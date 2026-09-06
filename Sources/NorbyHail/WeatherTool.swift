@@ -11,314 +11,6 @@ import NIOCore
 public struct WeatherTool: Tool {
     public typealias Effect = CombinedEffect<ClockEffect, NetworkEffect>
 
-    public struct Configuration: Sendable {
-        public let now: @Sendable () -> Date
-
-        public init(now: @escaping @Sendable () -> Date = Date.init) {
-            self.now = now
-        }
-    }
-
-    /// The domain meaning of the forecast requested by the caller.
-    public enum ForecastHorizon: Equatable, Sendable {
-        case currentDay(fromHour: Int?)
-        case days(Int)
-
-        public static let today = Self.currentDay(fromHour: nil)
-        public static let upcomingWeek = Self.days(7)
-
-        public static func today(from hour: Int) -> Self {
-            .currentDay(fromHour: hour)
-        }
-
-        var days: Int {
-            switch self {
-            case .currentDay:
-                1
-            case .days(let days):
-                days
-            }
-        }
-    }
-
-    public struct Input: Codable, Sendable {
-        public let location: String
-        public let days: Int
-        public let fromHour: Int?
-
-        enum CodingKeys: String, CodingKey {
-            case location
-            case days
-            case fromHour = "from_hour"
-        }
-
-        public init(
-            location: String,
-            horizon: ForecastHorizon = .today
-        ) {
-            self.location = location
-            switch horizon {
-            case .currentDay(let fromHour):
-                self.days = 1
-                self.fromHour = fromHour
-            case .days(let days):
-                self.days = days
-                self.fromHour = nil
-            }
-        }
-    }
-
-    public enum Error: Swift.Error, Equatable, Sendable {
-        case invalidURL
-        case locationNotFound(String)
-        case invalidResponse
-        case httpStatus(Int)
-    }
-
-    private struct GeocodingResponse: Decodable {
-        let results: [Location]?
-    }
-
-    private struct Location: Decodable {
-        let name: String
-        let country: String?
-        let admin1: String?
-        let latitude: Double
-        let longitude: Double
-        let timezone: String?
-    }
-
-    private struct ForecastResponse: Decodable {
-        let timezone: String
-        let current: Current
-        let daily: Daily?
-        let hourly: Hourly?
-    }
-
-    private struct Current: Decodable {
-        let temperature: Double
-        let apparentTemperature: Double
-        let relativeHumidity: Double
-        let precipitation: Double
-        let weatherCode: Int
-        let windSpeed: Double
-        let windDirection: Double
-
-        enum CodingKeys: String, CodingKey {
-            case temperature = "temperature_2m"
-            case apparentTemperature = "apparent_temperature"
-            case relativeHumidity = "relative_humidity_2m"
-            case precipitation
-            case weatherCode = "weather_code"
-            case windSpeed = "wind_speed_10m"
-            case windDirection = "wind_direction_10m"
-        }
-    }
-
-    /// Data returned to the model. Presentation belongs to the model-facing
-    /// conversation, not to this provider adapter.
-    private struct WeatherReport: Encodable, Sendable {
-        let location: WeatherLocation
-        let timezone: String
-        let toolNow: Date
-        let localNow: LocalDateTime
-        let requestedDays: Int
-        let fromLocalHour: Int?
-        let current: WeatherCurrent
-        let hourly: [WeatherHourlyPoint]
-        let daily: [WeatherDailyPoint]
-        let source: String
-    }
-
-    private struct WeatherLocation: Encodable, Sendable {
-        let name: String
-        let region: String?
-        let country: String?
-        let latitude: Double
-        let longitude: Double
-    }
-
-    private struct WeatherCurrent: Encodable, Sendable {
-        let temperatureCelsius: Double
-        let apparentTemperatureCelsius: Double
-        let relativeHumidityPercent: Double
-        let precipitationMillimeters: Double
-        let weatherCode: Int
-        let condition: String
-        let windSpeedKilometersPerHour: Double
-        let windDirectionDegrees: Double
-        let windDirection: String
-    }
-
-    private struct WeatherHourlyPoint: Encodable, Sendable {
-        let time: Date
-        let localTime: LocalDateTime
-        let temperatureCelsius: Double
-        let apparentTemperatureCelsius: Double
-        let precipitationProbabilityPercent: Int?
-        let precipitationMillimeters: Double
-        let weatherCode: Int
-        let condition: String
-        let windSpeedKilometersPerHour: Double
-        let windDirectionDegrees: Double
-        let windDirection: String
-    }
-
-    private struct WeatherDailyPoint: Encodable, Sendable {
-        let date: String
-        let weatherCode: Int
-        let condition: String
-        let maximumTemperatureCelsius: Double
-        let minimumTemperatureCelsius: Double
-        let precipitationProbabilityPercent: Int?
-    }
-
-    private struct LocalDateTime: Encodable, Sendable {
-        let year: Int
-        let month: Int
-        let day: Int
-        let hour: Int
-        let minute: Int
-        let weekday: Int
-    }
-
-    private struct Daily: Decodable {
-        struct Point {
-            let date: String
-            let weatherCode: Int
-            let maximumTemperature: Double
-            let minimumTemperature: Double
-            let precipitationProbability: Int?
-        }
-
-        let points: [Point]
-
-        enum CodingKeys: String, CodingKey {
-            case dates = "time"
-            case weatherCodes = "weather_code"
-            case maximumTemperatures = "temperature_2m_max"
-            case minimumTemperatures = "temperature_2m_min"
-            case precipitationProbabilities = "precipitation_probability_max"
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            let dates = try container.decode([String].self, forKey: .dates)
-            let weatherCodes = try container.decode([Int].self, forKey: .weatherCodes)
-            let maximumTemperatures = try container.decode(
-                [Double].self,
-                forKey: .maximumTemperatures
-            )
-            let minimumTemperatures = try container.decode(
-                [Double].self,
-                forKey: .minimumTemperatures
-            )
-            let precipitationProbabilities = try container.decode(
-                [Int?].self,
-                forKey: .precipitationProbabilities
-            )
-            guard Set([
-                dates.count,
-                weatherCodes.count,
-                maximumTemperatures.count,
-                minimumTemperatures.count,
-                precipitationProbabilities.count,
-            ]).count == 1 else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .dates,
-                    in: container,
-                    debugDescription: "Daily weather series have different lengths."
-                )
-            }
-
-            self.points = dates.indices.map { index in
-                Point(
-                    date: dates[index],
-                    weatherCode: weatherCodes[index],
-                    maximumTemperature: maximumTemperatures[index],
-                    minimumTemperature: minimumTemperatures[index],
-                    precipitationProbability: precipitationProbabilities[index]
-                )
-            }
-        }
-    }
-
-    private struct Hourly: Decodable {
-        struct Point {
-            let time: Date
-            let temperature: Double
-            let apparentTemperature: Double
-            let precipitationProbability: Int?
-            let precipitation: Double
-            let weatherCode: Int
-            let windSpeed: Double
-            let windDirection: Double
-        }
-
-        let points: [Point]
-
-        enum CodingKeys: String, CodingKey {
-            case times = "time"
-            case temperatures = "temperature_2m"
-            case apparentTemperatures = "apparent_temperature"
-            case precipitationProbabilities = "precipitation_probability"
-            case precipitations = "precipitation"
-            case weatherCodes = "weather_code"
-            case windSpeeds = "wind_speed_10m"
-            case windDirections = "wind_direction_10m"
-        }
-
-        init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            let times = try container.decode([Date].self, forKey: .times)
-            let temperatures = try container.decode([Double].self, forKey: .temperatures)
-            let apparentTemperatures = try container.decode(
-                [Double].self,
-                forKey: .apparentTemperatures
-            )
-            let precipitationProbabilities = try container.decode(
-                [Int?].self,
-                forKey: .precipitationProbabilities
-            )
-            let precipitations = try container.decode(
-                [Double].self,
-                forKey: .precipitations
-            )
-            let weatherCodes = try container.decode([Int].self, forKey: .weatherCodes)
-            let windSpeeds = try container.decode([Double].self, forKey: .windSpeeds)
-            let windDirections = try container.decode([Double].self, forKey: .windDirections)
-            guard Set([
-                times.count,
-                temperatures.count,
-                apparentTemperatures.count,
-                precipitationProbabilities.count,
-                precipitations.count,
-                weatherCodes.count,
-                windSpeeds.count,
-                windDirections.count,
-            ]).count == 1 else {
-                throw DecodingError.dataCorruptedError(
-                    forKey: .times,
-                    in: container,
-                    debugDescription: "Hourly weather series have different lengths."
-                )
-            }
-
-            self.points = times.indices.map { index in
-                Point(
-                    time: times[index],
-                    temperature: temperatures[index],
-                    apparentTemperature: apparentTemperatures[index],
-                    precipitationProbability: precipitationProbabilities[index],
-                    precipitation: precipitations[index],
-                    weatherCode: weatherCodes[index],
-                    windSpeed: windSpeeds[index],
-                    windDirection: windDirections[index]
-                )
-            }
-        }
-    }
-
     private static let httpClient: HTTPClient = {
         var configuration = HTTPClient.Configuration()
         configuration.timeout = .init(connect: .seconds(10), read: .seconds(15))
@@ -690,6 +382,316 @@ public struct WeatherTool: Tool {
         case 95: "thunderstorm"
         case 96, 99: "thunderstorm with hail"
         default: "unknown conditions"
+        }
+    }
+}
+
+extension WeatherTool {
+    public struct Configuration: Sendable {
+        public let now: @Sendable () -> Date
+
+        public init(now: @escaping @Sendable () -> Date = Date.init) {
+            self.now = now
+        }
+    }
+
+    /// The domain meaning of the forecast requested by the caller.
+    public enum ForecastHorizon: Equatable, Sendable {
+        case currentDay(fromHour: Int?)
+        case days(Int)
+
+        public static let today = Self.currentDay(fromHour: nil)
+        public static let upcomingWeek = Self.days(7)
+
+        public static func today(from hour: Int) -> Self {
+            .currentDay(fromHour: hour)
+        }
+
+        var days: Int {
+            switch self {
+            case .currentDay:
+                1
+            case .days(let days):
+                days
+            }
+        }
+    }
+
+    public struct Input: Codable, Sendable {
+        public let location: String
+        public let days: Int
+        public let fromHour: Int?
+
+        enum CodingKeys: String, CodingKey {
+            case location
+            case days
+            case fromHour = "from_hour"
+        }
+
+        public init(
+            location: String,
+            horizon: ForecastHorizon = .today
+        ) {
+            self.location = location
+            switch horizon {
+            case .currentDay(let fromHour):
+                self.days = 1
+                self.fromHour = fromHour
+            case .days(let days):
+                self.days = days
+                self.fromHour = nil
+            }
+        }
+    }
+
+    public enum Error: Swift.Error, Equatable, Sendable {
+        case invalidURL
+        case locationNotFound(String)
+        case invalidResponse
+        case httpStatus(Int)
+    }
+
+    private struct GeocodingResponse: Decodable {
+        let results: [Location]?
+    }
+
+    private struct Location: Decodable {
+        let name: String
+        let country: String?
+        let admin1: String?
+        let latitude: Double
+        let longitude: Double
+        let timezone: String?
+    }
+
+    private struct ForecastResponse: Decodable {
+        let timezone: String
+        let current: Current
+        let daily: Daily?
+        let hourly: Hourly?
+    }
+
+    private struct Current: Decodable {
+        let temperature: Double
+        let apparentTemperature: Double
+        let relativeHumidity: Double
+        let precipitation: Double
+        let weatherCode: Int
+        let windSpeed: Double
+        let windDirection: Double
+
+        enum CodingKeys: String, CodingKey {
+            case temperature = "temperature_2m"
+            case apparentTemperature = "apparent_temperature"
+            case relativeHumidity = "relative_humidity_2m"
+            case precipitation
+            case weatherCode = "weather_code"
+            case windSpeed = "wind_speed_10m"
+            case windDirection = "wind_direction_10m"
+        }
+    }
+
+    /// Data returned to the model. Presentation belongs to the model-facing
+    /// conversation, not to this provider adapter.
+    private struct WeatherReport: Encodable, Sendable {
+        let location: WeatherLocation
+        let timezone: String
+        let toolNow: Date
+        let localNow: LocalDateTime
+        let requestedDays: Int
+        let fromLocalHour: Int?
+        let current: WeatherCurrent
+        let hourly: [WeatherHourlyPoint]
+        let daily: [WeatherDailyPoint]
+        let source: String
+    }
+
+    private struct WeatherLocation: Encodable, Sendable {
+        let name: String
+        let region: String?
+        let country: String?
+        let latitude: Double
+        let longitude: Double
+    }
+
+    private struct WeatherCurrent: Encodable, Sendable {
+        let temperatureCelsius: Double
+        let apparentTemperatureCelsius: Double
+        let relativeHumidityPercent: Double
+        let precipitationMillimeters: Double
+        let weatherCode: Int
+        let condition: String
+        let windSpeedKilometersPerHour: Double
+        let windDirectionDegrees: Double
+        let windDirection: String
+    }
+
+    private struct WeatherHourlyPoint: Encodable, Sendable {
+        let time: Date
+        let localTime: LocalDateTime
+        let temperatureCelsius: Double
+        let apparentTemperatureCelsius: Double
+        let precipitationProbabilityPercent: Int?
+        let precipitationMillimeters: Double
+        let weatherCode: Int
+        let condition: String
+        let windSpeedKilometersPerHour: Double
+        let windDirectionDegrees: Double
+        let windDirection: String
+    }
+
+    private struct WeatherDailyPoint: Encodable, Sendable {
+        let date: String
+        let weatherCode: Int
+        let condition: String
+        let maximumTemperatureCelsius: Double
+        let minimumTemperatureCelsius: Double
+        let precipitationProbabilityPercent: Int?
+    }
+
+    private struct LocalDateTime: Encodable, Sendable {
+        let year: Int
+        let month: Int
+        let day: Int
+        let hour: Int
+        let minute: Int
+        let weekday: Int
+    }
+
+    private struct Daily: Decodable {
+        struct Point {
+            let date: String
+            let weatherCode: Int
+            let maximumTemperature: Double
+            let minimumTemperature: Double
+            let precipitationProbability: Int?
+        }
+
+        let points: [Point]
+
+        enum CodingKeys: String, CodingKey {
+            case dates = "time"
+            case weatherCodes = "weather_code"
+            case maximumTemperatures = "temperature_2m_max"
+            case minimumTemperatures = "temperature_2m_min"
+            case precipitationProbabilities = "precipitation_probability_max"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let dates = try container.decode([String].self, forKey: .dates)
+            let weatherCodes = try container.decode([Int].self, forKey: .weatherCodes)
+            let maximumTemperatures = try container.decode(
+                [Double].self,
+                forKey: .maximumTemperatures
+            )
+            let minimumTemperatures = try container.decode(
+                [Double].self,
+                forKey: .minimumTemperatures
+            )
+            let precipitationProbabilities = try container.decode(
+                [Int?].self,
+                forKey: .precipitationProbabilities
+            )
+            guard Set([
+                dates.count,
+                weatherCodes.count,
+                maximumTemperatures.count,
+                minimumTemperatures.count,
+                precipitationProbabilities.count,
+            ]).count == 1 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .dates,
+                    in: container,
+                    debugDescription: "Daily weather series have different lengths."
+                )
+            }
+
+            self.points = dates.indices.map { index in
+                Point(
+                    date: dates[index],
+                    weatherCode: weatherCodes[index],
+                    maximumTemperature: maximumTemperatures[index],
+                    minimumTemperature: minimumTemperatures[index],
+                    precipitationProbability: precipitationProbabilities[index]
+                )
+            }
+        }
+    }
+
+    private struct Hourly: Decodable {
+        struct Point {
+            let time: Date
+            let temperature: Double
+            let apparentTemperature: Double
+            let precipitationProbability: Int?
+            let precipitation: Double
+            let weatherCode: Int
+            let windSpeed: Double
+            let windDirection: Double
+        }
+
+        let points: [Point]
+
+        enum CodingKeys: String, CodingKey {
+            case times = "time"
+            case temperatures = "temperature_2m"
+            case apparentTemperatures = "apparent_temperature"
+            case precipitationProbabilities = "precipitation_probability"
+            case precipitations = "precipitation"
+            case weatherCodes = "weather_code"
+            case windSpeeds = "wind_speed_10m"
+            case windDirections = "wind_direction_10m"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let times = try container.decode([Date].self, forKey: .times)
+            let temperatures = try container.decode([Double].self, forKey: .temperatures)
+            let apparentTemperatures = try container.decode(
+                [Double].self,
+                forKey: .apparentTemperatures
+            )
+            let precipitationProbabilities = try container.decode(
+                [Int?].self,
+                forKey: .precipitationProbabilities
+            )
+            let precipitations = try container.decode(
+                [Double].self,
+                forKey: .precipitations
+            )
+            let weatherCodes = try container.decode([Int].self, forKey: .weatherCodes)
+            let windSpeeds = try container.decode([Double].self, forKey: .windSpeeds)
+            let windDirections = try container.decode([Double].self, forKey: .windDirections)
+            guard Set([
+                times.count,
+                temperatures.count,
+                apparentTemperatures.count,
+                precipitationProbabilities.count,
+                precipitations.count,
+                weatherCodes.count,
+                windSpeeds.count,
+                windDirections.count,
+            ]).count == 1 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .times,
+                    in: container,
+                    debugDescription: "Hourly weather series have different lengths."
+                )
+            }
+
+            self.points = times.indices.map { index in
+                Point(
+                    time: times[index],
+                    temperature: temperatures[index],
+                    apparentTemperature: apparentTemperatures[index],
+                    precipitationProbability: precipitationProbabilities[index],
+                    precipitation: precipitations[index],
+                    weatherCode: weatherCodes[index],
+                    windSpeed: windSpeeds[index],
+                    windDirection: windDirections[index]
+                )
+            }
         }
     }
 }
