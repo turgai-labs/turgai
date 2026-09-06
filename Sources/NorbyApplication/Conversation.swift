@@ -140,9 +140,11 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
         case .running:
             true
         case .idle:
-            !pendingMessages.isEmpty || !pendingReplies.isEmpty
+            !pendingMessages.isEmpty
+                || !pendingReplies.isEmpty
         case .failed:
-            !pendingMessages.isEmpty || !pendingReplies.isEmpty
+            !pendingMessages.isEmpty
+                || !pendingReplies.isEmpty
         }
     }
 
@@ -159,7 +161,10 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
 /// its transient model task. The Conversation actor remains the only owner of
 /// turn state.
 public enum ConversationModelEvent: Codable, Sendable, Equatable {
-    case completed(turnID: NorbyDomain.TurnID, text: String)
+    case completed(
+        turnID: NorbyDomain.TurnID,
+        completion: ConversationCompletion
+    )
     case failed(
         turnID: NorbyDomain.TurnID,
         kind: ConversationFailureKind,
@@ -265,14 +270,14 @@ private actor ConversationPhase {
 /// after recovery: a channel connection may reconnect while the durable turn
 /// is still running, and the terminal reply must reach that new connection.
 private struct ConversationScope: ScopeLifecycle {
-    typealias Result = String
+    typealias Result = ConversationCompletion
     typealias Update = ConversationProgress
 
     let conversationID: ConversationID
     let turnID: NorbyDomain.TurnID
     let connections: ConversationConnectionRegistry
-    let complete: @Sendable (String) async -> Void
-    let operation: @Sendable (PartialSink<ConversationProgress>) async throws -> String
+    let complete: @Sendable (ConversationCompletion) async -> Void
+    let operation: @Sendable (PartialSink<ConversationProgress>) async throws -> ConversationCompletion
     let phase = ConversationPhase()
 
     func start() async {
@@ -295,7 +300,7 @@ private struct ConversationScope: ScopeLifecycle {
 
     func perform(
         using updates: PartialSink<ConversationProgress>
-    ) async throws -> String {
+    ) async throws -> ConversationCompletion {
         try await operation(updates)
     }
 
@@ -318,12 +323,13 @@ private struct ConversationScope: ScopeLifecycle {
         }
     }
 
-    func finish(_ outcome: ScopeOutcome<String>) async {
+    func finish(_ outcome: ScopeOutcome<ConversationCompletion>) async {
         switch outcome {
-        case .completed(let text):
-            // Persist first. The conversation then attempts delivery from its
-            // durable pending-reply projection.
-            await complete(text)
+        case .completed(let completion):
+            // Persist first. A reply is delivered from the durable pending
+            // projection; a void completion publishes only the lifecycle
+            // terminal event.
+            await complete(completion)
         case .failed(let failure):
             await broadcast(
                 .reply(
@@ -526,6 +532,39 @@ public distributed actor Conversation {
         )
     }
 
+    /// Delivers a non-agent notification through the currently attached
+    /// channel. This is intentionally not journaled: the durable workflow is
+    /// the owner of retrying the activity when no channel is available.
+    public distributed func notify(_ text: String) async throws {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            throw ConversationActorError.emptyNotification
+        }
+
+        let connections = await connectionRegistry.snapshot()
+        guard !connections.isEmpty else {
+            throw ConversationActorError.noConnection
+        }
+
+        var failures: [String] = []
+        for connection in connections {
+            do {
+                try await connection.broadcast(
+                    .notice(
+                        conversationID: conversationID,
+                        turnID: nil,
+                        text: text
+                    )
+                )
+                return
+            } catch {
+                failures.append(String(describing: error))
+            }
+        }
+
+        throw ConversationActorError.deliveryFailed(failures.joined(separator: "; "))
+    }
+
     public distributed func reset() async throws {
         try await dispatch(.reset)
     }
@@ -601,9 +640,12 @@ public distributed actor Conversation {
             conversationID: conversationID,
             turnID: request.turnID,
             connections: connectionRegistry,
-            complete: { [weak self] text in
+            complete: { [weak self] completion in
                 try? await self?.modelEvent(
-                    .completed(turnID: request.turnID, text: text)
+                    .completed(
+                        turnID: request.turnID,
+                        completion: completion
+                    )
                 )
             },
             operation: { updates in
@@ -629,20 +671,13 @@ public distributed actor Conversation {
                         break
                     }
                 }
-                let text = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else {
-                    throw ConversationFailure(
-                        kind: .emptyResponse,
-                        message: "The model returned an empty response."
-                    )
-                }
-                return text
+                return ConversationCompletion(text: response.content)
             }
         )
 
         modelTask = Task { [weak self] in
             do {
-                _ = try await withScope(scope)
+                _ = try await withScope(scope) { error in Self.modelFailure(for: error) }
 
             } catch is CancellationError {
                 try? await self?.modelEvent(
@@ -652,7 +687,28 @@ public distributed actor Conversation {
                         message: "The model request was cancelled."
                     )
                 )
+            } catch let failure as ConversationFailure {
+                actorSystem.log.error(
+                    "Model turn failed",
+                    metadata: [
+                        "conversationID": .string(conversationID.stableKey),
+                        "turnID": .string(request.turnID.rawValue.uuidString),
+                        "error": .string(failure.message),
+                    ]
+                )
+                try? await self?.modelEvent(
+                    .failed(
+                        turnID: request.turnID,
+                        kind: failure.kind,
+                        message: failure.message
+                    )
+                )
             } catch {
+                // The scope already emitted the mapped lifecycle failure. The
+                // model event still needs the same typed failure so the
+                // durable conversation closes the turn, while the original
+                // error remains available in logs.
+                let failure = Self.modelFailure(for: error)
                 actorSystem.log.error(
                     "Model turn failed",
                     metadata: [
@@ -664,8 +720,8 @@ public distributed actor Conversation {
                 try? await self?.modelEvent(
                     .failed(
                         turnID: request.turnID,
-                        kind: .model,
-                        message: HailAgentAdapter.userFacingMessage(for: error)
+                        kind: failure.kind,
+                        message: failure.message
                     )
                 )
             }
@@ -690,9 +746,11 @@ public distributed actor Conversation {
             modelTask = nil
         }
 
-        // A completed reply is journaled before this point. Delivery is an
-        // at-least-once side effect: a failed transport leaves the reply in
-        // the aggregate and a later input/reconnect gets another attempt.
+        // A model completion is journaled before this point. A reply is an
+        // at-least-once side effect: a failed transport leaves it in the
+        // aggregate and a later input/reconnect gets another attempt. A void
+        // completion has no message to retry; its terminal lifecycle event is
+        // published as the corresponding effect below.
         if case .replyDelivered = action {
             // Avoid recursively trying to deliver while acknowledging one.
         } else {
@@ -803,7 +861,7 @@ public distributed actor Conversation {
         action: ConversationAction
     ) {
         guard
-            case .modelCompleted(let turnID, let response) = action,
+            case .modelCompleted(let turnID, let completion) = action,
             previous.activeTurnID == turnID,
             let activeMessage = previous.activeMessage
         else {
@@ -814,7 +872,7 @@ public distributed actor Conversation {
             id: ObservationID(rawValue: activeMessage.message.id.rawValue),
             sourceID: MemorySourceID(rawValue: activeMessage.message.id.rawValue),
             text: activeMessage.message.text,
-            response: response,
+            response: completion.text,
             observedAt: activeMessage.message.receivedAt
         )
         let userID = activeMessage.message.userID
@@ -921,14 +979,21 @@ public distributed actor Conversation {
 
     private func action(for event: ConversationModelEvent) -> ConversationAction {
         switch event {
-        case .completed(let turnID, let text):
-            return .modelCompleted(turnID: turnID, text: text)
+        case .completed(let turnID, let completion):
+            return .modelCompleted(turnID: turnID, completion: completion)
         case .failed(let turnID, let kind, let message):
             return .modelFailed(
                 turnID: turnID,
                 failure: ConversationFailure(kind: kind, message: message)
             )
         }
+    }
+
+    private static func modelFailure(for error: any Error) -> ConversationFailure {
+        return ConversationFailure(
+            kind: .model,
+            message: HailAgentAdapter.userFacingMessage(for: error)
+        )
     }
 
     private func events(
@@ -1036,4 +1101,7 @@ public distributed actor Conversation {
 
 public enum ConversationActorError: Error, Codable, Sendable, Equatable {
     case conversationMismatch
+    case emptyNotification
+    case noConnection
+    case deliveryFailed(String)
 }

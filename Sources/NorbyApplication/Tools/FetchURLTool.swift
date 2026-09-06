@@ -131,7 +131,7 @@ public struct FetchURLTool: Tool {
         )
     }
 
-    static func resolvedContentType(
+    public static func resolvedContentType(
         response: String?,
         hint: String?,
         url: URL

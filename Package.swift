@@ -65,7 +65,6 @@ let package = Package(
             dependencies: [
                 "NorbyDomain",
                 .product(name: "Hail", package: "hail"),
-                .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors")
             ]
@@ -76,6 +75,7 @@ let package = Package(
                 "NorbyDomain",
                 "NorbyMemory",
                 "NorbyHail",
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
                 .product(name: "Hail", package: "hail"),
@@ -123,7 +123,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NorbyHailTests",
-            dependencies: ["NorbyDomain", "NorbyHail"]
+            dependencies: ["NorbyDomain", "NorbyHail", "NorbyApplication"]
         ),
         .testTarget(
             name: "NorbyApplicationTests",

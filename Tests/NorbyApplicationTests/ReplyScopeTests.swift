@@ -38,6 +38,27 @@ struct ReplyScopeTests {
     }
 
     @Test
+    func unexpectedOperationErrorsAreMappedForLifecycleButPreservedForCaller() async {
+        let scope = ScopeRecorder { _ in
+            throw InternalScopeError.secret
+        }
+
+        do {
+            _ = try await withScope(scope)
+            Issue.record("Expected the reply operation to fail")
+        } catch let error as InternalScopeError {
+            #expect(error == .secret)
+        } catch {
+            Issue.record("Expected InternalScopeError, got \(error)")
+        }
+
+        #expect(await scope.events == [
+            "started",
+            "failed:The operation could not be completed.",
+        ])
+    }
+
+    @Test
     func operationCanPublishPartialUpdatesThroughTheScope() async throws {
         let scope = ScopeRecorder { updates in
             await updates.send("partial")
@@ -52,6 +73,10 @@ struct ReplyScopeTests {
             "finished:answer"
         ])
     }
+}
+
+private enum InternalScopeError: Error, Equatable {
+    case secret
 }
 
 private actor ScopeRecorder: ScopeLifecycle {

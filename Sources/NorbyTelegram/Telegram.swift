@@ -383,6 +383,17 @@ public actor TelegramEventPublisher {
                 draftIDs[conversationID]?[turnID] = nil
                 lastSentDraftText[DraftKey(conversationID: conversationID, turnID: turnID)] = nil
 
+            case .completed(let conversationID, let turnID):
+                _ = try chatID(for: conversationID)
+                await setReaction(
+                    nil,
+                    conversationID: conversationID,
+                    turnID: turnID
+                )
+                sourceMessageIDs[conversationID]?[turnID] = nil
+                draftIDs[conversationID]?[turnID] = nil
+                lastSentDraftText[DraftKey(conversationID: conversationID, turnID: turnID)] = nil
+
             case .failed(let conversationID, let turnID, let text):
                 let chatID = try chatID(for: conversationID)
                 let replyTo = replyParameters(

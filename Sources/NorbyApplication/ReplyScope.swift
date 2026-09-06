@@ -45,7 +45,13 @@ protocol ScopeLifecycle: Sendable {
 /// operation can publish updates while it runs, but only this function emits
 /// the terminal outcome.
 func withScope<L: ScopeLifecycle>(
-    _ scope: L
+    _ scope: L,
+    mapError: @escaping @Sendable (any Error) -> ConversationFailure = { _ in
+        ConversationFailure(
+            kind: .unknown,
+            message: "The operation could not be completed."
+        )
+    }
 ) async throws -> L.Result {
     await scope.start()
 
@@ -86,11 +92,10 @@ func withScope<L: ScopeLifecycle>(
         await scope.finish(.failed(failure))
         throw failure
     } catch {
-        let failure = ConversationFailure(
-            kind: .unknown,
-            message: String(describing: error)
-        )
+        let failure = mapError(error)
         await scope.finish(.failed(failure))
+        // Keep the original error for the caller and logs. The mapped value is
+        // only the channel-facing lifecycle result.
         throw error
     }
 }

@@ -31,7 +31,8 @@ public struct HailRuntimeConfiguration: Sendable {
     public func makeAgentRuntimePlugin(
         workspaceRoot: String,
         definitionProvider: AgentRuntimePlugin.DefinitionProvider? = nil,
-        turnToolsProvider: AgentRuntimePlugin.TurnToolsProvider? = nil
+        turnToolsProvider: AgentRuntimePlugin.TurnToolsProvider? = nil,
+        authorityProvider: AgentRuntimePlugin.AuthorityProvider? = nil
     ) throws -> AgentRuntimePlugin {
         let model = try AgentModelReference(modelRoute)
         let routerConfiguration = try ModelRouterConfiguration(
@@ -57,6 +58,7 @@ public struct HailRuntimeConfiguration: Sendable {
             maxToolRounds: maxToolRounds,
             routerConfiguration: routerConfiguration,
             turnToolsProvider: turnToolsProvider,
+            authorityProvider: authorityProvider,
             workspaceProvider: { _ in
                 AgentWorkspace(rootPath: workspaceRoot)
             },

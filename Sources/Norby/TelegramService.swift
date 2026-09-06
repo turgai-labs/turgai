@@ -2,6 +2,7 @@ import AsyncAlgorithms
 import Foundation
 import Hail
 import Logging
+import NorbyApplication
 import NorbyDomain
 import NorbyHail
 import NorbyTelegram
@@ -245,7 +246,8 @@ enum TelegramDelivery {
                 .phase(_, let turnID, _),
                 .partial(_, let turnID, _),
                 .keepAlive(_, let turnID, _),
-                .finished(_, let turnID, _):
+                .finished(_, let turnID, _),
+                .completed(_, let turnID):
                 turnID
             case .failed(_, let turnID, _):
                 turnID
@@ -297,7 +299,7 @@ actor TelegramService: Service {
 
     public func run() async throws {
         let client = telegramIntegration.client
-        await attachmentResolver.register(channel: ChannelID("telegram")) {
+        await attachmentResolver.register(channel: AttachmentChannel("telegram")) {
             externalID,
             expectedContentType in
             let file = try await client.downloadFile(externalID)
@@ -344,10 +346,10 @@ actor TelegramService: Service {
                 }
             )
         } catch {
-            await attachmentResolver.unregister(channel: ChannelID("telegram"))
+            await attachmentResolver.unregister(channel: AttachmentChannel("telegram"))
             throw error
         }
-        await attachmentResolver.unregister(channel: ChannelID("telegram"))
+        await attachmentResolver.unregister(channel: AttachmentChannel("telegram"))
     }
 
     private func consume(
@@ -420,7 +422,7 @@ actor TelegramService: Service {
                         await delivery.failed("The Telegram delivery stream was closed.")
                     }
 
-                case .reply(.finished), .reply(.failed):
+                case .reply(.finished), .reply(.completed), .reply(.failed):
                     await Self.enqueueReliable(
                         .terminal(delivery),
                         continuation: deliveryContinuation

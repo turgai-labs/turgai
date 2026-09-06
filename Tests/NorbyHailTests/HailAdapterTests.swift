@@ -1,5 +1,6 @@
 import Foundation
 import Hail
+import NorbyApplication
 import NorbyDomain
 @testable import NorbyHail
 import Testing
@@ -248,7 +249,7 @@ struct HailAdapterTests {
     @Test
     func fetchAttachmentRoutesOpaqueIDThroughOwningChannel() async throws {
         let resolver = AttachmentResolver()
-        await resolver.register(channel: ChannelID("telegram")) {
+        await resolver.register(channel: AttachmentChannel("telegram")) {
             externalID,
             expectedContentType in
             #expect(externalID == "telegram-file-id")

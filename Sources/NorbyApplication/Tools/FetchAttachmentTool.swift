@@ -1,10 +1,50 @@
 import Foundation
 import Hail
-import NorbyDomain
+
+public struct AttachmentChannel: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.init(rawValue: rawValue)
+    }
+}
+
+public struct AttachmentID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(channel: AttachmentChannel, externalID: String) {
+        self.rawValue = "\(channel.rawValue):\(externalID)"
+    }
+
+    public var channel: AttachmentChannel? {
+        guard let separator = rawValue.firstIndex(of: ":"),
+              separator != rawValue.startIndex
+        else {
+            return nil
+        }
+        return AttachmentChannel(String(rawValue[..<separator]))
+    }
+
+    public var externalID: String? {
+        guard let separator = rawValue.firstIndex(of: ":") else {
+            return nil
+        }
+        let value = rawValue[rawValue.index(after: separator)...]
+        return value.isEmpty ? nil : String(value)
+    }
+}
 
 public enum AttachmentResolverError: Error, Equatable, Sendable {
-    case invalidAttachmentID(String)
-    case unsupportedChannel(ChannelID)
+    case invalidAttachmentID(AttachmentID)
+    case unsupportedChannel(AttachmentChannel)
 }
 
 /// Routes durable attachment references to their owning channel adapter.
@@ -17,15 +57,15 @@ public actor AttachmentResolver {
         _ expectedContentType: String?
     ) async throws -> ToolData
 
-    private var loaders: [ChannelID: Loader] = [:]
+    private var loaders: [AttachmentChannel: Loader] = [:]
 
     public init() {}
 
-    public func register(channel: ChannelID, loader: @escaping Loader) {
+    public func register(channel: AttachmentChannel, loader: @escaping Loader) {
         loaders[channel] = loader
     }
 
-    public func unregister(channel: ChannelID) {
+    public func unregister(channel: AttachmentChannel) {
         loaders[channel] = nil
     }
 
@@ -33,8 +73,10 @@ public actor AttachmentResolver {
         _ id: AttachmentID,
         expectedContentType: String?
     ) async throws -> ToolData {
-        guard let channel = id.channel, let externalID = id.externalID else {
-            throw AttachmentResolverError.invalidAttachmentID(id.rawValue)
+        guard let channel = id.channel,
+              let externalID = id.externalID
+        else {
+            throw AttachmentResolverError.invalidAttachmentID(id)
         }
         guard let loader = loaders[channel] else {
             throw AttachmentResolverError.unsupportedChannel(channel)
@@ -100,7 +142,7 @@ public struct FetchAttachmentTool: Tool {
     public func effect(for input: Input) throws -> NetworkEffect {
         let id = AttachmentID(rawValue: input.attachmentID)
         guard let channel = id.channel, id.externalID != nil else {
-            throw AttachmentResolverError.invalidAttachmentID(input.attachmentID)
+            throw AttachmentResolverError.invalidAttachmentID(id)
         }
         return NetworkEffect(
             host: channel.rawValue,

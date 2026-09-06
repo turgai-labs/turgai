@@ -84,6 +84,10 @@ struct ConversationReducerTests {
         TurnID(rawValue: UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, value)))
     }
 
+    private func makeReply(_ text: String) -> ConversationReply {
+        ConversationReply(text)!
+    }
+
     @Test
     func receivingMessageStartsTurnAndPersists() {
         let state = ConversationState(
@@ -134,7 +138,7 @@ struct ConversationReducerTests {
             queued,
             .modelCompleted(
                 turnID: firstTurnID,
-                text: "first answer"
+                completion: .reply(makeReply("first answer"))
             )
         )
 
@@ -171,7 +175,10 @@ struct ConversationReducerTests {
 
         let (completed, _) = reduce(
             running,
-            .modelCompleted(turnID: turnID, text: "answer")
+            .modelCompleted(
+                turnID: turnID,
+                completion: .reply(makeReply("answer"))
+            )
         )
         let (duplicate, effects) = reduce(
             completed,
@@ -205,7 +212,7 @@ struct ConversationReducerTests {
             running,
             .modelCompleted(
                 turnID: turnID,
-                text: "hello"
+                completion: .reply(makeReply("hello"))
             )
         )
 
@@ -221,6 +228,40 @@ struct ConversationReducerTests {
         )
         #expect(delivered.pendingReplies.isEmpty)
         #expect(deliveryEffects.isEmpty)
+    }
+
+    @Test
+    func voidCompletionClosesTurnWithoutQueueingReply() {
+        let state = ConversationState(
+            conversationID: conversationID,
+            capabilities: capabilities
+        )
+        let (running, _) = reduce(
+            state,
+            .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1), capabilities: capabilities)
+        )
+        guard case .running(let turnID) = running.status else {
+            Issue.record("Expected a running turn")
+            return
+        }
+
+        let (completed, effects) = reduce(
+            running,
+            .modelCompleted(turnID: turnID, completion: .void)
+        )
+
+        #expect(completed.status == .idle)
+        #expect(completed.pendingReplies.isEmpty)
+        #expect(effects == [
+            .publish(
+                .reply(
+                    .completed(
+                        conversationID: conversationID,
+                        turnID: turnID
+                    )
+                )
+            )
+        ])
     }
 
     @Test
@@ -286,7 +327,7 @@ struct ConversationReducerTests {
             running,
             .modelCompleted(
                 turnID: staleTurnID,
-                text: "stale"
+                completion: .reply(makeReply("stale"))
             )
         )
 

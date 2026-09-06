@@ -391,6 +391,67 @@ public struct PendingConversationMessage: Hashable, Codable, Sendable {
     }
 }
 
+/// A reply that satisfies the conversational channel contract.
+///
+/// An empty model value is represented by ``ConversationCompletion.void``
+/// instead of being forced into this type.
+public struct ConversationReply: Hashable, Codable, Sendable {
+    public let text: String
+
+    public init?(_ text: String) {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            return nil
+        }
+        self.text = normalized
+    }
+
+    public init(from decoder: Decoder) throws {
+        let text = try decoder.singleValueContainer().decode(String.self)
+        guard let reply = Self(text) else {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "Conversation reply cannot be empty"
+                )
+            )
+        }
+        self = reply
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(text)
+    }
+}
+
+/// The successful result of one model operation.
+///
+/// A model may complete after performing work without producing a message for
+/// the conversational channel. That is a normal domain outcome, not an
+/// error. The application boundary decides how each outcome is delivered.
+public enum ConversationCompletion: Hashable, Codable, Sendable {
+    case reply(ConversationReply)
+    case `void`
+
+    public init(text: String) {
+        if let reply = ConversationReply(text) {
+            self = .reply(reply)
+        } else {
+            self = .void
+        }
+    }
+
+    public var text: String {
+        switch self {
+        case .reply(let reply):
+            reply.text
+        case .void:
+            ""
+        }
+    }
+}
+
 /// A model response that has been durably produced but has not yet been
 /// acknowledged by a channel connection.
 public struct PendingConversationReply: Hashable, Codable, Sendable {
@@ -400,6 +461,10 @@ public struct PendingConversationReply: Hashable, Codable, Sendable {
     public init(turnID: TurnID, text: String) {
         self.turnID = turnID
         self.text = text
+    }
+
+    public init(turnID: TurnID, reply: ConversationReply) {
+        self.init(turnID: turnID, text: reply.text)
     }
 }
 
@@ -432,7 +497,6 @@ public struct ConversationJournal: Sendable, Equatable {
 public enum ConversationFailureKind: String, Codable, Sendable {
     case model
     case cancelled
-    case emptyResponse
     case invalidInput
     case unknown
 }
@@ -516,6 +580,7 @@ public enum ReplyEvent: Hashable, Codable, Sendable {
     case partial(conversationID: ConversationID, turnID: TurnID, text: String)
     case keepAlive(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)
     case finished(conversationID: ConversationID, turnID: TurnID, text: String)
+    case completed(conversationID: ConversationID, turnID: TurnID)
     case failed(conversationID: ConversationID, turnID: TurnID?, message: String)
 }
 
@@ -537,7 +602,7 @@ public enum ConversationAction: Sendable {
         turnID: TurnID,
         capabilities: ChannelCapabilities
     )
-    case modelCompleted(turnID: TurnID, text: String)
+    case modelCompleted(turnID: TurnID, completion: ConversationCompletion)
     case replyDelivered(turnID: TurnID)
     case modelFailed(turnID: TurnID, failure: ConversationFailure)
     case reset
@@ -624,28 +689,30 @@ public func reduce(
             effects += startNextTurn(&next)
         }
 
-    case .modelCompleted(let turnID, let text):
+    case .modelCompleted(let turnID, let completion):
         guard isActive(turnID, in: next.status) else {
             return (state, [])
         }
 
-        let response = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !response.isEmpty else {
-            return fail(
-                state: state,
-                turnID: turnID,
-                failure: ConversationFailure(
-                    kind: .emptyResponse,
-                    message: "The model returned an empty response."
+        if case .reply(let reply) = completion {
+            next.pendingReplies.append(
+                PendingConversationReply(turnID: turnID, reply: reply)
+            )
+        }
+        next.activeMessage = nil
+        next.status = .idle
+        if case .void = completion {
+            effects.append(
+                .publish(
+                    .reply(
+                        .completed(
+                            conversationID: next.conversationID,
+                            turnID: turnID
+                        )
+                    )
                 )
             )
         }
-
-        next.pendingReplies.append(
-            PendingConversationReply(turnID: turnID, text: response)
-        )
-        next.activeMessage = nil
-        next.status = .idle
         effects += startNextTurn(&next)
 
     case .replyDelivered(let turnID):

@@ -4,13 +4,22 @@ import Hail
 import NorbyDomain
 import NorbyMemory
 
-/// Lets the model add or revise a durable, user-specific memory. The tool is
-/// scoped to a user and the source conversation turn by the application
-/// composition root; Hail only sees a normal per-turn tool.
+/// Lets the model propose a durable user-specific memory update.
+///
+/// It is scoped to the current user and observation by the application
+/// composition root, then applies proposals through Norby's memory actor.
 public struct MemoryTool: Tool {
     public enum Operation: String, Codable, Sendable, Equatable, CaseIterable {
         case add
         case revise
+    }
+
+    public enum Namespace: String, Codable, Sendable, Equatable, CaseIterable {
+        case profile
+        case preference
+        case relationship
+        case project
+        case environment
     }
 
     public enum ValueKind: String, Codable, Sendable, Equatable, CaseIterable {
@@ -21,17 +30,24 @@ public struct MemoryTool: Tool {
         case preference
     }
 
+    public enum Stability: String, Codable, Sendable, Equatable, CaseIterable {
+        case transient
+        case situational
+        case mutable
+        case stable
+    }
+
     public struct Input: Codable, Sendable {
         public let operation: Operation
         public let factID: String?
-        public let namespace: MemoryNamespace
+        public let namespace: Namespace
         public let predicate: String
         public let value: String
         public let valueKind: ValueKind
         public let supportingText: String
         public let confidence: Double
         public let importance: Double
-        public let stability: MemoryStability
+        public let stability: Stability
 
         private enum CodingKeys: String, CodingKey {
             case operation
@@ -49,14 +65,14 @@ public struct MemoryTool: Tool {
         public init(
             operation: Operation = .add,
             factID: String? = nil,
-            namespace: MemoryNamespace,
+            namespace: Namespace,
             predicate: String,
             value: String,
             valueKind: ValueKind = .text,
             supportingText: String,
             confidence: Double = 0.9,
             importance: Double = 0.5,
-            stability: MemoryStability = .mutable
+            stability: Stability = .mutable
         ) {
             self.operation = operation
             self.factID = factID
@@ -74,14 +90,14 @@ public struct MemoryTool: Tool {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.operation = try container.decodeIfPresent(Operation.self, forKey: .operation) ?? .add
             self.factID = try container.decodeIfPresent(String.self, forKey: .factID)
-            self.namespace = try container.decode(MemoryNamespace.self, forKey: .namespace)
+            self.namespace = try container.decode(Namespace.self, forKey: .namespace)
             self.predicate = try container.decode(String.self, forKey: .predicate)
             self.value = try container.decode(String.self, forKey: .value)
             self.valueKind = try container.decode(ValueKind.self, forKey: .valueKind)
             self.supportingText = try container.decode(String.self, forKey: .supportingText)
             self.confidence = try container.decode(Double.self, forKey: .confidence)
             self.importance = try container.decode(Double.self, forKey: .importance)
-            self.stability = try container.decode(MemoryStability.self, forKey: .stability)
+            self.stability = try container.decode(Stability.self, forKey: .stability)
         }
     }
 
@@ -118,7 +134,7 @@ public struct MemoryTool: Tool {
                         "namespace": LLMToolSchema.PropertySchema(
                             type: "string",
                             description: "Memory category.",
-                            enumValues: MemoryNamespace.allCases.map(\.rawValue)
+                            enumValues: Namespace.allCases.map(\.rawValue)
                         ),
                         "operation": LLMToolSchema.PropertySchema(
                             type: "string",
@@ -163,17 +179,27 @@ public struct MemoryTool: Tool {
                         "stability": LLMToolSchema.PropertySchema(
                             type: "string",
                             description: "How likely the fact is to change.",
-                            enumValues: MemoryStability.allCases.map(\.rawValue)
+                            enumValues: Stability.allCases.map(\.rawValue)
                         ),
                     ],
-                    required: ["operation", "namespace", "predicate", "value", "value_kind", "supporting_text", "confidence", "importance", "stability"]
+                    required: [
+                        "operation",
+                        "namespace",
+                        "predicate",
+                        "value",
+                        "value_kind",
+                        "supporting_text",
+                        "confidence",
+                        "importance",
+                        "stability",
+                    ]
                 )
             )
         )
     }
 
     public func effect(for input: Input) throws -> CoordinationEffect {
-        _ = try proposal(from: input)
+        try validate(input)
         return CoordinationEffect(subsystem: "memory", action: input.operation.rawValue)
     }
 
@@ -182,6 +208,7 @@ public struct MemoryTool: Tool {
         token: borrowing EffectToken<CoordinationEffect>
     ) async throws -> String {
         _ = token
+        try validate(input)
         let proposal = try proposal(from: input)
         let user = try await User.resolve(on: actorSystem, userID: userID)
         let update = try await user.applyMemoryProposal(
@@ -205,19 +232,41 @@ public struct MemoryTool: Tool {
         }
     }
 
+    private func validate(_ input: Input) throws {
+        guard !input.predicate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToolError.missingArgument("predicate")
+        }
+        guard !input.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToolError.missingArgument("value")
+        }
+        guard !input.supportingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToolError.missingArgument("supporting_text")
+        }
+        guard input.confidence.isFinite, (0...1).contains(input.confidence) else {
+            throw ToolError.invalidArgument("confidence", value: String(input.confidence))
+        }
+        guard input.importance.isFinite, (0...1).contains(input.importance) else {
+            throw ToolError.invalidArgument("importance", value: String(input.importance))
+        }
+
+        switch input.operation {
+        case .add:
+            guard input.factID == nil else {
+                throw ToolError.invalidArgument("fact_id", value: "fact_id is only used for revise")
+            }
+        case .revise:
+            guard let factID = input.factID,
+                  !factID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                throw ToolError.missingArgument("fact_id")
+            }
+        }
+    }
+
     private func proposal(from input: Input) throws -> MemoryProposal {
         let predicate = input.predicate.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = input.value.trimmingCharacters(in: .whitespacesAndNewlines)
         let supportingText = input.supportingText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !predicate.isEmpty else {
-            throw ToolError.missingArgument("predicate")
-        }
-        guard !value.isEmpty else {
-            throw ToolError.missingArgument("value")
-        }
-        guard !supportingText.isEmpty else {
-            throw ToolError.missingArgument("supporting_text")
-        }
 
         let memoryValue: MemoryValue
         switch input.valueKind {
@@ -239,30 +288,31 @@ public struct MemoryTool: Tool {
             memoryValue = .preference(preference)
         }
 
+        guard let namespace = MemoryNamespace(rawValue: input.namespace.rawValue),
+              let stability = MemoryStability(rawValue: input.stability.rawValue)
+        else {
+            throw ToolError.invalidArgument("namespace", value: input.namespace.rawValue)
+        }
         let candidate = FactCandidate(
-            namespace: input.namespace,
+            namespace: namespace,
             predicate: predicate,
             value: memoryValue,
             evidence: [observation.id],
             supportingText: supportingText,
             confidence: input.confidence,
             importance: input.importance,
-            stability: input.stability,
+            stability: stability,
             observedAt: observation.observedAt
         )
 
         switch input.operation {
         case .add:
-            guard input.factID == nil else {
-                throw ToolError.invalidArgument("fact_id", value: "fact_id is only used for revise")
-            }
             return .add(candidate)
         case .revise:
-            guard let factID = input.factID, !factID.isEmpty else {
-                throw ToolError.missingArgument("fact_id")
-            }
-            guard let uuid = UUID(uuidString: factID) else {
-                throw ToolError.invalidArgument("fact_id", value: factID)
+            guard let factID = input.factID,
+                  let uuid = UUID(uuidString: factID)
+            else {
+                throw ToolError.invalidArgument("fact_id", value: input.factID ?? "")
             }
             return .revise(
                 factID: MemoryFactID(rawValue: uuid),
@@ -272,5 +322,4 @@ public struct MemoryTool: Tool {
     }
 }
 
-/// Source compatibility for callers that still refer to the old name.
 public typealias RememberTool = MemoryTool

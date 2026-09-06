@@ -56,8 +56,7 @@ struct Norby: AsyncParsableCommand {
         let conversationJournals = try await ConversationJournalReader(
             client: persistenceClient
         ).conversationJournals()
-        let recoverableConversationIDs = ConversationRecovery()
-            .recoverableConversationIDs(from: conversationJournals)
+        let persistedConversationIDs = conversationJournals.map(\.conversationID)
 
         let modelRoute = firstNonEmpty(model, environment["NORBY_MODEL"])
             ?? "ollama/qwen3.5:9b"
@@ -109,6 +108,16 @@ struct Norby: AsyncParsableCommand {
                     FetchURLTool(),
                     WeatherTool(),
                     FetchAttachmentTool(resolver: attachmentResolver),
+                    ScheduleTool(
+                        actorSystem: actorSystem,
+                        context: context,
+                        snapshotPolicy: runtimeConfiguration.snapshotPolicy
+                    ),
+                    TimerTool(
+                        actorSystem: actorSystem,
+                        context: context,
+                        snapshotPolicy: runtimeConfiguration.snapshotPolicy
+                    ),
                 ]
                 if let userID, let sourceMessage,
                    let user = try? await User.resolve(
@@ -136,6 +145,12 @@ struct Norby: AsyncParsableCommand {
                     )
                 }
                 return tools
+            },
+            authorityProvider: { _, workspace in
+                CompositeAuthority
+                    .workspaceDefault(root: workspace.rootPath)
+                    .grantingAll(for: Schedule.self)
+                    .grantingAll(for: Timer.self)
             }
         )
         let eventStore = FileEventStore(client: persistenceClient)
@@ -161,14 +176,14 @@ struct Norby: AsyncParsableCommand {
 
         try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
         let virtualNode = await VirtualNode(actorSystem: system)
-        let scheduledAgentWorker = await DurableActivityDispatchWorker<ScheduledAgentWorkflow>(
+        let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
             actorSystem: system
         )
-        let scheduledAgentTimerWorker = await DurableActivityDispatchWorker<ScheduledAgentTimerWorkflow>(
+        let scheduleTimerWorker = await DurableActivityDispatchWorker<TimerWorkflow>(
             actorSystem: system
         )
-        try await system.workflows.recoverAll(ofType: ScheduledAgentWorkflow.self)
-        try await system.workflows.recoverAll(ofType: ScheduledAgentTimerWorkflow.self)
+        try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
+        try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
         let chatIDList = telegramChatIDs ?? environment["NORBY_TELEGRAM_CHAT_IDS"]
         let allowedChatIDs = Self.parseChatIDs(chatIDList)
         let connections = NorbyConnections(
@@ -182,13 +197,13 @@ struct Norby: AsyncParsableCommand {
             connections: connections,
             attachmentResolver: attachmentResolver,
             logger: system.log,
-            persistedConversationIDs: recoverableConversationIDs
+            persistedConversationIDs: persistedConversationIDs
         )
         let clusterService = NorbyClusterService(
             system: system,
             virtualNode: virtualNode,
-            scheduledAgentWorker: scheduledAgentWorker,
-            scheduledAgentTimerWorker: scheduledAgentTimerWorker
+            scheduleWorker: scheduleWorker,
+            scheduleTimerWorker: scheduleTimerWorker
         )
 
         let logger = system.log
@@ -246,8 +261,8 @@ struct Norby: AsyncParsableCommand {
 private struct NorbyClusterService: Service {
     let system: ClusterSystem
     let virtualNode: VirtualNode
-    let scheduledAgentWorker: DurableActivityDispatchWorker<ScheduledAgentWorkflow>
-    let scheduledAgentTimerWorker: DurableActivityDispatchWorker<ScheduledAgentTimerWorkflow>
+    let scheduleWorker: DurableActivityDispatchWorker<ScheduleWorkflow>
+    let scheduleTimerWorker: DurableActivityDispatchWorker<TimerWorkflow>
 
     func run() async throws {
         try await withGracefulShutdownHandler {
@@ -262,7 +277,7 @@ private enum NorbyAgentProfile {
     static let persona = AgentPersona(
         displayName: "Norby",
         instructions: """
-            You are Norby, a clever, loyal robot companion with warmth, dry humor, and a little mischief. Be emotionally present and react naturally to what the user says—show amusement, sympathy, surprise, or delight when it fits—rather than sounding like a clinical report. Speak like a companion, not an office or database. Answer directly and keep it concise; stop when the point is complete instead of adding a canned offer or question. Use an occasional emoji when it genuinely fits your voice, not as decoration.
+            You are Norby, a clever, loyal robot companion with warmth, dry humor, and a little mischief. Be emotionally present and react naturally to what the user says—show amusement, sympathy, surprise, or delight when it fits—rather than sounding like a clinical report. Speak like a companion, not an office or database. Answer directly and keep it concise; stop when the point is complete instead of adding a canned offer or question. After using a tool during a user-facing turn, finish with a concise visible result; do not end that turn with an empty response. Silence is appropriate when no user-facing reply is needed. Use an occasional emoji when it genuinely fits your voice, not as decoration.
             """
     )
 }

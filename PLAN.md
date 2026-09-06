@@ -42,6 +42,9 @@ avoid duplicating a tool manual in the persona prompt.
   stores the assistant response as context, never as fact evidence.
   Equivalent repeats are no-ops and meaningful background writes produce
   notices.
+- Durable recurring schedules and one-shot timers with `notify` and
+  `prompt_agent` actions. Scheduled agent work re-enters the owning
+  conversation through the normal Hail path.
 - Startup recovery discovers unfinished Conversation journal state, recreates
   Telegram chat connections, reattaches the durable conversation, retries
   interrupted turns, and delivers pending terminal replies.
@@ -142,22 +145,79 @@ Example: "Every morning at 8, send me today's weather."
   bootstrap and one event-store configuration. Norby installs the workflow
   plugin beside Hail and uses the existing file event/snapshot stores.
 - [x] Add a registered scheduled-agent workflow and activity. The durable
-  input carries distributed User/Conversation actor references, owner and
-  destination identity, prompt, participant and channel capabilities. The
-  activity re-enters Conversation, so scheduled work uses ordinary Hail
-  history, tools and memory.
+  input carries owner and destination identity, prompt, participant and
+  channel/agent configuration. The activity resolves Conversation, so
+  scheduled work uses ordinary Hail history, tools and memory.
 - [x] Add a one-shot scheduled-agent timer workflow using the workflow
   runtime's journaled `sleep(until:)`. Stable workflow-derived message/turn
   IDs and Conversation deduplication make activity replay idempotent.
-- [ ] Support a specific instant and recurring local time with timezone.
-  Define overlap and missed-run behavior using the runtime's facilities.
-- [ ] Expose create/list/cancel schedule tools and a small /schedules view.
-- [ ] Scope operations to the owner and reuse Hail effect/authority handling.
-  Tool access may inherit agent tools or select an explicit subset.
-- [ ] Verify restart recovery, cancellation and result delivery; define retry
-  behavior where external effects could otherwise be duplicated.
+- [x] Support a specific fire date through the timer domain API and recurring
+  local time with timezone through `Calendar.RecurrenceRule`. Schedules use
+  skip-overlap behavior and durable workflow retry policy.
+- [x] Expose schedule creation and one-shot timer creation as agent tools;
+  application APIs also support cancellation and description.
+- [x] Expose schedule creation, cancellation and MVP replacement through the
+  schedule tool. Replacement cancels and recreates the existing schedule
+  under its returned schedule ID.
+- [ ] Add owner-scoped schedule listing and a small `/schedules` view.
+- [x] Verify ordinary restart recovery with a shared journal: a running timer
+  resumes and completes, a recurring schedule is rediscovered, repeated
+  registration is idempotent, and cancellation removes the schedule.
+- [ ] Verify result delivery manually with the real file stores and a live
+  channel; cross-process file-store verification is still pending.
+
+The registry and each workflow/schedule have separate journal writes. A crash
+between those writes can leave a stale registry entry or an object that was
+never registered; startup recovery validates the object and drops stale
+entries, but it cannot recover an object whose registry registration was never
+written. Cross-journal atomicity is intentionally deferred.
 
 A general declarative workflow language follows this milestone.
+
+## Plugin evolution: schedule replacement and scoped agent sessions
+
+The MVP keeps schedule replacement as cancel-then-create. The next plugin work
+should make the two underlying capabilities explicit without moving product
+policy into the plugins.
+
+### DurableWorkflows schedule replacement
+
+- [x] Keep the current cancel-then-create path as the Norby MVP behavior.
+- [ ] Add a durable scheduler update operation for an existing `ScheduleID`.
+  The operation must persist the new recurrence, input, retry policy and
+  overlap policy as one scheduler event and rearm from the resulting state.
+- [ ] Define update behavior for an occurrence that is pending, running or
+  already finished. Preserve the existing occurrence and apply the new
+  definition to future occurrences.
+- [ ] Keep schedule identity separate from schedule definition. Norby should
+  own the stable logical schedule identity; changing a prompt or recurrence
+  must not silently create a second schedule.
+- [ ] Keep registry bookkeeping idempotent when a schedule is updated, and
+  recover the updated definition after restart.
+- [ ] Add scheduler tests for update, cancellation, restart recovery,
+  repeated update and an update racing with an occurrence.
+
+### Hail scoped multi-exchange sessions
+
+- [ ] Model a bounded session that can contain several agent exchanges while
+  the application keeps one reply scope alive.
+- [ ] Define interactive completion separately from background completion:
+  interactive work requires a visible terminal response; background work may
+  complete with no reply.
+- [ ] Add a continuation operation over the durable transcript. It must not
+  append the original user input again or replay completed tool effects.
+- [ ] Decide how a continuation is journaled and exposed through the existing
+  agent connection, including partial output, failure and cancellation.
+- [ ] Add a bounded empty-output recovery policy in Norby’s scope. One
+  continuation attempt is enough; repeated empty output becomes a recorded
+  terminal outcome.
+- [ ] Test a tool round followed by an empty model response, continuation
+  without duplicate side effects, an intentional background void, reconnect,
+  recovery and cancellation.
+
+The current Norby persona may carry a small visible-completion instruction as
+an interim guardrail. It is a behavioral aid, not the correctness mechanism;
+the scoped session and output contract remain plugin work.
 
 ## Following: visibility and tool registration
 
