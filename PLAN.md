@@ -109,6 +109,29 @@ Accepted MVP tradeoffs: observations use journal order; background extraction
 is best-effort and may be skipped by a crash. Durable extraction jobs and
 additional ordering machinery are deferred. Saved facts remain durable.
 
+## Following: local data protection
+
+Norby currently stores conversation coordination, Hail transcripts, memory,
+and snapshots as readable local persistence files. Telegram and any remote
+model endpoint remain separate external trust boundaries.
+
+- [ ] Make Telegram access explicit and default-deny. An empty allow-list
+  currently permits every chat to reach Norby.
+- [ ] Keep Ollama local unless explicitly configured otherwise. Make a remote
+  model endpoint an obvious, deliberate configuration choice.
+- [ ] Define the local at-rest protection contract and key-loss behavior.
+- [ ] Add encryption to `FilePersistenceClient`, covering event journals and
+  snapshots through the existing store/client boundary. Event and snapshot
+  adapters remain thin plugin details; Hail and domain values stay unaware of
+  encryption.
+- [ ] Provision the installation key from the application composition root
+  using the macOS Keychain, and fail clearly when protected data cannot be
+  opened.
+- [ ] Verify migration/rotation behavior and backups before enabling it by
+  default.
+- [ ] Keep logical `/forget` separate from a future physical local wipe of
+  journals and snapshots.
+
 ## Next feature: a scheduled agent
 
 First deliver one narrow path: a durable schedule wakes a named Hail agent
