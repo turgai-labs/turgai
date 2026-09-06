@@ -160,23 +160,9 @@ public distributed actor User {
         return reference.id
     }
 
-    /// Records a completed turn and applies the supplied extractor output.
-    ///
-    /// The observation is persisted before candidates are evaluated. If a
-    /// process stops between those events, retrying still evaluates the same
-    /// candidates; policy makes already-applied evidence a no-op.
-    public distributed func recordCompletedObservation(
-        _ observation: MemoryObservation
-    ) async throws -> MemoryUpdate {
-        try await recordCompletedObservation(
-            observation,
-            proposals: MemoryExtractor.extract(from: observation).map(MemoryProposal.add)
-        )
-    }
-
     /// Persists a completed observation and applies candidates produced by an
-    /// application-side extractor. This overload keeps the original domain
-    /// boundary for callers that only produce additions.
+    /// extractor. This overload keeps the original domain boundary for
+    /// callers that only produce additions.
     public distributed func recordCompletedObservation(
         _ observation: MemoryObservation,
         candidates: [FactCandidate]
@@ -195,16 +181,9 @@ public distributed actor User {
         proposals: [MemoryProposal]
     ) async throws -> MemoryUpdate {
         let reference = try await ensureObservation(observation)
-        let evidencedProposals = proposals.map {
-            Self.addEvidence(
-                from: $0,
-                observationID: reference.id,
-                replacingObservationID: observation.id
-            )
-        }
 
         var changes: [MemoryFactChange] = []
-        for proposal in evidencedProposals {
+        for proposal in proposals {
             if let change = try await recordProposalInJournal(proposal) {
                 changes.append(change)
             }
@@ -222,21 +201,16 @@ public distributed actor User {
         return MemoryUpdate(factChanges: change.map { [$0] } ?? [])
     }
 
-    /// Applies a model-directed proposal with provenance from the current
-    /// conversation turn. Both additions and revisions use the same policy as
-    /// automatic extraction.
+    /// Applies a model-directed proposal. The caller supplies provenance in
+    /// the proposal, so direct tool writes and background extraction use the
+    /// same policy and evidence invariant.
     public distributed func applyMemoryProposal(
         _ proposal: MemoryProposal,
         observation: MemoryObservation
     ) async throws -> MemoryUpdate {
         let reference = try await ensureObservation(observation)
-        let evidencedProposal = Self.addEvidence(
-            from: proposal,
-            observationID: reference.id,
-            replacingObservationID: observation.id
-        )
 
-        let change = try await recordProposalInJournal(evidencedProposal)
+        let change = try await recordProposalInJournal(proposal)
         return MemoryUpdate(
             observationRecorded: reference.recorded,
             factChanges: change.map { [$0] } ?? []
@@ -252,8 +226,20 @@ public distributed actor User {
             text: "Explicit memory request: \(candidate.predicate) = \(candidate.value.rendered)",
             observedAt: candidate.observedAt
         )
+        let evidencedCandidate = FactCandidate(
+            namespace: candidate.namespace,
+            predicate: candidate.predicate,
+            value: candidate.value,
+            evidence: [observation.id],
+            supportingText: observation.text,
+            confidence: candidate.confidence,
+            importance: candidate.importance,
+            stability: candidate.stability,
+            observedAt: candidate.observedAt,
+            validUntil: candidate.validUntil
+        )
         return try await applyMemoryProposal(
-            .add(candidate),
+            .add(evidencedCandidate),
             observation: observation
         )
     }
@@ -284,16 +270,25 @@ public distributed actor User {
     private func recordProposalInJournal(
         _ proposal: MemoryProposal
     ) async throws -> MemoryFactChange? {
+        let candidate: FactCandidate
+        switch proposal {
+        case .add(let value), .revise(_, let value):
+            candidate = value
+        }
+        guard MemoryEvidence.supports(candidate, in: state.memory.observations) else {
+            return nil
+        }
+
         let alreadyApplied: Bool
         switch proposal {
-        case .add(let candidate):
+        case .add:
             alreadyApplied = state.memory.facts.contains { fact in
                 fact.namespace == candidate.namespace
                     && fact.predicate == candidate.predicate
                     && fact.value == candidate.value
                     && candidate.evidence.allSatisfy(fact.evidence.contains)
             }
-        case .revise(let factID, let candidate):
+        case .revise(let factID, _):
             alreadyApplied = state.memory.facts.contains { fact in
                 fact.id != factID
                     && fact.namespace == candidate.namespace
@@ -321,40 +316,6 @@ public distributed actor User {
             return .superseded
         case .rejected:
             return nil
-        }
-    }
-
-    private static func addEvidence(
-        from proposal: MemoryProposal,
-        observationID: ObservationID,
-        replacingObservationID: ObservationID? = nil
-    ) -> MemoryProposal {
-        func withEvidence(_ candidate: FactCandidate) -> FactCandidate {
-            var evidence = candidate.evidence
-            if let replacingObservationID, replacingObservationID != observationID {
-                evidence.removeAll { $0 == replacingObservationID }
-            }
-            if !evidence.contains(observationID) {
-                evidence.append(observationID)
-            }
-            return FactCandidate(
-                namespace: candidate.namespace,
-                predicate: candidate.predicate,
-                value: candidate.value,
-                evidence: evidence,
-                confidence: candidate.confidence,
-                importance: candidate.importance,
-                stability: candidate.stability,
-                observedAt: candidate.observedAt,
-                validUntil: candidate.validUntil
-            )
-        }
-
-        switch proposal {
-        case .add(let candidate):
-            return .add(withEvidence(candidate))
-        case .revise(let factID, let candidate):
-            return .revise(factID: factID, candidate: withEvidence(candidate))
         }
     }
 

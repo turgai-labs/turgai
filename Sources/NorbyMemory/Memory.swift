@@ -159,12 +159,18 @@ public struct MemoryFact: Hashable, Codable, Sendable {
 }
 
 /// The extractor's proposal. Carries no identity and no authority: the
-/// deterministic ``MemoryPolicy`` decides what becomes a durable fact.
+/// deterministic ``MemoryPolicy`` decides what becomes a durable fact, while
+/// ``MemoryEvidence`` validates that its provenance is user-authored.
 public struct FactCandidate: Hashable, Codable, Sendable {
     public let namespace: MemoryNamespace
     public let predicate: String
     public let value: MemoryValue
     public let evidence: [ObservationID]
+    /// A short verbatim fragment from one of the referenced user
+    /// observations. This is deliberately separate from the assistant
+    /// response: tool output and generated text can provide context, but
+    /// cannot establish a personal fact.
+    public let supportingText: String
     public let confidence: Double
     public let importance: Double
     public let stability: MemoryStability
@@ -176,6 +182,7 @@ public struct FactCandidate: Hashable, Codable, Sendable {
         predicate: String,
         value: MemoryValue,
         evidence: [ObservationID],
+        supportingText: String,
         confidence: Double,
         importance: Double,
         stability: MemoryStability,
@@ -186,11 +193,43 @@ public struct FactCandidate: Hashable, Codable, Sendable {
         self.predicate = predicate
         self.value = value
         self.evidence = evidence
+        self.supportingText = supportingText
         self.confidence = min(max(confidence, 0), 1)
         self.importance = min(max(importance, 0), 1)
         self.stability = stability
         self.observedAt = observedAt
         self.validUntil = validUntil
+    }
+}
+
+/// Pure validation of proposal provenance. The referenced observation IDs
+/// identify possible sources; the supporting text proves that at least one of
+/// those sources is the user's own message. Observation responses are never
+/// searched, so generated replies and tool results cannot become evidence.
+public enum MemoryEvidence {
+    public static func supports(
+        _ candidate: FactCandidate,
+        in observations: [MemoryObservation]
+    ) -> Bool {
+        let quote = normalized(candidate.supportingText)
+        guard !candidate.evidence.isEmpty, !quote.isEmpty else { return false }
+        guard candidate.evidence.allSatisfy({ evidenceID in
+            observations.contains { $0.id == evidenceID }
+        }) else {
+            return false
+        }
+
+        return observations.contains { observation in
+            candidate.evidence.contains(observation.id)
+                && normalized(observation.text).contains(quote)
+        }
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text
+            .lowercased()
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
     }
 }
 

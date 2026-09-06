@@ -82,28 +82,19 @@ public struct MemoryPolicy: Equatable, Sendable {
 
         switch proposal {
         case .add:
-            let matching = facts.enumerated().filter {
-                $0.element.status == .active
-                    && $0.element.namespace == candidate.namespace
-                    && $0.element.predicate == candidate.predicate
+            guard !facts.contains(where: {
+                $0.status == .active
+                    && $0.namespace == candidate.namespace
+                    && $0.predicate == candidate.predicate
+                    && $0.value == candidate.value
+            }) else {
+                // Repeating an equivalent claim does not change memory.
+                // Evidence is provenance, not a reason to mutate the fact on
+                // every turn.
+                return .rejected
             }
 
-            guard let existing = matching
-                .filter({ $0.element.value == candidate.value })
-                .max(by: { left, right in
-                if left.element.observedAt != right.element.observedAt {
-                    return left.element.observedAt < right.element.observedAt
-                }
-                return left.offset < right.offset
-            })?.element else {
-                return .accepted(makeFact(from: candidate, id: factID))
-            }
-
-            return .reinforced(
-                factID: existing.id,
-                evidence: candidate.evidence,
-                confidence: max(existing.confidence, candidate.confidence)
-            )
+            return .accepted(makeFact(from: candidate, id: factID))
 
         case .revise(let targetID, _):
             guard let existing = facts.first(where: {
@@ -111,19 +102,13 @@ public struct MemoryPolicy: Equatable, Sendable {
             }) else {
                 return .rejected
             }
-            guard candidate.namespace == existing.namespace,
-                  candidate.predicate == existing.predicate,
-                  candidate.observedAt >= existing.observedAt
+            guard candidate.observedAt >= existing.observedAt
             else {
                 return .rejected
             }
 
             if existing.value == candidate.value {
-                return .reinforced(
-                    factID: existing.id,
-                    evidence: candidate.evidence,
-                    confidence: max(existing.confidence, candidate.confidence)
-                )
+                return .rejected
             }
 
             // An explicit revision identifies the fact being corrected. Its
@@ -131,7 +116,11 @@ public struct MemoryPolicy: Equatable, Sendable {
             // with the old fact's confidence a second time.
             return .superseded(
                 oldFactID: existing.id,
-                replacement: makeFact(from: candidate, id: factID)
+                replacement: makeFact(
+                    from: candidate,
+                    id: factID,
+                    preserving: existing
+                )
             )
         }
     }
@@ -141,6 +130,26 @@ public struct MemoryPolicy: Equatable, Sendable {
             id: id,
             namespace: candidate.namespace,
             predicate: candidate.predicate,
+            value: candidate.value,
+            evidence: candidate.evidence,
+            confidence: candidate.confidence,
+            importance: candidate.importance,
+            stability: candidate.stability,
+            observedAt: candidate.observedAt,
+            validFrom: candidate.observedAt,
+            validUntil: candidate.validUntil
+        )
+    }
+
+    private func makeFact(
+        from candidate: FactCandidate,
+        id: MemoryFactID,
+        preserving existing: MemoryFact
+    ) -> MemoryFact {
+        MemoryFact(
+            id: id,
+            namespace: existing.namespace,
+            predicate: existing.predicate,
             value: candidate.value,
             evidence: candidate.evidence,
             confidence: candidate.confidence,

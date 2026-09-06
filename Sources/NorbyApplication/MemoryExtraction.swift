@@ -18,6 +18,8 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
         public let confidence: Double
         public let importance: Double
         public let stability: String
+        public let evidenceIDs: [String]
+        public let supportingText: String
 
         public init(
             operation: String = "add",
@@ -28,7 +30,9 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
             valueKind: String,
             confidence: Double,
             importance: Double,
-            stability: String
+            stability: String,
+            evidenceIDs: [String] = [],
+            supportingText: String = ""
         ) {
             self.operation = operation
             self.factID = factID
@@ -39,6 +43,8 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
             self.confidence = confidence
             self.importance = importance
             self.stability = stability
+            self.evidenceIDs = evidenceIDs
+            self.supportingText = supportingText
         }
 
         public init(_ content: GeneratedContent) throws {
@@ -51,7 +57,9 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
                 valueKind: try content.value(String.self, forProperty: "valueKind"),
                 confidence: try content.value(Double.self, forProperty: "confidence"),
                 importance: try content.value(Double.self, forProperty: "importance"),
-                stability: try content.value(String.self, forProperty: "stability")
+                stability: try content.value(String.self, forProperty: "stability"),
+                evidenceIDs: try content.value([String].self, forProperty: "evidenceIDs"),
+                supportingText: try content.value(String.self, forProperty: "supportingText")
             )
         }
 
@@ -66,6 +74,8 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
                 "confidence": confidence,
                 "importance": importance,
                 "stability": stability,
+                "evidenceIDs": evidenceIDs,
+                "supportingText": supportingText,
             ])
         }
 
@@ -83,6 +93,16 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
                     .init(name: "confidence", description: "Confidence from 0 to 1.", type: Double.self),
                     .init(name: "importance", description: "Importance from 0 to 1.", type: Double.self),
                     .init(name: "stability", description: "Expected stability.", type: String.self),
+                    .init(
+                        name: "evidenceIDs",
+                        description: "Observation IDs containing the user's supporting statements.",
+                        type: [String].self
+                    ),
+                    .init(
+                        name: "supportingText",
+                        description: "A short verbatim quote from a user's supporting statement; never quote the assistant or a tool.",
+                        type: String.self
+                    ),
                 ]
             )
         }
@@ -184,6 +204,21 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
                                     description: "Expected stability.",
                                     enumValues: MemoryStability.allCases.map(\.rawValue)
                                 ),
+                                "evidenceIDs": LLMToolSchema.PropertySchema(
+                                    type: "array",
+                                    description: "Observation IDs containing the user's supporting statements.",
+                                    enumValues: nil,
+                                    items: LLMToolSchema.PropertySchema(
+                                        type: "string",
+                                        description: "An observation ID.",
+                                        enumValues: nil
+                                    )
+                                ),
+                                "supportingText": LLMToolSchema.PropertySchema(
+                                    type: "string",
+                                    description: "A short verbatim quote from a user's supporting statement; never quote the assistant or a tool.",
+                                    enumValues: nil
+                                ),
                             ],
                             required: [
                                 "operation",
@@ -195,6 +230,8 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
                                 "confidence",
                                 "importance",
                                 "stability",
+                                "evidenceIDs",
+                                "supportingText",
                             ]
                         )
                     )
@@ -260,20 +297,21 @@ public struct HailMemoryCandidateExtractor: Sendable {
         throw HailMemoryExtractionError.noResponse
     }
 
-    private static let instructions = "Extract only durable user facts or useful recurring defaults that are stated by or unambiguously confirmed by the user in the completed exchange. Return a fact only when this exchange adds evidence for it; never repeat a fact merely because it appears in the current memory context. Understand any language. Ignore one-off task inputs, temporary locations, assistant claims, secrets, and sensitive information. Use operation add for a new fact. Use operation revise only when correcting one of the supplied active facts, and copy its exact factID. Return an empty list when uncertain."
+    private static let instructions = "Reconcile the completed exchange with the supplied active memory. Return only durable facts about the user that this exchange actually establishes or corrects. Assistant text, tool results, weather locations, search targets, quoted text, and existing memory are context, never evidence by themselves. Return an empty list when the exchange adds nothing. Use add only for a genuinely new fact. Use revise with the exact existing factID when the exchange repeats, clarifies, or corrects a supplied fact; never create a second fact because predicate wording changed. Every candidate must list one or more evidenceIDs and a supportingText that is copied verbatim from a user's statement with only whitespace or case differences; never quote the assistant or a tool. The quote must establish the fact, not merely provide a parameter for a one-off task. Understand any language, and ignore secrets and sensitive information."
 
     private static func prompt(for context: MemoryExtractionContext) -> String {
         var sections = [
             "Completed exchange:",
-            "User: \(context.observation.text)",
-            "Assistant: \(context.observation.response ?? "(none)")",
+            "Evidence-capable user observation ID: \(context.observation.id.rawValue.uuidString)",
+            "User statement: \(context.observation.text)",
+            "Assistant response (context only): \(context.observation.response ?? "(none)")",
         ]
 
         if !context.previousObservations.isEmpty {
             sections.append("Previous exchanges:")
             sections.append(
                 context.previousObservations.map { observation in
-                    "User: \(observation.text)\nAssistant: \(observation.response ?? "(none)")"
+                    "Evidence-capable user observation ID: \(observation.id.rawValue.uuidString)\nUser statement: \(observation.text)\nAssistant response (context only): \(observation.response ?? "(none)")"
                 }.joined(separator: "\n---\n")
             )
         }
@@ -302,9 +340,11 @@ public struct HailMemoryCandidateExtractor: Sendable {
 
         let predicate = output.predicate.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = output.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let supportingText = output.supportingText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !predicate.isEmpty, !value.isEmpty, value.count <= 500 else {
             return nil
         }
+        guard !supportingText.isEmpty else { return nil }
 
         let memoryValue: MemoryValue
         switch output.valueKind {
@@ -328,16 +368,35 @@ public struct HailMemoryCandidateExtractor: Sendable {
             return nil
         }
 
+        let allowedEvidenceIDs = Set(
+            ([context.observation] + context.previousObservations).map(\.id)
+        )
+        let evidence = output.evidenceIDs.compactMap { value in
+            UUID(uuidString: value).map(ObservationID.init(rawValue:))
+        }
+        guard !evidence.isEmpty,
+              evidence.allSatisfy(allowedEvidenceIDs.contains)
+        else {
+            return nil
+        }
+
         let candidate = FactCandidate(
             namespace: namespace,
             predicate: predicate,
             value: memoryValue,
-            evidence: [context.observation.id],
+            evidence: evidence,
+            supportingText: supportingText,
             confidence: output.confidence,
             importance: output.importance,
             stability: stability,
             observedAt: context.observation.observedAt
         )
+        guard MemoryEvidence.supports(
+            candidate,
+            in: [context.observation] + context.previousObservations
+        ) else {
+            return nil
+        }
 
         switch output.operation.lowercased() {
         case "add":

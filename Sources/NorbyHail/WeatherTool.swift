@@ -115,12 +115,83 @@ public struct WeatherTool: Tool {
         }
     }
 
+    /// Data returned to the model. Presentation belongs to the model-facing
+    /// conversation, not to this provider adapter.
+    private struct WeatherReport: Encodable, Sendable {
+        let location: WeatherLocation
+        let timezone: String
+        let toolNow: Date
+        let localNow: LocalDateTime
+        let requestedDays: Int
+        let fromLocalHour: Int?
+        let current: WeatherCurrent
+        let hourly: [WeatherHourlyPoint]
+        let daily: [WeatherDailyPoint]
+        let source: String
+    }
+
+    private struct WeatherLocation: Encodable, Sendable {
+        let name: String
+        let region: String?
+        let country: String?
+        let latitude: Double
+        let longitude: Double
+    }
+
+    private struct WeatherCurrent: Encodable, Sendable {
+        let temperatureCelsius: Double
+        let apparentTemperatureCelsius: Double
+        let relativeHumidityPercent: Double
+        let precipitationMillimeters: Double
+        let weatherCode: Int
+        let condition: String
+        let windSpeedKilometersPerHour: Double
+        let windDirectionDegrees: Double
+        let windDirection: String
+    }
+
+    private struct WeatherHourlyPoint: Encodable, Sendable {
+        let time: Date
+        let localTime: LocalDateTime
+        let temperatureCelsius: Double
+        let apparentTemperatureCelsius: Double
+        let precipitationProbabilityPercent: Int?
+        let precipitationMillimeters: Double
+        let weatherCode: Int
+        let condition: String
+        let windSpeedKilometersPerHour: Double
+        let windDirectionDegrees: Double
+        let windDirection: String
+    }
+
+    private struct WeatherDailyPoint: Encodable, Sendable {
+        let date: String
+        let weatherCode: Int
+        let condition: String
+        let maximumTemperatureCelsius: Double
+        let minimumTemperatureCelsius: Double
+        let precipitationProbabilityPercent: Int?
+    }
+
+    private struct LocalDateTime: Encodable, Sendable {
+        let year: Int
+        let month: Int
+        let day: Int
+        let hour: Int
+        let minute: Int
+        let weekday: Int
+    }
+
     private struct Daily: Decodable {
-        let dates: [String]
-        let weatherCodes: [Int]
-        let maximumTemperatures: [Double]
-        let minimumTemperatures: [Double]
-        let precipitationProbabilities: [Int?]
+        struct Point {
+            let date: String
+            let weatherCode: Int
+            let maximumTemperature: Double
+            let minimumTemperature: Double
+            let precipitationProbability: Int?
+        }
+
+        let points: [Point]
 
         enum CodingKeys: String, CodingKey {
             case dates = "time"
@@ -129,17 +200,62 @@ public struct WeatherTool: Tool {
             case minimumTemperatures = "temperature_2m_min"
             case precipitationProbabilities = "precipitation_probability_max"
         }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let dates = try container.decode([String].self, forKey: .dates)
+            let weatherCodes = try container.decode([Int].self, forKey: .weatherCodes)
+            let maximumTemperatures = try container.decode(
+                [Double].self,
+                forKey: .maximumTemperatures
+            )
+            let minimumTemperatures = try container.decode(
+                [Double].self,
+                forKey: .minimumTemperatures
+            )
+            let precipitationProbabilities = try container.decode(
+                [Int?].self,
+                forKey: .precipitationProbabilities
+            )
+            guard Set([
+                dates.count,
+                weatherCodes.count,
+                maximumTemperatures.count,
+                minimumTemperatures.count,
+                precipitationProbabilities.count,
+            ]).count == 1 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .dates,
+                    in: container,
+                    debugDescription: "Daily weather series have different lengths."
+                )
+            }
+
+            self.points = dates.indices.map { index in
+                Point(
+                    date: dates[index],
+                    weatherCode: weatherCodes[index],
+                    maximumTemperature: maximumTemperatures[index],
+                    minimumTemperature: minimumTemperatures[index],
+                    precipitationProbability: precipitationProbabilities[index]
+                )
+            }
+        }
     }
 
     private struct Hourly: Decodable {
-        let times: [Date]
-        let temperatures: [Double]
-        let apparentTemperatures: [Double]
-        let precipitationProbabilities: [Int?]
-        let precipitations: [Double]
-        let weatherCodes: [Int]
-        let windSpeeds: [Double]
-        let windDirections: [Double]
+        struct Point {
+            let time: Date
+            let temperature: Double
+            let apparentTemperature: Double
+            let precipitationProbability: Int?
+            let precipitation: Double
+            let weatherCode: Int
+            let windSpeed: Double
+            let windDirection: Double
+        }
+
+        let points: [Point]
 
         enum CodingKeys: String, CodingKey {
             case times = "time"
@@ -150,6 +266,56 @@ public struct WeatherTool: Tool {
             case weatherCodes = "weather_code"
             case windSpeeds = "wind_speed_10m"
             case windDirections = "wind_direction_10m"
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let times = try container.decode([Date].self, forKey: .times)
+            let temperatures = try container.decode([Double].self, forKey: .temperatures)
+            let apparentTemperatures = try container.decode(
+                [Double].self,
+                forKey: .apparentTemperatures
+            )
+            let precipitationProbabilities = try container.decode(
+                [Int?].self,
+                forKey: .precipitationProbabilities
+            )
+            let precipitations = try container.decode(
+                [Double].self,
+                forKey: .precipitations
+            )
+            let weatherCodes = try container.decode([Int].self, forKey: .weatherCodes)
+            let windSpeeds = try container.decode([Double].self, forKey: .windSpeeds)
+            let windDirections = try container.decode([Double].self, forKey: .windDirections)
+            guard Set([
+                times.count,
+                temperatures.count,
+                apparentTemperatures.count,
+                precipitationProbabilities.count,
+                precipitations.count,
+                weatherCodes.count,
+                windSpeeds.count,
+                windDirections.count,
+            ]).count == 1 else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .times,
+                    in: container,
+                    debugDescription: "Hourly weather series have different lengths."
+                )
+            }
+
+            self.points = times.indices.map { index in
+                Point(
+                    time: times[index],
+                    temperature: temperatures[index],
+                    apparentTemperature: apparentTemperatures[index],
+                    precipitationProbability: precipitationProbabilities[index],
+                    precipitation: precipitations[index],
+                    weatherCode: weatherCodes[index],
+                    windSpeed: windSpeeds[index],
+                    windDirection: windDirections[index]
+                )
+            }
         }
     }
 
@@ -166,7 +332,7 @@ public struct WeatherTool: Tool {
 
     public let name = "weather"
     public let description =
-        "Get the current weather and forecast for a place. A one-day forecast is hourly; longer forecasts are daily. Pass a city, place name, or postal code; include the country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
+        "Get structured current weather and forecast data for a place. A one-day forecast is hourly; longer forecasts are daily. The result includes the tool clock, timezone, and local date/time components. Pass a city, place name, or postal code; include the country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
 
     private let configuration: Configuration
 
@@ -239,7 +405,13 @@ public struct WeatherTool: Tool {
                 longitude: location.longitude,
                 horizon: horizon
             )
-            return try format(location: location, forecast: forecast, horizon: horizon, now: now)
+            let report = try makeReport(
+                location: location,
+                forecast: forecast,
+                horizon: horizon,
+                now: now
+            )
+            return try encode(report)
         }
     }
 
@@ -333,113 +505,137 @@ public struct WeatherTool: Tool {
         }
     }
 
-    private func format(
+    private func makeReport(
         location: Location,
         forecast: ForecastResponse,
         horizon: ForecastHorizon,
         now: Date
-    ) throws -> String {
+    ) throws -> WeatherReport {
         guard let timeZone = TimeZone(identifier: forecast.timezone) else {
             throw Error.invalidResponse
         }
 
-        let place = [location.name, location.admin1, location.country]
-            .compactMap { value in
-                guard let value, !value.isEmpty else { return nil }
-                return value
-            }
-            .joined(separator: ", ")
-
-        let localTime = localClock(
-            in: timeZone,
-            at: now
+        let localNow = try localDateTime(now, in: timeZone)
+        let current = WeatherCurrent(
+            temperatureCelsius: forecast.current.temperature,
+            apparentTemperatureCelsius: forecast.current.apparentTemperature,
+            relativeHumidityPercent: forecast.current.relativeHumidity,
+            precipitationMillimeters: forecast.current.precipitation,
+            weatherCode: forecast.current.weatherCode,
+            condition: condition(forecast.current.weatherCode),
+            windSpeedKilometersPerHour: forecast.current.windSpeed,
+            windDirectionDegrees: forecast.current.windDirection,
+            windDirection: compassDirection(forecast.current.windDirection)
         )
-        var lines = [
-            "Weather for \(place) (local time: \(forecast.timezone))",
-            "Current local time from the tool clock: \(localTime)",
-            "Now: \(format(forecast.current.temperature)) °C, \(condition(forecast.current.weatherCode))",
-            "Feels like: \(format(forecast.current.apparentTemperature)) °C; humidity: \(format(forecast.current.relativeHumidity))%",
-            "Precipitation: \(format(forecast.current.precipitation)) mm; wind: \(format(forecast.current.windSpeed)) km/h \(compassDirection(forecast.current.windDirection))",
-        ]
 
+        let hourly: [WeatherHourlyPoint]
+        let daily: [WeatherDailyPoint]
+        let fromLocalHour: Int?
         switch horizon {
         case .currentDay(let fromHour):
-            lines.append("Hourly forecast:")
-            if let hourly = forecast.hourly {
-                lines.append(contentsOf: formatHourly(
-                    hourly,
-                    fromHour: fromHour ?? currentLocalHour(
-                        in: timeZone,
-                        at: now
-                    ),
-                    in: timeZone
-                ))
+            let startHour = fromHour ?? localNow.hour
+            fromLocalHour = startHour
+            if let source = forecast.hourly {
+                hourly = try source.points
+                    .map { try makeHourlyPoint($0, in: timeZone) }
+                    .filter { $0.localTime.hour >= startHour }
+            } else {
+                hourly = []
             }
+            daily = []
         case .days(let days):
-            lines.append("Daily forecast:")
-            if let daily = forecast.daily {
-                let count = min(
-                    days,
-                    daily.dates.count,
-                    daily.weatherCodes.count,
-                    daily.maximumTemperatures.count,
-                    daily.minimumTemperatures.count,
-                    daily.precipitationProbabilities.count
-                )
-                for index in 0..<count {
-                    let precipitation = daily.precipitationProbabilities[index]
-                        .map { "\($0)% rain" }
-                        ?? "rain chance unavailable"
-                    let date = try formatDailyDate(
-                        daily.dates[index],
-                        in: timeZone
-                    )
-                    lines.append(
-                        "- \(date): \(condition(daily.weatherCodes[index])), \(format(daily.minimumTemperatures[index]))–\(format(daily.maximumTemperatures[index])) °C, \(precipitation)"
+            fromLocalHour = nil
+            hourly = []
+            if let source = forecast.daily {
+                daily = source.points.prefix(days).map { point in
+                    WeatherDailyPoint(
+                        date: point.date,
+                        weatherCode: point.weatherCode,
+                        condition: condition(point.weatherCode),
+                        maximumTemperatureCelsius: point.maximumTemperature,
+                        minimumTemperatureCelsius: point.minimumTemperature,
+                        precipitationProbabilityPercent: point.precipitationProbability
                     )
                 }
+            } else {
+                daily = []
             }
         }
-        lines.append("Source: Open-Meteo")
-        return lines.joined(separator: "\n")
+
+        return WeatherReport(
+            location: WeatherLocation(
+                name: location.name,
+                region: location.admin1,
+                country: location.country,
+                latitude: location.latitude,
+                longitude: location.longitude
+            ),
+            timezone: forecast.timezone,
+            toolNow: now,
+            localNow: localNow,
+            requestedDays: horizon.days,
+            fromLocalHour: fromLocalHour,
+            current: current,
+            hourly: hourly,
+            daily: daily,
+            source: "Open-Meteo"
+        )
     }
 
-    private func formatHourly(
-        _ hourly: Hourly,
-        fromHour: Int,
+    private func makeHourlyPoint(
+        _ point: Hourly.Point,
         in timeZone: TimeZone
-    ) -> [String] {
-        let count = min(
-            hourly.times.count,
-            hourly.temperatures.count,
-            hourly.apparentTemperatures.count,
-            hourly.precipitationProbabilities.count,
-            hourly.precipitations.count,
-            hourly.weatherCodes.count,
-            hourly.windSpeeds.count,
-            hourly.windDirections.count
+    ) throws -> WeatherHourlyPoint {
+        WeatherHourlyPoint(
+            time: point.time,
+            localTime: try localDateTime(point.time, in: timeZone),
+            temperatureCelsius: point.temperature,
+            apparentTemperatureCelsius: point.apparentTemperature,
+            precipitationProbabilityPercent: point.precipitationProbability,
+            precipitationMillimeters: point.precipitation,
+            weatherCode: point.weatherCode,
+            condition: condition(point.weatherCode),
+            windSpeedKilometersPerHour: point.windSpeed,
+            windDirectionDegrees: point.windDirection,
+            windDirection: compassDirection(point.windDirection)
         )
+    }
 
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        return (0..<count).compactMap { index in
-            let date = hourly.times[index]
-            guard calendar.component(.hour, from: date) >= fromHour else {
-                return nil
-            }
-            let precipitation = hourly.precipitationProbabilities[index]
-                .map { "\($0)% rain" }
-                ?? "rain chance unavailable"
-            let time = date.formatted(
-                Date.FormatStyle(
-                    date: .omitted,
-                    time: .shortened,
-                    locale: Locale(identifier: "en_GB"),
-                    timeZone: timeZone
-                )
-            )
-            return "- \(time): \(format(hourly.temperatures[index])) °C, \(condition(hourly.weatherCodes[index])), feels like \(format(hourly.apparentTemperatures[index])) °C, \(precipitation), \(format(hourly.precipitations[index])) mm, wind \(format(hourly.windSpeeds[index])) km/h \(compassDirection(hourly.windDirections[index]))"
+    private func localDateTime(
+        _ date: Date,
+        in timeZone: TimeZone
+    ) throws -> LocalDateTime {
+        let components = Calendar(identifier: .gregorian)
+            .dateComponents(in: timeZone, from: date)
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day,
+              let hour = components.hour,
+              let minute = components.minute,
+              let weekday = components.weekday
+        else {
+            throw Error.invalidResponse
         }
+
+        return LocalDateTime(
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute,
+            weekday: weekday
+        )
+    }
+
+    private func encode(_ report: WeatherReport) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(report)
+        guard let result = String(data: data, encoding: .utf8) else {
+            throw Error.invalidResponse
+        }
+        return result
     }
 
     private func validatedLocation(_ value: String) throws -> String {
@@ -471,52 +667,6 @@ public struct WeatherTool: Tool {
             }
             return .days(days)
         }
-    }
-
-    private func currentLocalHour(
-        in timeZone: TimeZone,
-        at date: Date
-    ) -> Int {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        return calendar.component(.hour, from: date)
-    }
-
-    private func localClock(
-        in timeZone: TimeZone,
-        at date: Date
-    ) -> String {
-        return date.formatted(
-            Date.FormatStyle(
-                date: .complete,
-                time: .shortened,
-                locale: Locale(identifier: "en_GB"),
-                timeZone: timeZone
-            )
-        )
-    }
-
-    private func formatDailyDate(_ value: String, in timeZone: TimeZone) throws -> String {
-        let strategy = Date.ParseStrategy(
-            format: "\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits)",
-            locale: Locale(identifier: "en_GB"),
-            timeZone: timeZone
-        )
-        guard let date = try? Date(value, strategy: strategy) else {
-            throw Error.invalidResponse
-        }
-        return date.formatted(
-            Date.FormatStyle(
-                date: .complete,
-                time: .omitted,
-                locale: Locale(identifier: "en_GB"),
-                timeZone: timeZone
-            )
-        )
-    }
-
-    private func format(_ value: Double) -> String {
-        String(format: "%.1f", value)
     }
 
     private func compassDirection(_ degrees: Double) -> String {

@@ -12,7 +12,7 @@ struct MemoryTests {
         let observation = MemoryObservation(
             id: observationID,
             sourceID: sourceID,
-            text: "I live in Berlin",
+            text: "Berlin",
             observedAt: Date(timeIntervalSince1970: 1)
         )
         var projection = MemoryProjection()
@@ -81,7 +81,7 @@ struct MemoryTests {
         )
         let second = MemoryObservation(
             sourceID: MemorySourceID(rawValue: UUID()),
-            text: "I live in Berlin.",
+            text: "Berlin",
             observedAt: Date(timeIntervalSince1970: 2)
         )
         let third = MemoryObservation(
@@ -107,12 +107,13 @@ struct MemoryTests {
     }
 
     @Test
-    func policyAcceptsReinforcesAndSupersedesFacts() {
+    func policyAcceptsAndSupersedesFactsWithoutReinforcingRepeats() {
         let candidate = FactCandidate(
             namespace: .profile,
             predicate: "home",
             value: .place("Berlin"),
             evidence: [observationID],
+            supportingText: "Berlin",
             confidence: 0.95,
             importance: 0.9,
             stability: .mutable
@@ -128,22 +129,21 @@ struct MemoryTests {
             return
         }
 
-        guard case .reinforced(let reinforcedID, _, let confidence) = policy.decide(
+        guard case .rejected = policy.decide(
             candidate: candidate,
             against: [fact],
             factID: MemoryFactID()
         ) else {
-            Issue.record("Expected the matching candidate to reinforce the fact")
+            Issue.record("Expected the matching candidate to be a no-op")
             return
         }
-        #expect(reinforcedID == factID)
-        #expect(confidence == 0.95)
 
         let replacement = FactCandidate(
             namespace: .profile,
             predicate: "home",
             value: .place("Munich"),
             evidence: [observationID],
+            supportingText: "Munich",
             confidence: 0.99,
             importance: 0.9,
             stability: .mutable,
@@ -159,6 +159,26 @@ struct MemoryTests {
         }
         #expect(oldID == factID)
         #expect(newFact.value == .place("Munich"))
+
+        let differentlyNamedRevision = FactCandidate(
+            namespace: .profile,
+            predicate: "lives_in",
+            value: .place("London"),
+            evidence: [observationID],
+            supportingText: "London",
+            confidence: 0.99,
+            importance: 0.9,
+            stability: .mutable
+        )
+        guard case .superseded(_, let canonicalFact) = policy.decide(
+            proposal: .revise(factID: factID, candidate: differentlyNamedRevision),
+            against: [fact],
+            factID: MemoryFactID()
+        ) else {
+            Issue.record("Expected an explicit revision to target the existing fact")
+            return
+        }
+        #expect(canonicalFact.predicate == fact.predicate)
     }
 
     @Test
@@ -180,6 +200,7 @@ struct MemoryTests {
             predicate: "home",
             value: .place("London"),
             evidence: [londonObservation],
+            supportingText: "London",
             confidence: 0.8,
             importance: 0.8,
             stability: .mutable,
@@ -198,7 +219,7 @@ struct MemoryTests {
     }
 
     @Test
-    func additionReinforcesAnOlderMatchingValueEvenWhenAnotherValueIsNewer() {
+    func additionOfAnOlderMatchingValueIsANoOpEvenWhenAnotherValueIsNewer() {
         let olderObservation = ObservationID(rawValue: UUID())
         let newerObservation = ObservationID(rawValue: UUID())
         let olderFact = MemoryFact(
@@ -227,21 +248,21 @@ struct MemoryTests {
             predicate: "likes",
             value: .text("Swift"),
             evidence: [observationID],
+            supportingText: "I like Swift",
             confidence: 0.9,
             importance: 0.5,
             stability: .situational,
             observedAt: Date(timeIntervalSince1970: 3)
         )
 
-        guard case .reinforced(let reinforcedID, _, _) = MemoryPolicy().decide(
+        guard case .rejected = MemoryPolicy().decide(
             proposal: .add(repeated),
             against: [olderFact, newerFact],
             factID: MemoryFactID()
         ) else {
-            Issue.record("Expected the matching older value to be reinforced")
+            Issue.record("Expected the matching older value to be a no-op")
             return
         }
-        #expect(reinforcedID == factID)
     }
 
     @Test
@@ -262,6 +283,7 @@ struct MemoryTests {
             predicate: "home",
             value: .place("Berlin"),
             evidence: [ObservationID(rawValue: UUID())],
+            supportingText: "Berlin",
             confidence: 1,
             importance: 1,
             stability: .mutable,
@@ -302,21 +324,40 @@ struct MemoryTests {
     }
 
     @Test
-    func extractorProposesFactsFromCompletedObservation() {
+    func evidenceMustComeFromUserTextRatherThanAssistantResponse() {
         let observation = MemoryObservation(
             id: observationID,
             sourceID: sourceID,
-            text: "My name is Ada",
-            response: "Nice to meet you.",
+            text: "Can you show me the weather in Haar?",
+            response: "You live in Haar.",
             observedAt: Date(timeIntervalSince1970: 1)
         )
+        let candidate = FactCandidate(
+            namespace: .profile,
+            predicate: "home",
+            value: .place("Haar"),
+            evidence: [observationID],
+            supportingText: "You live in Haar",
+            confidence: 0.95,
+            importance: 0.9,
+            stability: .mutable,
+            observedAt: observation.observedAt
+        )
 
-        let candidates = MemoryExtractor.extract(from: observation)
+        #expect(!MemoryEvidence.supports(candidate, in: [observation]))
 
-        #expect(candidates.count == 1)
-        #expect(candidates[0].predicate == "name")
-        #expect(candidates[0].value == .person("Ada"))
-        #expect(candidates[0].evidence == [observationID])
+        let userSupported = FactCandidate(
+            namespace: .profile,
+            predicate: "home",
+            value: .place("Haar"),
+            evidence: [observationID],
+            supportingText: "weather in Haar",
+            confidence: 0.95,
+            importance: 0.9,
+            stability: .mutable,
+            observedAt: observation.observedAt
+        )
+        #expect(MemoryEvidence.supports(userSupported, in: [observation]))
     }
 
 }

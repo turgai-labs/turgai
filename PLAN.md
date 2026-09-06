@@ -37,8 +37,11 @@ avoid duplicating a tool manual in the persona prompt.
 - Semantic memory values, provenance, deterministic policy, additions/revisions,
   bounded retrieval and per-turn context.
 - Combined capture: MemoryTool plus independent background model extraction.
-  Both share source identity; observation completion attaches the response.
-  Meaningful background writes produce notices.
+  Both submit explicit proposals through the User aggregate. A proposal must
+  reference a user observation and quote its text; observation completion
+  stores the assistant response as context, never as fact evidence.
+  Equivalent repeats are no-ops and meaningful background writes produce
+  notices.
 - Startup recovery discovers unfinished Conversation journal state, recreates
   Telegram chat connections, reattaches the durable conversation, retries
   interrupted turns, and delivers pending terminal replies.
