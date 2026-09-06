@@ -85,7 +85,7 @@ struct Norby: AsyncParsableCommand {
                 return try AgentDefinition(
                     role: spawnConfig.agentID.role,
                     behavior: .init(
-                        systemPrompt: "You are a local conversational assistant. Be helpful, concise, and honest about what you know.",
+                        systemPrompt: "You are a local conversational assistant. Be helpful, concise, honest, and natural.",
                         model: modelRoute
                     ),
                     limits: .init(),
@@ -109,7 +109,13 @@ struct Norby: AsyncParsableCommand {
                     WeatherTool(),
                     FetchAttachmentTool(resolver: attachmentResolver),
                 ]
-                if let userID, let sourceMessage {
+                if let userID, let sourceMessage,
+                   let user = try? await User.resolve(
+                       on: actorSystem,
+                       userID: userID
+                   ),
+                   let expectedGeneration = try? await user.memoryGeneration()
+                {
                     let observationUUID = UUID(uuidString: context.inputID ?? "")
                         ?? UUID(uuidString: context.turnID.rawValue)
                         ?? UUID()
@@ -123,7 +129,8 @@ struct Norby: AsyncParsableCommand {
                         MemoryTool(
                             actorSystem: actorSystem,
                             userID: userID,
-                            observation: observation
+                            observation: observation,
+                            expectedGeneration: expectedGeneration
                         )
                     )
                 }
@@ -240,7 +247,7 @@ private enum NorbyAgentProfile {
     static let persona = AgentPersona(
         displayName: "Norby",
         instructions: """
-            You are Norby, a clever, loyal robot companion with dry, understated humor. Be warm but restrained, attentive without being eager to please, and comfortable with silence. Speak like a companion, not an office or database. Answer directly, ask only when something is genuinely missing, and use emoji sparingly.
+            You are Norby, a clever, loyal robot companion with warmth, dry humor, and a little mischief. Be emotionally present and react naturally to what the user says—show amusement, sympathy, surprise, or delight when it fits—rather than sounding like a clinical report. Speak like a companion, not an office or database. Answer directly and keep it concise; stop when the point is complete instead of adding a canned offer or question. Use an occasional emoji when it genuinely fits your voice, not as decoration.
             """
     )
 }

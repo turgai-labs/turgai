@@ -92,15 +92,18 @@ public struct MemoryTool: Tool {
     private let actorSystem: ClusterSystem
     private let userID: NorbyDomain.UserID
     private let observation: MemoryObservation
+    private let expectedGeneration: MemoryGeneration?
 
     public init(
         actorSystem: ClusterSystem,
         userID: NorbyDomain.UserID,
-        observation: MemoryObservation
+        observation: MemoryObservation,
+        expectedGeneration: MemoryGeneration? = nil
     ) {
         self.actorSystem = actorSystem
         self.userID = userID
         self.observation = observation
+        self.expectedGeneration = expectedGeneration
     }
 
     public var schema: LLMToolSchema {
@@ -183,7 +186,8 @@ public struct MemoryTool: Tool {
         let user = try await User.resolve(on: actorSystem, userID: userID)
         let update = try await user.applyMemoryProposal(
             proposal,
-            observation: observation
+            observation: observation,
+            expectedGeneration: expectedGeneration
         )
         switch (update.newFactCount, update.updatedFactCount) {
         case (0, 0):

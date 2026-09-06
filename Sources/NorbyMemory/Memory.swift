@@ -24,6 +24,23 @@ public struct MemoryFactID: Hashable, Codable, Sendable {
     }
 }
 
+/// Monotonic generation of a user's logical memory. A background extraction
+/// captures this value before it starts; a later `/forget` advances it so the
+/// old extraction cannot write its result back into the cleared projection.
+public struct MemoryGeneration: Hashable, Codable, Sendable {
+    public let rawValue: UInt64
+
+    public init(rawValue: UInt64 = 0) {
+        self.rawValue = rawValue
+    }
+
+    public static let initial = MemoryGeneration()
+
+    public func advancing() -> MemoryGeneration {
+        MemoryGeneration(rawValue: rawValue &+ 1)
+    }
+}
+
 /// A raw, unfiltered record of one conversation turn.
 ///
 /// The response is optional while the turn is running. Once available, the

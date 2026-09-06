@@ -209,6 +209,25 @@ private enum ConversationProgress: Sendable {
     case text(String)
 }
 
+private enum MemoryPresentation {
+    static func facts(_ facts: [MemoryFact]) -> String {
+        guard !facts.isEmpty else {
+            return "I don't have any saved personal memory for you."
+        }
+
+        return "Saved personal memory:\n"
+            + facts.map { fact in
+                "- [\(fact.namespace.rawValue)] \(fact.predicate): \(fact.value.rendered)"
+            }.joined(separator: "\n")
+    }
+
+    static func forgotten(factCount: Int) -> String {
+        factCount == 0
+            ? "There was no saved personal memory to forget."
+            : "I forgot your saved personal memory."
+    }
+}
+
 private actor ConversationPhase {
     private var value: ReplyPhase = .thinking
 
@@ -491,6 +510,36 @@ public distributed actor Conversation {
 
     public distributed func reset() async throws {
         try await dispatch(.reset)
+    }
+
+    /// Shows only the requesting user's bounded active memory. The command is
+    /// handled here rather than sent through the model, so it cannot create a
+    /// turn or become a new memory observation.
+    public distributed func showMemory(for userID: NorbyDomain.UserID) async throws {
+        let user = try await User.resolve(on: actorSystem, userID: userID)
+        let facts = try await user.currentMemoryFacts(limit: 20)
+        await publish(
+            .notice(
+                conversationID: conversationID,
+                turnID: nil,
+                text: MemoryPresentation.facts(facts)
+            )
+        )
+    }
+
+    /// Clears the user's logical memory projection without touching the
+    /// conversation or Hail transcript. Stale background extraction is
+    /// rejected by the generation check in `User`.
+    public distributed func forgetMemory(for userID: NorbyDomain.UserID) async throws {
+        let user = try await User.resolve(on: actorSystem, userID: userID)
+        let forgottenFactCount = try await user.forgetMemory()
+        await publish(
+            .notice(
+                conversationID: conversationID,
+                turnID: nil,
+                text: MemoryPresentation.forgotten(factCount: forgottenFactCount)
+            )
+        )
     }
 
     public distributed func clearFailure() async throws {
@@ -802,7 +851,9 @@ public distributed actor Conversation {
     ) async -> MemoryUpdate? {
         do {
             let user = try await User.resolve(on: actorSystem, userID: userID)
-            _ = try await user.recordObservation(observation)
+            guard let generation = try await user.beginMemoryObservation(observation) else {
+                return nil
+            }
             let userRecord = try await user.currentRecord()
             let context = MemoryExtractionContext(
                 observation: observation,
@@ -817,7 +868,8 @@ public distributed actor Conversation {
             let proposals = try await memoryExtractor.extract(from: context)
             return try await user.recordCompletedObservation(
                 observation,
-                proposals: proposals
+                proposals: proposals,
+                expectedGeneration: generation
             )
         } catch {
             actorSystem.log.warning(

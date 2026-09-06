@@ -8,14 +8,63 @@ import Foundation
 public struct MemoryProjection: Codable, Sendable, Equatable {
     /// Observations older than the tail remain in the journal, not in memory.
     public static let observationTailLimit = 100
+    public static let maximumCurrentFacts = 50
 
+    public private(set) var generation: MemoryGeneration
+    /// The logical boundary prevents delayed observations from a turn that
+    /// predates `/forget` from re-entering the new generation.
+    public private(set) var lastClearedAt: Date?
     public private(set) var observations: [MemoryObservation] = []
     public private(set) var facts: [MemoryFact] = []
 
-    public init() {}
+    public init(generation: MemoryGeneration = .initial) {
+        self.generation = generation
+        self.lastClearedAt = nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case generation
+        case lastClearedAt
+        case observations
+        case facts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        generation = try container.decodeIfPresent(
+            MemoryGeneration.self,
+            forKey: .generation
+        ) ?? .initial
+        lastClearedAt = try container.decodeIfPresent(
+            Date.self,
+            forKey: .lastClearedAt
+        )
+        observations = try container.decodeIfPresent(
+            [MemoryObservation].self,
+            forKey: .observations
+        ) ?? []
+        facts = try container.decodeIfPresent(
+            [MemoryFact].self,
+            forKey: .facts
+        ) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(generation, forKey: .generation)
+        try container.encodeIfPresent(lastClearedAt, forKey: .lastClearedAt)
+        try container.encode(observations, forKey: .observations)
+        try container.encode(facts, forKey: .facts)
+    }
 
     public mutating func apply(_ event: MemoryEvent) {
         switch event {
+        case .cleared(let at):
+            observations.removeAll(keepingCapacity: true)
+            facts.removeAll(keepingCapacity: true)
+            generation = generation.advancing()
+            lastClearedAt = max(lastClearedAt ?? at, at)
+
         case .observationRecorded(let observation):
             guard !observations.contains(where: {
                 $0.id == observation.id || $0.sourceID == observation.sourceID
@@ -73,6 +122,17 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         }
     }
 
+    public func currentFacts(
+        limit: Int,
+        now: Date = Date()
+    ) -> [MemoryFact] {
+        Array(
+            currentFacts(now: now).suffix(
+                min(max(0, limit), Self.maximumCurrentFacts)
+            )
+        )
+    }
+
     public func activeFact(namespace: MemoryNamespace, predicate: String) -> MemoryFact? {
         facts.first {
             $0.status == .active
@@ -101,5 +161,10 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
 
     public func containsObservation(for sourceID: MemorySourceID) -> Bool {
         observations.contains { $0.sourceID == sourceID }
+    }
+
+    public func accepts(_ observation: MemoryObservation) -> Bool {
+        guard let lastClearedAt else { return true }
+        return observation.observedAt > lastClearedAt
     }
 }

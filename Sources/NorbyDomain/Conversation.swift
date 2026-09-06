@@ -369,6 +369,16 @@ public enum ConversationInput: Sendable, Equatable {
     )
     case connect(ConversationID)
     case reset(ConversationID)
+    case memory(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    case forget(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
 }
 
 public struct PendingConversationMessage: Hashable, Codable, Sendable {
@@ -508,7 +518,7 @@ public enum ReplyEvent: Hashable, Codable, Sendable {
 
 public enum OutboundEvent: Hashable, Codable, Sendable {
     case reply(ReplyEvent)
-    case notice(conversationID: ConversationID, turnID: TurnID, text: String)
+    case notice(conversationID: ConversationID, turnID: TurnID?, text: String)
     case reset(conversationID: ConversationID)
 }
 

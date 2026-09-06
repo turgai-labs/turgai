@@ -156,8 +156,20 @@ public distributed actor User {
     public distributed func recordObservation(
         _ observation: MemoryObservation
     ) async throws -> ObservationID {
+        guard state.memory.accepts(observation) else { return observation.id }
         let reference = try await ensureObservation(observation)
         return reference.id
+    }
+
+    /// Records the observation and returns the memory generation in which
+    /// extraction began. A later logical forget advances that generation;
+    /// callers must pass it back when committing the extracted proposals.
+    public distributed func beginMemoryObservation(
+        _ observation: MemoryObservation
+    ) async throws -> MemoryGeneration? {
+        guard state.memory.accepts(observation) else { return nil }
+        _ = try await ensureObservation(observation)
+        return state.memory.generation
     }
 
     /// Persists a completed observation and applies candidates produced by an
@@ -178,8 +190,18 @@ public distributed actor User {
     /// only durable memory policy and journaling.
     public distributed func recordCompletedObservation(
         _ observation: MemoryObservation,
-        proposals: [MemoryProposal]
+        proposals: [MemoryProposal],
+        expectedGeneration: MemoryGeneration? = nil
     ) async throws -> MemoryUpdate {
+        guard expectedGeneration == nil
+                || expectedGeneration == state.memory.generation
+        else {
+            // The extraction started before /forget. Its result is stale and
+            // must not recreate facts in the new logical memory generation.
+            return MemoryUpdate()
+        }
+        guard state.memory.accepts(observation) else { return MemoryUpdate() }
+
         let reference = try await ensureObservation(observation)
 
         var changes: [MemoryFactChange] = []
@@ -206,8 +228,16 @@ public distributed actor User {
     /// same policy and evidence invariant.
     public distributed func applyMemoryProposal(
         _ proposal: MemoryProposal,
-        observation: MemoryObservation
+        observation: MemoryObservation,
+        expectedGeneration: MemoryGeneration? = nil
     ) async throws -> MemoryUpdate {
+        guard expectedGeneration == nil
+                || expectedGeneration == state.memory.generation
+        else {
+            return MemoryUpdate()
+        }
+        guard state.memory.accepts(observation) else { return MemoryUpdate() }
+
         let reference = try await ensureObservation(observation)
 
         let change = try await recordProposalInJournal(proposal)
@@ -325,6 +355,26 @@ public distributed actor User {
             matching: MemoryQuery(text: text)
         )
         return MemoryRetrieval.systemInstruction(for: facts)
+    }
+
+    /// Returns a bounded view for explicit user inspection. The journal and
+    /// projection remain owned by this aggregate; callers cannot request an
+    /// unbounded memory dump through the distributed API.
+    public distributed func currentMemoryFacts(limit: Int = 20) -> [MemoryFact] {
+        state.memory.currentFacts(limit: limit)
+    }
+
+    public distributed func memoryGeneration() -> MemoryGeneration {
+        state.memory.generation
+    }
+
+    /// Logically forgets all active memory and provenance retained by the
+    /// projection. The journal remains intact; replay sees the clear boundary
+    /// and starts a new generation.
+    public distributed func forgetMemory() async throws -> Int {
+        let count = state.memory.currentFacts().count
+        try await emit(event: .memory(.cleared(at: Date())))
+        return count
     }
 
     public distributed func currentRecord() -> UserRecord {

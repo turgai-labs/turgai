@@ -6,6 +6,58 @@ import Testing
 
 struct TelegramTests {
     @Test
+    func botMapsMemoryCommandsToTheRequestingUser() {
+        let user = TelegramUser(id: 7, firstName: "John")
+        let chat = TelegramChat(id: 42)
+        let participantID = TelegramBot.participantID(for: user.id)
+        let userID = UserID(participantID: participantID)
+
+        let memory = TelegramBot.event(
+            for: TelegramUpdate(
+                updateID: 1,
+                message: TelegramMessage(
+                    messageID: 1,
+                    from: user,
+                    chat: chat,
+                    date: 100,
+                    text: "/memory"
+                )
+            ),
+            messageID: MessageID(rawValue: UUID()),
+            turnID: TurnID()
+        )
+        let forget = TelegramBot.event(
+            for: TelegramUpdate(
+                updateID: 2,
+                message: TelegramMessage(
+                    messageID: 2,
+                    from: user,
+                    chat: chat,
+                    date: 101,
+                    text: "/forget"
+                )
+            ),
+            messageID: MessageID(rawValue: UUID()),
+            turnID: TurnID()
+        )
+
+        #expect(
+            memory == .memory(
+                conversationID: TelegramBot.conversationID(for: chat.id),
+                participantID: participantID,
+                userID: userID
+            )
+        )
+        #expect(
+            forget == .forget(
+                conversationID: TelegramBot.conversationID(for: chat.id),
+                participantID: participantID,
+                userID: userID
+            )
+        )
+    }
+
+    @Test
     func botCanRestoreAConversationWithoutATelegramUpdate() async throws {
         let bot = TelegramBot(
             client: makeClient(recorder: TelegramCallRecorder(responses: [])),

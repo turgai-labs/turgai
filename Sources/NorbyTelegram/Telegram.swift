@@ -184,6 +184,16 @@ public enum TelegramInboundEvent: Equatable, Sendable {
         participantID: ParticipantID,
         userID: UserID
     )
+    case memory(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    case forget(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
 }
 
 public protocol TelegramOffsetStore: Sendable {

@@ -6,6 +6,10 @@ import Foundation
 /// candidates produce no event at all, so the journal remains the complete
 /// audit trail of what was accepted, reinforced, superseded, or removed.
 public enum MemoryEvent: Codable, Sendable, Equatable {
+    /// Logically forgets the active memory projection. Earlier journal events
+    /// remain available to infrastructure readers, but replay after this
+    /// boundary starts a fresh memory generation.
+    case cleared(at: Date)
     case observationRecorded(MemoryObservation)
     /// Completes a previously recorded source without changing its identity.
     case observationCompleted(sourceID: MemorySourceID, response: String)

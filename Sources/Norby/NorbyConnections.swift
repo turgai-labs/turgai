@@ -245,6 +245,11 @@ public actor NorbyConnections: Service {
 /// It is channel-neutral: Telegram, a web client, or another adapter can
 /// feed `ConversationInput` and consume `OutboundEvent` without leaking its
 /// transport types into this layer.
+private enum UserCommand {
+    case memory
+    case forget
+}
+
 actor LiveSession {
     typealias OutputStream = AsyncChannel<OutboundDelivery>
 
@@ -405,6 +410,63 @@ actor LiveSession {
                 )
                 return false
             }
+
+        case .memory(let conversationID, let participantID, let userID):
+            return await handleUserCommand(
+                .memory,
+                conversationID: conversationID,
+                participantID: participantID,
+                userID: userID
+            )
+
+        case .forget(let conversationID, let participantID, let userID):
+            return await handleUserCommand(
+                .forget,
+                conversationID: conversationID,
+                participantID: participantID,
+                userID: userID
+            )
+        }
+    }
+
+    private func handleUserCommand(
+        _ command: UserCommand,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: NorbyDomain.UserID
+    ) async -> Bool {
+        do {
+            let user = try await User.resolve(on: actorSystem, userID: userID)
+            try await user.link(participantID: participantID)
+
+            let conversation = try await Conversation.resolve(
+                on: actorSystem,
+                conversationID: conversationID,
+                snapshotPolicy: snapshotPolicy
+            )
+            try await attach(
+                to: conversation,
+                conversationID: conversationID
+            )
+
+            switch command {
+            case .memory:
+                try await conversation.showMemory(for: userID)
+            case .forget:
+                try await conversation.forgetMemory(for: userID)
+            }
+            return true
+        } catch {
+            await publish(
+                .reply(
+                    .failed(
+                        conversationID: conversationID,
+                        turnID: nil,
+                        message: String(describing: error)
+                    )
+                )
+            )
+            return false
         }
     }
 

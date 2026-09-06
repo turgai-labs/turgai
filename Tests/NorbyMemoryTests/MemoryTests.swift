@@ -25,6 +25,62 @@ struct MemoryTests {
     }
 
     @Test
+    func clearingMemoryStartsANewGenerationAndRemovesTheProjection() {
+        let observation = MemoryObservation(
+            id: observationID,
+            sourceID: sourceID,
+            text: "My name is Ada",
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        let fact = MemoryFact(
+            id: factID,
+            namespace: .profile,
+            predicate: "name",
+            value: .person("Ada"),
+            evidence: [observationID],
+            confidence: 1,
+            importance: 1,
+            stability: .stable,
+            observedAt: observation.observedAt
+        )
+        var projection = MemoryProjection()
+        projection.apply(.observationRecorded(observation))
+        projection.apply(.factAccepted(fact))
+        let generation = projection.generation
+
+        projection.apply(.cleared(at: Date(timeIntervalSince1970: 2)))
+
+        #expect(projection.observations.isEmpty)
+        #expect(projection.facts.isEmpty)
+        #expect(projection.generation == generation.advancing())
+    }
+
+    @Test
+    func observationsFromBeforeForgetCannotEnterTheNewGeneration() {
+        var projection = MemoryProjection()
+        projection.apply(.cleared(at: Date(timeIntervalSince1970: 10)))
+
+        #expect(
+            !projection.accepts(
+                MemoryObservation(
+                    sourceID: sourceID,
+                    text: "old",
+                    observedAt: Date(timeIntervalSince1970: 9)
+                )
+            )
+        )
+        #expect(
+            projection.accepts(
+                MemoryObservation(
+                    sourceID: sourceID,
+                    text: "new",
+                    observedAt: Date(timeIntervalSince1970: 11)
+                )
+            )
+        )
+    }
+
+    @Test
     func memoryUpdateCountsChangesWithinTheUpdate() {
         let update = MemoryUpdate(
             factChanges: [.accepted, .reinforced, .superseded]

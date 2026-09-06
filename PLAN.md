@@ -87,18 +87,16 @@ must not be silently treated as the user's timezone.
 Capture is automatic. The user can inspect or delete all saved memory;
 there is no candidate approval workflow.
 
-- [ ] Add /memory with bounded output for the requesting user's current facts.
+- [x] Add /memory with bounded output for the requesting user's current facts.
   Preserve participant ownership in group chats.
-- [ ] Add /forget for all saved personal memory. Define which observations,
-  facts and historical records are retained; distinguish logical forgetting
-  from physical journal erasure.
-- [ ] Ensure extraction already in flight cannot restore forgotten memory.
-- [ ] Finish /reset. Current code clears Norby coordination/channel state,
-  but does not invoke a Hail context reset. Add a generic journaled Hail reset
-  boundary and connect it through the adapter.
-- [ ] Reset settles the active turn and clears queued work and model
-  context/summary/session state, retaining personal memory and historical
-  chat records. Verify this boundary survives replay.
+- [x] Add /forget for all saved personal memory. Logical forgetting clears the
+  active memory projection and starts a new generation; the event journal is
+  retained. Physical journal erasure remains a separate privacy operation.
+- [x] Ensure extraction already in flight cannot restore forgotten memory.
+  Generation and observation-time boundaries reject stale writes.
+- [ ] Revisit /reset only if the product needs a fresh Hail context. The
+  current command remains Norby's coordination/channel reset; Hail does not
+  own this product command or a reset event.
 - [ ] Manually check multilingual facts, contextual short answers,
   corrections, duplicate tool/background writes, notices and later retrieval.
 
