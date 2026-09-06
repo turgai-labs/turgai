@@ -61,7 +61,7 @@ Remaining behavior checks are listed below.
 | NorbyPersistence | File journals and snapshots |
 | Norby | Composition, live connections and Telegram delivery coordination |
 
-## Next: explicit calendar information
+## Validation: explicit calendar information
 
 Observed: weather responses assign incorrect weekdays to dates and reuse
 those incorrect labels in follow-up turns. The current weather formatter
@@ -82,7 +82,7 @@ Start with explicit tool data. If follow-ups still invent dates without a tool
 call, evaluate a small host-supplied per-turn clock context. A host timezone
 must not be silently treated as the user's timezone.
 
-## Next: memory controls and reset
+## Memory controls and context reset
 
 Capture is automatic. The user can inspect or delete all saved memory;
 there is no candidate approval workflow.
@@ -94,9 +94,14 @@ there is no candidate approval workflow.
   retained. Physical journal erasure remains a separate privacy operation.
 - [x] Ensure extraction already in flight cannot restore forgotten memory.
   Generation and observation-time boundaries reject stale writes.
-- [ ] Revisit /reset only if the product needs a fresh Hail context. The
-  current command remains Norby's coordination/channel reset; Hail does not
-  own this product command or a reset event.
+- [x] Keep `/reset` as a Norby coordination/channel reset. It cancels active
+  model work, drops queued messages and pending replies, and clears channel
+  delivery state; it does not clear Hail's durable transcript or context
+  summary.
+- [ ] Only add a fresh-context command when the product needs it. That would
+  be a separate Hail-owned durable context boundary, while Norby would still
+  own the user-facing command and policy. Hail's `contextSet` marker is not a
+  reset operation.
 - [ ] Manually check multilingual facts, contextual short answers,
   corrections, duplicate tool/background writes, notices and later retrieval.
 
