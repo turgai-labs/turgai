@@ -17,6 +17,7 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
     public let conversationID: ConversationID
     public private(set) var capabilities: ChannelCapabilities
     public private(set) var status: ConversationStatus
+    public private(set) var acceptedMessageIDs: [MessageID]
     public private(set) var pendingMessages: [PendingConversationMessage]
     public private(set) var pendingReplies: [PendingConversationReply]
     public private(set) var activeMessage: PendingConversationMessage?
@@ -29,6 +30,7 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
         self.conversationID = conversationID
         self.capabilities = capabilities
         self.status = .idle
+        self.acceptedMessageIDs = []
         self.pendingMessages = []
         self.pendingReplies = []
         self.activeMessage = nil
@@ -39,6 +41,7 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
         case conversationID
         case capabilities
         case status
+        case acceptedMessageIDs
         case pendingMessages
         case pendingReplies
         case activeMessage
@@ -50,6 +53,10 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
         self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
         self.capabilities = try container.decode(ChannelCapabilities.self, forKey: .capabilities)
         self.status = try container.decode(ConversationStatus.self, forKey: .status)
+        self.acceptedMessageIDs = try container.decodeIfPresent(
+            [MessageID].self,
+            forKey: .acceptedMessageIDs
+        ) ?? []
         self.pendingMessages = try container.decodeIfPresent(
             [PendingConversationMessage].self,
             forKey: .pendingMessages
@@ -72,6 +79,7 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
             revision &+= 1
 
         case .messageQueued(let pending):
+            rememberAcceptedMessage(pending.message.id)
             pendingMessages.append(pending)
             revision &+= 1
 
@@ -93,6 +101,7 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
             revision &+= 1
 
         case .turnStarted(let pending):
+            rememberAcceptedMessage(pending.message.id)
             if let index = pendingMessages.firstIndex(where: { $0.turnID == pending.turnID }) {
                 pendingMessages.remove(at: index)
             }
@@ -134,6 +143,14 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
             !pendingMessages.isEmpty || !pendingReplies.isEmpty
         case .failed:
             !pendingMessages.isEmpty || !pendingReplies.isEmpty
+        }
+    }
+
+    private mutating func rememberAcceptedMessage(_ messageID: MessageID) {
+        guard !acceptedMessageIDs.contains(messageID) else { return }
+        acceptedMessageIDs.append(messageID)
+        if acceptedMessageIDs.count > 256 {
+            acceptedMessageIDs.removeFirst(acceptedMessageIDs.count - 256)
         }
     }
 }
@@ -429,6 +446,7 @@ public distributed actor Conversation {
             conversationID: record.conversationID,
             capabilities: record.capabilities,
             status: record.status,
+            acceptedMessageIDs: record.acceptedMessageIDs,
             pendingMessages: record.pendingMessages,
             pendingReplies: record.pendingReplies,
             activeMessage: record.activeMessage,

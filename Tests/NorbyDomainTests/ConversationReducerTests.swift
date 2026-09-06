@@ -153,6 +153,40 @@ struct ConversationReducerTests {
     }
 
     @Test
+    func receivingTheSameMessageAgainIsIdempotent() {
+        let message = makeMessage(text: "scheduled prompt")
+        let initial = ConversationState(conversationID: conversationID)
+        let (running, _) = reduce(
+            initial,
+            .receive(
+                message: message,
+                turnID: makeTurnID(1),
+                capabilities: .default
+            )
+        )
+        guard case .running(let turnID) = running.status else {
+            Issue.record("Expected the first message to start a turn")
+            return
+        }
+
+        let (completed, _) = reduce(
+            running,
+            .modelCompleted(turnID: turnID, text: "answer")
+        )
+        let (duplicate, effects) = reduce(
+            completed,
+            .receive(
+                message: message,
+                turnID: makeTurnID(2),
+                capabilities: .default
+            )
+        )
+
+        #expect(duplicate == completed)
+        #expect(effects.isEmpty)
+    }
+
+    @Test
     func modelCompletionDoesNotPublishBecauseReplyScopeOwnsDelivery() {
         let state = ConversationState(
             conversationID: conversationID,

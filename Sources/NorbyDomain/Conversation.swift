@@ -457,6 +457,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
     public internal(set) var capabilities: ChannelCapabilities
     public internal(set) var status: ConversationStatus
+    public internal(set) var acceptedMessageIDs: [MessageID]
     public internal(set) var pendingMessages: [PendingConversationMessage]
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var activeMessage: PendingConversationMessage?
@@ -466,6 +467,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
         conversationID: ConversationID,
         capabilities: ChannelCapabilities = .default,
         status: ConversationStatus = .idle,
+        acceptedMessageIDs: [MessageID] = [],
         pendingMessages: [PendingConversationMessage] = [],
         pendingReplies: [PendingConversationReply] = [],
         activeMessage: PendingConversationMessage? = nil,
@@ -474,6 +476,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
         self.conversationID = conversationID
         self.capabilities = capabilities
         self.status = status
+        self.acceptedMessageIDs = acceptedMessageIDs
         self.pendingMessages = pendingMessages
         self.pendingReplies = pendingReplies
         self.activeMessage = activeMessage
@@ -555,6 +558,10 @@ public func reduce(
             return (state, [])
         }
 
+        guard !state.acceptedMessageIDs.contains(message.id) else {
+            return (state, [])
+        }
+
         let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !message.attachments.isEmpty else {
             // Input rejection, not a turn failure: a `nil` turn ID means no
@@ -585,6 +592,13 @@ public func reduce(
             attachments: message.attachments,
             receivedAt: message.receivedAt
         )
+
+        next.acceptedMessageIDs.append(message.id)
+        if next.acceptedMessageIDs.count > 256 {
+            next.acceptedMessageIDs.removeFirst(
+                next.acceptedMessageIDs.count - 256
+            )
+        }
 
         if next.activeTurnID == nil, next.capabilities != capabilities {
             next.capabilities = capabilities

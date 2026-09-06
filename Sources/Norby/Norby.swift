@@ -1,5 +1,6 @@
 import ArgumentParser
 import DistributedCluster
+import DurableWorkflows
 import EventSourcing
 import Foundation
 import Hail
@@ -144,6 +145,7 @@ struct Norby: AsyncParsableCommand {
             snapshotFactory: { _ in snapshotStore }
         )
         let virtualActorsPlugin = ClusterVirtualActorsPlugin()
+        let workflowsPlugin = DurableWorkflowsPlugin()
 
         let system = await ClusterSystem("norby") { settings in
             settings.bindHost = "127.0.0.1"
@@ -154,10 +156,19 @@ struct Norby: AsyncParsableCommand {
             settings.plugins.install(plugin: virtualActorsPlugin)
             settings.plugins.install(plugin: journalPlugin)
             settings.plugins.install(plugin: runtimePlugin)
+            settings.plugins.install(plugin: workflowsPlugin)
         }
 
         try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
         let virtualNode = await VirtualNode(actorSystem: system)
+        let scheduledAgentWorker = await DurableActivityDispatchWorker<ScheduledAgentWorkflow>(
+            actorSystem: system
+        )
+        let scheduledAgentTimerWorker = await DurableActivityDispatchWorker<ScheduledAgentTimerWorkflow>(
+            actorSystem: system
+        )
+        try await system.workflows.recoverAll(ofType: ScheduledAgentWorkflow.self)
+        try await system.workflows.recoverAll(ofType: ScheduledAgentTimerWorkflow.self)
         let chatIDList = telegramChatIDs ?? environment["NORBY_TELEGRAM_CHAT_IDS"]
         let allowedChatIDs = Self.parseChatIDs(chatIDList)
         let connections = NorbyConnections(
@@ -175,7 +186,9 @@ struct Norby: AsyncParsableCommand {
         )
         let clusterService = NorbyClusterService(
             system: system,
-            virtualNode: virtualNode
+            virtualNode: virtualNode,
+            scheduledAgentWorker: scheduledAgentWorker,
+            scheduledAgentTimerWorker: scheduledAgentTimerWorker
         )
 
         let logger = system.log
@@ -233,6 +246,8 @@ struct Norby: AsyncParsableCommand {
 private struct NorbyClusterService: Service {
     let system: ClusterSystem
     let virtualNode: VirtualNode
+    let scheduledAgentWorker: DurableActivityDispatchWorker<ScheduledAgentWorkflow>
+    let scheduledAgentTimerWorker: DurableActivityDispatchWorker<ScheduledAgentTimerWorkflow>
 
     func run() async throws {
         try await withGracefulShutdownHandler {

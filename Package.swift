@@ -4,7 +4,7 @@ import PackageDescription
 let package = Package(
     name: "Norby",
     platforms: [
-        .macOS(.v26)
+        .macOS("26.4")
     ],
     products: [
         .library(name: "NorbyDomain", targets: ["NorbyDomain"]),
@@ -15,6 +15,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../hail"),
+        .package(path: "../cluster-durable-workflows"),
         .package(
             url: "https://github.com/huggingface/AnyLanguageModel.git",
             from: "0.9.0",
@@ -80,7 +81,8 @@ let package = Package(
                 .product(name: "Hail", package: "hail"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
-                .product(name: "VirtualActors", package: "cluster-virtual-actors")
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+                .product(name: "DurableWorkflows", package: "cluster-durable-workflows")
             ]
         ),
         .target(
@@ -106,6 +108,7 @@ let package = Package(
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+                .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Logging", package: "swift-log")
             ]

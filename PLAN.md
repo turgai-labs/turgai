@@ -138,10 +138,17 @@ First deliver one narrow path: a durable schedule wakes a named Hail agent
 with input and selected tools, then sends its result to the owner conversation.
 Example: "Every morning at 8, send me today's weather."
 
-- [ ] Integrate cluster-durable-workflows with the existing cluster/journal
-  bootstrap and one event-store configuration.
-- [ ] Add one registered scheduled-agent workflow with persisted agent
-  reference, input, owner, output destination and tool-access selection.
+- [x] Integrate cluster-durable-workflows with the existing cluster/journal
+  bootstrap and one event-store configuration. Norby installs the workflow
+  plugin beside Hail and uses the existing file event/snapshot stores.
+- [x] Add a registered scheduled-agent workflow and activity. The durable
+  input carries distributed User/Conversation actor references, owner and
+  destination identity, prompt, participant and channel capabilities. The
+  activity re-enters Conversation, so scheduled work uses ordinary Hail
+  history, tools and memory.
+- [x] Add a one-shot scheduled-agent timer workflow using the workflow
+  runtime's journaled `sleep(until:)`. Stable workflow-derived message/turn
+  IDs and Conversation deduplication make activity replay idempotent.
 - [ ] Support a specific instant and recurring local time with timezone.
   Define overlap and missed-run behavior using the runtime's facilities.
 - [ ] Expose create/list/cancel schedule tools and a small /schedules view.
