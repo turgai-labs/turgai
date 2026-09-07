@@ -52,10 +52,11 @@ struct ReplyScopeTests {
             Issue.record("Expected InternalScopeError, got \(error)")
         }
 
-        #expect(await scope.events == [
-            "started",
-            "failed:The operation could not be completed.",
-        ])
+        #expect(
+            await scope.events == [
+                "started",
+                "failed:The operation could not be completed.",
+            ])
     }
 
     @Test
@@ -67,11 +68,12 @@ struct ReplyScopeTests {
 
         _ = try await withScope(scope)
 
-        #expect(await scope.events == [
-            "started",
-            "partial:partial",
-            "finished:answer"
-        ])
+        #expect(
+            await scope.events == [
+                "started",
+                "partial:partial",
+                "finished:answer",
+            ])
     }
 }
 

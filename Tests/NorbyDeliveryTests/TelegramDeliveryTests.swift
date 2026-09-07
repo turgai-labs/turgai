@@ -1,6 +1,7 @@
 import NorbyDomain
 import NorbyTelegram
 import Testing
+
 @testable import Norby
 
 @Test
@@ -333,23 +334,23 @@ func exhaustedRateLimitKeepsCooldownForTheLatestPreview() {
     #expect(resumedEffect.isSendPreview)
 }
 
-private extension TelegramDelivery.Effect {
-    var isNone: Bool {
+extension TelegramDelivery.Effect {
+    fileprivate var isNone: Bool {
         if case .none = self { return true }
         return false
     }
 
-    var isSendPreview: Bool {
+    fileprivate var isSendPreview: Bool {
         if case .sendPreview = self { return true }
         return false
     }
 
-    var isSendReliable: Bool {
+    fileprivate var isSendReliable: Bool {
         if case .sendReliable = self { return true }
         return false
     }
 
-    var isWait: Bool {
+    fileprivate var isWait: Bool {
         if case .wait = self { return true }
         return false
     }

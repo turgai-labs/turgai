@@ -21,9 +21,11 @@ public struct ConversationJournalReader: Sendable {
         journals.reserveCapacity(persistenceIDs.count)
 
         for persistenceID in persistenceIDs {
-            guard let conversationPersistenceID = ConversationPersistenceID(
-                rawValue: persistenceID
-            ) else {
+            guard
+                let conversationPersistenceID = ConversationPersistenceID(
+                    rawValue: persistenceID
+                )
+            else {
                 continue
             }
 
