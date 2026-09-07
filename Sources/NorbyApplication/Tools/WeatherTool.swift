@@ -90,8 +90,8 @@ public struct WeatherTool: Tool {
                 }
             }
         }
-        let now = try await token.withRight { clock in
-            clock.now()
+        let now = try await token.withRight { clockToken in
+            try await ClockEffect.run(in: clockToken)
         }
 
         let horizon = try validatedHorizon(input)
