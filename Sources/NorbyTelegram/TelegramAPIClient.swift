@@ -1,8 +1,13 @@
 import AsyncHTTPClient
-import Foundation
 import Logging
-import NorbyDomain
 import NIOCore
+import NorbyDomain
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 public enum TelegramAPIConfigurationError: Error, Equatable, Sendable {
     case emptyToken
@@ -70,19 +75,38 @@ public struct TelegramAPIClient: Sendable {
     public var getUpdates: @Sendable (_ offset: Int64?, _ timeout: Int) async throws -> [TelegramUpdate]
     public var downloadFile: @Sendable (_ fileID: String) async throws -> TelegramFileData
     public var sendChatAction: @Sendable (_ chatID: Int64, _ action: String) async throws -> Void
-    public var setMessageReaction: @Sendable (_ chatID: Int64, _ messageID: Int64, _ reaction: TelegramReaction?) async throws -> Void
-    public var sendMessageDraft: @Sendable (_ chatID: Int64, _ draftID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws -> Void
-    public var sendMessage: @Sendable (_ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?, _ replyParameters: TelegramReplyParameters?) async throws -> TelegramMessage
-    public var editMessageText: @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws -> Void
+    public var setMessageReaction:
+        @Sendable (_ chatID: Int64, _ messageID: Int64, _ reaction: TelegramReaction?) async throws -> Void
+    public var sendMessageDraft:
+        @Sendable (_ chatID: Int64, _ draftID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws ->
+            Void
+    public var sendMessage:
+        @Sendable (
+            _ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?,
+            _ replyParameters: TelegramReplyParameters?
+        ) async throws -> TelegramMessage
+    public var editMessageText:
+        @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws ->
+            Void
 
     public init(
         getUpdates: @escaping @Sendable (_ offset: Int64?, _ timeout: Int) async throws -> [TelegramUpdate],
         downloadFile: @escaping @Sendable (_ fileID: String) async throws -> TelegramFileData,
         sendChatAction: @escaping @Sendable (_ chatID: Int64, _ action: String) async throws -> Void,
-        setMessageReaction: @escaping @Sendable (_ chatID: Int64, _ messageID: Int64, _ reaction: TelegramReaction?) async throws -> Void,
-        sendMessageDraft: @escaping @Sendable (_ chatID: Int64, _ draftID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws -> Void,
-        sendMessage: @escaping @Sendable (_ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?, _ replyParameters: TelegramReplyParameters?) async throws -> TelegramMessage,
-        editMessageText: @escaping @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws -> Void
+        setMessageReaction:
+            @escaping @Sendable (_ chatID: Int64, _ messageID: Int64, _ reaction: TelegramReaction?) async throws ->
+            Void,
+        sendMessageDraft:
+            @escaping @Sendable (_ chatID: Int64, _ draftID: Int64, _ text: String, _ parseMode: TelegramParseMode?)
+            async throws -> Void,
+        sendMessage:
+            @escaping @Sendable (
+                _ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?,
+                _ replyParameters: TelegramReplyParameters?
+            ) async throws -> TelegramMessage,
+        editMessageText:
+            @escaping @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?)
+            async throws -> Void
     ) {
         self.getUpdates = getUpdates
         self.downloadFile = downloadFile
@@ -132,7 +156,8 @@ public struct TelegramUpdateStream: AsyncSequence, Sendable {
 
             while bufferedUpdates.isEmpty {
                 let updates = try await nextBatch()
-                bufferedUpdates = updates
+                bufferedUpdates =
+                    updates
                     .sorted(by: { $0.updateID < $1.updateID })
                     .filter { update in
                         offset == nil || update.updateID >= offset!
@@ -263,7 +288,8 @@ extension TelegramAPIClient {
             result: Result.Type,
             timeout: TimeAmount
         ) async throws -> Result {
-            let url = baseURL
+            let url =
+                baseURL
                 .appendingPathComponent("bot\(token)")
                 .appendingPathComponent(method.rawValue)
             var request = HTTPClientRequest(url: url.absoluteString)
@@ -331,7 +357,8 @@ extension TelegramAPIClient {
                 guard let filePath = file.filePath else {
                     throw TelegramAPIError.missingFilePath
                 }
-                let downloadURL = baseURL
+                let downloadURL =
+                    baseURL
                     .appendingPathComponent("file")
                     .appendingPathComponent("bot\(token)")
                     .appendingPathComponent(filePath)
@@ -406,16 +433,17 @@ extension TelegramAPIClient {
                     _ = try await call(
                         method: .editMessageText,
                         body: EditMessageTextRequest(
-                        chatID: chatID,
-                        messageID: messageID,
-                        text: text,
-                        parseMode: parseMode
+                            chatID: chatID,
+                            messageID: messageID,
+                            text: text,
+                            parseMode: parseMode
                         ),
                         result: TelegramMessage.self,
                         timeout: .seconds(Int64(requestTimeout.rounded(.up)))
                     )
                 } catch TelegramAPIError.api(_, let message)
-                where message?.contains("not modified") == true {
+                    where message?.contains("not modified") == true
+                {
                     // Editing a message to identical text is a Telegram no-op.
                 }
             }

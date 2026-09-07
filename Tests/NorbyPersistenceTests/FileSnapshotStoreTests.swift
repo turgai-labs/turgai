@@ -1,7 +1,13 @@
 import EventSourcing
-import Foundation
-@testable import NorbyPersistence
 import Testing
+
+@testable import NorbyPersistence
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 struct FileSnapshotStoreTests {
     private struct TestState: Codable, Equatable, Sendable {

@@ -1,8 +1,13 @@
 import AsyncAlgorithms
-import Foundation
 import Logging
 import NorbyApplication
 import NorbyDomain
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// One logical Telegram chat connection.
 ///
@@ -244,8 +249,8 @@ public actor TelegramBot {
     /// durable work even when Telegram has no new update to deliver.
     public func connect(conversationID: ConversationID) async -> Bool {
         guard conversationID.channel == ChannelID("telegram"),
-              let chatID = Int64(conversationID.externalAddress.rawValue),
-              allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID)
+            let chatID = Int64(conversationID.externalAddress.rawValue),
+            allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID)
         else {
             return false
         }
@@ -283,13 +288,14 @@ public actor TelegramBot {
         attachments: [Attachment] = []
     ) -> TelegramInboundEvent? {
         guard let message = update.message,
-              let sender = message.from
+            let sender = message.from
         else {
             return nil
         }
 
         let text = message.text ?? message.caption ?? ""
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !attachments.isEmpty
         else {
             return nil
@@ -367,7 +373,8 @@ public actor TelegramBot {
 
             let ids = idFactory()
             if let chatID = update.message?.chat.id,
-               (allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID)) {
+                allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID)
+            {
                 let attachments = attachments(for: update.message)
                 if let event = Self.event(
                     for: update,
@@ -468,10 +475,12 @@ public actor TelegramBot {
     }
 
     private static func command(in text: String) -> String? {
-        guard let firstWord = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(whereSeparator: \.isWhitespace)
-            .first,
+        guard
+            let firstWord =
+                text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .split(whereSeparator: \.isWhitespace)
+                .first,
             firstWord.first == "/"
         else {
             return nil
@@ -482,8 +491,8 @@ public actor TelegramBot {
     }
 }
 
-private extension TelegramInboundEvent {
-    var conversationID: ConversationID {
+extension TelegramInboundEvent {
+    fileprivate var conversationID: ConversationID {
         switch self {
         case .message(let message, _, _, _): message.conversationID
         case .start(let conversationID, _, _): conversationID

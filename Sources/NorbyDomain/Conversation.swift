@@ -1,4 +1,8 @@
-import Foundation
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 public struct ChannelID: RawRepresentable, Hashable, Codable, Sendable {
     public let rawValue: String
@@ -67,7 +71,8 @@ public struct ParticipantID: RawRepresentable, Hashable, Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.channel = try container.decodeIfPresent(ChannelID.self, forKey: .channel)
+        self.channel =
+            try container.decodeIfPresent(ChannelID.self, forKey: .channel)
             ?? ChannelID("unknown")
         self.rawValue = try container.decode(String.self, forKey: .rawValue)
     }
@@ -222,7 +227,7 @@ public struct AttachmentID: RawRepresentable, Hashable, Codable, Sendable {
 
     public var channel: ChannelID? {
         guard let separator = rawValue.firstIndex(of: ":"),
-              separator != rawValue.startIndex
+            separator != rawValue.startIndex
         else {
             return nil
         }
@@ -336,7 +341,8 @@ public struct InboundMessage: Hashable, Codable, Sendable {
         self.id = try container.decode(MessageID.self, forKey: .id)
         self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
         self.participantID = try container.decode(ParticipantID.self, forKey: .participantID)
-        self.userID = try container.decodeIfPresent(UserID.self, forKey: .userID)
+        self.userID =
+            try container.decodeIfPresent(UserID.self, forKey: .userID)
             ?? UserID(participantID: participantID)
         self.author = try container.decodeIfPresent(MessageAuthor.self, forKey: .author)
         self.text = try container.decode(String.self, forKey: .text)
@@ -392,9 +398,6 @@ public struct PendingConversationMessage: Hashable, Codable, Sendable {
 }
 
 /// A reply that satisfies the conversational channel contract.
-///
-/// An empty model value is represented by ``ConversationCompletion.void``
-/// instead of being forced into this type.
 public struct ConversationReply: Hashable, Codable, Sendable {
     public let text: String
 
@@ -427,29 +430,12 @@ public struct ConversationReply: Hashable, Codable, Sendable {
 
 /// The successful result of one model operation.
 ///
-/// A model may complete after performing work without producing a message for
-/// the conversational channel. That is a normal domain outcome, not an
-/// error. The application boundary decides how each outcome is delivered.
+/// A model operation may complete without a conversational message. That is an
+/// explicit domain outcome for work that intentionally has no reply; it is not
+/// the representation of an empty model string.
 public enum ConversationCompletion: Hashable, Codable, Sendable {
     case reply(ConversationReply)
     case `void`
-
-    public init(text: String) {
-        if let reply = ConversationReply(text) {
-            self = .reply(reply)
-        } else {
-            self = .void
-        }
-    }
-
-    public var text: String {
-        switch self {
-        case .reply(let reply):
-            reply.text
-        case .void:
-            ""
-        }
-    }
 }
 
 /// A model response that has been durably produced but has not yet been
@@ -746,29 +732,29 @@ public func reduce(
         next.status = .idle
         effects += startNextTurn(&next)
 
-        case .resume:
-            switch next.status {
-            case .idle:
-                effects += startNextTurn(&next)
+    case .resume:
+        switch next.status {
+        case .idle:
+            effects += startNextTurn(&next)
         case .running:
             guard let activeMessage = next.activeMessage else {
                 return (state, [])
             }
-                effects.append(
-                    .runReply(
-                        modelRequest(
-                            for: activeMessage,
-                            conversationID: next.conversationID
-                        )
+            effects.append(
+                .runReply(
+                    modelRequest(
+                        for: activeMessage,
+                        conversationID: next.conversationID
                     )
                 )
-            case .failed:
-                guard !next.pendingMessages.isEmpty else {
-                    return (state, [])
-                }
-                next.status = .idle
-                effects += startNextTurn(&next)
+            )
+        case .failed:
+            guard !next.pendingMessages.isEmpty else {
+                return (state, [])
             }
+            next.status = .idle
+            effects += startNextTurn(&next)
+        }
     }
 
     guard next != state || !effects.isEmpty else {

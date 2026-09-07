@@ -1,8 +1,13 @@
-import Foundation
 import Logging
 import NorbyDomain
 import NorbyTelegram
 import Testing
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 struct TelegramTests {
     @Test
@@ -42,18 +47,20 @@ struct TelegramTests {
         )
 
         #expect(
-            memory == .memory(
-                conversationID: TelegramBot.conversationID(for: chat.id),
-                participantID: participantID,
-                userID: userID
-            )
+            memory
+                == .memory(
+                    conversationID: TelegramBot.conversationID(for: chat.id),
+                    participantID: participantID,
+                    userID: userID
+                )
         )
         #expect(
-            forget == .forget(
-                conversationID: TelegramBot.conversationID(for: chat.id),
-                participantID: participantID,
-                userID: userID
-            )
+            forget
+                == .forget(
+                    conversationID: TelegramBot.conversationID(for: chat.id),
+                    participantID: participantID,
+                    userID: userID
+                )
         )
     }
 
@@ -131,7 +138,7 @@ struct TelegramTests {
                     text: "ignored"
                 )
             ),
-            TelegramUpdate(updateID: 14)
+            TelegramUpdate(updateID: 14),
         ]
         let recorder = TelegramCallRecorder(responses: [updates])
         let client = makeClient(recorder: recorder)
@@ -182,10 +189,11 @@ struct TelegramTests {
             #expect(message.participantID == participantID)
             #expect(message.userID == userID)
             #expect(
-                message.author == MessageAuthor(
-                    displayName: "John Appleseed",
-                    handle: "johnappleseed"
-                )
+                message.author
+                    == MessageAuthor(
+                        displayName: "John Appleseed",
+                        handle: "johnappleseed"
+                    )
             )
             #expect(message.receivedAt == Date(timeIntervalSince1970: 101))
             #expect(capabilities.supportsDrafts)
@@ -199,7 +207,8 @@ struct TelegramTests {
         let deadline = Date().addingTimeInterval(2)
         var requestedOffsets = await recorder.requestedOffsets
         while Date() < deadline,
-              !requestedOffsets.contains(where: { $0 == 15 }) {
+            !requestedOffsets.contains(where: { $0 == 15 })
+        {
             try await Task.sleep(for: .milliseconds(10))
             requestedOffsets = await recorder.requestedOffsets
         }
@@ -244,11 +253,12 @@ struct TelegramTests {
             )
         )
 
-        #expect(TelegramBot.event(
-            for: update,
-            messageID: MessageID(),
-            turnID: TurnID()
-        ) == nil)
+        #expect(
+            TelegramBot.event(
+                for: update,
+                messageID: MessageID(),
+                turnID: TurnID()
+            ) == nil)
     }
 
     @Test
@@ -276,7 +286,7 @@ struct TelegramTests {
                         width: 1000,
                         height: 1000,
                         fileSize: 100
-                    )
+                    ),
                 ]
             )
         )
@@ -334,50 +344,66 @@ struct TelegramTests {
         let conversationID = TelegramBot.conversationID(for: 42)
         let turnID = TurnID()
 
-        try await publisher.publish(.reply(.started(
-            conversationID: conversationID,
-            turnID: turnID
-        )))
-        try await publisher.publish(.reply(.keepAlive(
-            conversationID: conversationID,
-            turnID: turnID,
-            phase: .thinking
-        )))
-        try await publisher.publish(.reply(.phase(
-            conversationID: conversationID,
-            turnID: turnID,
-            phase: .typing
-        )))
-        try await publisher.publish(.reply(.partial(
-            conversationID: conversationID,
-            turnID: turnID,
-            text: "ab"
-        )))
-        try await publisher.publish(.reply(.partial(
-            conversationID: conversationID,
-            turnID: turnID,
-            text: "abcdef"
-        )))
-        try await publisher.publish(.reply(.keepAlive(
-            conversationID: conversationID,
-            turnID: turnID,
-            phase: .typing
-        )))
-        try await publisher.publish(.reply(.finished(
-            conversationID: conversationID,
-            turnID: turnID,
-            text: "abcdef"
-        )))
+        try await publisher.publish(
+            .reply(
+                .started(
+                    conversationID: conversationID,
+                    turnID: turnID
+                )))
+        try await publisher.publish(
+            .reply(
+                .keepAlive(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    phase: .thinking
+                )))
+        try await publisher.publish(
+            .reply(
+                .phase(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    phase: .typing
+                )))
+        try await publisher.publish(
+            .reply(
+                .partial(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    text: "ab"
+                )))
+        try await publisher.publish(
+            .reply(
+                .partial(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    text: "abcdef"
+                )))
+        try await publisher.publish(
+            .reply(
+                .keepAlive(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    phase: .typing
+                )))
+        try await publisher.publish(
+            .reply(
+                .finished(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    text: "abcdef"
+                )))
 
-        #expect(await recorder.sentActions == [
-            "typing",
-            "typing",
-            "typing",
-            "typing",
-        ])
-        #expect(await recorder.sentDrafts == ["ab", "abc"])
-        #expect(await recorder.sentDraftIDs.count == 2)
+        #expect(
+            await recorder.sentActions == [
+                "typing",
+                "typing",
+                "typing",
+                "typing",
+            ])
+        #expect(await recorder.sentDrafts == ["ab", "abc", "abc"])
+        #expect(await recorder.sentDraftIDs.count == 3)
         #expect(await recorder.sentDraftIDs[0] == recorder.sentDraftIDs[1])
+        #expect(await recorder.sentDraftIDs[1] == recorder.sentDraftIDs[2])
         #expect(await recorder.sentMessages == ["abc", "def"])
         #expect(await recorder.sentParseModes == [.html, .html])
     }
@@ -395,21 +421,26 @@ struct TelegramTests {
         let conversationID = TelegramBot.conversationID(for: 42)
         let turnID = TurnID()
 
-        try await publisher.publish(.reply(.partial(
-            conversationID: conversationID,
-            turnID: turnID,
-            text: "The **weather"
-        )))
-        try await publisher.publish(.reply(.partial(
-            conversationID: conversationID,
-            turnID: turnID,
-            text: "The **weather** is clear"
-        )))
+        try await publisher.publish(
+            .reply(
+                .partial(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    text: "The **weather"
+                )))
+        try await publisher.publish(
+            .reply(
+                .partial(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    text: "The **weather** is clear"
+                )))
 
-        #expect(await recorder.sentDrafts == [
-            "The ",
-            "The <b>weather</b> is clear"
-        ])
+        #expect(
+            await recorder.sentDrafts == [
+                "The ",
+                "The <b>weather</b> is clear",
+            ])
         #expect(await recorder.sentDraftIDs.count == 2)
         #expect(await recorder.sentDraftIDs[0] == recorder.sentDraftIDs[1])
     }
@@ -431,20 +462,26 @@ struct TelegramTests {
             telegramMessageID: 123,
             turnID: turnID
         )
-        try await publisher.publish(.reply(.started(
-            conversationID: conversationID,
-            turnID: turnID
-        )))
-        try await publisher.publish(.reply(.phase(
-            conversationID: conversationID,
-            turnID: turnID,
-            phase: .typing
-        )))
-        try await publisher.publish(.reply(.finished(
-            conversationID: conversationID,
-            turnID: turnID,
-            text: "done"
-        )))
+        try await publisher.publish(
+            .reply(
+                .started(
+                    conversationID: conversationID,
+                    turnID: turnID
+                )))
+        try await publisher.publish(
+            .reply(
+                .phase(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    phase: .typing
+                )))
+        try await publisher.publish(
+            .reply(
+                .finished(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    text: "done"
+                )))
 
         #expect(await recorder.sentActions == ["typing", "typing"])
         #expect(await recorder.reactionMessageIDs == [123, 123, 123, 123])
@@ -468,11 +505,13 @@ struct TelegramTests {
         let turnID = TurnID()
 
         await #expect(throws: TelegramAPIError.rateLimited(retryAfter: .milliseconds(1))) {
-            try await publisher.publish(.reply(.partial(
-                conversationID: conversationID,
-                turnID: turnID,
-                text: "hello"
-            )))
+            try await publisher.publish(
+                .reply(
+                    .partial(
+                        conversationID: conversationID,
+                        turnID: turnID,
+                        text: "hello"
+                    )))
         }
 
         #expect(await recorder.draftAttempts == 1)
@@ -486,11 +525,13 @@ struct TelegramTests {
         let conversationID = TelegramBot.conversationID(for: 42)
         let turnID = TurnID()
 
-        try await publisher.publish(.reply(.failed(
-            conversationID: conversationID,
-            turnID: turnID,
-            message: "Something went wrong."
-        )))
+        try await publisher.publish(
+            .reply(
+                .failed(
+                    conversationID: conversationID,
+                    turnID: turnID,
+                    message: "Something went wrong."
+                )))
 
         #expect(await recorder.sentMessages == ["Something went wrong."])
         #expect(await recorder.sentReplyMessageIDs == [nil])
@@ -555,7 +596,8 @@ private func eventually(
     return await condition()
 }
 
-private actor TelegramCallRecorder {    private var responses: [[TelegramUpdate]]
+private actor TelegramCallRecorder {
+    private var responses: [[TelegramUpdate]]
     private var draftsSupported = true
     private var rateLimitedDrafts = 0
     private(set) var draftAttempts = 0

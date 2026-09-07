@@ -1,4 +1,8 @@
-import Foundation
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// The result of applying deterministic memory policy to one extractor
 /// proposal. A rejected proposal produces no journal event.
@@ -67,8 +71,8 @@ public struct MemoryPolicy: Equatable, Sendable {
         }
 
         guard candidate.confidence >= minimumConfidence,
-              candidate.importance >= minimumImportance,
-              !candidate.evidence.isEmpty
+            candidate.importance >= minimumImportance,
+            !candidate.evidence.isEmpty
         else {
             return .rejected
         }
@@ -82,12 +86,14 @@ public struct MemoryPolicy: Equatable, Sendable {
 
         switch proposal {
         case .add:
-            guard !facts.contains(where: {
-                $0.status == .active
-                    && $0.namespace == candidate.namespace
-                    && $0.predicate == candidate.predicate
-                    && $0.value == candidate.value
-            }) else {
+            guard
+                !facts.contains(where: {
+                    $0.status == .active
+                        && $0.namespace == candidate.namespace
+                        && $0.predicate == candidate.predicate
+                        && $0.value == candidate.value
+                })
+            else {
                 // Repeating an equivalent claim does not change memory.
                 // Evidence is provenance, not a reason to mutate the fact on
                 // every turn.
@@ -97,9 +103,11 @@ public struct MemoryPolicy: Equatable, Sendable {
             return .accepted(makeFact(from: candidate, id: factID))
 
         case .revise(let targetID, _):
-            guard let existing = facts.first(where: {
-                $0.id == targetID && $0.status == .active
-            }) else {
+            guard
+                let existing = facts.first(where: {
+                    $0.id == targetID && $0.status == .active
+                })
+            else {
                 return .rejected
             }
             guard candidate.observedAt >= existing.observedAt

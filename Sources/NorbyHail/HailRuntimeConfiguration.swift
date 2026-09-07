@@ -1,5 +1,10 @@
-import Foundation
 import Hail
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 public struct HailRuntimeConfiguration: Sendable {
     public let modelRoute: String

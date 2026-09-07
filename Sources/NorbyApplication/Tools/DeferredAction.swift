@@ -1,4 +1,8 @@
-import Foundation
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// The work a durable schedule or timer performs when it fires.
 public enum DeferredAction: Codable, Sendable, Equatable {

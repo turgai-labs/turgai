@@ -1,8 +1,11 @@
-import AsyncHTTPClient
-import Foundation
 import Hail
-import NIOCore
 import UniformTypeIdentifiers
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Fetches a URL when the model needs to inspect a referenced resource.
 ///
@@ -31,15 +34,6 @@ public struct FetchURLTool: Tool {
         case httpStatus(Int)
         case responseTooLarge
     }
-
-    private static let httpClient: HTTPClient = {
-        var configuration = HTTPClient.Configuration()
-        configuration.timeout = .init(connect: .seconds(10), read: .seconds(30))
-        return HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: configuration
-        )
-    }()
 
     private static let maximumResponseBytes = 16 * 1024 * 1024
 
@@ -77,43 +71,44 @@ public struct FetchURLTool: Tool {
 
     public func effect(for input: Input) throws -> NetworkEffect {
         let url = try validatedURL(input.url)
-        return NetworkEffect(host: url.host ?? "", operation: "fetch_url")
+        return NetworkEffect(
+            host: url.host ?? "",
+            operation: "fetch_url",
+            request: NetworkRequest(
+                url: url.absoluteString,
+                headers: [
+                    "User-Agent": "Norby/1.0 (+https://github.com/akbashev/norby)",
+                    "Accept": input.mimeType ?? "*/*",
+                ],
+                maximumResponseBytes: Self.maximumResponseBytes
+            )
+        )
     }
 
-    public func execute(
+    public func run(
         input: Input,
         token: borrowing EffectToken<NetworkEffect>
     ) async throws -> String {
-        try await executeOutput(input: input, token: token).transcript
+        try await runOutput(input: input, token: token).transcript
     }
 
-    public func executeOutput(
+    public func runOutput(
         input: Input,
         token: borrowing EffectToken<NetworkEffect>
     ) async throws -> ToolOutput {
-        _ = token
         let url = try validatedURL(input.url)
-        var request = HTTPClientRequest(url: url.absoluteString)
-        request.headers.add(
-            name: "User-Agent",
-            value: "Norby/1.0 (+https://github.com/akbashev/norby)"
-        )
-
-        let response = try await Self.httpClient.execute(
-            request,
-            timeout: .seconds(30)
-        )
-        guard (200..<300).contains(response.status.code) else {
-            throw Error.httpStatus(Int(response.status.code))
+        let response = try await NetworkEffect.run(in: token)
+        guard (200..<300).contains(response.statusCode) else {
+            throw Error.httpStatus(response.statusCode)
         }
-
-        let body = try await response.body.collect(upTo: Self.maximumResponseBytes)
-        let data = Data(body.readableBytesView)
+        let data = response.body
         guard !data.isEmpty else {
             throw Error.invalidResponse
         }
 
-        let responseContentType = response.headers.first(name: "Content-Type")?
+        let responseContentType = response.headers.first(where: { key, _ in
+            key.caseInsensitiveCompare("Content-Type") == .orderedSame
+        })?.value
             .split(separator: ";", maxSplits: 1)
             .first
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -144,7 +139,7 @@ public struct FetchURLTool: Tool {
             return hint.lowercased()
         }
         if !url.pathExtension.isEmpty,
-           let inferred = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+            let inferred = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
         {
             return inferred
         }
@@ -164,9 +159,9 @@ public struct FetchURLTool: Tool {
 
         let normalizedHost = host.lowercased()
         guard normalizedHost != "localhost",
-              normalizedHost != "127.0.0.1",
-              normalizedHost != "0.0.0.0",
-              normalizedHost != "::1"
+            normalizedHost != "127.0.0.1",
+            normalizedHost != "0.0.0.0",
+            normalizedHost != "::1"
         else {
             throw Error.invalidURL
         }

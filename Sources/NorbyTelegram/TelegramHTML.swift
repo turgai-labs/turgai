@@ -1,4 +1,8 @@
-import Foundation
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Markdown-to-Telegram-HTML formatting belongs at the Telegram boundary.
 /// The domain continues to deal in ordinary text and never has to know about
@@ -101,18 +105,19 @@ private enum HTMLToken {
     case close(HTMLTag)
 }
 
-private extension TelegramHTMLFormatter {
-    static let styles = [
+extension TelegramHTMLFormatter {
+    fileprivate static let styles = [
         MarkdownStyle(delimiter: "**", tag: "b"),
         MarkdownStyle(delimiter: "__", tag: "b"),
         MarkdownStyle(delimiter: "~~", tag: "s"),
         MarkdownStyle(delimiter: "*", tag: "i"),
-        MarkdownStyle(delimiter: "_", tag: "i")
+        MarkdownStyle(delimiter: "_", tag: "i"),
     ]
 
-    static func document(markdown: String) -> MarkdownDocument {
+    fileprivate static func document(markdown: String) -> MarkdownDocument {
         let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")
-        let lines = normalized
+        let lines =
+            normalized
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
 
@@ -152,7 +157,8 @@ private extension TelegramHTMLFormatter {
                 var quoteLines = [quote]
                 index += 1
                 while index < lines.count,
-                      let continuation = blockquoteContent(in: lines[index]) {
+                    let continuation = blockquoteContent(in: lines[index])
+                {
                     quoteLines.append(continuation)
                     index += 1
                 }
@@ -167,15 +173,15 @@ private extension TelegramHTMLFormatter {
         return MarkdownDocument(blocks: blocks)
     }
 
-    static func table(
+    fileprivate static func table(
         in lines: [String],
         startingAt index: Int
     ) -> (block: MarkdownBlock, nextIndex: Int)? {
         guard index + 1 < lines.count,
-              let headers = tableCells(in: lines[index]),
-              headers.count >= 2,
-              let separator = tableCells(in: lines[index + 1]),
-              isTableSeparatorRow(separator)
+            let headers = tableCells(in: lines[index]),
+            headers.count >= 2,
+            let separator = tableCells(in: lines[index + 1]),
+            isTableSeparatorRow(separator)
         else {
             return nil
         }
@@ -183,7 +189,8 @@ private extension TelegramHTMLFormatter {
         var rows: [[String]] = []
         var nextIndex = index + 2
         while nextIndex < lines.count,
-              let row = tableCells(in: lines[nextIndex]) {
+            let row = tableCells(in: lines[nextIndex])
+        {
             rows.append(row)
             nextIndex += 1
         }
@@ -194,13 +201,14 @@ private extension TelegramHTMLFormatter {
         )
     }
 
-    static func tableBoundary(
+    fileprivate static func tableBoundary(
         in characters: [Character],
         startingAt start: Int
     ) -> TableBoundary {
         guard start < characters.count else { return .notTable }
 
-        let headerEnd = characters[start...].firstIndex(of: "\n")
+        let headerEnd =
+            characters[start...].firstIndex(of: "\n")
             ?? characters.count
         let header = String(characters[start..<headerEnd])
         guard let headers = tableCells(in: header), headers.count >= 2 else {
@@ -215,7 +223,8 @@ private extension TelegramHTMLFormatter {
         guard separatorStart < characters.count else {
             return .incomplete
         }
-        let separatorEnd = characters[separatorStart...].firstIndex(of: "\n")
+        let separatorEnd =
+            characters[separatorStart...].firstIndex(of: "\n")
             ?? characters.count
         let separator = String(characters[separatorStart..<separatorEnd])
 
@@ -233,11 +242,13 @@ private extension TelegramHTMLFormatter {
                 : .notTable
         }
 
-        var nextStart = separatorEnd < characters.count
+        var nextStart =
+            separatorEnd < characters.count
             ? separatorEnd + 1
             : separatorEnd
         while nextStart < characters.count {
-            let lineEnd = characters[nextStart...].firstIndex(of: "\n")
+            let lineEnd =
+                characters[nextStart...].firstIndex(of: "\n")
                 ?? characters.count
             let line = String(characters[nextStart..<lineEnd])
             guard tableCells(in: line) != nil else {
@@ -248,7 +259,7 @@ private extension TelegramHTMLFormatter {
         return .complete(end: characters.count)
     }
 
-    static func tableCells(in line: String) -> [String]? {
+    fileprivate static func tableCells(in line: String) -> [String]? {
         let characters = Array(line)
         var cells: [String] = []
         var cell = ""
@@ -257,8 +268,9 @@ private extension TelegramHTMLFormatter {
 
         while index < characters.count {
             if characters[index] == "\\",
-               index + 1 < characters.count,
-               characters[index + 1] == "|" {
+                index + 1 < characters.count,
+                characters[index + 1] == "|"
+            {
                 cell.append("|")
                 index += 2
                 continue
@@ -285,43 +297,46 @@ private extension TelegramHTMLFormatter {
         return cells
     }
 
-    static func isTableSeparatorRow(_ cells: [String]) -> Bool {
-        !cells.isEmpty && cells.allSatisfy { cell in
-            var characters = Array(cell)
-            if characters.first == ":" {
-                characters.removeFirst()
+    fileprivate static func isTableSeparatorRow(_ cells: [String]) -> Bool {
+        !cells.isEmpty
+            && cells.allSatisfy { cell in
+                var characters = Array(cell)
+                if characters.first == ":" {
+                    characters.removeFirst()
+                }
+                if characters.last == ":" {
+                    characters.removeLast()
+                }
+                return characters.count >= 3
+                    && characters.allSatisfy { $0 == "-" }
             }
-            if characters.last == ":" {
-                characters.removeLast()
-            }
-            return characters.count >= 3
-                && characters.allSatisfy { $0 == "-" }
-        }
     }
 
-    static func isPossibleTableSeparator(_ line: String) -> Bool {
+    fileprivate static func isPossibleTableSeparator(_ line: String) -> Bool {
         let characters = Array(line.filter { !$0.isWhitespace })
         return !characters.isEmpty
             && characters.allSatisfy { $0 == "-" || $0 == ":" || $0 == "|" }
     }
 
-    static func stablePrefix(markdown: String) -> String {
+    fileprivate static func stablePrefix(markdown: String) -> String {
         let characters = Array(markdown)
         guard !characters.isEmpty else { return "" }
 
         var lineStart = 0
         while lineStart < characters.count {
-            let lineEnd = characters[lineStart...].firstIndex(of: "\n")
+            let lineEnd =
+                characters[lineStart...].firstIndex(of: "\n")
                 ?? characters.count
             let line = Array(characters[lineStart..<lineEnd])
             let hasFollowingNewline = lineEnd < characters.count
 
             if let fence = fenceStart(in: String(line)) {
-                guard let closingLineEnd = closingFenceEnd(
-                    in: characters,
-                    after: lineEnd + (hasFollowingNewline ? 1 : 0),
-                    marker: fence.marker
-                )
+                guard
+                    let closingLineEnd = closingFenceEnd(
+                        in: characters,
+                        after: lineEnd + (hasFollowingNewline ? 1 : 0),
+                        marker: fence.marker
+                    )
                 else {
                     return String(characters[..<lineStart])
                 }
@@ -360,7 +375,8 @@ private extension TelegramHTMLFormatter {
 
             if let offset = firstUnfinishedInlineConstruct(in: line) {
                 if headingContent(in: String(line)) != nil
-                    || blockquoteContent(in: String(line)) != nil {
+                    || blockquoteContent(in: String(line)) != nil
+                {
                     return String(characters[..<lineStart])
                 }
                 return String(characters[..<(lineStart + offset)])
@@ -373,7 +389,7 @@ private extension TelegramHTMLFormatter {
         return markdown
     }
 
-    static func blockquoteBlockEnd(
+    fileprivate static func blockquoteBlockEnd(
         in characters: [Character],
         lineEnd: Int,
         hasFollowingNewline: Bool
@@ -382,11 +398,14 @@ private extension TelegramHTMLFormatter {
 
         var nextLineStart = lineEnd + 1
         while nextLineStart < characters.count {
-            let nextLineEnd = characters[nextLineStart...].firstIndex(of: "\n")
+            let nextLineEnd =
+                characters[nextLineStart...].firstIndex(of: "\n")
                 ?? characters.count
-            guard blockquoteContent(
-                in: String(characters[nextLineStart..<nextLineEnd])
-            ) != nil else {
+            guard
+                blockquoteContent(
+                    in: String(characters[nextLineStart..<nextLineEnd])
+                ) != nil
+            else {
                 return nextLineStart
             }
             guard nextLineEnd < characters.count else {
@@ -397,14 +416,15 @@ private extension TelegramHTMLFormatter {
         return characters.count
     }
 
-    static func closingFenceEnd(
+    fileprivate static func closingFenceEnd(
         in characters: [Character],
         after start: Int,
         marker: Character
     ) -> Int? {
         var lineStart = start
         while lineStart < characters.count {
-            let lineEnd = characters[lineStart...].firstIndex(of: "\n")
+            let lineEnd =
+                characters[lineStart...].firstIndex(of: "\n")
                 ?? characters.count
             if fenceEnd(
                 in: String(characters[lineStart..<lineEnd]),
@@ -418,7 +438,7 @@ private extension TelegramHTMLFormatter {
         return nil
     }
 
-    static func isGrowingBlock(
+    fileprivate static func isGrowingBlock(
         in line: [Character],
         hasFollowingNewline: Bool
     ) -> Bool {
@@ -443,7 +463,8 @@ private extension TelegramHTMLFormatter {
         }
 
         if first == ">",
-           content.count == 1 || content[1] == " " {
+            content.count == 1 || content[1] == " "
+        {
             return !hasFollowingNewline
         }
 
@@ -465,7 +486,8 @@ private extension TelegramHTMLFormatter {
                 return true
             }
             if content[index] == ".",
-               index + 1 == content.count || content[index + 1] == " " {
+                index + 1 == content.count || content[index + 1] == " "
+            {
                 return !hasFollowingNewline
             }
         }
@@ -477,7 +499,7 @@ private extension TelegramHTMLFormatter {
         return false
     }
 
-    static func firstUnfinishedInlineConstruct(in line: [Character]) -> Int? {
+    fileprivate static func firstUnfinishedInlineConstruct(in line: [Character]) -> Int? {
         var index = inlineContentStart(in: line)
         while index < line.count {
             if line[index] == "\\" {
@@ -489,11 +511,13 @@ private extension TelegramHTMLFormatter {
             if line[index] == "`" {
                 let runEnd = sameCharacterRun(in: line, from: index, character: "`")
                 let delimiter = String(line[index..<runEnd])
-                guard let end = closingDelimiter(
-                    in: line,
-                    from: runEnd,
-                    delimiter: delimiter
-                ) else {
+                guard
+                    let end = closingDelimiter(
+                        in: line,
+                        from: runEnd,
+                        delimiter: delimiter
+                    )
+                else {
                     return index
                 }
                 index = end + delimiter.count
@@ -501,7 +525,8 @@ private extension TelegramHTMLFormatter {
             }
 
             if line[index] == "[",
-               link(in: line, from: index) == nil {
+                link(in: line, from: index) == nil
+            {
                 return index
             }
 
@@ -512,18 +537,21 @@ private extension TelegramHTMLFormatter {
 
                 let contentStart = index + delimiter.count
                 guard contentStart < line.count else { return index }
-                guard let end = closingDelimiter(
-                    in: line,
-                    from: contentStart,
-                    delimiter: style.delimiter
-                ) else {
+                guard
+                    let end = closingDelimiter(
+                        in: line,
+                        from: contentStart,
+                        delimiter: style.delimiter
+                    )
+                else {
                     return index
                 }
 
                 if style.delimiter == "_",
-                   index > 0,
-                   line[index - 1].isLetterOrNumber,
-                   line[contentStart].isLetterOrNumber {
+                    index > 0,
+                    line[index - 1].isLetterOrNumber,
+                    line[contentStart].isLetterOrNumber
+                {
                     continue
                 }
 
@@ -539,7 +567,7 @@ private extension TelegramHTMLFormatter {
         return nil
     }
 
-    static func inlineContentStart(in line: [Character]) -> Int {
+    fileprivate static func inlineContentStart(in line: [Character]) -> Int {
         var start = 0
         while start < line.count, line[start] == " ", start < 3 {
             start += 1
@@ -548,8 +576,9 @@ private extension TelegramHTMLFormatter {
 
         let content = Array(line[start...])
         if content.count >= 2,
-           ["-", "*", "+"].contains(content[0]),
-           content[1] == " " {
+            ["-", "*", "+"].contains(content[0]),
+            content[1] == " "
+        {
             return start + 2
         }
 
@@ -558,16 +587,17 @@ private extension TelegramHTMLFormatter {
             numberEnd += 1
         }
         if numberEnd > 0,
-           numberEnd + 1 < content.count,
-           content[numberEnd] == ".",
-           content[numberEnd + 1] == " " {
+            numberEnd + 1 < content.count,
+            content[numberEnd] == ".",
+            content[numberEnd + 1] == " "
+        {
             return start + numberEnd + 2
         }
 
         return start
     }
 
-    static func block(for line: String) -> MarkdownBlock {
+    fileprivate static func block(for line: String) -> MarkdownBlock {
         let characters = Array(line)
         var start = 0
         while start < characters.count, characters[start] == " ", start < 3 {
@@ -593,11 +623,11 @@ private extension TelegramHTMLFormatter {
         return .paragraph(inlineNodes(line))
     }
 
-    static func inlineNodes(_ text: String) -> [MarkdownInline] {
+    fileprivate static func inlineNodes(_ text: String) -> [MarkdownInline] {
         parseInline(Array(text), from: 0, until: nil).nodes
     }
 
-    static func parseInline(
+    fileprivate static func parseInline(
         _ characters: [Character],
         from start: Int,
         until delimiter: String?
@@ -614,7 +644,8 @@ private extension TelegramHTMLFormatter {
 
         while index < characters.count {
             if let delimiter,
-               characters[index...].starts(with: Array(delimiter)) {
+                characters[index...].starts(with: Array(delimiter))
+            {
                 flushPlainText()
                 return InlineParseResult(
                     nodes: nodes,
@@ -650,7 +681,8 @@ private extension TelegramHTMLFormatter {
             }
 
             if characters[index] == "[",
-               let link = link(in: characters, from: index) {
+                let link = link(in: characters, from: index)
+            {
                 if let destination = allowedURL(link.destination) {
                     flushPlainText()
                     let label = inlineNodes(String(characters[(index + 1)..<link.labelEnd]))
@@ -678,9 +710,10 @@ private extension TelegramHTMLFormatter {
 
                 // An underscore in a word is ordinary text, not emphasis.
                 if style.delimiter == "_",
-                   index > 0,
-                   characters[index - 1].isLetterOrNumber,
-                   characters[contentStart].isLetterOrNumber {
+                    index > 0,
+                    characters[index - 1].isLetterOrNumber,
+                    characters[contentStart].isLetterOrNumber
+                {
                     continue
                 }
 
@@ -704,7 +737,7 @@ private extension TelegramHTMLFormatter {
         return InlineParseResult(nodes: nodes, end: index, closed: false)
     }
 
-    static func tokens(for document: MarkdownDocument) -> [HTMLToken] {
+    fileprivate static func tokens(for document: MarkdownDocument) -> [HTMLToken] {
         document.blocks.enumerated().flatMap { index, block in
             var tokens = tokens(for: block)
             if index + 1 < document.blocks.count {
@@ -714,7 +747,7 @@ private extension TelegramHTMLFormatter {
         }
     }
 
-    static func tokens(for block: MarkdownBlock) -> [HTMLToken] {
+    fileprivate static func tokens(for block: MarkdownBlock) -> [HTMLToken] {
         switch block {
         case .paragraph(let nodes):
             return inlineTokens(nodes)
@@ -752,7 +785,7 @@ private extension TelegramHTMLFormatter {
         }
     }
 
-    static func inlineTokens(_ nodes: [MarkdownInline]) -> [HTMLToken] {
+    fileprivate static func inlineTokens(_ nodes: [MarkdownInline]) -> [HTMLToken] {
         nodes.flatMap { node in
             switch node {
             case .text(let text):
@@ -775,7 +808,7 @@ private extension TelegramHTMLFormatter {
         }
     }
 
-    static func tableText(headers: [String], rows: [[String]]) -> String {
+    fileprivate static func tableText(headers: [String], rows: [[String]]) -> String {
         let parsedRows = ([headers] + rows).map { row in
             row.map { plainText(inlineNodes($0)) }
         }
@@ -801,16 +834,18 @@ private extension TelegramHTMLFormatter {
             }.joined()
         }
 
-        let separator = widths
+        let separator =
+            widths
             .map { String(repeating: "-", count: $0) }
             .joined(separator: "-+-")
 
-        return ([rowText(normalizedRows[0]), separator]
+        return
+            ([rowText(normalizedRows[0]), separator]
             + normalizedRows.dropFirst().map(rowText))
             .joined(separator: "\n")
     }
 
-    static func plainText(_ nodes: [MarkdownInline]) -> String {
+    fileprivate static func plainText(_ nodes: [MarkdownInline]) -> String {
         nodes.map { node in
             switch node {
             case .text(let text):
@@ -825,16 +860,16 @@ private extension TelegramHTMLFormatter {
         }.joined()
     }
 
-    static func wrapped(_ nodes: [MarkdownInline], in name: String) -> [HTMLToken] {
+    fileprivate static func wrapped(_ nodes: [MarkdownInline], in name: String) -> [HTMLToken] {
         let wrapper = tag(name)
         return [.open(wrapper)] + inlineTokens(nodes) + [.close(wrapper)]
     }
 
-    static func tag(_ name: String, attributes: String = "") -> HTMLTag {
+    fileprivate static func tag(_ name: String, attributes: String = "") -> HTMLTag {
         HTMLTag(raw: "<\(name)\(attributes)>", name: name)
     }
 
-    static func render(tokens: [HTMLToken]) -> String {
+    fileprivate static func render(tokens: [HTMLToken]) -> String {
         tokens.map { token in
             switch token {
             case .text(let value): return value
@@ -844,14 +879,14 @@ private extension TelegramHTMLFormatter {
         }.joined()
     }
 
-    static func chunk(tokens: [HTMLToken], maximumLength: Int) -> [String] {
+    fileprivate static func chunk(tokens: [HTMLToken], maximumLength: Int) -> [String] {
         let state = tokens.reduce(into: HTMLChunkState(maximumLength: maximumLength)) {
             $0.consume($1)
         }
         return state.finished()
     }
 
-    static func sameCharacterRun(
+    fileprivate static func sameCharacterRun(
         in characters: [Character],
         from start: Int,
         character: Character
@@ -863,7 +898,7 @@ private extension TelegramHTMLFormatter {
         return index
     }
 
-    static func closingDelimiter(
+    fileprivate static func closingDelimiter(
         in characters: [Character],
         from start: Int,
         delimiter: String
@@ -872,8 +907,9 @@ private extension TelegramHTMLFormatter {
         var index = start
         while index + delimiterCharacters.count <= characters.count {
             if characters[index...].starts(with: delimiterCharacters),
-               index > start,
-               characters[index - 1] != "\\" {
+                index > start,
+                characters[index - 1] != "\\"
+            {
                 return index
             }
             index += 1
@@ -881,7 +917,7 @@ private extension TelegramHTMLFormatter {
         return nil
     }
 
-    static func link(
+    fileprivate static func link(
         in characters: [Character],
         from start: Int
     ) -> (labelEnd: Int, destination: String, end: Int)? {
@@ -895,8 +931,8 @@ private extension TelegramHTMLFormatter {
             labelEnd += 1
         }
         guard labelEnd < characters.count,
-              labelEnd + 1 < characters.count,
-              characters[labelEnd + 1] == "("
+            labelEnd + 1 < characters.count,
+            characters[labelEnd + 1] == "("
         else {
             return nil
         }
@@ -926,7 +962,7 @@ private extension TelegramHTMLFormatter {
         )
     }
 
-    static func allowedURL(_ rawValue: String) -> String? {
+    fileprivate static func allowedURL(_ rawValue: String) -> String? {
         var value = rawValue
         if value.first == "<", value.last == ">", value.count >= 2 {
             value = String(value.dropFirst().dropLast())
@@ -935,60 +971,60 @@ private extension TelegramHTMLFormatter {
         }
 
         guard let scheme = value.split(separator: ":", maxSplits: 1).first,
-              ["http", "https", "tg", "mailto"].contains(scheme.lowercased())
+            ["http", "https", "tg", "mailto"].contains(scheme.lowercased())
         else {
             return nil
         }
         return value
     }
 
-    static func escapeText(_ text: String) -> String {
+    fileprivate static func escapeText(_ text: String) -> String {
         text
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
     }
 
-    static func escapeAttribute(_ text: String) -> String {
+    fileprivate static func escapeAttribute(_ text: String) -> String {
         escapeText(text).replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    static func headingContent(in line: String) -> String? {
+    fileprivate static func headingContent(in line: String) -> String? {
         let characters = Array(line)
         var count = 0
         while count < characters.count, characters[count] == "#", count < 6 {
             count += 1
         }
         guard count > 0,
-              count < characters.count,
-              characters[count] == " "
+            count < characters.count,
+            characters[count] == " "
         else {
             return nil
         }
         return String(characters.dropFirst(count + 1))
     }
 
-    static func unorderedListContent(in line: String) -> String? {
+    fileprivate static func unorderedListContent(in line: String) -> String? {
         let characters = Array(line)
         guard characters.count >= 2,
-              ["-", "*", "+"].contains(characters[0]),
-              characters[1] == " "
+            ["-", "*", "+"].contains(characters[0]),
+            characters[1] == " "
         else {
             return nil
         }
         return String(characters.dropFirst(2))
     }
 
-    static func orderedListContent(in line: String) -> (number: String, content: String)? {
+    fileprivate static func orderedListContent(in line: String) -> (number: String, content: String)? {
         let characters = Array(line)
         var index = 0
         while index < characters.count, characters[index].isNumber {
             index += 1
         }
         guard index > 0,
-              index + 1 < characters.count,
-              characters[index] == ".",
-              characters[index + 1] == " "
+            index + 1 < characters.count,
+            characters[index] == ".",
+            characters[index + 1] == " "
         else {
             return nil
         }
@@ -998,22 +1034,22 @@ private extension TelegramHTMLFormatter {
         )
     }
 
-    static func isHorizontalRule(_ line: String) -> Bool {
+    fileprivate static func isHorizontalRule(_ line: String) -> Bool {
         let characters = Array(line.filter { !$0.isWhitespace })
         guard characters.count >= 3,
-              let first = characters.first,
-              ["-", "*", "_"].contains(first)
+            let first = characters.first,
+            ["-", "*", "_"].contains(first)
         else {
             return false
         }
         return characters.allSatisfy { $0 == first }
     }
 
-    static func blockquoteContent(in line: String) -> String? {
+    fileprivate static func blockquoteContent(in line: String) -> String? {
         let characters = Array(line)
         guard let index = characters.firstIndex(of: ">"),
-              index <= 3,
-              characters[..<index].allSatisfy({ $0 == " " })
+            index <= 3,
+            characters[..<index].allSatisfy({ $0 == " " })
         else {
             return nil
         }
@@ -1024,16 +1060,16 @@ private extension TelegramHTMLFormatter {
         return String(characters.dropFirst(contentStart))
     }
 
-    static func fenceStart(in line: String) -> (marker: Character, language: String)? {
+    fileprivate static func fenceStart(in line: String) -> (marker: Character, language: String)? {
         let characters = Array(line)
         var index = 0
         while index < characters.count, characters[index] == " ", index < 3 {
             index += 1
         }
         guard index + 2 < characters.count,
-              characters[index] == "`" || characters[index] == "~",
-              characters[index] == characters[index + 1],
-              characters[index] == characters[index + 2]
+            characters[index] == "`" || characters[index] == "~",
+            characters[index] == characters[index + 1],
+            characters[index] == characters[index + 2]
         else {
             return nil
         }
@@ -1044,16 +1080,16 @@ private extension TelegramHTMLFormatter {
         )
     }
 
-    static func fenceEnd(in line: String, marker: Character) -> Bool {
+    fileprivate static func fenceEnd(in line: String, marker: Character) -> Bool {
         let characters = Array(line)
         var index = 0
         while index < characters.count, characters[index] == " ", index < 3 {
             index += 1
         }
         guard index + 2 < characters.count,
-              characters[index] == marker,
-              characters[index + 1] == marker,
-              characters[index + 2] == marker
+            characters[index] == marker,
+            characters[index + 1] == marker,
+            characters[index + 2] == marker
         else {
             return false
         }
@@ -1113,10 +1149,12 @@ private struct HTMLChunkState {
         var index = 0
         while index < characters.count {
             if characters[index] == "&",
-               let end = characters[index...].firstIndex(of: ";") {
+                let end = characters[index...].firstIndex(of: ";")
+            {
                 let entity = String(characters[index...end])
                 if ["&amp;", "&lt;", "&gt;", "&quot;"].contains(entity)
-                    || entity.hasPrefix("&#") {
+                    || entity.hasPrefix("&#")
+                {
                     units.append(entity)
                     index = end + 1
                     continue
@@ -1129,6 +1167,6 @@ private struct HTMLChunkState {
     }
 }
 
-private extension Character {
-    var isLetterOrNumber: Bool { isLetter || isNumber }
+extension Character {
+    fileprivate var isLetterOrNumber: Bool { isLetter || isNumber }
 }

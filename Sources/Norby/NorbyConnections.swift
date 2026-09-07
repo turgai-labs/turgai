@@ -1,10 +1,15 @@
 import AsyncAlgorithms
 import DistributedCluster
-import Foundation
 import Hail
 import NorbyApplication
 import NorbyDomain
 import ServiceLifecycle
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 private enum OutboundDeliveryResult: Sendable {
     case delivered
@@ -145,7 +150,7 @@ public actor NorbyConnections: Service {
             switch self {
             case .live(let session): session.handle
             }
-            }
+        }
 
         func finish() async {
             switch self {

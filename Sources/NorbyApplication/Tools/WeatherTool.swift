@@ -1,7 +1,10 @@
-import AsyncHTTPClient
-import Foundation
 import Hail
-import NIOCore
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Looks up a place and returns its current weather plus a short forecast.
 ///
@@ -9,28 +12,16 @@ import NIOCore
 /// that introducing a provider abstraction would add more surface than value
 /// at this stage.
 public struct WeatherTool: Tool {
-    public typealias Effect = CombinedEffect<ClockEffect, NetworkEffect>
-
-    private static let httpClient: HTTPClient = {
-        var configuration = HTTPClient.Configuration()
-        configuration.timeout = .init(connect: .seconds(10), read: .seconds(15))
-        return HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: configuration
-        )
-    }()
+    public typealias Effect = CombinedEffect<LocationEffect, ClockEffect>
 
     private static let maximumResponseBytes = 512 * 1024
+    private static let userAgent = "Norby/1.0 (+https://github.com/akbashev/norby)"
 
     public let name = "weather"
     public let description =
         "Get structured current weather and forecast data for a place. A one-day forecast is hourly; longer forecasts are daily. The result includes the tool clock, timezone, and local date/time components. Pass a city, place name, or postal code; include the country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
 
-    private let configuration: Configuration
-
-    public init(configuration: Configuration = .init()) {
-        self.configuration = configuration
-    }
+    public init() {}
 
     public var schema: LLMToolSchema {
         LLMToolSchema(
@@ -48,12 +39,14 @@ public struct WeatherTool: Tool {
                         ),
                         "days": LLMToolSchema.PropertySchema(
                             type: "integer",
-                            description: "Forecast length in days, from 1 to 7. One day returns hourly weather; seven days returns the upcoming week by day.",
+                            description:
+                                "Forecast length in days, from 1 to 7. One day returns hourly weather; seven days returns the upcoming week by day.",
                             enumValues: nil,
                         ),
                         "from_hour": LLMToolSchema.PropertySchema(
                             type: "integer",
-                            description: "Optional local hour from which today's hourly forecast should start, from 0 to 23. Only used when days is 1.",
+                            description:
+                                "Optional local hour from which today's hourly forecast should start, from 0 to 23. Only used when days is 1.",
                             enumValues: nil
                         ),
                     ],
@@ -64,80 +57,74 @@ public struct WeatherTool: Tool {
     }
 
     public func effect(for input: Input) throws -> Effect {
-        _ = try validatedLocation(input.location)
+        let location = try validatedLocation(input.location)
         _ = try validatedHorizon(input)
-        // Geocoding and forecast are both Open-Meteo operations. The effect
-        // uses the provider domain rather than exposing the two subdomains.
-        // Weather also needs the local clock to choose the default starting
-        // hour for today's forecast, so both capabilities are required by the
-        // operation.
-        return ClockEffect(now: configuration.now)
-            .combined(
-                with: NetworkEffect(
-                    host: "open-meteo.com",
-                    operation: "weather"
-                )
-            )
+        let locationEffect = try LocationTool().effect(
+            for: LocationTool.Input(query: location)
+        )
+        return
+            locationEffect
+            .combined(with: ClockEffect())
     }
 
-    public func execute(
+    public func run(
         input: Input,
         token: borrowing EffectToken<Effect>
     ) async throws -> String {
-        let now = await token.withLeft { clock in
+        let location = try await token.withLeft { locationToken in
+            let locationQuery = try validatedLocation(input.location)
+            do {
+                let places = try await LocationEffect.run(in: locationToken)
+                guard let place = places.first else {
+                    throw Error.locationNotFound(locationQuery)
+                }
+                return place
+            } catch let error as LocationEffect.Error {
+                switch error {
+                case .invalidResponse:
+                    throw Error.invalidResponse
+                case .httpStatus(let status):
+                    throw Error.httpStatus(status)
+                case .locationNotFound(let query):
+                    throw Error.locationNotFound(query)
+                }
+            }
+        }
+        let now = try await token.withRight { clock in
             clock.now()
         }
 
-        return try await token.withRight { _ in
-            let locationQuery = try validatedLocation(input.location)
-            let horizon = try validatedHorizon(input)
-            let location = try await geocode(locationQuery)
-            let forecast = try await forecast(
-                latitude: location.latitude,
-                longitude: location.longitude,
-                horizon: horizon
-            )
-            let report = try makeReport(
-                location: location,
-                forecast: forecast,
-                horizon: horizon,
-                now: now
-            )
-            return try encode(report)
+        let horizon = try validatedHorizon(input)
+        let forecastEffect = try forecastEffect(
+            latitude: location.latitude,
+            longitude: location.longitude,
+            horizon: horizon
+        )
+        let forecast = try await token.withChild(forecastEffect) { networkToken in
+            try await NetworkEffect.run(in: networkToken)
         }
+        let report = try makeReport(
+            location: location,
+            forecast: try decodeForecast(forecast),
+            horizon: horizon,
+            now: now
+        )
+        return try encode(report)
     }
 
-    private func geocode(_ location: String) async throws -> Location {
-        var components = URLComponents(
-            string: "https://geocoding-api.open-meteo.com/v1/search"
-        )!
-        components.queryItems = [
-            URLQueryItem(name: "name", value: location),
-            URLQueryItem(name: "count", value: "1"),
-            URLQueryItem(name: "language", value: "en"),
-            URLQueryItem(name: "format", value: "json"),
-        ]
-        guard let url = components.url else { throw Error.invalidURL }
-
-        let response: GeocodingResponse = try await fetch(url)
-        guard let result = response.results?.first else {
-            throw Error.locationNotFound(location)
-        }
-        return result
-    }
-
-    private func forecast(
+    private func forecastEffect(
         latitude: Double,
         longitude: Double,
         horizon: ForecastHorizon
-    ) async throws -> ForecastResponse {
+    ) throws -> NetworkEffect {
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
         components.queryItems = [
             URLQueryItem(name: "latitude", value: String(latitude)),
             URLQueryItem(name: "longitude", value: String(longitude)),
             URLQueryItem(
                 name: "current",
-                value: "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m"
+                value:
+                    "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m"
             ),
             URLQueryItem(name: "timezone", value: "auto"),
         ]
@@ -149,7 +136,8 @@ public struct WeatherTool: Tool {
             components.queryItems?.append(
                 URLQueryItem(
                     name: "hourly",
-                    value: "temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m"
+                    value:
+                        "temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m"
                 )
             )
             components.queryItems?.append(URLQueryItem(name: "forecast_days", value: "1"))
@@ -165,32 +153,32 @@ public struct WeatherTool: Tool {
             )
         }
         guard let url = components.url else { throw Error.invalidURL }
-        return try await fetch(url)
+        return NetworkEffect(
+            host: "api.open-meteo.com",
+            operation: "weather",
+            request: NetworkRequest(
+                url: url.absoluteString,
+                headers: [
+                    "User-Agent": Self.userAgent,
+                    "Accept": "application/json",
+                ],
+                maximumResponseBytes: Self.maximumResponseBytes
+            )
+        )
     }
 
-    private func fetch<Response: Decodable>(_ url: URL) async throws -> Response {
-        var request = HTTPClientRequest(url: url.absoluteString)
-        request.headers.add(
-            name: "User-Agent",
-            value: "Norby/1.0 (+https://github.com/akbashev/norby)"
-        )
-        request.headers.add(name: "Accept", value: "application/json")
-
-        let response = try await Self.httpClient.execute(
-            request,
-            timeout: .seconds(15)
-        )
-        guard (200..<300).contains(response.status.code) else {
-            throw Error.httpStatus(Int(response.status.code))
+    private func decodeForecast(
+        _ response: NetworkResponse
+    ) throws -> ForecastResponse {
+        guard (200..<300).contains(response.statusCode) else {
+            throw Error.httpStatus(response.statusCode)
         }
-
-        let body = try await response.body.collect(upTo: Self.maximumResponseBytes)
         do {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .secondsSince1970
             return try decoder.decode(
-                Response.self,
-                from: Data(body.readableBytesView)
+                ForecastResponse.self,
+                from: response.body
             )
         } catch {
             throw Error.invalidResponse
@@ -198,7 +186,7 @@ public struct WeatherTool: Tool {
     }
 
     private func makeReport(
-        location: Location,
+        location: LocationEffect.Result,
         forecast: ForecastResponse,
         horizon: ForecastHorizon,
         now: Date
@@ -257,7 +245,7 @@ public struct WeatherTool: Tool {
         return WeatherReport(
             location: WeatherLocation(
                 name: location.name,
-                region: location.admin1,
+                region: location.region,
                 country: location.country,
                 latitude: location.latitude,
                 longitude: location.longitude
@@ -300,11 +288,11 @@ public struct WeatherTool: Tool {
         let components = Calendar(identifier: .gregorian)
             .dateComponents(in: timeZone, from: date)
         guard let year = components.year,
-              let month = components.month,
-              let day = components.day,
-              let hour = components.hour,
-              let minute = components.minute,
-              let weekday = components.weekday
+            let month = components.month,
+            let day = components.day,
+            let hour = components.hour,
+            let minute = components.minute,
+            let weekday = components.weekday
         else {
             throw Error.invalidResponse
         }
@@ -387,14 +375,6 @@ public struct WeatherTool: Tool {
 }
 
 extension WeatherTool {
-    public struct Configuration: Sendable {
-        public let now: @Sendable () -> Date
-
-        public init(now: @escaping @Sendable () -> Date = Date.init) {
-            self.now = now
-        }
-    }
-
     /// The domain meaning of the forecast requested by the caller.
     public enum ForecastHorizon: Equatable, Sendable {
         case currentDay(fromHour: Int?)
@@ -449,19 +429,6 @@ extension WeatherTool {
         case locationNotFound(String)
         case invalidResponse
         case httpStatus(Int)
-    }
-
-    private struct GeocodingResponse: Decodable {
-        let results: [Location]?
-    }
-
-    private struct Location: Decodable {
-        let name: String
-        let country: String?
-        let admin1: String?
-        let latitude: Double
-        let longitude: Double
-        let timezone: String?
     }
 
     private struct ForecastResponse: Decodable {
@@ -593,13 +560,15 @@ extension WeatherTool {
                 [Int?].self,
                 forKey: .precipitationProbabilities
             )
-            guard Set([
-                dates.count,
-                weatherCodes.count,
-                maximumTemperatures.count,
-                minimumTemperatures.count,
-                precipitationProbabilities.count,
-            ]).count == 1 else {
+            guard
+                Set([
+                    dates.count,
+                    weatherCodes.count,
+                    maximumTemperatures.count,
+                    minimumTemperatures.count,
+                    precipitationProbabilities.count,
+                ]).count == 1
+            else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .dates,
                     in: container,
@@ -663,16 +632,18 @@ extension WeatherTool {
             let weatherCodes = try container.decode([Int].self, forKey: .weatherCodes)
             let windSpeeds = try container.decode([Double].self, forKey: .windSpeeds)
             let windDirections = try container.decode([Double].self, forKey: .windDirections)
-            guard Set([
-                times.count,
-                temperatures.count,
-                apparentTemperatures.count,
-                precipitationProbabilities.count,
-                precipitations.count,
-                weatherCodes.count,
-                windSpeeds.count,
-                windDirections.count,
-            ]).count == 1 else {
+            guard
+                Set([
+                    times.count,
+                    temperatures.count,
+                    apparentTemperatures.count,
+                    precipitationProbabilities.count,
+                    precipitations.count,
+                    weatherCodes.count,
+                    windSpeeds.count,
+                    windDirections.count,
+                ]).count == 1
+            else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .times,
                     in: container,

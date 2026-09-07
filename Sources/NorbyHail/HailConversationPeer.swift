@@ -1,15 +1,30 @@
 import AnyLanguageModel
 import DistributedCluster
-import Foundation
 import Hail
 import NorbyDomain
 import VirtualActors
 
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
+
 public struct HailResponse: Hashable, Sendable {
+    public let reply: ConversationReply
     public let content: String
 
-    public init(content: String) {
-        self.content = content
+    public init?(content: String) {
+        guard let reply = ConversationReply(content) else {
+            return nil
+        }
+        self.reply = reply
+        self.content = reply.text
+    }
+
+    public init(reply: ConversationReply) {
+        self.reply = reply
+        self.content = reply.text
     }
 }
 
@@ -51,7 +66,8 @@ private struct HailConversationInput: AgentInput {
         } else if message.text.isEmpty {
             self.content = "Attachments:\n" + attachmentLines.joined(separator: "\n")
         } else {
-            self.content = message.text
+            self.content =
+                message.text
                 + "\n\nAttachments:\n"
                 + attachmentLines.joined(separator: "\n")
         }
@@ -163,7 +179,7 @@ public enum HailStructuredUpdateMapper {
         case .runFailed(let error, _):
             return [.failed(error)]
         case .messageHandled, .modelOutputGenerated, .toolRequested, .toolCompleted,
-             .runCompleted:
+            .runCompleted:
             return []
         }
     }
@@ -175,16 +191,18 @@ public enum HailStructuredUpdateMapper {
 public struct HailStructuredConversationPeer<Output: AgentOutput>: Sendable {
     public typealias EventHandler = @Sendable (HailStructuredEvent<Output>) async throws -> Void
 
-    private let runHandler: @Sendable (
-        ModelRequest,
-        @escaping EventHandler
-    ) async throws -> Void
-
-    public init(
-        run: @escaping @Sendable (
+    private let runHandler:
+        @Sendable (
             ModelRequest,
             @escaping EventHandler
         ) async throws -> Void
+
+    public init(
+        run:
+            @escaping @Sendable (
+                ModelRequest,
+                @escaping EventHandler
+            ) async throws -> Void
     ) {
         self.runHandler = run
     }
@@ -203,17 +221,19 @@ public struct HailStructuredConversationPeer<Output: AgentOutput>: Sendable {
 public struct HailConversationPeer: Sendable {
     public typealias ActivityHandler = @Sendable (HailModelEvent) async throws -> Void
 
-    private let runHandler: @Sendable (
-        ModelRequest,
-        [String],
-        @escaping ActivityHandler
-    ) async throws -> HailResponse
-
-    public init(
-        run: @escaping @Sendable (
+    private let runHandler:
+        @Sendable (
             ModelRequest,
+            [String],
             @escaping ActivityHandler
         ) async throws -> HailResponse
+
+    public init(
+        run:
+            @escaping @Sendable (
+                ModelRequest,
+                @escaping ActivityHandler
+            ) async throws -> HailResponse
     ) {
         self.runHandler = { request, _, onActivity in
             try await run(request, onActivity)
@@ -221,11 +241,12 @@ public struct HailConversationPeer: Sendable {
     }
 
     public init(
-        runWithInstructions: @escaping @Sendable (
-            ModelRequest,
-            [String],
-            @escaping ActivityHandler
-        ) async throws -> HailResponse
+        runWithInstructions:
+            @escaping @Sendable (
+                ModelRequest,
+                [String],
+                @escaping ActivityHandler
+            ) async throws -> HailResponse
     ) {
         self.runHandler = runWithInstructions
     }
@@ -258,6 +279,7 @@ public enum HailAdapterError: Error, Hashable, Sendable {
     case conversationMismatch
     case missingUserMessage
     case activityStreamEnded
+    case emptyResponse
 }
 
 private enum HailRunResult: Sendable {
@@ -308,7 +330,10 @@ public struct HailAgentAdapter: Sendable {
                     // opaque references unless the model explicitly
                     // fetches one.
                     let response: String = try await agent.respond(input)
-                    return .response(HailResponse(content: response))
+                    guard let response = HailResponse(content: response) else {
+                        throw HailAdapterError.emptyResponse
+                    }
+                    return .response(response)
                 }
 
                 group.addTask {
@@ -427,6 +452,8 @@ public struct HailAgentAdapter: Sendable {
                 return "The model request did not contain a user message."
             case .activityStreamEnded:
                 return "The model activity stream ended before the response was available."
+            case .emptyResponse:
+                return "I couldn’t produce a reply to that message. Please try again."
             }
         }
         return HailErrorFormatter.userFacingMessage(error)

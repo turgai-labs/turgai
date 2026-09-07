@@ -1,6 +1,12 @@
-import Foundation
 import Testing
+
 @testable import NorbyDomain
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 struct ConversationReducerTests {
     private let conversationID = ConversationID(
@@ -106,14 +112,15 @@ struct ConversationReducerTests {
         }
         #expect(next.pendingMessages.isEmpty)
         #expect(next.revision == 1)
-        #expect(effects.contains(where: { effect in
-            if case .runReply(let request) = effect {
-                return request.conversationID == conversationID
-                    && request.turnID == turnID
-                    && request.message.text == "hello"
-            }
-            return false
-        }))
+        #expect(
+            effects.contains(where: { effect in
+                if case .runReply(let request) = effect {
+                    return request.conversationID == conversationID
+                        && request.turnID == turnID
+                        && request.message.text == "hello"
+                }
+                return false
+            }))
     }
 
     @Test
@@ -147,13 +154,14 @@ struct ConversationReducerTests {
             return
         }
         #expect(completed.pendingMessages.isEmpty)
-        #expect(completionEffects.contains(where: { effect in
-            if case .runReply(let request) = effect {
-                return request.turnID == secondTurnID
-                    && request.message.text == "second"
-            }
-            return false
-        }))
+        #expect(
+            completionEffects.contains(where: { effect in
+                if case .runReply(let request) = effect {
+                    return request.turnID == secondTurnID
+                        && request.message.text == "second"
+                }
+                return false
+            }))
     }
 
     @Test
@@ -217,9 +225,10 @@ struct ConversationReducerTests {
         )
 
         #expect(completed.status == .idle)
-        #expect(completed.pendingReplies == [
-            PendingConversationReply(turnID: turnID, text: "hello")
-        ])
+        #expect(
+            completed.pendingReplies == [
+                PendingConversationReply(turnID: turnID, text: "hello")
+            ])
         #expect(effects.isEmpty)
 
         let (delivered, deliveryEffects) = reduce(
@@ -252,16 +261,17 @@ struct ConversationReducerTests {
 
         #expect(completed.status == .idle)
         #expect(completed.pendingReplies.isEmpty)
-        #expect(effects == [
-            .publish(
-                .reply(
-                    .completed(
-                        conversationID: conversationID,
-                        turnID: turnID
+        #expect(
+            effects == [
+                .publish(
+                    .reply(
+                        .completed(
+                            conversationID: conversationID,
+                            turnID: turnID
+                        )
                     )
                 )
-            )
-        ])
+            ])
     }
 
     @Test
@@ -279,15 +289,16 @@ struct ConversationReducerTests {
         let (recovered, effects) = reduce(running, .resume)
 
         #expect(recovered == running)
-        #expect(effects == [
-            .runReply(
-                ModelRequest(
-                    conversationID: conversationID,
-                    turnID: pending.turnID,
-                    message: pending.message
+        #expect(
+            effects == [
+                .runReply(
+                    ModelRequest(
+                        conversationID: conversationID,
+                        turnID: pending.turnID,
+                        message: pending.message
+                    )
                 )
-            )
-        ])
+            ])
     }
 
     @Test
@@ -306,12 +317,13 @@ struct ConversationReducerTests {
         #expect(recovered.status == .running(pending.turnID))
         #expect(recovered.activeMessage == pending)
         #expect(recovered.pendingMessages.isEmpty)
-        #expect(effects.contains(where: { effect in
-            if case .runReply(let request) = effect {
-                return request.turnID == pending.turnID
-            }
-            return false
-        }))
+        #expect(
+            effects.contains(where: { effect in
+                if case .runReply(let request) = effect {
+                    return request.turnID == pending.turnID
+                }
+                return false
+            }))
     }
 
     @Test
@@ -366,10 +378,11 @@ struct ConversationReducerTests {
             return
         }
         #expect(recovered.pendingMessages.isEmpty)
-        #expect(recoveryEffects.contains(where: { effect in
-            if case .runReply = effect { return true }
-            return false
-        }))
+        #expect(
+            recoveryEffects.contains(where: { effect in
+                if case .runReply = effect { return true }
+                return false
+            }))
 
         let (resumed, resumeEffects) = reduce(failed, .clearFailure)
         guard case .running = resumed.status else {
@@ -377,10 +390,11 @@ struct ConversationReducerTests {
             return
         }
         #expect(resumed.pendingMessages.isEmpty)
-        #expect(resumeEffects.contains(where: { effect in
-            if case .runReply = effect { return true }
-            return false
-        }))
+        #expect(
+            resumeEffects.contains(where: { effect in
+                if case .runReply = effect { return true }
+                return false
+            }))
     }
 
     @Test
@@ -412,17 +426,18 @@ struct ConversationReducerTests {
         )
 
         #expect(next == state)
-        #expect(effects == [
-            .publish(
-                .reply(
-                    .failed(
-                        conversationID: conversationID,
-                        turnID: nil,
-                        message: "Message cannot be empty."
+        #expect(
+            effects == [
+                .publish(
+                    .reply(
+                        .failed(
+                            conversationID: conversationID,
+                            turnID: nil,
+                            message: "Message cannot be empty."
+                        )
                     )
                 )
-            )
-        ])
+            ])
     }
 
     @Test
@@ -443,17 +458,18 @@ struct ConversationReducerTests {
         )
 
         #expect(next == running)
-        #expect(effects == [
-            .publish(
-                .reply(
-                    .failed(
-                        conversationID: conversationID,
-                        turnID: nil,
-                        message: "Message cannot be empty."
+        #expect(
+            effects == [
+                .publish(
+                    .reply(
+                        .failed(
+                            conversationID: conversationID,
+                            turnID: nil,
+                            message: "Message cannot be empty."
+                        )
                     )
                 )
-            )
-        ])
+            ])
         #expect(next.status == .running(turnID))
     }
 

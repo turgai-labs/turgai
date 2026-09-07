@@ -1,6 +1,11 @@
-import Foundation
 import NorbyMemory
 import Testing
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 struct MemoryTests {
     private let sourceID = MemorySourceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
@@ -176,20 +181,24 @@ struct MemoryTests {
         )
         let policy = MemoryPolicy()
 
-        guard case .accepted(let fact) = policy.decide(
-            candidate: candidate,
-            against: [],
-            factID: factID
-        ) else {
+        guard
+            case .accepted(let fact) = policy.decide(
+                candidate: candidate,
+                against: [],
+                factID: factID
+            )
+        else {
             Issue.record("Expected the first candidate to be accepted")
             return
         }
 
-        guard case .rejected = policy.decide(
-            candidate: candidate,
-            against: [fact],
-            factID: MemoryFactID()
-        ) else {
+        guard
+            case .rejected = policy.decide(
+                candidate: candidate,
+                against: [fact],
+                factID: MemoryFactID()
+            )
+        else {
             Issue.record("Expected the matching candidate to be a no-op")
             return
         }
@@ -205,11 +214,13 @@ struct MemoryTests {
             stability: .mutable,
             validUntil: nil
         )
-        guard case .superseded(let oldID, let newFact) = policy.decide(
-            proposal: .revise(factID: factID, candidate: replacement),
-            against: [fact],
-            factID: MemoryFactID()
-        ) else {
+        guard
+            case .superseded(let oldID, let newFact) = policy.decide(
+                proposal: .revise(factID: factID, candidate: replacement),
+                against: [fact],
+                factID: MemoryFactID()
+            )
+        else {
             Issue.record("Expected the stronger contradictory candidate to supersede the fact")
             return
         }
@@ -226,11 +237,13 @@ struct MemoryTests {
             importance: 0.9,
             stability: .mutable
         )
-        guard case .superseded(_, let canonicalFact) = policy.decide(
-            proposal: .revise(factID: factID, candidate: differentlyNamedRevision),
-            against: [fact],
-            factID: MemoryFactID()
-        ) else {
+        guard
+            case .superseded(_, let canonicalFact) = policy.decide(
+                proposal: .revise(factID: factID, candidate: differentlyNamedRevision),
+                against: [fact],
+                factID: MemoryFactID()
+            )
+        else {
             Issue.record("Expected an explicit revision to target the existing fact")
             return
         }
@@ -263,11 +276,13 @@ struct MemoryTests {
             observedAt: Date(timeIntervalSince1970: 2)
         )
 
-        guard case .accepted(let fact) = MemoryPolicy().decide(
-            proposal: .add(london),
-            against: [berlin],
-            factID: MemoryFactID()
-        ) else {
+        guard
+            case .accepted(let fact) = MemoryPolicy().decide(
+                proposal: .add(london),
+                against: [berlin],
+                factID: MemoryFactID()
+            )
+        else {
             Issue.record("Expected a distinct addition to coexist with the old fact")
             return
         }
@@ -311,11 +326,13 @@ struct MemoryTests {
             observedAt: Date(timeIntervalSince1970: 3)
         )
 
-        guard case .rejected = MemoryPolicy().decide(
-            proposal: .add(repeated),
-            against: [olderFact, newerFact],
-            factID: MemoryFactID()
-        ) else {
+        guard
+            case .rejected = MemoryPolicy().decide(
+                proposal: .add(repeated),
+                against: [olderFact, newerFact],
+                factID: MemoryFactID()
+            )
+        else {
             Issue.record("Expected the matching older value to be a no-op")
             return
         }

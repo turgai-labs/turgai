@@ -2,7 +2,6 @@ import ArgumentParser
 import DistributedCluster
 import DurableWorkflows
 import EventSourcing
-import Foundation
 import Hail
 import Logging
 import NorbyApplication
@@ -12,6 +11,12 @@ import NorbyMemory
 import NorbyPersistence
 import ServiceLifecycle
 import VirtualActors
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 @main
 struct Norby: AsyncParsableCommand {
@@ -23,7 +28,10 @@ struct Norby: AsyncParsableCommand {
     @Option(help: "Telegram bot token. Defaults to NORBY_TELEGRAM_BOT_TOKEN.")
     var telegramBotToken: String?
 
-    @Option(help: "Comma-separated Telegram chat IDs allowed to talk to the bot. Defaults to NORBY_TELEGRAM_CHAT_IDS; empty means everyone.")
+    @Option(
+        help:
+            "Comma-separated Telegram chat IDs allowed to talk to the bot. Defaults to NORBY_TELEGRAM_CHAT_IDS; empty means everyone."
+    )
     var telegramChatIDs: String?
 
     @Option(help: "Model route. Defaults to NORBY_MODEL or ollama/qwen3.5:9b")
@@ -40,10 +48,12 @@ struct Norby: AsyncParsableCommand {
 
     func run() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard let telegramBotToken = firstNonEmpty(
-            telegramBotToken,
-            environment["NORBY_TELEGRAM_BOT_TOKEN"]
-        ) else {
+        guard
+            let telegramBotToken = firstNonEmpty(
+                telegramBotToken,
+                environment["NORBY_TELEGRAM_BOT_TOKEN"]
+            )
+        else {
             throw ValidationError(
                 "Telegram bot token is required. Pass --telegram-bot-token or set NORBY_TELEGRAM_BOT_TOKEN."
             )
@@ -58,9 +68,11 @@ struct Norby: AsyncParsableCommand {
         ).conversationJournals()
         let persistedConversationIDs = conversationJournals.map(\.conversationID)
 
-        let modelRoute = firstNonEmpty(model, environment["NORBY_MODEL"])
+        let modelRoute =
+            firstNonEmpty(model, environment["NORBY_MODEL"])
             ?? "ollama/qwen3.5:9b"
-        let ollamaURLString = firstNonEmpty(ollamaBaseURL, environment["OLLAMA_BASE_URL"])
+        let ollamaURLString =
+            firstNonEmpty(ollamaBaseURL, environment["OLLAMA_BASE_URL"])
             ?? "http://127.0.0.1:11434"
         guard let ollamaURL = URL(string: ollamaURLString) else {
             throw ValidationError("Invalid Ollama base URL: \(ollamaURLString)")
@@ -85,7 +97,8 @@ struct Norby: AsyncParsableCommand {
                 return try AgentDefinition(
                     role: spawnConfig.agentID.role,
                     behavior: .init(
-                        systemPrompt: "You are a local conversational assistant. Be helpful, concise, honest, and natural.",
+                        systemPrompt:
+                            "You are a local conversational assistant. Be helpful, concise, honest, and natural.",
                         model: modelRoute
                     ),
                     limits: .init(),
@@ -106,27 +119,27 @@ struct Norby: AsyncParsableCommand {
                 var tools: [any Tool] = [
                     WebSearchTool(),
                     FetchURLTool(),
+                    LocationTool(),
                     WeatherTool(),
                     FetchAttachmentTool(resolver: attachmentResolver),
                     ScheduleTool(
-                        actorSystem: actorSystem,
                         context: context,
                         snapshotPolicy: runtimeConfiguration.snapshotPolicy
                     ),
                     TimerTool(
-                        actorSystem: actorSystem,
                         context: context,
                         snapshotPolicy: runtimeConfiguration.snapshotPolicy
                     ),
                 ]
                 if let userID, let sourceMessage,
-                   let user = try? await User.resolve(
-                       on: actorSystem,
-                       userID: userID
-                   ),
-                   let expectedGeneration = try? await user.memoryGeneration()
+                    let user = try? await User.resolve(
+                        on: actorSystem,
+                        userID: userID
+                    ),
+                    let expectedGeneration = try? await user.memoryGeneration()
                 {
-                    let observationUUID = UUID(uuidString: context.inputID ?? "")
+                    let observationUUID =
+                        UUID(uuidString: context.inputID ?? "")
                         ?? UUID(uuidString: context.turnID.rawValue)
                         ?? UUID()
                     let observation = MemoryObservation(
@@ -137,7 +150,6 @@ struct Norby: AsyncParsableCommand {
                     )
                     tools.append(
                         MemoryTool(
-                            actorSystem: actorSystem,
                             userID: userID,
                             observation: observation,
                             expectedGeneration: expectedGeneration
@@ -175,6 +187,7 @@ struct Norby: AsyncParsableCommand {
         }
 
         try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
+        ActorSystemDependency.prepare(.live(on: system))
         let virtualNode = await VirtualNode(actorSystem: system)
         let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
             actorSystem: system
@@ -229,7 +242,7 @@ struct Norby: AsyncParsableCommand {
             value?
                 .split(separator: ",")
                 .compactMap { Int64($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-            ?? []
+                ?? []
         )
     }
 
@@ -256,6 +269,7 @@ struct Norby: AsyncParsableCommand {
         }
         return value
     }
+
 }
 
 private struct NorbyClusterService: Service {

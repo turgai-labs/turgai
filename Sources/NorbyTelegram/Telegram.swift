@@ -1,5 +1,10 @@
-import Foundation
 import NorbyDomain
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 public struct TelegramUser: Codable, Equatable, Sendable {
     public let id: Int64
@@ -239,7 +244,7 @@ public actor FileTelegramOffsetStore: TelegramOffsetStore {
 
         let data = try Data(contentsOf: fileURL)
         guard let string = String(data: data, encoding: .utf8),
-              let offset = Int64(string.trimmingCharacters(in: .whitespacesAndNewlines))
+            let offset = Int64(string.trimmingCharacters(in: .whitespacesAndNewlines))
         else {
             throw TelegramOffsetStoreError.invalidFile
         }
@@ -354,8 +359,24 @@ public actor TelegramEventPublisher {
                 try await client.sendMessageDraft(chatID, draftID, html, .html)
                 lastSentDraftText[key] = html
 
-            case .keepAlive(let conversationID, _, let phase):
+            case .keepAlive(let conversationID, let turnID, let phase):
                 guard phase == .thinking || phase == .typing else { return }
+                if let html = lastSentDraftText[
+                    DraftKey(conversationID: conversationID, turnID: turnID)
+                ] {
+                    let chatID = try chatID(for: conversationID)
+                    let draftID = draftID(for: conversationID, turnID: turnID)
+                    // Telegram drafts are ephemeral. Refresh the current
+                    // draft during a long model/tool round so the user keeps
+                    // seeing the latest visible text until the final message
+                    // is sent.
+                    try? await client.sendMessageDraft(
+                        chatID,
+                        draftID,
+                        html,
+                        .html
+                    )
+                }
                 try await sendTypingAction(for: conversationID)
 
             case .finished(let conversationID, let turnID, let text):
@@ -486,7 +507,8 @@ public actor TelegramEventPublisher {
         backoff: ArraySlice<Duration> = TelegramEventPublisher.deliveryBackoff[...],
         rateLimitRetriesRemaining: Int? = nil
     ) async throws -> TelegramMessage {
-        let rateLimitRetriesRemaining = rateLimitRetriesRemaining
+        let rateLimitRetriesRemaining =
+            rateLimitRetriesRemaining
             ?? delivery.maximumRateLimitRetries
 
         do {
@@ -541,7 +563,7 @@ public actor TelegramEventPublisher {
 
     private func chatID(for conversationID: ConversationID) throws -> Int64 {
         guard conversationID.channel == ChannelID("telegram"),
-              let chatID = Int64(conversationID.externalAddress.rawValue)
+            let chatID = Int64(conversationID.externalAddress.rawValue)
         else {
             throw TelegramPublisherError.invalidConversation(conversationID)
         }
@@ -561,7 +583,8 @@ public actor TelegramEventPublisher {
     private func reserveTypingActionSlot(for conversationID: ConversationID) -> Bool {
         let now = clock.now
         if let last = lastTypingActionReservation[conversationID],
-           now < last.advanced(by: delivery.minimumTypingActionInterval) {
+            now < last.advanced(by: delivery.minimumTypingActionInterval)
+        {
             return false
         }
         lastTypingActionReservation[conversationID] = now
@@ -575,7 +598,7 @@ public actor TelegramEventPublisher {
             return try await operation()
         } catch let error as TelegramAPIError {
             guard case .rateLimited(let retryAfter) = error,
-                  delivery.maximumRateLimitRetries > 0
+                delivery.maximumRateLimitRetries > 0
             else {
                 throw error
             }
@@ -602,7 +625,7 @@ public actor TelegramEventPublisher {
             return try await operation()
         } catch let error as TelegramAPIError {
             guard case .rateLimited(let nextRetryAfter) = error,
-                  remainingRetries > 0
+                remainingRetries > 0
             else {
                 throw error
             }
@@ -634,7 +657,7 @@ public actor TelegramEventPublisher {
         turnID: TurnID?
     ) -> TelegramReplyParameters? {
         guard let turnID,
-              let messageID = sourceMessageIDs[conversationID]?[turnID]
+            let messageID = sourceMessageIDs[conversationID]?[turnID]
         else {
             return nil
         }
@@ -647,7 +670,7 @@ public actor TelegramEventPublisher {
         turnID: TurnID
     ) async {
         guard let messageID = sourceMessageIDs[conversationID]?[turnID],
-              let chatID = try? chatID(for: conversationID)
+            let chatID = try? chatID(for: conversationID)
         else {
             return
         }

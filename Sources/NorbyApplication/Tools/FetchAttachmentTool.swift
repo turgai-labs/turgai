@@ -1,5 +1,10 @@
-import Foundation
 import Hail
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 public struct AttachmentChannel: RawRepresentable, Hashable, Codable, Sendable {
     public let rawValue: String
@@ -26,7 +31,7 @@ public struct AttachmentID: RawRepresentable, Hashable, Codable, Sendable {
 
     public var channel: AttachmentChannel? {
         guard let separator = rawValue.firstIndex(of: ":"),
-              separator != rawValue.startIndex
+            separator != rawValue.startIndex
         else {
             return nil
         }
@@ -52,10 +57,11 @@ public enum AttachmentResolverError: Error, Equatable, Sendable {
 /// It stores one loader per channel rather than one entry per attachment, so
 /// references remain restart-safe without accumulating per-message state.
 public actor AttachmentResolver {
-    public typealias Loader = @Sendable (
-        _ externalID: String,
-        _ expectedContentType: String?
-    ) async throws -> ToolData
+    public typealias Loader =
+        @Sendable (
+            _ externalID: String,
+            _ expectedContentType: String?
+        ) async throws -> ToolData
 
     private var loaders: [AttachmentChannel: Loader] = [:]
 
@@ -74,7 +80,7 @@ public actor AttachmentResolver {
         expectedContentType: String?
     ) async throws -> ToolData {
         guard let channel = id.channel,
-              let externalID = id.externalID
+            let externalID = id.externalID
         else {
             throw AttachmentResolverError.invalidAttachmentID(id)
         }
@@ -146,18 +152,19 @@ public struct FetchAttachmentTool: Tool {
         }
         return NetworkEffect(
             host: channel.rawValue,
-            operation: "fetch_attachment"
+            operation: "fetch_attachment",
+            request: NetworkRequest(url: "https://(channel.rawValue)/")
         )
     }
 
-    public func execute(
+    public func run(
         input: Input,
         token: borrowing EffectToken<NetworkEffect>
     ) async throws -> String {
-        try await executeOutput(input: input, token: token).transcript
+        try await runOutput(input: input, token: token).transcript
     }
 
-    public func executeOutput(
+    public func runOutput(
         input: Input,
         token: borrowing EffectToken<NetworkEffect>
     ) async throws -> ToolOutput {

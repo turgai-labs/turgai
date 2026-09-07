@@ -1,12 +1,17 @@
 import Distributed
 import DistributedCluster
 import EventSourcing
-import Foundation
 import Hail
 import NorbyDomain
 import NorbyHail
 import NorbyMemory
 import VirtualActors
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Durable coordination state for one Norby conversation.
 ///
@@ -53,18 +58,21 @@ public struct ConversationRecord: Codable, Sendable, Equatable {
         self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
         self.capabilities = try container.decode(ChannelCapabilities.self, forKey: .capabilities)
         self.status = try container.decode(ConversationStatus.self, forKey: .status)
-        self.acceptedMessageIDs = try container.decodeIfPresent(
-            [MessageID].self,
-            forKey: .acceptedMessageIDs
-        ) ?? []
-        self.pendingMessages = try container.decodeIfPresent(
-            [PendingConversationMessage].self,
-            forKey: .pendingMessages
-        ) ?? []
-        self.pendingReplies = try container.decodeIfPresent(
-            [PendingConversationReply].self,
-            forKey: .pendingReplies
-        ) ?? []
+        self.acceptedMessageIDs =
+            try container.decodeIfPresent(
+                [MessageID].self,
+                forKey: .acceptedMessageIDs
+            ) ?? []
+        self.pendingMessages =
+            try container.decodeIfPresent(
+                [PendingConversationMessage].self,
+                forKey: .pendingMessages
+            ) ?? []
+        self.pendingReplies =
+            try container.decodeIfPresent(
+                [PendingConversationReply].self,
+                forKey: .pendingReplies
+            ) ?? []
         self.activeMessage = try container.decodeIfPresent(
             PendingConversationMessage.self,
             forKey: .activeMessage
@@ -671,7 +679,7 @@ public distributed actor Conversation {
                         break
                     }
                 }
-                return ConversationCompletion(text: response.content)
+                return .reply(response.reply)
             }
         )
 
@@ -868,11 +876,19 @@ public distributed actor Conversation {
             return
         }
 
+        let response: String?
+        switch completion {
+        case .reply(let reply):
+            response = reply.text
+        case .void:
+            response = nil
+        }
+
         let observation = MemoryObservation(
             id: ObservationID(rawValue: activeMessage.message.id.rawValue),
             sourceID: MemorySourceID(rawValue: activeMessage.message.id.rawValue),
             text: activeMessage.message.text,
-            response: completion.text,
+            response: response,
             observedAt: activeMessage.message.receivedAt
         )
         let userID = activeMessage.message.userID
@@ -1013,13 +1029,14 @@ public distributed actor Conversation {
         // Persist the terminal output before the lifecycle bookkeeping. The
         // reply event is the recovery point if the process crashes between
         // individual journal appends.
-        events.append(contentsOf: newPendingReplies(
-            from: previous.pendingReplies,
-            to: next.pendingReplies
-        ).map(ConversationEvent.replyQueued))
+        events.append(
+            contentsOf: newPendingReplies(
+                from: previous.pendingReplies,
+                to: next.pendingReplies
+            ).map(ConversationEvent.replyQueued))
 
         if let previousTurnID = previous.activeTurnID,
-           previousTurnID != next.activeTurnID
+            previousTurnID != next.activeTurnID
         {
             if case .failed(let failure) = next.status {
                 events.append(.turnFailed(previousTurnID, failure))
@@ -1028,18 +1045,20 @@ public distributed actor Conversation {
             }
         }
 
-        events.append(contentsOf: newPendingMessages(
-            from: previous.pendingMessages,
-            to: next.pendingMessages
-        ).map(ConversationEvent.messageQueued))
+        events.append(
+            contentsOf: newPendingMessages(
+                from: previous.pendingMessages,
+                to: next.pendingMessages
+            ).map(ConversationEvent.messageQueued))
 
-        events.append(contentsOf: deliveredReplies(
-            from: previous.pendingReplies,
-            to: next.pendingReplies
-        ).map(ConversationEvent.replyDelivered))
+        events.append(
+            contentsOf: deliveredReplies(
+                from: previous.pendingReplies,
+                to: next.pendingReplies
+            ).map(ConversationEvent.replyDelivered))
 
         if let activeMessage = next.activeMessage,
-           previous.activeTurnID != next.activeTurnID
+            previous.activeTurnID != next.activeTurnID
         {
             events.append(.turnStarted(activeMessage))
         }

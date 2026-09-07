@@ -1,5 +1,10 @@
 import EventSourcing
-import Foundation
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// A handle to Norby's file-backed persistence.
 ///
@@ -52,10 +57,12 @@ public final class FilePersistenceClient: Sendable {
         var ids: [String] = []
         for url in urls where url.pathExtension == "jsonl" {
             let data = try Data(contentsOf: url)
-            guard let line = data.split(
-                separator: 0x0A,
-                omittingEmptySubsequences: true
-            ).first else {
+            guard
+                let line = data.split(
+                    separator: 0x0A,
+                    omittingEmptySubsequences: true
+                ).first
+            else {
                 continue
             }
 
@@ -163,7 +170,8 @@ public final class FilePersistenceClient: Sendable {
         let decoder = JSONDecoder()
         let records = try readSnapshotRecords(at: url, decoder: decoder)
         let stateType = String(reflecting: State.self)
-        let latestSequence = records
+        let latestSequence =
+            records
             .filter { $0.stateType == stateType }
             .map(\.coveredSequenceNumber)
             .max()
@@ -209,9 +217,11 @@ public final class FilePersistenceClient: Sendable {
         let decoder = JSONDecoder()
         let records = try readSnapshotRecords(at: url, decoder: decoder)
         let stateType = String(reflecting: State.self)
-        guard let record = records
-            .filter({ $0.stateType == stateType })
-            .max(by: { $0.coveredSequenceNumber < $1.coveredSequenceNumber }),
+        guard
+            let record =
+                records
+                .filter({ $0.stateType == stateType })
+                .max(by: { $0.coveredSequenceNumber < $1.coveredSequenceNumber }),
             let state = try? decoder.decode(State.self, from: record.payload)
         else {
             return nil
@@ -232,7 +242,8 @@ public final class FilePersistenceClient: Sendable {
         }
 
         let data = try Data(contentsOf: url)
-        return try data
+        return
+            try data
             .split(separator: 0x0A, omittingEmptySubsequences: true)
             .map { try decoder.decode(SnapshotRecord.self, from: Data($0)) }
     }
@@ -259,7 +270,8 @@ public final class FilePersistenceClient: Sendable {
     }
 
     private func fileName(for id: String) -> String {
-        let safe = id
+        let safe =
+            id
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
             .replacingOccurrences(of: "\\", with: "_")

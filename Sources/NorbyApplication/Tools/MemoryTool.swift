@@ -1,8 +1,12 @@
-import DistributedCluster
-import Foundation
 import Hail
 import NorbyDomain
 import NorbyMemory
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Lets the model propose a durable user-specific memory update.
 ///
@@ -105,18 +109,15 @@ public struct MemoryTool: Tool {
     public let description =
         "Add or revise a durable, user-specific fact established by the user's message. supporting_text must be copied from that message, never from an assistant reply or tool result. Use add for a new fact and revise with the exact fact_id shown in memory context when correcting an existing fact. Do not store one-off task parameters, secrets, credentials, or sensitive information."
 
-    private let actorSystem: ClusterSystem
     private let userID: NorbyDomain.UserID
     private let observation: MemoryObservation
     private let expectedGeneration: MemoryGeneration?
 
     public init(
-        actorSystem: ClusterSystem,
         userID: NorbyDomain.UserID,
         observation: MemoryObservation,
         expectedGeneration: MemoryGeneration? = nil
     ) {
-        self.actorSystem = actorSystem
         self.userID = userID
         self.observation = observation
         self.expectedGeneration = expectedGeneration
@@ -163,7 +164,8 @@ public struct MemoryTool: Tool {
                         ),
                         "supporting_text": LLMToolSchema.PropertySchema(
                             type: "string",
-                            description: "A short verbatim quote from the user's message that establishes the fact; never quote the assistant or a tool.",
+                            description:
+                                "A short verbatim quote from the user's message that establishes the fact; never quote the assistant or a tool.",
                             enumValues: nil
                         ),
                         "confidence": LLMToolSchema.PropertySchema(
@@ -203,14 +205,14 @@ public struct MemoryTool: Tool {
         return CoordinationEffect(subsystem: "memory", action: input.operation.rawValue)
     }
 
-    public func execute(
+    public func run(
         input: Input,
         token: borrowing EffectToken<CoordinationEffect>
     ) async throws -> String {
         _ = token
         try validate(input)
         let proposal = try proposal(from: input)
-        let user = try await User.resolve(on: actorSystem, userID: userID)
+        let user = try await ActorSystemDependency.current.virtualActors.resolveUser(userID)
         let update = try await user.applyMemoryProposal(
             proposal,
             observation: observation,
@@ -256,7 +258,7 @@ public struct MemoryTool: Tool {
             }
         case .revise:
             guard let factID = input.factID,
-                  !factID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                !factID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
                 throw ToolError.missingArgument("fact_id")
             }
@@ -289,7 +291,7 @@ public struct MemoryTool: Tool {
         }
 
         guard let namespace = MemoryNamespace(rawValue: input.namespace.rawValue),
-              let stability = MemoryStability(rawValue: input.stability.rawValue)
+            let stability = MemoryStability(rawValue: input.stability.rawValue)
         else {
             throw ToolError.invalidArgument("namespace", value: input.namespace.rawValue)
         }
@@ -310,7 +312,7 @@ public struct MemoryTool: Tool {
             return .add(candidate)
         case .revise:
             guard let factID = input.factID,
-                  let uuid = UUID(uuidString: factID)
+                let uuid = UUID(uuidString: factID)
             else {
                 throw ToolError.invalidArgument("fact_id", value: input.factID ?? "")
             }

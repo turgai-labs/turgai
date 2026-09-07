@@ -1,4 +1,8 @@
-import Foundation
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 public struct MemorySourceID: Hashable, Codable, Sendable {
     public let rawValue: UUID
@@ -230,9 +234,11 @@ public enum MemoryEvidence {
     ) -> Bool {
         let quote = normalized(candidate.supportingText)
         guard !candidate.evidence.isEmpty, !quote.isEmpty else { return false }
-        guard candidate.evidence.allSatisfy({ evidenceID in
-            observations.contains { $0.id == evidenceID }
-        }) else {
+        guard
+            candidate.evidence.allSatisfy({ evidenceID in
+                observations.contains { $0.id == evidenceID }
+            })
+        else {
             return false
         }
 

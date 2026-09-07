@@ -1,7 +1,10 @@
-import AsyncHTTPClient
-import Foundation
 import Hail
-import NIOCore
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Searches the public web and retrieves pages for the conversation agent.
 ///
@@ -38,15 +41,6 @@ public struct WebSearchTool: Tool {
         let url: String
         let snippet: String
     }
-
-    private static let httpClient: HTTPClient = {
-        var configuration = HTTPClient.Configuration()
-        configuration.timeout = .init(connect: .seconds(10), read: .seconds(15))
-        return HTTPClient(
-            eventLoopGroupProvider: .singleton,
-            configuration: configuration
-        )
-    }()
 
     private static let maximumResponseBytes = 512 * 1024
     private static let maximumSearchResults = 5
@@ -94,55 +88,78 @@ public struct WebSearchTool: Tool {
     public func effect(for input: Input) throws -> NetworkEffect {
         switch input.action {
         case .search:
-            _ = try validatedQuery(input.query)
-            return NetworkEffect(host: "html.duckduckgo.com", operation: "search")
+            let query = try validatedQuery(input.query)
+            var components = URLComponents(string: "https://html.duckduckgo.com/html/")!
+            components.queryItems = [
+                URLQueryItem(name: "q", value: query),
+                URLQueryItem(name: "kl", value: "wt-wt"),
+            ]
+            guard let url = components.url else {
+                throw Error.invalidURL
+            }
+            return NetworkEffect(
+                host: "html.duckduckgo.com",
+                operation: "search",
+                request: NetworkRequest(
+                    url: url.absoluteString,
+                    headers: [
+                        "User-Agent": "Norby/1.0 (+https://github.com/akbashev/norby)",
+                        "Accept": "text/html",
+                    ],
+                    maximumResponseBytes: Self.maximumResponseBytes
+                )
+            )
         case .open:
             let url = try validatedURL(input.url)
-            return NetworkEffect(host: url.host ?? "", operation: "open")
+            return NetworkEffect(
+                host: url.host ?? "",
+                operation: "open",
+                request: NetworkRequest(
+                    url: url.absoluteString,
+                    headers: [
+                        "User-Agent": "Norby/1.0 (+https://github.com/akbashev/norby)",
+                        "Accept": "text/html",
+                    ],
+                    maximumResponseBytes: Self.maximumResponseBytes
+                )
+            )
         }
     }
 
-    public func execute(
+    public func run(
         input: Input,
         token: borrowing EffectToken<NetworkEffect>
     ) async throws -> String {
-        _ = token
-
         switch input.action {
         case .search:
-            return try await search(query: validatedQuery(input.query))
+            let query = try validatedQuery(input.query)
+            let html = try await responseBody(from: token)
+            return searchResult(query: query, html: html)
         case .open:
-            return try await open(url: validatedURL(input.url))
+            let url = try validatedURL(input.url)
+            let page = try await responseBody(from: token)
+            return openResult(for: url, page: page)
         }
     }
 
-    private func search(query: String) async throws -> String {
-        var components = URLComponents(string: "https://html.duckduckgo.com/html/")!
-        components.queryItems = [
-            URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "kl", value: "wt-wt"),
-        ]
-        guard let url = components.url else {
-            throw Error.invalidURL
-        }
-
-        let html = try await fetch(url)
+    private func searchResult(query: String, html: String) -> String {
         let results = parseSearchResults(html)
         guard !results.isEmpty else {
             return "No web results found for: \(query)"
         }
 
-        let output = ([
-            "Web results for \"\(query)\":",
-            "Choose a result and use open if the snippets are insufficient."
-        ] + results.prefix(Self.maximumSearchResults).enumerated().map { index, result in
-            "\(index + 1). \(bounded(result.title, to: 160))\nURL: \(bounded(result.url, to: 512))\n\(bounded(result.snippet, to: Self.maximumSnippetCharacters))"
-        }).joined(separator: "\n\n")
+        let output =
+            ([
+                "Web results for \"\(query)\":",
+                "Choose a result and use open if the snippets are insufficient.",
+            ]
+            + results.prefix(Self.maximumSearchResults).enumerated().map { index, result in
+                "\(index + 1). \(bounded(result.title, to: 160))\nURL: \(bounded(result.url, to: 512))\n\(bounded(result.snippet, to: Self.maximumSnippetCharacters))"
+            }).joined(separator: "\n\n")
         return bounded(output, to: Self.maximumSearchOutputCharacters)
     }
 
-    private func open(url: URL) async throws -> String {
-        let page = try await fetch(url)
+    private func openResult(for url: URL, page: String) -> String {
         let text = htmlText(page)
         guard !text.isEmpty else {
             return "The page returned no readable text: \(url.absoluteString)"
@@ -151,23 +168,14 @@ public struct WebSearchTool: Tool {
         return "Page: \(url.absoluteString)\n\n\(bounded(text, to: Self.maximumPageOutputCharacters))"
     }
 
-    private func fetch(_ url: URL) async throws -> String {
-        var request = HTTPClientRequest(url: url.absoluteString)
-        request.headers.add(
-            name: "User-Agent",
-            value: "Norby/1.0 (+https://github.com/akbashev/norby)"
-        )
-
-        let response = try await Self.httpClient.execute(
-            request,
-            timeout: .seconds(15)
-        )
-        guard (200..<300).contains(response.status.code) else {
-            throw Error.httpStatus(Int(response.status.code))
+    private func responseBody(
+        from token: borrowing EffectToken<NetworkEffect>
+    ) async throws -> String {
+        let response = try await NetworkEffect.run(in: token)
+        guard (200..<300).contains(response.statusCode) else {
+            throw Error.httpStatus(response.statusCode)
         }
-
-        let body = try await response.body.collect(upTo: Self.maximumResponseBytes)
-        let text = String(decoding: body.readableBytesView, as: UTF8.self)
+        let text = String(decoding: response.body, as: UTF8.self)
         guard !text.isEmpty else {
             throw Error.invalidUTF8
         }
@@ -203,9 +211,9 @@ public struct WebSearchTool: Tool {
         }
         let normalizedHost = host.lowercased()
         guard normalizedHost != "localhost",
-              normalizedHost != "127.0.0.1",
-              normalizedHost != "0.0.0.0",
-              normalizedHost != "::1"
+            normalizedHost != "127.0.0.1",
+            normalizedHost != "0.0.0.0",
+            normalizedHost != "::1"
         else {
             throw Error.invalidURL
         }
@@ -250,7 +258,7 @@ public struct WebSearchTool: Tool {
             .queryItems?
             .first(where: { $0.name == "uddg" })?
             .value,
-           let decoded = encoded.removingPercentEncoding
+            let decoded = encoded.removingPercentEncoding
         {
             return decoded
         }
@@ -264,7 +272,8 @@ public struct WebSearchTool: Tool {
         }
         text = text.replacingOccurrences(of: #"(?is)<[^>]+>"#, with: " ", options: .regularExpression)
         text = decodeHTMLEntities(text)
-        return text
+        return
+            text
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)

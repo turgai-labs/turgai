@@ -1,15 +1,48 @@
 import CryptoKit
 import DistributedCluster
 import DurableWorkflows
-import Foundation
 import Hail
 import NorbyDomain
 
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
+
 /// Durable recurring schedule domain and its scoped capability.
 public struct Schedule: ScopedEffect, Sendable {
-    public let name = "schedule"
+    public typealias Output = Result
 
-    public init() {}
+    public let name = "schedule"
+    public let operation: Operation
+
+    public enum Operation: Sendable {
+        case create(
+            id: ScheduleID,
+            recurrence: Calendar.RecurrenceRule,
+            request: Request
+        )
+        case replace(
+            id: ScheduleID,
+            recurrence: Calendar.RecurrenceRule,
+            request: Request
+        )
+        case cancel(id: ScheduleID)
+        case list(conversationID: ConversationID)
+        case trigger(id: ScheduleID)
+    }
+
+    public enum Result: Sendable {
+        case scheduled(id: ScheduleID, replaced: Bool)
+        case cancelled
+        case listed([Info])
+        case triggered(ScheduleTriggerOutcome)
+    }
+
+    public init(operation: Operation) {
+        self.operation = operation
+    }
 
     public struct Request: Codable, Sendable {
         public let ownerID: NorbyDomain.UserID
@@ -52,6 +85,37 @@ public struct Schedule: ScopedEffect, Sendable {
         case invalidParticipantID(String)
     }
 
+    public struct Info: Sendable {
+        public let id: ScheduleID
+        public let recurrence: Calendar.RecurrenceRule
+        public let action: DeferredAction
+        public let createdAt: Date
+        public let lastFiredAt: Date?
+        public let nextFireAt: Date?
+        public let nextFireIn: Duration?
+        public let executions: [ScheduleExecutionState]
+
+        public init(
+            id: ScheduleID,
+            recurrence: Calendar.RecurrenceRule,
+            action: DeferredAction,
+            createdAt: Date,
+            lastFiredAt: Date?,
+            nextFireAt: Date?,
+            nextFireIn: Duration?,
+            executions: [ScheduleExecutionState]
+        ) {
+            self.id = id
+            self.recurrence = recurrence
+            self.action = action
+            self.createdAt = createdAt
+            self.lastFiredAt = lastFiredAt
+            self.nextFireAt = nextFireAt
+            self.nextFireIn = nextFireIn
+            self.executions = executions
+        }
+    }
+
     /// A connection outage should not silently consume a scheduled delivery.
     /// The workflow retries the activity and the policy is persisted by the
     /// durable runtime for each occurrence.
@@ -62,13 +126,59 @@ public struct Schedule: ScopedEffect, Sendable {
         maximumAttempts: 6
     )
 
-    fileprivate static func schedule(
-        on actorSystem: ClusterSystem,
+    public static func run(
+        in token: borrowing EffectToken<Schedule>
+    ) async throws -> Result {
+        let workflows = ActorSystemDependency.current.workflows
+        let operation = token.withConfiguration { $0.operation }
+
+        switch operation {
+        case .cancel(let id):
+            try await cancel(id, workflows: workflows)
+            return .cancelled
+
+        case .list(let conversationID):
+            return .listed(
+                try await list(
+                    conversationID: conversationID,
+                    workflows: workflows
+                )
+            )
+
+        case .trigger(let id):
+            return .triggered(
+                try await trigger(id, workflows: workflows)
+            )
+
+        case .create(let id, let recurrence, let request),
+            .replace(let id, let recurrence, let request):
+            let replaced: Bool
+            switch operation {
+            case .create:
+                replaced = false
+            case .replace:
+                try await cancel(id, workflows: workflows)
+                replaced = true
+            case .cancel, .list, .trigger:
+                fatalError("unreachable")
+            }
+            try await schedule(
+                id: id,
+                recurrence: recurrence,
+                request: request,
+                workflows: workflows
+            )
+            return .scheduled(id: id, replaced: replaced)
+        }
+    }
+
+    private static func schedule(
         id: ScheduleID,
         recurrence: Calendar.RecurrenceRule,
         request: Request,
         retryPolicy: RetryPolicy? = Self.defaultRetryPolicy,
-        overlapPolicy: ScheduleOverlapPolicy = .skip
+        overlapPolicy: ScheduleOverlapPolicy = .skip,
+        workflows: WorkflowActions
     ) async throws {
         guard !id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw Error.emptyScheduleID
@@ -77,34 +187,61 @@ public struct Schedule: ScopedEffect, Sendable {
             throw Error.emptyText
         }
 
-        try await actorSystem.workflows.schedule(
-            id: id,
-            recurrence: recurrence,
-            workflow: ScheduleWorkflow.self,
-            input: request,
-            retryPolicy: retryPolicy,
-            overlapPolicy: overlapPolicy
-        )
+        try await workflows.schedule(id, recurrence, request, retryPolicy, overlapPolicy)
     }
 
-    fileprivate static func cancel(
-        on actorSystem: ClusterSystem,
-        id: ScheduleID
+    private static func cancel(
+        _ id: ScheduleID,
+        workflows: WorkflowActions
     ) async throws {
-        try await actorSystem.workflows.cancelSchedule(
-            id: id,
-            workflow: ScheduleWorkflow.self
-        )
+        try await workflows.cancelSchedule(id)
     }
 
-    fileprivate static func describe(
-        on actorSystem: ClusterSystem,
-        id: ScheduleID
-    ) async throws -> ScheduleDescription? {
-        try await actorSystem.workflows.describeSchedule(
-            id: id,
-            workflow: ScheduleWorkflow.self
-        )
+    private static func trigger(
+        _ id: ScheduleID,
+        workflows: WorkflowActions
+    ) async throws -> ScheduleTriggerOutcome {
+        try await workflows.triggerSchedule(id)
+    }
+
+    private static func list(
+        conversationID: ConversationID,
+        workflows: WorkflowActions
+    ) async throws -> [Info] {
+        let descriptions = try await workflows.listSchedules()
+        let decoder = JSONDecoder()
+        return descriptions.compactMap { description in
+            guard
+                let request = try? decoder.decode(
+                    Request.self,
+                    from: description.inputData
+                ), request.conversationID == conversationID
+            else {
+                return nil
+            }
+            return Info(
+                id: description.id,
+                recurrence: description.recurrence,
+                action: request.action,
+                createdAt: description.createdAt,
+                lastFiredAt: description.lastFiredAt,
+                nextFireAt: description.nextFireAt,
+                nextFireIn: description.nextFireIn,
+                executions: description.executions
+            )
+        }
+        .sorted { left, right in
+            switch (left.nextFireAt, right.nextFireAt) {
+            case (let left?, let right?) where left != right:
+                return left < right
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            default:
+                return left.id.rawValue < right.id.rawValue
+            }
+        }
     }
 
     fileprivate static func messageID(for workflowID: WorkflowID) -> MessageID {
@@ -113,40 +250,6 @@ public struct Schedule: ScopedEffect, Sendable {
 
     fileprivate static func turnID(for workflowID: WorkflowID) -> NorbyDomain.TurnID {
         NorbyDomain.TurnID(rawValue: norbyDeterministicUUID("turn:\(workflowID.rawValue)"))
-    }
-}
-
-extension EffectToken where Effect == Schedule {
-    public func schedule(
-        on actorSystem: ClusterSystem,
-        id: ScheduleID,
-        recurrence: Calendar.RecurrenceRule,
-        request: Schedule.Request,
-        retryPolicy: RetryPolicy? = Schedule.defaultRetryPolicy,
-        overlapPolicy: ScheduleOverlapPolicy = .skip
-    ) async throws {
-        try await Schedule.schedule(
-            on: actorSystem,
-            id: id,
-            recurrence: recurrence,
-            request: request,
-            retryPolicy: retryPolicy,
-            overlapPolicy: overlapPolicy
-        )
-    }
-
-    public func cancel(
-        on actorSystem: ClusterSystem,
-        id: ScheduleID
-    ) async throws {
-        try await Schedule.cancel(on: actorSystem, id: id)
-    }
-
-    public func describe(
-        on actorSystem: ClusterSystem,
-        id: ScheduleID
-    ) async throws -> ScheduleDescription? {
-        try await Schedule.describe(on: actorSystem, id: id)
     }
 }
 
@@ -177,12 +280,13 @@ extension ScheduleID {
 
 internal func norbyDeterministicUUID(_ value: String) -> UUID {
     let digest = Array(SHA256.hash(data: Data(value.utf8)).prefix(16))
-    return UUID(uuid: (
-        digest[0], digest[1], digest[2], digest[3],
-        digest[4], digest[5], digest[6], digest[7],
-        digest[8], digest[9], digest[10], digest[11],
-        digest[12], digest[13], digest[14], digest[15]
-    ))
+    return UUID(
+        uuid: (
+            digest[0], digest[1], digest[2], digest[3],
+            digest[4], digest[5], digest[6], digest[7],
+            digest[8], digest[9], digest[10], digest[11],
+            digest[12], digest[13], digest[14], digest[15]
+        ))
 }
 
 @Workflow

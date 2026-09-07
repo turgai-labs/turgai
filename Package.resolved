@@ -1,5 +1,5 @@
 {
-  "originHash" : "eee664cd2d8b620579b77c696ba4f43244f10f0c7c937d78556da0e8e0c0b9ba",
+  "originHash" : "c71f3218d72c4e72f1179d5082203fa4e01c4ac97e694e1444bf0d6a03bfaa3d",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -34,7 +34,7 @@
       "location" : "https://github.com/akbashev/cluster-virtual-actors.git",
       "state" : {
         "branch" : "main",
-        "revision" : "61f3523c7a06c13405790a35f29f23a70888b0f6"
+        "revision" : "32c68ec38360566ac5c94dbd8e2442ff8a64d102"
       }
     },
     {

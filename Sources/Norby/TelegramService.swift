@@ -1,5 +1,4 @@
 import AsyncAlgorithms
-import Foundation
 import Hail
 import Logging
 import NorbyApplication
@@ -7,6 +6,12 @@ import NorbyDomain
 import NorbyHail
 import NorbyTelegram
 import ServiceLifecycle
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Pure delivery policy for one Telegram connection.
 ///
@@ -208,8 +213,8 @@ enum TelegramDelivery {
         configuration: TelegramDeliveryConfiguration
     ) -> Effect {
         if state.reliableInFlight == nil,
-           !state.pendingReliable.isEmpty,
-           !state.previewStatus.isSending
+            !state.pendingReliable.isEmpty,
+            !state.previewStatus.isSending
         {
             let delivery = state.pendingReliable.removeFirst()
             state.reliableInFlight = delivery
@@ -217,8 +222,8 @@ enum TelegramDelivery {
         }
 
         guard state.reliableInFlight == nil,
-              state.previewStatus.isIdle,
-              let preview = state.pendingPreview
+            state.previewStatus.isIdle,
+            let preview = state.pendingPreview
         else {
             return .none
         }

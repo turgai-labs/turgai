@@ -1,9 +1,15 @@
-import Foundation
 import Hail
 import NorbyApplication
 import NorbyDomain
-@testable import NorbyHail
 import Testing
+
+@testable import NorbyHail
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 private actor HailModelEventCollector {
     private(set) var events: [HailModelEvent] = []
@@ -35,6 +41,15 @@ struct HailAdapterTests {
 
         #expect(
             message == "I’m having trouble reaching my main systems right now. Please try again in a moment."
+        )
+    }
+
+    @Test
+    func emptyResponsesCannotCrossTheHailBoundary() {
+        #expect(HailResponse(content: "   ") == nil)
+        #expect(
+            HailAgentAdapter.userFacingMessage(for: HailAdapterError.emptyResponse)
+                == "I couldn’t produce a reply to that message. Please try again."
         )
     }
 
@@ -117,15 +132,17 @@ struct HailAdapterTests {
     }
 
     @Test
-    func weatherToolUsesClockAndOpenMeteoNetworkEffects() throws {
+    func weatherToolUsesClockAndGeocodingNetworkEffects() throws {
         let tool = WeatherTool()
         let effect = try tool.effect(
             for: .init(location: "London", horizon: .today(from: 9))
         )
 
-        #expect(effect.left.name == "clock")
-        #expect(effect.right.host == "open-meteo.com")
-        #expect(effect.right.operation == "weather")
+        #expect(effect.left.name == "location")
+        #expect(effect.left.query == "London")
+        #expect(effect.left.network.host == "geocoding-api.open-meteo.com")
+        #expect(effect.left.network.operation == "geocode")
+        #expect(effect.right.name == "clock")
     }
 
     @Test
@@ -173,9 +190,10 @@ struct HailAdapterTests {
         let collector = HailModelEventCollector()
         let peer = HailConversationPeer(run: { request, onActivity in
             try await onActivity(.text("partial"))
-            return HailResponse(
-                content: request.message.text
-            )
+            guard let response = HailResponse(content: request.message.text) else {
+                throw HailAdapterError.emptyResponse
+            }
+            return response
         })
         let request = ModelRequest(
             conversationID: conversationID,
@@ -261,7 +279,7 @@ struct HailAdapterTests {
         }
         let tool = FetchAttachmentTool(resolver: resolver)
 
-        let output = try await tool.executeOutput(
+        let output = try await tool.runOutput(
             input: .init(
                 attachmentID: "telegram:telegram-file-id",
                 mimeType: "image/jpeg"

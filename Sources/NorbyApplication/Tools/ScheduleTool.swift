@@ -1,8 +1,12 @@
-import DistributedCluster
 import DurableWorkflows
-import Foundation
 import Hail
 import NorbyDomain
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Creates, replaces or cancels a durable recurring schedule for the current
 /// conversation.
@@ -37,7 +41,7 @@ public struct ScheduleTool: Tool {
 
         public let frequency: Frequency
         public let interval: Int
-        public let timeZone: String
+        public let timeZone: TimeZone
         public let hour: Int
         public let minute: Int
         public let weekdays: [Weekday]
@@ -54,7 +58,7 @@ public struct ScheduleTool: Tool {
         public init(
             frequency: Frequency,
             interval: Int = 1,
-            timeZone: String,
+            timeZone: TimeZone,
             hour: Int,
             minute: Int,
             weekdays: [Weekday] = []
@@ -67,6 +71,34 @@ public struct ScheduleTool: Tool {
             self.weekdays = weekdays
         }
 
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.frequency = try container.decode(Frequency.self, forKey: .frequency)
+            self.interval = try container.decode(Int.self, forKey: .interval)
+            let identifier = try container.decode(String.self, forKey: .timeZone)
+            guard let timeZone = TimeZone(identifier: identifier) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .timeZone,
+                    in: container,
+                    debugDescription: "Invalid IANA timezone: \(identifier)"
+                )
+            }
+            self.timeZone = timeZone
+            self.hour = try container.decode(Int.self, forKey: .hour)
+            self.minute = try container.decode(Int.self, forKey: .minute)
+            self.weekdays = try container.decode([Weekday].self, forKey: .weekdays)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(frequency, forKey: .frequency)
+            try container.encode(interval, forKey: .interval)
+            try container.encode(timeZone.identifier, forKey: .timeZone)
+            try container.encode(hour, forKey: .hour)
+            try container.encode(minute, forKey: .minute)
+            try container.encode(weekdays, forKey: .weekdays)
+        }
+
         fileprivate func foundationRule() throws -> Calendar.RecurrenceRule {
             guard interval > 0 else {
                 throw Error.invalidInterval(interval)
@@ -77,9 +109,7 @@ public struct ScheduleTool: Tool {
             guard (0...59).contains(minute) else {
                 throw Error.invalidMinute(minute)
             }
-            guard let zone = TimeZone(identifier: timeZone) else {
-                throw Error.invalidTimeZone(timeZone)
-            }
+            let zone = timeZone
             if frequency == .weekly, weekdays.isEmpty {
                 throw Error.missingWeekdays
             }
@@ -92,10 +122,11 @@ public struct ScheduleTool: Tool {
             let foundationWeekdays = weekdays.map {
                 Calendar.RecurrenceRule.Weekday.every($0.foundationValue)
             }
-            let foundationFrequency: Calendar.RecurrenceRule.Frequency = switch frequency {
-            case .daily: .daily
-            case .weekly: .weekly
-            }
+            let foundationFrequency: Calendar.RecurrenceRule.Frequency =
+                switch frequency {
+                case .daily: .daily
+                case .weekly: .weekly
+                }
             return Calendar.RecurrenceRule(
                 calendar: calendar,
                 frequency: foundationFrequency,
@@ -111,6 +142,8 @@ public struct ScheduleTool: Tool {
         case create
         case replace
         case cancel
+        case list
+        case trigger
     }
 
     public struct Input: Codable, Sendable {
@@ -159,7 +192,6 @@ public struct ScheduleTool: Tool {
         case invalidInterval(Int)
         case invalidHour(Int)
         case invalidMinute(Int)
-        case invalidTimeZone(String)
         case missingWeekdays
         case invalidWeekdays
         case invalidConversationID(String)
@@ -168,18 +200,15 @@ public struct ScheduleTool: Tool {
 
     public let name = "schedule"
     public let description =
-        "Manage a durable recurring action for this conversation. Use create for a new schedule, replace with the schedule_id from an earlier result to change it, and cancel with that schedule_id to remove it. Use notify for a user-visible message, whether the user says 'remind' or 'notify'. Use prompt_agent when Norby should wake up, use its tools, and compose a fresh response. Recurrence supports daily or weekly local times."
+        "Manage durable recurring actions for this conversation. Use create for a new schedule, replace with its schedule_id to change it, cancel to remove it, list to inspect active schedules, or trigger to run one immediately as a test without changing its next planned time. Use notify for a user-visible message and prompt_agent when Norby should wake up, use its tools, and compose a fresh response. Recurrence supports daily or weekly local times."
 
-    private let actorSystem: ClusterSystem
     private let context: AgentTurnContext
     private let snapshotPolicy: AgentSnapshotPolicy
 
     public init(
-        actorSystem: ClusterSystem,
         context: AgentTurnContext,
         snapshotPolicy: AgentSnapshotPolicy = .default
     ) {
-        self.actorSystem = actorSystem
         self.context = context
         self.snapshotPolicy = snapshotPolicy
     }
@@ -195,12 +224,13 @@ public struct ScheduleTool: Tool {
                     properties: [
                         "operation": LLMToolSchema.PropertySchema(
                             type: "string",
-                            description: "The operation: create, replace, or cancel.",
-                            enumValues: ["create", "replace", "cancel"]
+                            description: "The operation: create, replace, cancel, list, or trigger.",
+                            enumValues: ["create", "replace", "cancel", "list", "trigger"]
                         ),
                         "schedule_id": LLMToolSchema.PropertySchema(
                             type: "string",
-                            description: "The opaque schedule_id returned when the schedule was created. Required for replace and cancel.",
+                            description:
+                                "The opaque schedule_id returned when the schedule was created. Required for replace, cancel, and trigger.",
                             enumValues: nil
                         ),
                         "action": LLMToolSchema.PropertySchema(
@@ -210,12 +240,14 @@ public struct ScheduleTool: Tool {
                         ),
                         "message": LLMToolSchema.PropertySchema(
                             type: "string",
-                            description: "Required for notify. The final user-visible message to send when the schedule fires.",
+                            description:
+                                "Required for notify. The final user-visible message to send when the schedule fires.",
                             enumValues: nil
                         ),
                         "instruction": LLMToolSchema.PropertySchema(
                             type: "string",
-                            description: "Required for prompt_agent. The complete request to give Norby when the schedule fires.",
+                            description:
+                                "Required for prompt_agent. The complete request to give Norby when the schedule fires.",
                             enumValues: nil
                         ),
                         "recurrence": recurrenceSchema,
@@ -228,20 +260,88 @@ public struct ScheduleTool: Tool {
 
     public func effect(for input: Input) throws -> Schedule {
         try validate(input)
-        return Schedule()
+        return Schedule(
+            operation: try operation(from: input)
+        )
     }
 
-    public func execute(
+    public func run(
         input: Input,
         token: borrowing EffectToken<Schedule>
     ) async throws -> String {
         try validate(input)
+        let result = try await Schedule.run(in: token)
+        return render(result, action: input.action)
+    }
+
+    private func validate(_ input: Input) throws {
         switch input.operation {
         case .cancel:
-            let scheduleID = try scheduleID(from: input)
-            try await token.cancel(on: actorSystem, id: scheduleID)
-            return "Recurring schedule cancelled."
+            _ = try scheduleID(from: input)
+        case .list:
+            break
+        case .trigger:
+            _ = try scheduleID(from: input)
+        case .create, .replace:
+            _ = try definition(from: input)
+            if input.operation == .replace {
+                _ = try scheduleID(from: input)
+            }
+        }
+    }
 
+    private func render(
+        _ result: Schedule.Result,
+        action: DeferredAction.Kind?
+    ) -> String {
+        switch result {
+        case .cancelled:
+            return "Recurring schedule cancelled."
+        case .triggered(.triggered):
+            return "Recurring schedule triggered."
+        case .triggered(.skipped):
+            return "Recurring schedule was not triggered because an occurrence is already running."
+        case .scheduled(let id, let replaced):
+            let prefix: String
+            switch action {
+            case .notify:
+                prefix =
+                    replaced
+                    ? "Recurring notification replaced."
+                    : "Recurring notification scheduled."
+            case .promptAgent:
+                prefix =
+                    replaced
+                    ? "Recurring agent task replaced."
+                    : "Recurring agent task scheduled."
+            case nil:
+                fatalError("scheduled result without an action")
+            }
+            return prefix + " schedule_id: " + id.rawValue + "."
+        case .listed(let schedules):
+            guard !schedules.isEmpty else {
+                return "No active recurring schedules."
+            }
+            return schedules.map { schedule in
+                let nextFireAt = schedule.nextFireAt?.ISO8601Format() ?? "none"
+                return [
+                    "schedule_id=\(schedule.id.rawValue)",
+                    "action=\(schedule.action.kind.rawValue)",
+                    "content=\(schedule.action.content)",
+                    "next_fire_at=\(nextFireAt)",
+                ].joined(separator: " | ")
+            }.joined(separator: "\n")
+        }
+    }
+
+    private func operation(from input: Input) throws -> Schedule.Operation {
+        switch input.operation {
+        case .cancel:
+            return .cancel(id: try scheduleID(from: input))
+        case .list:
+            return .list(conversationID: try target().conversationID)
+        case .trigger:
+            return .trigger(id: try scheduleID(from: input))
         case .create, .replace:
             let definition = try definition(from: input)
             let target = try target()
@@ -253,52 +353,27 @@ public struct ScheduleTool: Tool {
                 action: action,
                 snapshotPolicy: snapshotPolicy
             )
-            let scheduleID: ScheduleID
+            let id: ScheduleID
             switch input.operation {
             case .create:
-                scheduleID = ScheduleID(
+                id = ScheduleID(
                     ownerID: target.ownerID,
                     conversationID: target.conversationID,
                     action: action,
                     recurrence: definition.recurrence
                 )
             case .replace:
-                scheduleID = try self.scheduleID(from: input)
-                try await token.cancel(on: actorSystem, id: scheduleID)
-            case .cancel:
+                id = try scheduleID(from: input)
+            case .cancel, .list, .trigger:
                 fatalError("unreachable")
             }
-
-            try await token.schedule(
-                on: actorSystem,
-                id: scheduleID,
-                recurrence: definition.recurrence,
-                request: request
-            )
-
-            let result: String
-            switch definition.action {
-            case .notify:
-                result = input.operation == .replace
-                    ? "Recurring notification replaced."
-                    : "Recurring notification scheduled."
-            case .promptAgent:
-                result = input.operation == .replace
-                    ? "Recurring agent task replaced."
-                    : "Recurring agent task scheduled."
-            }
-            return result + " schedule_id: " + scheduleID.rawValue + "."
-        }
-    }
-
-    private func validate(_ input: Input) throws {
-        switch input.operation {
-        case .cancel:
-            _ = try scheduleID(from: input)
-        case .create, .replace:
-            _ = try definition(from: input)
-            if input.operation == .replace {
-                _ = try scheduleID(from: input)
+            switch input.operation {
+            case .create:
+                return .create(id: id, recurrence: definition.recurrence, request: request)
+            case .replace:
+                return .replace(id: id, recurrence: definition.recurrence, request: request)
+            case .cancel, .list, .trigger:
+                fatalError("unreachable")
             }
         }
     }
@@ -364,9 +439,11 @@ public struct ScheduleTool: Tool {
     }
 
     private func target() throws -> Target {
-        guard let conversationID = ConversationID(
-            stableKey: context.agentID.contextID.rawValue
-        ) else {
+        guard
+            let conversationID = ConversationID(
+                stableKey: context.agentID.contextID.rawValue
+            )
+        else {
             throw Error.invalidConversationID(context.agentID.contextID.rawValue)
         }
         guard case .text(let sender, _, _) = context.message else {
@@ -410,7 +487,8 @@ private let recurrenceSchema = LLMToolSchema.PropertySchema(
         ),
         "time_zone": LLMToolSchema.PropertySchema(
             type: "string",
-            description: "IANA time zone, for example Europe/Berlin.",
+            description:
+                "IANA time zone, for example Europe/Berlin. Take it from the location or now tool result, or from memory; never guess it.",
             enumValues: nil
         ),
         "hour": LLMToolSchema.PropertySchema(

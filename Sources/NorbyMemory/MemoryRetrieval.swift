@@ -1,4 +1,8 @@
-import Foundation
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 public struct MemoryQuery: Codable, Equatable, Sendable {
     public let text: String
@@ -36,7 +40,8 @@ public enum MemoryRetrieval {
             )
         }
 
-        return ranked
+        return
+            ranked
             .sorted { left, right in
                 if left.score != right.score { return left.score > right.score }
                 if left.fact.importance != right.fact.importance {

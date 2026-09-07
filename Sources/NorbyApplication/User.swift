@@ -1,10 +1,15 @@
 import Distributed
 import DistributedCluster
 import EventSourcing
-import Foundation
 import NorbyDomain
 import NorbyMemory
 import VirtualActors
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Durable state owned by one Norby user.
 ///
@@ -35,15 +40,17 @@ public struct UserRecord: Codable, Sendable, Equatable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.userID = try container.decode(UserID.self, forKey: .userID)
-        self.participantLinks = try container.decodeIfPresent(
-            [UserParticipantLink].self,
-            forKey: .participantLinks
-        ) ?? []
+        self.participantLinks =
+            try container.decodeIfPresent(
+                [UserParticipantLink].self,
+                forKey: .participantLinks
+            ) ?? []
         // Older User snapshots predate semantic memory.
-        self.memory = try container.decodeIfPresent(
-            MemoryProjection.self,
-            forKey: .memory
-        ) ?? MemoryProjection()
+        self.memory =
+            try container.decodeIfPresent(
+                MemoryProjection.self,
+                forKey: .memory
+            ) ?? MemoryProjection()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -193,7 +200,8 @@ public distributed actor User {
         proposals: [MemoryProposal],
         expectedGeneration: MemoryGeneration? = nil
     ) async throws -> MemoryUpdate {
-        guard expectedGeneration == nil
+        guard
+            expectedGeneration == nil
                 || expectedGeneration == state.memory.generation
         else {
             // The extraction started before /forget. Its result is stale and
@@ -231,7 +239,8 @@ public distributed actor User {
         observation: MemoryObservation,
         expectedGeneration: MemoryGeneration? = nil
     ) async throws -> MemoryUpdate {
-        guard expectedGeneration == nil
+        guard
+            expectedGeneration == nil
                 || expectedGeneration == state.memory.generation
         else {
             return MemoryUpdate()

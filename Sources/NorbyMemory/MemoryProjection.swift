@@ -1,4 +1,8 @@
-import Foundation
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// The materialized "what is current?" view over one user's memory events.
 ///
@@ -31,22 +35,25 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        generation = try container.decodeIfPresent(
-            MemoryGeneration.self,
-            forKey: .generation
-        ) ?? .initial
+        generation =
+            try container.decodeIfPresent(
+                MemoryGeneration.self,
+                forKey: .generation
+            ) ?? .initial
         lastClearedAt = try container.decodeIfPresent(
             Date.self,
             forKey: .lastClearedAt
         )
-        observations = try container.decodeIfPresent(
-            [MemoryObservation].self,
-            forKey: .observations
-        ) ?? []
-        facts = try container.decodeIfPresent(
-            [MemoryFact].self,
-            forKey: .facts
-        ) ?? []
+        observations =
+            try container.decodeIfPresent(
+                [MemoryObservation].self,
+                forKey: .observations
+            ) ?? []
+        facts =
+            try container.decodeIfPresent(
+                [MemoryFact].self,
+                forKey: .facts
+            ) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -66,18 +73,22 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
             lastClearedAt = max(lastClearedAt ?? at, at)
 
         case .observationRecorded(let observation):
-            guard !observations.contains(where: {
-                $0.id == observation.id || $0.sourceID == observation.sourceID
-            }) else { return }
+            guard
+                !observations.contains(where: {
+                    $0.id == observation.id || $0.sourceID == observation.sourceID
+                })
+            else { return }
             observations.append(observation)
             if observations.count > Self.observationTailLimit {
                 observations.removeFirst(observations.count - Self.observationTailLimit)
             }
 
         case .observationCompleted(let sourceID, let response):
-            guard let index = observations.firstIndex(where: {
-                $0.sourceID == sourceID
-            }) else { return }
+            guard
+                let index = observations.firstIndex(where: {
+                    $0.sourceID == sourceID
+                })
+            else { return }
             guard observations[index].response == nil else { return }
             let observation = observations[index]
             observations[index] = MemoryObservation(
@@ -152,7 +163,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         limit: Int
     ) -> [MemoryObservation] {
         guard limit > 0,
-              let index = observations.firstIndex(where: { $0.sourceID == sourceID })
+            let index = observations.firstIndex(where: { $0.sourceID == sourceID })
         else {
             return recentObservations(limit: limit)
         }

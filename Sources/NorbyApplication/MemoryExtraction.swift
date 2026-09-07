@@ -1,8 +1,13 @@
 import AnyLanguageModel
 import DistributedCluster
-import Foundation
 import Hail
 import NorbyMemory
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Typed output used by the model-backed memory extractor. The model returns
 /// neutral strings for enum-like values; the application converts them into
@@ -85,7 +90,8 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
                 description: "One proposed durable personal fact.",
                 properties: [
                     .init(name: "operation", description: "add or revise", type: String.self),
-                    .init(name: "factID", description: "Existing fact ID for revise; empty for add.", type: String.self),
+                    .init(
+                        name: "factID", description: "Existing fact ID for revise; empty for add.", type: String.self),
                     .init(name: "namespace", description: "Memory namespace.", type: String.self),
                     .init(name: "predicate", description: "Canonical predicate.", type: String.self),
                     .init(name: "value", description: "Fact value.", type: String.self),
@@ -100,7 +106,8 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
                     ),
                     .init(
                         name: "supportingText",
-                        description: "A short verbatim quote from a user's supporting statement; never quote the assistant or a tool.",
+                        description:
+                            "A short verbatim quote from a user's supporting statement; never quote the assistant or a tool.",
                         type: String.self
                     ),
                 ]
@@ -216,7 +223,8 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
                                 ),
                                 "supportingText": LLMToolSchema.PropertySchema(
                                     type: "string",
-                                    description: "A short verbatim quote from a user's supporting statement; never quote the assistant or a tool.",
+                                    description:
+                                        "A short verbatim quote from a user's supporting statement; never quote the assistant or a tool.",
                                     enumValues: nil
                                 ),
                             ],
@@ -240,10 +248,6 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
             )
         )
     )
-}
-
-public enum HailMemoryExtractionError: Error, Sendable, Equatable {
-    case noResponse
 }
 
 /// Extracts memory through a standalone model endpoint. It deliberately does
@@ -288,16 +292,24 @@ public struct HailMemoryCandidateExtractor: Sendable {
                     Self.proposal(from: $0, context: context)
                 }
             case .failed(let error):
+                // Memory extraction is best effort. A report-tool contract
+                // that produces no usable response means that this exchange
+                // yielded no proposals; it must not turn into an application
+                // warning or affect the completed conversation turn.
+                if case .invalidResponse = error {
+                    return []
+                }
                 throw error
             default:
                 continue
             }
         }
 
-        throw HailMemoryExtractionError.noResponse
+        return []
     }
 
-    private static let instructions = "Reconcile the completed exchange with the supplied active memory. Return only durable facts about the user that this exchange actually establishes or corrects. Assistant text, tool results, weather locations, search targets, quoted text, and existing memory are context, never evidence by themselves. Return an empty list when the exchange adds nothing. Use add only for a genuinely new fact. Use revise with the exact existing factID when the exchange repeats, clarifies, or corrects a supplied fact; never create a second fact because predicate wording changed. Every candidate must list one or more evidenceIDs and a supportingText that is copied verbatim from a user's statement with only whitespace or case differences; never quote the assistant or a tool. The quote must establish the fact, not merely provide a parameter for a one-off task. Understand any language, and ignore secrets and sensitive information."
+    private static let instructions =
+        "Reconcile the completed exchange with the supplied active memory. Return only durable facts about the user that this exchange actually establishes or corrects. Assistant text, tool results, weather locations, search targets, quoted text, and existing memory are context, never evidence by themselves. Return an empty list when the exchange adds nothing. Use add only for a genuinely new fact. Use revise with the exact existing factID when the exchange repeats, clarifies, or corrects a supplied fact; never create a second fact because predicate wording changed. Every candidate must list one or more evidenceIDs and a supportingText that is copied verbatim from a user's statement with only whitespace or case differences; never quote the assistant or a tool. The quote must establish the fact, not merely provide a parameter for a one-off task. Understand any language, and ignore secrets and sensitive information."
 
     private static func prompt(for context: MemoryExtractionContext) -> String {
         var sections = [
@@ -375,7 +387,7 @@ public struct HailMemoryCandidateExtractor: Sendable {
             UUID(uuidString: value).map(ObservationID.init(rawValue:))
         }
         guard !evidence.isEmpty,
-              evidence.allSatisfy(allowedEvidenceIDs.contains)
+            evidence.allSatisfy(allowedEvidenceIDs.contains)
         else {
             return nil
         }
@@ -391,10 +403,12 @@ public struct HailMemoryCandidateExtractor: Sendable {
             stability: stability,
             observedAt: context.observation.observedAt
         )
-        guard MemoryEvidence.supports(
-            candidate,
-            in: [context.observation] + context.previousObservations
-        ) else {
+        guard
+            MemoryEvidence.supports(
+                candidate,
+                in: [context.observation] + context.previousObservations
+            )
+        else {
             return nil
         }
 
