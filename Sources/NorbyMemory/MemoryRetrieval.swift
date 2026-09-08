@@ -32,11 +32,23 @@ public enum MemoryRetrieval {
         guard query.limit > 0 else { return [] }
 
         let queryTokens = tokens(query.text)
-        let ranked = current.enumerated().map { index, fact in
-            (
+        let ranked = current.enumerated().compactMap {
+            (index: Int, fact: MemoryFact) -> (index: Int, fact: MemoryFact, score: Double)? in
+            let factTokens = tokens(
+                "\(fact.namespace.rawValue) \(fact.predicate) \(fact.value.rendered)"
+            )
+            let overlap = queryTokens.intersection(factTokens).count
+            // Importance and freshness rank relevant facts; they must not
+            // turn an unrelated fact into context for every conversation.
+            guard overlap > 0 else { return nil }
+            return (
                 index: index,
                 fact: fact,
-                score: score(fact: fact, queryTokens: queryTokens, now: now)
+                score: score(
+                    fact: fact,
+                    overlap: overlap,
+                    now: now
+                )
             )
         }
 
@@ -56,7 +68,7 @@ public enum MemoryRetrieval {
                 return left.index < right.index
             }
             .prefix(query.limit)
-            .map(\.fact)
+            .map { $0.fact }
     }
 
     public static func systemInstruction(
@@ -75,13 +87,10 @@ public enum MemoryRetrieval {
 
     private static func score(
         fact: MemoryFact,
-        queryTokens: Set<String>,
+        overlap: Int,
         now: Date
     ) -> Double {
-        let factTokens = tokens(
-            "\(fact.namespace.rawValue) \(fact.predicate) \(fact.value.rendered)"
-        )
-        let overlap = Double(queryTokens.intersection(factTokens).count)
+        let overlap = Double(overlap)
         let freshness = max(0, 1 - max(0, now.timeIntervalSince(fact.observedAt)) / 31_536_000)
         return overlap * 10 + fact.importance * 2 + fact.confidence + freshness * 0.1
     }

@@ -82,6 +82,15 @@ public actor TelegramConnection {
                 )
             )
 
+        case .context(let conversationID, let participantID, let userID):
+            return await sendToApplication(
+                .context(
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+
         case .start(let conversationID, _, _):
             do {
                 try await publisher.sendText(
@@ -89,7 +98,7 @@ public actor TelegramConnection {
                     text: """
                         Hi — I'm Norby, an assistant running locally on this machine. \
                         Send me a message to get started. Use /reset to clear this conversation, \
-                        /memory to inspect saved memory, or /forget to clear it.
+                        /memory to inspect saved memory, /context for runtime diagnostics, or /forget to clear it.
                         """
                 )
             } catch {
@@ -339,6 +348,12 @@ public actor TelegramBot {
                 participantID: participantID,
                 userID: userID
             )
+        case "/context":
+            return .context(
+                conversationID: conversationID,
+                participantID: participantID,
+                userID: userID
+            )
         default:
             return .message(
                 InboundMessage(
@@ -499,6 +514,7 @@ extension TelegramInboundEvent {
         case .reset(let conversationID, _, _): conversationID
         case .memory(let conversationID, _, _): conversationID
         case .forget(let conversationID, _, _): conversationID
+        case .context(let conversationID, _, _): conversationID
         }
     }
 }

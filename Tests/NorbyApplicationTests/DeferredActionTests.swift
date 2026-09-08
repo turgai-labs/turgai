@@ -65,7 +65,7 @@ struct DeferredActionTests {
             Issue.record("Expected an after trigger")
             return
         }
-        #expect(duration == Timer.RelativeDuration(amount: 5, unit: .minutes))
+        #expect(duration == .seconds(5 * 60))
     }
 
     @Test
@@ -73,25 +73,39 @@ struct DeferredActionTests {
         let input = try JSONDecoder().decode(
             TimerTool.Input.self,
             from: Data(
-                #"{"operation":"create","action":"notify","message":"Check doors","trigger":{"kind":"occurrence","occurrence":{"offset":{"day":2},"matching":{"hour":9,"minute":0},"time_zone":"Europe/Berlin"}}}"#
+                #"{"operation":"create","action":"notify","message":"Check doors","trigger":{"kind":"at","at":{"components":{"day":9,"month":9,"year":2026,"hour":9,"minute":0},"time_zone":"Europe/Berlin"}}}"#
                     .utf8
             )
         )
 
-        guard case .occurrence(let occurrence) = input.trigger else {
-            Issue.record("Expected an occurrence trigger")
+        guard case .at(let occurrence) = input.trigger else {
+            Issue.record("Expected an at trigger")
             return
         }
-        #expect(occurrence.offset.day == 2)
-        #expect(occurrence.matching.hour == 9)
-        #expect(occurrence.matching.minute == 0)
+        #expect(occurrence.components.day == 9)
+        #expect(occurrence.components.month == 9)
+        #expect(occurrence.components.year == 2026)
+        #expect(occurrence.components.hour == 9)
+        #expect(occurrence.components.minute == 0)
         #expect(occurrence.timeZone.identifier == "Europe/Berlin")
 
         let encoded = try JSONEncoder().encode(input)
         let json = String(decoding: encoded, as: UTF8.self)
         #expect(json.contains(#""time_zone":"Europe\/Berlin""#))
-        #expect(json.contains("\"day\":2"))
+        #expect(json.contains("\"day\":9"))
         #expect(json.contains("\"hour\":9"))
+    }
+
+    @Test
+    func timerRejectsRelativeOffsetCalendarShape() throws {
+        let invalid = Data(
+            #"{"operation":"create","action":"notify","message":"Check doors","trigger":{"kind":"at","at":{"offset":{"day":2},"matching":{"hour":9},"time_zone":"Europe/Berlin"}}}"#
+                .utf8
+        )
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(TimerTool.Input.self, from: invalid)
+        }
     }
 
     @Test
@@ -109,13 +123,18 @@ struct DeferredActionTests {
                 ))
         )
         let occurrence = Timer.Occurrence(
-            offset: DateComponents(day: 2),
-            matching: DateComponents(hour: 9, minute: 0),
+            components: DateComponents(
+                year: 2026,
+                month: 9,
+                day: 9,
+                hour: 9,
+                minute: 0
+            ),
             timeZone: calendar.timeZone
         )
 
         let fireAt = try Timer.fireAt(
-            for: .occurrence(occurrence),
+            for: .at(occurrence),
             after: now
         )
 
@@ -145,12 +164,12 @@ struct DeferredActionTests {
                 ))
         )
         let occurrence = Timer.Occurrence(
-            matching: DateComponents(hour: 8, minute: 0, weekday: 7),
+            components: DateComponents(hour: 8, minute: 0, weekday: 7),
             timeZone: timeZone
         )
 
         let fireAt = try Timer.fireAt(
-            for: .occurrence(occurrence),
+            for: .at(occurrence),
             after: now
         )
 

@@ -253,6 +253,7 @@ public actor NorbyConnections: Service {
 private enum UserCommand {
     case memory
     case forget
+    case context
 }
 
 actor LiveSession {
@@ -431,6 +432,14 @@ actor LiveSession {
                 participantID: participantID,
                 userID: userID
             )
+
+        case .context(let conversationID, let participantID, let userID):
+            return await handleUserCommand(
+                .context,
+                conversationID: conversationID,
+                participantID: participantID,
+                userID: userID
+            )
         }
     }
 
@@ -459,6 +468,8 @@ actor LiveSession {
                 try await conversation.showMemory(for: userID)
             case .forget:
                 try await conversation.forgetMemory(for: userID)
+            case .context:
+                try await conversation.showContext()
             }
             return true
         } catch {

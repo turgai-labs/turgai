@@ -68,7 +68,7 @@ public struct TimerTool: Tool {
 
     public let name = "timer"
     public let description =
-        "Manage durable one-shot actions for this conversation. Use create for a new timer, replace with its timer_id to change it, cancel to remove it, or list to inspect active timers. Use notify when the future result is a user-visible message and prompt_agent when Norby should wake up, use its tools, and compose a fresh response. For create and replace, trigger is either after with an amount and unit, or occurrence with calendar components and an explicit IANA time_zone. Express time as intent; do not calculate seconds or an absolute date."
+        "Manage durable one-shot actions for this conversation. Use create for a new timer, replace with its timer_id to change it, cancel to remove it, or list to inspect active timers. Use notify when the future result is a user-visible message and prompt_agent when Norby should wake up, use its tools, and compose a fresh response. For create and replace, trigger is either after with an amount and unit, or at with calendar components and an explicit IANA time_zone. Use after for relative requests such as in five minutes. Use at for calendar requests such as at 17:30 or on Saturday at 09:00. Do not put an absolute date into after."
 
     private let context: AgentTurnContext
     private let snapshotPolicy: AgentSnapshotPolicy
@@ -214,7 +214,7 @@ public struct TimerTool: Tool {
         switch result {
         case .cancelled:
             return "One-shot timer cancelled."
-        case .scheduled(let id, let action, let replaced):
+        case .scheduled(let id, let action, let fireAt, let timeZone, let replaced):
             let prefix: String
             switch action {
             case .notify:
@@ -228,7 +228,8 @@ public struct TimerTool: Tool {
                     ? "One-shot agent task replaced."
                     : "One-shot agent task scheduled."
             }
-            return prefix + " timer_id: " + id.rawValue + "."
+            let zone = timeZone.map { " \($0)" } ?? ""
+            return "\(prefix) fire_at=\(fireAt.ISO8601Format())\(zone), timer_id=\(id.rawValue)."
         case .listed(let timers):
             guard !timers.isEmpty else {
                 return "No active one-shot timers."
@@ -330,7 +331,7 @@ private enum TimerToolSchema {
             ),
             "day": LLMToolSchema.PropertySchema(
                 type: "integer",
-                description: "Day of month, or a calendar day offset when used in offset.",
+                description: "Day of month.",
                 enumValues: nil
             ),
             "hour": LLMToolSchema.PropertySchema(
@@ -395,7 +396,7 @@ private enum TimerToolSchema {
             "kind": LLMToolSchema.PropertySchema(
                 type: "string",
                 description: "The trigger form.",
-                enumValues: ["after", "occurrence"]
+                enumValues: ["after", "at"]
             ),
             "amount": LLMToolSchema.PropertySchema(
                 type: "integer",
@@ -407,14 +408,13 @@ private enum TimerToolSchema {
                 description: "Unit for an after trigger.",
                 enumValues: ["seconds", "minutes", "hours", "days", "weeks"]
             ),
-            "occurrence": LLMToolSchema.PropertySchema(
+            "at": LLMToolSchema.PropertySchema(
                 type: "object",
                 description:
-                    "A calendar occurrence. offset moves the current calendar date first; matching selects the next matching date in time_zone.",
+                    "A calendar occurrence. components selects the next matching date and time in time_zone. Do not use relative offsets here.",
                 enumValues: nil,
                 properties: [
-                    "offset": calendarComponents,
-                    "matching": calendarComponents,
+                    "components": calendarComponents,
                     "time_zone": LLMToolSchema.PropertySchema(
                         type: "string",
                         description:
@@ -422,7 +422,7 @@ private enum TimerToolSchema {
                         enumValues: nil
                     ),
                 ],
-                required: ["offset", "matching", "time_zone"]
+                required: ["components", "time_zone"]
             ),
         ],
         required: ["kind"]

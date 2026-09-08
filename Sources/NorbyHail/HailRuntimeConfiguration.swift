@@ -11,6 +11,7 @@ public struct HailRuntimeConfiguration: Sendable {
     public let ollamaBaseURL: URL
     public let temperature: Double
     public let contextWindow: Int?
+    public let compactionMaxOutputTokens: Int
     public let maxToolRounds: Int
     public let snapshotPolicy: AgentSnapshotPolicy
 
@@ -19,6 +20,7 @@ public struct HailRuntimeConfiguration: Sendable {
         ollamaBaseURL: URL = URL(string: "http://127.0.0.1:11434")!,
         temperature: Double = 0.2,
         contextWindow: Int? = nil,
+        compactionMaxOutputTokens: Int = 8_192,
         maxToolRounds: Int = 16,
         snapshotPolicy: AgentSnapshotPolicy = .periodicOrWhenCompacted(
             every: 50,
@@ -29,6 +31,7 @@ public struct HailRuntimeConfiguration: Sendable {
         self.ollamaBaseURL = ollamaBaseURL
         self.temperature = temperature
         self.contextWindow = contextWindow
+        self.compactionMaxOutputTokens = compactionMaxOutputTokens
         self.maxToolRounds = maxToolRounds
         self.snapshotPolicy = snapshotPolicy
     }
@@ -55,7 +58,14 @@ public struct HailRuntimeConfiguration: Sendable {
                         baseURL: baseURL
                     )
                 }
-            )
+            ),
+            // Verified for the local Ollama runner: "no reasoning" maps to
+            // the boolean think switch. Graded levels stay undeclared.
+            reasoningCapabilities: [
+                model: ModelReasoningCapabilities(levels: [
+                    ModelReasoningLevel(effort: .none, encoding: .disabled)
+                ])
+            ]
         )
 
         return try AgentRuntimePlugin(
@@ -68,7 +78,9 @@ public struct HailRuntimeConfiguration: Sendable {
                 AgentWorkspace(rootPath: workspaceRoot)
             },
             definitionProvider: definitionProvider,
-            contextCompactor: SlidingWindowCompactor()
+            contextCompactor: SlidingWindowCompactor(
+                outputReserve: compactionMaxOutputTokens
+            )
         )
     }
 }

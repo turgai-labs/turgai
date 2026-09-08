@@ -98,7 +98,8 @@ struct Norby: AsyncParsableCommand {
                     role: spawnConfig.agentID.role,
                     behavior: .init(
                         systemPrompt:
-                            "You are a local conversational assistant. Be helpful, concise, honest, and natural.",
+                            "You are a local conversational assistant. Be helpful, concise, honest, and natural."
+                            + "\n\n" + MemoryRetrieval.capabilityInstruction,
                         model: modelRoute
                     ),
                     limits: .init(),
@@ -120,6 +121,7 @@ struct Norby: AsyncParsableCommand {
                     WebSearchTool(),
                     FetchURLTool(),
                     LocationTool(),
+                    NowTool(),
                     WeatherTool(),
                     FetchAttachmentTool(resolver: attachmentResolver),
                     ScheduleTool(
@@ -131,13 +133,20 @@ struct Norby: AsyncParsableCommand {
                         snapshotPolicy: runtimeConfiguration.snapshotPolicy
                     ),
                 ]
-                if let userID, let sourceMessage,
-                    let user = try? await User.resolve(
-                        on: actorSystem,
-                        userID: userID
-                    ),
-                    let expectedGeneration = try? await user.memoryGeneration()
-                {
+                if let userID, let sourceMessage {
+                    let user: NorbyApplication.User
+                    let expectedGeneration: MemoryGeneration
+                    do {
+                        user = try await User.resolve(
+                            on: actorSystem,
+                            userID: userID
+                        )
+                        expectedGeneration = try await user.memoryGeneration()
+                    } catch {
+                        throw AgentRuntimeError.infrastructureFailure(
+                            "Could not prepare memory tool: \(error)"
+                        )
+                    }
                     let observationUUID =
                         UUID(uuidString: context.inputID ?? "")
                         ?? UUID(uuidString: context.turnID.rawValue)

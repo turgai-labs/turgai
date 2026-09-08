@@ -258,6 +258,73 @@ private enum MemoryPresentation {
     }
 }
 
+/// Human-readable rendering of Hail's context diagnostics for the /context
+/// command. Identifiers and request IDs are omitted on purpose: they mean
+/// nothing in a chat message.
+enum ContextPresentation {
+    static func text(for snapshot: AgentContextSnapshot) -> String {
+        var lines: [String] = ["Context diagnostics", ""]
+
+        var status = snapshot.phase.rawValue
+        if let tool = snapshot.currentToolName {
+            status += " (running tool: \(tool))"
+        }
+        lines.append("Status: \(status)")
+
+        if let usage = snapshot.contextUsage {
+            let percentage =
+                usage.limitTokens > 0
+                ? Int((Double(usage.usedTokens) / Double(usage.limitTokens) * 100).rounded())
+                : 0
+            lines.append(
+                "Context window: \(usage.usedTokens.formatted(.number.locale(Self.numberLocale))) / \(usage.limitTokens.formatted(.number.locale(Self.numberLocale))) tokens"
+                    + " (\(percentage)%, \(render(source: usage.source)))"
+            )
+        } else {
+            lines.append("Context window: not reported")
+        }
+
+        lines.append(
+            "Messages in context: \(snapshot.conversationMessageCount.formatted(.number.locale(Self.numberLocale)))")
+        lines.append("Compaction summary: \(snapshot.hasContextSummary ? "yes" : "no")")
+
+        let usageSummary = snapshot.usageSummary
+        guard usageSummary.requestCount > 0 else {
+            return lines.joined(separator: "\n")
+        }
+
+        lines.append("")
+        lines.append("Model usage")
+        lines.append("Requests: \(usageSummary.requestCount.formatted(.number.locale(Self.numberLocale)))")
+        if let input = usageSummary.inputTokens {
+            lines.append("Input tokens: \(input.formatted(.number.locale(Self.numberLocale)))")
+        }
+        if let output = usageSummary.outputTokens {
+            lines.append("Output tokens: \(output.formatted(.number.locale(Self.numberLocale)))")
+        }
+        if let reasoning = usageSummary.reasoningTokens {
+            lines.append("Reasoning tokens: \(reasoning.formatted(.number.locale(Self.numberLocale)))")
+        }
+        if let cached = usageSummary.cachedReadTokens {
+            lines.append("Cached tokens read: \(cached.formatted(.number.locale(Self.numberLocale)))")
+        }
+        if let total = usageSummary.totalTokens {
+            lines.append("Total tokens: \(total.formatted(.number.locale(Self.numberLocale)))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func render(source: ModelMeasurementSource) -> String {
+        switch source {
+        case .reported: "reported by the model"
+        case .estimated: "estimated"
+        }
+    }
+
+    /// Token counts render identically regardless of the host's locale.
+    private static let numberLocale = Locale(identifier: "en_US")
+}
+
 private actor ConversationPhase {
     private var value: ReplyPhase = .thinking
 
@@ -270,6 +337,12 @@ private actor ConversationPhase {
     func current() -> ReplyPhase {
         value
     }
+}
+
+private struct MemoryExtractionRequest: Sendable {
+    let turnID: NorbyDomain.TurnID
+    let observation: MemoryObservation
+    let userID: NorbyDomain.UserID
 }
 
 /// The application-side interpreter for one scoped model output.
@@ -425,6 +498,8 @@ public distributed actor Conversation {
     private let connectionRegistry = ConversationConnectionRegistry()
     private var modelTask: Task<Void, Never>?
     private var memoryTasks: [NorbyDomain.TurnID: Task<Void, Never>] = [:]
+    private var activeMemoryExtractions: [NorbyDomain.TurnID: MemoryExtractionRequest] = [:]
+    private var pendingMemoryExtractions: [MemoryExtractionRequest] = []
 
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
@@ -501,7 +576,10 @@ public distributed actor Conversation {
     /// on a transient Task existing.
     public func shouldDeactivate() async -> Bool {
         let noConnections = await connectionRegistry.isEmpty()
-        return state.activeTurnID == nil && noConnections && memoryTasks.isEmpty
+        return state.activeTurnID == nil
+            && noConnections
+            && memoryTasks.isEmpty
+            && pendingMemoryExtractions.isEmpty
     }
 
     public distributed func currentRecord() -> ConversationRecord {
@@ -592,6 +670,20 @@ public distributed actor Conversation {
         )
     }
 
+    /// Shows durable runtime diagnostics without opening a model turn. The
+    /// snapshot is read from Hail's event-sourced agent in one operation, so
+    /// token usage and lifecycle data describe one coherent state.
+    public distributed func showContext() async throws {
+        let snapshot = try await peer.contextSnapshot()
+        await publish(
+            .notice(
+                conversationID: conversationID,
+                turnID: nil,
+                text: ContextPresentation.text(for: snapshot)
+            )
+        )
+    }
+
     /// Clears the user's logical memory projection without touching the
     /// conversation or Hail transcript. Stale background extraction is
     /// rejected by the generation check in `User`.
@@ -657,7 +749,7 @@ public distributed actor Conversation {
                 )
             },
             operation: { updates in
-                let instructions = await Self.memoryInstructions(
+                let turnContext = await Self.memoryContext(
                     for: request,
                     actorSystem: actorSystem,
                     conversationID: conversationID
@@ -665,7 +757,7 @@ public distributed actor Conversation {
                 let accumulator = ReplyTextAccumulator()
                 let response = try await peer.run(
                     to: request,
-                    systemInstructions: instructions
+                    turnContext: turnContext
                 ) { event in
                     switch event {
                     case .reasoning:
@@ -743,6 +835,12 @@ public distributed actor Conversation {
         let action = requestedAction
 
         let (next, effects) = reduce(previous, action)
+        if case .receive = action, next != previous {
+            // Memory extraction is background work, but it shares the local
+            // model slot with foreground conversation turns. A new message
+            // always wins; the cancelled request is put back in the queue.
+            cancelActiveMemoryExtractions()
+        }
         for event in events(for: action, from: previous, to: next) {
             try await emit(event: event)
         }
@@ -765,10 +863,6 @@ public distributed actor Conversation {
             await deliverPendingReplies()
         }
 
-        if case .modelCompleted = action {
-            startMemoryExtraction(from: previous, action: action)
-        }
-
         for effect in effects {
             switch effect {
             case .runReply(let request):
@@ -780,6 +874,15 @@ public distributed actor Conversation {
                 modelTask = nil
             }
         }
+
+        // Launch the next conversation turn before starting extraction. The
+        // Ollama server is commonly configured with one parallel slot; if the
+        // extractor is created first, it can occupy that slot between two
+        // user messages and make the next reply appear to hang.
+        if case .modelCompleted = action {
+            startMemoryExtraction(from: previous, action: action)
+        }
+        startPendingMemoryExtractionIfIdle()
     }
 
     /// Delivers terminal replies from the durable projection and removes each
@@ -831,7 +934,11 @@ public distributed actor Conversation {
     /// Retrieves memory immediately before a primary model turn. Retrieval is
     /// best-effort: memory is useful context, but it must not make the
     /// conversation unavailable while the separate User actor is recovering.
-    private static func memoryInstructions(
+    ///
+    /// Returns only the retrieved facts — per-turn data that lives in the
+    /// request's tail context. The static capability guidance is part of the
+    /// agent's system prompt, so it stays inside the reusable prompt prefix.
+    private static func memoryContext(
         for request: ModelRequest,
         actorSystem: ClusterSystem,
         conversationID: ConversationID
@@ -842,13 +949,12 @@ public distributed actor Conversation {
         }
         let userID = message.userID
 
-        var instructions = [MemoryRetrieval.capabilityInstruction]
         do {
             let user = try await User.resolve(on: actorSystem, userID: userID)
             if let instruction = try await user.memoryInstruction(for: message.text) {
-                instructions.append(instruction)
+                return [instruction]
             }
-            return instructions
+            return []
         } catch {
             actorSystem.log.warning(
                 "Could not retrieve user memory for turn",
@@ -857,13 +963,12 @@ public distributed actor Conversation {
                     "error": .string(String(describing: error)),
                 ]
             )
-            return instructions
+            return []
         }
     }
 
-    /// Starts one application-owned background operation for a completed turn.
-    /// The task is retained until it finishes so an active extraction prevents
-    /// passivation, while the reply and any queued turn proceed immediately.
+    /// Queues one application-owned background operation for a completed turn.
+    /// It is started only after all queued conversation turns have finished.
     private func startMemoryExtraction(
         from previous: ConversationState,
         action: ConversationAction
@@ -876,50 +981,78 @@ public distributed actor Conversation {
             return
         }
 
-        let response: String?
-        switch completion {
-        case .reply(let reply):
-            response = reply.text
-        case .void:
-            response = nil
+        let response: String? =
+            switch completion {
+            case .reply(let reply): reply.text
+            case .void: nil
+            }
+
+        let request = MemoryExtractionRequest(
+            turnID: turnID,
+            observation: MemoryObservation(
+                id: ObservationID(rawValue: activeMessage.message.id.rawValue),
+                sourceID: MemorySourceID(rawValue: activeMessage.message.id.rawValue),
+                text: activeMessage.message.text,
+                response: response,
+                observedAt: activeMessage.message.receivedAt
+            ),
+            userID: activeMessage.message.userID
+        )
+        pendingMemoryExtractions.append(request)
+    }
+
+    /// Starts extraction only while the conversation is genuinely idle. A
+    /// completed turn may already have another user message queued; launching
+    /// the extractor in that gap would compete with the next model request on
+    /// a single-slot local server. The request stays in this small in-memory
+    /// queue and is picked up after the last queued turn completes.
+    private func startPendingMemoryExtractionIfIdle() {
+        guard
+            coreState.activeTurnID == nil,
+            coreState.pendingMessages.isEmpty,
+            modelTask == nil,
+            memoryTasks.isEmpty,
+            let request = pendingMemoryExtractions.first
+        else {
+            return
         }
 
-        let observation = MemoryObservation(
-            id: ObservationID(rawValue: activeMessage.message.id.rawValue),
-            sourceID: MemorySourceID(rawValue: activeMessage.message.id.rawValue),
-            text: activeMessage.message.text,
-            response: response,
-            observedAt: activeMessage.message.receivedAt
-        )
-        let userID = activeMessage.message.userID
+        pendingMemoryExtractions.removeFirst()
+        activeMemoryExtractions[request.turnID] = request
         let actorSystem = self.actorSystem
         let memoryExtractor = self.memoryExtractor
         let conversationID = self.conversationID
 
-        let task = Task {
-            [weak self, actorSystem, memoryExtractor, observation, userID, conversationID]
+        let task = Task(priority: .background) {
+            [weak self, actorSystem, memoryExtractor, request, conversationID]
             in
             let update = await Self.recordCompletedMemory(
-                observation: observation,
-                userID: userID,
+                observation: request.observation,
+                userID: request.userID,
                 conversationID: conversationID,
                 actorSystem: actorSystem,
                 memoryExtractor: memoryExtractor
             )
             try? await self?.memoryExtractionCompleted(
-                turnID: turnID,
+                turnID: request.turnID,
                 update: update
             )
         }
-        memoryTasks[turnID] = task
+        memoryTasks[request.turnID] = task
     }
 
     public distributed func memoryExtractionCompleted(
         turnID: NorbyDomain.TurnID,
         update: MemoryUpdate?
     ) async {
-        memoryTasks[turnID] = nil
+        guard memoryTasks.removeValue(forKey: turnID) != nil else {
+            // The extraction was cancelled in favour of a foreground turn.
+            // Its task may still be unwinding; its request is already queued.
+            return
+        }
+        activeMemoryExtractions[turnID] = nil
         guard let update, update.shouldNotify else {
+            startPendingMemoryExtractionIfIdle()
             return
         }
 
@@ -930,6 +1063,18 @@ public distributed actor Conversation {
                 text: Self.memoryNotice(for: update)
             )
         )
+        startPendingMemoryExtractionIfIdle()
+    }
+
+    private func cancelActiveMemoryExtractions() {
+        guard !memoryTasks.isEmpty else { return }
+
+        let requests = memoryTasks.keys.compactMap { activeMemoryExtractions[$0] }
+        pendingMemoryExtractions.insert(contentsOf: requests, at: 0)
+
+        memoryTasks.values.forEach { $0.cancel() }
+        memoryTasks.removeAll(keepingCapacity: true)
+        activeMemoryExtractions.removeAll(keepingCapacity: true)
     }
 
     /// Persists the completed user/assistant pair in the background. The User
@@ -942,6 +1087,7 @@ public distributed actor Conversation {
         memoryExtractor: HailMemoryCandidateExtractor
     ) async -> MemoryUpdate? {
         do {
+            try Task.checkCancellation()
             let user = try await User.resolve(on: actorSystem, userID: userID)
             guard let generation = try await user.beginMemoryObservation(observation) else {
                 return nil
@@ -958,11 +1104,14 @@ public distributed actor Conversation {
                 )
             )
             let proposals = try await memoryExtractor.extract(from: context)
+            try Task.checkCancellation()
             return try await user.recordCompletedObservation(
                 observation,
                 proposals: proposals,
                 expectedGeneration: generation
             )
+        } catch is CancellationError {
+            return nil
         } catch {
             actorSystem.log.warning(
                 "Could not record completed user memory",

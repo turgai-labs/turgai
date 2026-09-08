@@ -385,6 +385,11 @@ public enum ConversationInput: Sendable, Equatable {
         participantID: ParticipantID,
         userID: UserID
     )
+    case context(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
 }
 
 public struct PendingConversationMessage: Hashable, Codable, Sendable {

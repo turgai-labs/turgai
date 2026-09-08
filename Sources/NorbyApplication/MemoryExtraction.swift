@@ -268,13 +268,18 @@ public struct HailMemoryCandidateExtractor: Sendable {
 
     public func extract(from context: MemoryExtractionContext) async throws -> [MemoryProposal] {
         let model = await actorSystem.agentRuntime.defaultModel.rawValue
+        // Extraction is structured reconciliation, not conversation: request
+        // non-thinking generation so background work stays cheap. The
+        // endpoint is cached per effort level, so conversational turns keep
+        // the model's default reasoning.
         let endpoint = try await actorSystem.agentRuntime.endpoint(
             for: model,
             agentID: "memory-extractor",
             contextID: AgentContextID(
                 "memory-extractor-\(context.observation.sourceID.rawValue.uuidString)"
             ),
-            executionPolicy: .autonomousWorkspace
+            executionPolicy: .autonomousWorkspace,
+            reasoningEffort: ReasoningEffort.none
         )
         let input = ModelInput(messages: [
             LLMMessage(role: .system, content: Self.instructions),

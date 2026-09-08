@@ -397,6 +397,31 @@ struct MemoryTests {
     }
 
     @Test
+    func retrievalOmitsUnrelatedFacts() {
+        let home = MemoryFact(
+            id: factID,
+            namespace: .profile,
+            predicate: "home",
+            value: .place("Berlin"),
+            evidence: [observationID],
+            confidence: 0.95,
+            importance: 1,
+            stability: .mutable,
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        var projection = MemoryProjection()
+        projection.apply(.factAccepted(home))
+
+        let facts = MemoryRetrieval.facts(
+            from: projection,
+            matching: MemoryQuery(text: "test without tools", limit: 6),
+            now: Date(timeIntervalSince1970: 2)
+        )
+
+        #expect(facts.isEmpty)
+    }
+
+    @Test
     func evidenceMustComeFromUserTextRatherThanAssistantResponse() {
         let observation = MemoryObservation(
             id: observationID,

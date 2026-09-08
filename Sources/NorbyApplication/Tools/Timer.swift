@@ -24,7 +24,13 @@ public struct Timer: ScopedEffect, Sendable {
     }
 
     public enum Result: Sendable {
-        case scheduled(id: WorkflowID, action: DeferredAction.Kind, replaced: Bool)
+        case scheduled(
+            id: WorkflowID,
+            action: DeferredAction.Kind,
+            fireAt: Date,
+            timeZone: String?,
+            replaced: Bool
+        )
         case cancelled
         case listed([Info])
     }
@@ -77,70 +83,31 @@ public struct Timer: ScopedEffect, Sendable {
         }
     }
 
-    /// A duration expressed in units meaningful at the tool boundary.
-    ///
-    /// The model supplies the intent (for example, five minutes). The
-    /// application converts it to an absolute instant using its clock.
-    public struct RelativeDuration: Codable, Sendable, Equatable {
-        public enum Unit: String, Codable, Sendable, Equatable {
-            case seconds
-            case minutes
-            case hours
-            case days
-            case weeks
-
-            fileprivate var seconds: TimeInterval {
-                switch self {
-                case .seconds: 1
-                case .minutes: 60
-                case .hours: 60 * 60
-                case .days: 24 * 60 * 60
-                case .weeks: 7 * 24 * 60 * 60
-                }
-            }
-        }
-
-        public let amount: Int
-        public let unit: Unit
-
-        public init(amount: Int, unit: Unit) {
-            self.amount = amount
-            self.unit = unit
-        }
-    }
-
     /// A one-shot calendar occurrence.
     ///
-    /// `offset` moves the current date by calendar components first. The
-    /// resulting date is then searched for the next date matching
-    /// `matching` in `timeZone`. This keeps the vocabulary open to calendar
-    /// concepts without baking phrases such as "tomorrow" or "next Saturday"
-    /// into the domain.
+    /// `components` describes the next calendar date matching those fields in
+    /// `timeZone`. Relative time belongs to ``Trigger/after(_:)``; this type
+    /// never adds model-provided components to the current date.
     public struct Occurrence: Codable, Sendable, Equatable {
-        public let offset: DateComponents
-        public let matching: DateComponents
+        public let components: DateComponents
         public let timeZone: TimeZone
 
         private enum CodingKeys: String, CodingKey {
-            case offset
-            case matching
+            case components
             case timeZone = "time_zone"
         }
 
         public init(
-            offset: DateComponents = DateComponents(),
-            matching: DateComponents,
+            components: DateComponents,
             timeZone: TimeZone
         ) {
-            self.offset = offset
-            self.matching = matching
+            self.components = components
             self.timeZone = timeZone
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.offset = try container.decode(DateComponents.self, forKey: .offset)
-            self.matching = try container.decode(DateComponents.self, forKey: .matching)
+            self.components = try container.decode(DateComponents.self, forKey: .components)
 
             let identifier = try container.decode(String.self, forKey: .timeZone)
             guard let timeZone = TimeZone(identifier: identifier) else {
@@ -155,44 +122,67 @@ public struct Timer: ScopedEffect, Sendable {
 
         public func encode(to encoder: Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(offset, forKey: .offset)
-            try container.encode(matching, forKey: .matching)
+            try container.encode(components, forKey: .components)
             try container.encode(timeZone.identifier, forKey: .timeZone)
         }
     }
 
     public enum Trigger: Codable, Sendable, Equatable {
-        case after(RelativeDuration)
-        case occurrence(Occurrence)
+        case after(Duration)
+        case at(Occurrence)
 
         private enum CodingKeys: String, CodingKey {
             case kind
             case amount
             case unit
-            case occurrence
+            case at
         }
 
         private enum Kind: String, Codable {
             case after
-            case occurrence
+            case at
+        }
+
+        private enum Unit: String, Codable {
+            case seconds
+            case minutes
+            case hours
+            case days
+            case weeks
+
+            var seconds: Int64 {
+                switch self {
+                case .seconds: 1
+                case .minutes: 60
+                case .hours: 60 * 60
+                case .days: 24 * 60 * 60
+                case .weeks: 7 * 24 * 60 * 60
+                }
+            }
         }
 
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             switch try container.decode(Kind.self, forKey: .kind) {
             case .after:
-                self = .after(
-                    RelativeDuration(
-                        amount: try container.decode(Int.self, forKey: .amount),
-                        unit: try container.decode(
-                            RelativeDuration.Unit.self,
-                            forKey: .unit
-                        )
+                let amount = try container.decode(Int.self, forKey: .amount)
+                let unit = try container.decode(Unit.self, forKey: .unit)
+                let seconds = Int64(exactly: amount)
+                    .map { $0.multipliedReportingOverflow(by: unit.seconds) }
+                guard
+                    let seconds,
+                    !seconds.overflow
+                else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .amount,
+                        in: container,
+                        debugDescription: "Duration is too large"
                     )
-                )
-            case .occurrence:
-                self = .occurrence(
-                    try container.decode(Occurrence.self, forKey: .occurrence)
+                }
+                self = .after(.seconds(seconds.partialValue))
+            case .at:
+                self = .at(
+                    try container.decode(Occurrence.self, forKey: .at)
                 )
             }
         }
@@ -202,12 +192,41 @@ public struct Timer: ScopedEffect, Sendable {
             switch self {
             case .after(let duration):
                 try container.encode(Kind.after, forKey: .kind)
-                try container.encode(duration.amount, forKey: .amount)
-                try container.encode(duration.unit, forKey: .unit)
-            case .occurrence(let occurrence):
-                try container.encode(Kind.occurrence, forKey: .kind)
-                try container.encode(occurrence, forKey: .occurrence)
+                let encoded = try Self.encode(duration: duration)
+                try container.encode(encoded.amount, forKey: .amount)
+                try container.encode(encoded.unit, forKey: .unit)
+            case .at(let occurrence):
+                try container.encode(Kind.at, forKey: .kind)
+                try container.encode(occurrence, forKey: .at)
             }
+        }
+
+        private static func encode(duration: Duration) throws -> (amount: Int, unit: Unit) {
+            let components = duration.components
+            guard
+                components.attoseconds == 0,
+                let seconds = Int(exactly: components.seconds)
+            else {
+                throw EncodingError.invalidValue(
+                    duration,
+                    EncodingError.Context(
+                        codingPath: [],
+                        debugDescription: "Timer duration must be whole seconds"
+                    )
+                )
+            }
+
+            let units: [Unit] = [.weeks, .days, .hours, .minutes, .seconds]
+            guard let unit = units.first(where: { seconds % Int($0.seconds) == 0 }) else {
+                throw EncodingError.invalidValue(
+                    duration,
+                    EncodingError.Context(
+                        codingPath: [],
+                        debugDescription: "Timer duration cannot be represented"
+                    )
+                )
+            }
+            return (seconds / Int(unit.seconds), unit)
         }
     }
 
@@ -277,6 +296,8 @@ public struct Timer: ScopedEffect, Sendable {
             return .scheduled(
                 id: workflowID,
                 action: request.action.kind,
+                fireAt: fireAt,
+                timeZone: timeZoneIdentifier(for: trigger),
                 replaced: false
             )
 
@@ -301,6 +322,8 @@ public struct Timer: ScopedEffect, Sendable {
             return .scheduled(
                 id: workflowID,
                 action: request.action.kind,
+                fireAt: fireAt,
+                timeZone: timeZoneIdentifier(for: trigger),
                 replaced: true
             )
         }
@@ -311,13 +334,13 @@ public struct Timer: ScopedEffect, Sendable {
     public static func validate(_ trigger: Trigger) throws {
         switch trigger {
         case .after(let duration):
-            guard duration.amount > 0 else {
-                throw Error.invalidRelativeDuration(duration.amount)
+            let seconds = duration.components.seconds
+            guard duration > .zero else {
+                throw Error.invalidRelativeDuration(Int(seconds))
             }
-        case .occurrence(let occurrence):
-            try validate(occurrence.offset)
-            try validate(occurrence.matching)
-            guard hasComponents(occurrence.offset) || hasComponents(occurrence.matching) else {
+        case .at(let occurrence):
+            try validate(occurrence.components)
+            guard hasComponents(occurrence.components) else {
                 throw Error.emptyOccurrence
             }
         }
@@ -327,38 +350,22 @@ public struct Timer: ScopedEffect, Sendable {
         try validate(trigger)
         switch trigger {
         case .after(let duration):
-            let fireAt = now.addingTimeInterval(
-                TimeInterval(duration.amount) * duration.unit.seconds
-            )
+            let components = duration.components
+            let interval = Double(components.seconds)
+                + Double(components.attoseconds) / 1_000_000_000_000_000_000
+            let fireAt = now.addingTimeInterval(interval)
             guard fireAt.timeIntervalSince1970.isFinite else {
-                throw Error.invalidRelativeDuration(duration.amount)
+                throw Error.invalidRelativeDuration(Int(components.seconds))
             }
             return fireAt
-        case .occurrence(let occurrence):
+        case .at(let occurrence):
             var calendar = Calendar(identifier: .gregorian)
             calendar.timeZone = occurrence.timeZone
 
-            guard let anchor = calendar.date(byAdding: occurrence.offset, to: now) else {
-                throw Error.occurrenceNotFound
-            }
-
-            let searchStart: Date
-            if hasDateComponents(occurrence.offset) {
-                searchStart =
-                    calendar
-                    .startOfDay(for: anchor)
-                    .addingTimeInterval(-1)
-            } else {
-                searchStart = anchor
-            }
-
-            if !hasComponents(occurrence.matching) {
-                return anchor
-            }
             guard
                 let fireAt = calendar.nextDate(
-                    after: searchStart,
-                    matching: occurrence.matching,
+                    after: now,
+                    matching: occurrence.components,
                     matchingPolicy: .nextTime,
                     repeatedTimePolicy: .first,
                     direction: .forward
@@ -367,6 +374,15 @@ public struct Timer: ScopedEffect, Sendable {
                 throw Error.occurrenceNotFound
             }
             return fireAt
+        }
+    }
+
+    private static func timeZoneIdentifier(for trigger: Trigger) -> String? {
+        switch trigger {
+        case .after:
+            nil
+        case .at(let occurrence):
+            occurrence.timeZone.identifier
         }
     }
 
@@ -404,21 +420,6 @@ public struct Timer: ScopedEffect, Sendable {
             components.minute,
             components.second,
             components.nanosecond,
-            components.weekday,
-            components.weekdayOrdinal,
-            components.quarter,
-            components.weekOfMonth,
-            components.weekOfYear,
-            components.yearForWeekOfYear,
-        ].contains { $0 != nil }
-    }
-
-    private static func hasDateComponents(_ components: DateComponents) -> Bool {
-        [
-            components.era,
-            components.year,
-            components.month,
-            components.day,
             components.weekday,
             components.weekdayOrdinal,
             components.quarter,
