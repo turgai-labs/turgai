@@ -12,19 +12,20 @@ import VirtualActors
 
 public struct HailResponse: Hashable, Sendable {
     public let reply: ConversationReply
-    public let content: String
+
+    public var content: String {
+        reply.text
+    }
 
     public init?(content: String) {
         guard let reply = ConversationReply(content) else {
             return nil
         }
         self.reply = reply
-        self.content = reply.text
     }
 
     public init(reply: ConversationReply) {
         self.reply = reply
-        self.content = reply.text
     }
 }
 

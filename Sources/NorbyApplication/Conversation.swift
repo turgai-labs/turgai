@@ -13,158 +13,6 @@ import VirtualActors
     import Foundation
 #endif
 
-/// Durable coordination state for one Norby conversation.
-///
-/// Hail's Agent journal is the transcript authority. This record therefore
-/// contains delivery/turn coordination only: the active input, queued inputs,
-/// and the lifecycle status needed by the channel-facing aggregate.
-public struct ConversationRecord: Codable, Sendable, Equatable {
-    public let conversationID: ConversationID
-    public private(set) var capabilities: ChannelCapabilities
-    public private(set) var status: ConversationStatus
-    public private(set) var acceptedMessageIDs: [MessageID]
-    public private(set) var pendingMessages: [PendingConversationMessage]
-    public private(set) var pendingReplies: [PendingConversationReply]
-    public private(set) var activeMessage: PendingConversationMessage?
-    public private(set) var revision: UInt64
-
-    public init(
-        conversationID: ConversationID,
-        capabilities: ChannelCapabilities = .default
-    ) {
-        self.conversationID = conversationID
-        self.capabilities = capabilities
-        self.status = .idle
-        self.acceptedMessageIDs = []
-        self.pendingMessages = []
-        self.pendingReplies = []
-        self.activeMessage = nil
-        self.revision = 0
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case conversationID
-        case capabilities
-        case status
-        case acceptedMessageIDs
-        case pendingMessages
-        case pendingReplies
-        case activeMessage
-        case revision
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
-        self.capabilities = try container.decode(ChannelCapabilities.self, forKey: .capabilities)
-        self.status = try container.decode(ConversationStatus.self, forKey: .status)
-        self.acceptedMessageIDs =
-            try container.decodeIfPresent(
-                [MessageID].self,
-                forKey: .acceptedMessageIDs
-            ) ?? []
-        self.pendingMessages =
-            try container.decodeIfPresent(
-                [PendingConversationMessage].self,
-                forKey: .pendingMessages
-            ) ?? []
-        self.pendingReplies =
-            try container.decodeIfPresent(
-                [PendingConversationReply].self,
-                forKey: .pendingReplies
-            ) ?? []
-        self.activeMessage = try container.decodeIfPresent(
-            PendingConversationMessage.self,
-            forKey: .activeMessage
-        )
-        self.revision = try container.decodeIfPresent(UInt64.self, forKey: .revision) ?? 0
-    }
-
-    public mutating func apply(_ event: ConversationEvent) {
-        switch event {
-        case .capabilitiesChanged(let capabilities):
-            self.capabilities = capabilities
-            revision &+= 1
-
-        case .messageQueued(let pending):
-            rememberAcceptedMessage(pending.message.id)
-            pendingMessages.append(pending)
-            revision &+= 1
-
-        case .replyQueued(let reply):
-            if !pendingReplies.contains(reply) {
-                pendingReplies.append(reply)
-            }
-            // Queueing the terminal reply is the durable completion barrier.
-            // It is deliberately applied before turnCompleted is emitted so
-            // a crash between journal writes cannot lose the reply.
-            if activeTurnID == reply.turnID {
-                activeMessage = nil
-                status = .idle
-            }
-            revision &+= 1
-
-        case .replyDelivered(let turnID):
-            pendingReplies.removeAll { $0.turnID == turnID }
-            revision &+= 1
-
-        case .turnStarted(let pending):
-            rememberAcceptedMessage(pending.message.id)
-            if let index = pendingMessages.firstIndex(where: { $0.turnID == pending.turnID }) {
-                pendingMessages.remove(at: index)
-            }
-            activeMessage = pending
-            status = .running(pending.turnID)
-            revision &+= 1
-
-        case .turnCompleted(let turnID):
-            guard activeTurnID == turnID else { return }
-            activeMessage = nil
-            status = .idle
-            revision &+= 1
-
-        case .turnFailed(let turnID, let failure):
-            guard activeTurnID == turnID else { return }
-            activeMessage = nil
-            status = .failed(failure)
-            revision &+= 1
-
-        case .reset:
-            activeMessage = nil
-            pendingMessages.removeAll(keepingCapacity: true)
-            pendingReplies.removeAll(keepingCapacity: true)
-            status = .idle
-            revision &+= 1
-        }
-    }
-
-    public var activeTurnID: NorbyDomain.TurnID? {
-        guard case .running(let turnID) = status else { return nil }
-        return turnID
-    }
-
-    public var requiresRecovery: Bool {
-        switch status {
-        case .running:
-            true
-        case .idle:
-            !pendingMessages.isEmpty
-                || !pendingReplies.isEmpty
-        case .failed:
-            !pendingMessages.isEmpty
-                || !pendingReplies.isEmpty
-        }
-    }
-
-    private mutating func rememberAcceptedMessage(_ messageID: MessageID) {
-        guard !acceptedMessageIDs.contains(messageID) else { return }
-        acceptedMessageIDs.append(messageID)
-        if acceptedMessageIDs.count > 256 {
-            acceptedMessageIDs.removeFirst(acceptedMessageIDs.count - 256)
-        }
-    }
-}
-
 /// Model lifecycle messages sent back into the Conversation aggregate from
 /// its transient model task. The Conversation actor remains the only owner of
 /// turn state.
@@ -456,7 +304,7 @@ private struct ConversationScope: ScopeLifecycle {
 public distributed actor Conversation {
     public typealias Event = ConversationEvent
     public typealias ActorSystem = ClusterSystem
-    public typealias State = ConversationRecord
+    public typealias State = ConversationState
     public typealias Dependency = Config
     public typealias PersistenceID = ConversationPersistenceID
 
@@ -482,9 +330,9 @@ public distributed actor Conversation {
         }
     }
 
-    public var state: ConversationRecord
+    public var state: ConversationState
 
-    public let snapshotting: Snapshotting<ConversationEvent, ConversationRecord> = .every(
+    public let snapshotting: Snapshotting<ConversationEvent, ConversationState> = .every(
         numberOfEvents: 50,
         retention: .keepLast(2)
     )
@@ -492,9 +340,6 @@ public distributed actor Conversation {
     private let conversationID: ConversationID
     private let peer: HailConversationPeer
     private let memoryExtractor: HailMemoryCandidateExtractor
-    /// The functional core's full state. `ConversationRecord` is the durable
-    /// journal projection; this value is the state passed through `reduce`.
-    private var coreState: ConversationState
     private let connectionRegistry = ConversationConnectionRegistry()
     private var modelTask: Task<Void, Never>?
     private var memoryTasks: [NorbyDomain.TurnID: Task<Void, Never>] = [:]
@@ -504,11 +349,7 @@ public distributed actor Conversation {
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
         self.conversationID = dependency.conversationID
-        self.state = ConversationRecord(
-            conversationID: dependency.conversationID,
-            capabilities: dependency.capabilities
-        )
-        self.coreState = ConversationState(
+        self.state = ConversationState(
             conversationID: dependency.conversationID,
             capabilities: dependency.capabilities
         )
@@ -524,23 +365,7 @@ public distributed actor Conversation {
             actor: self,
             with: Self.persistenceID(for: dependency.conversationID)
         )
-        self.coreState = Self.coreState(from: state)
         try await resumeAfterReplay()
-    }
-
-    private static func coreState(
-        from record: ConversationRecord
-    ) -> ConversationState {
-        ConversationState(
-            conversationID: record.conversationID,
-            capabilities: record.capabilities,
-            status: record.status,
-            acceptedMessageIDs: record.acceptedMessageIDs,
-            pendingMessages: record.pendingMessages,
-            pendingReplies: record.pendingReplies,
-            activeMessage: record.activeMessage,
-            revision: record.revision
-        )
     }
 
     public static func actorID(for conversationID: ConversationID) -> VirtualActorID {
@@ -582,7 +407,7 @@ public distributed actor Conversation {
             && pendingMemoryExtractions.isEmpty
     }
 
-    public distributed func currentRecord() -> ConversationRecord {
+    public distributed func currentRecord() -> ConversationState {
         state
     }
 
@@ -831,7 +656,7 @@ public distributed actor Conversation {
     private func dispatch(
         _ requestedAction: ConversationAction
     ) async throws {
-        let previous = coreState
+        let previous = state
         let action = requestedAction
 
         let (next, effects) = reduce(previous, action)
@@ -844,7 +669,7 @@ public distributed actor Conversation {
         for event in events(for: action, from: previous, to: next) {
             try await emit(event: event)
         }
-        coreState = next
+        state = next
 
         if case .modelCompleted = action {
             modelTask = nil
@@ -892,7 +717,7 @@ public distributed actor Conversation {
     /// fallbacks, which avoids sending the same Telegram reply to every
     /// transient session attached to this conversation.
     private func deliverPendingReplies() async {
-        let pendingReplies = coreState.pendingReplies
+        let pendingReplies = state.pendingReplies
         guard !pendingReplies.isEmpty else { return }
 
         let connections = await connectionRegistry.snapshot()
@@ -1008,8 +833,8 @@ public distributed actor Conversation {
     /// queue and is picked up after the last queued turn completes.
     private func startPendingMemoryExtractionIfIdle() {
         guard
-            coreState.activeTurnID == nil,
-            coreState.pendingMessages.isEmpty,
+            state.activeTurnID == nil,
+            state.pendingMessages.isEmpty,
             modelTask == nil,
             memoryTasks.isEmpty,
             let request = pendingMemoryExtractions.first

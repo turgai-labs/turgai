@@ -13,7 +13,7 @@ public struct ConversationRecovery: Sendable {
         conversationIDs.reserveCapacity(journals.count)
 
         for journal in journals {
-            var record = ConversationRecord(
+            var record = ConversationState(
                 conversationID: journal.conversationID
             )
             for event in journal.events {

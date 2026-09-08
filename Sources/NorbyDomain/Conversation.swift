@@ -447,15 +447,15 @@ public enum ConversationCompletion: Hashable, Codable, Sendable {
 /// acknowledged by a channel connection.
 public struct PendingConversationReply: Hashable, Codable, Sendable {
     public let turnID: TurnID
-    public let text: String
-
-    public init(turnID: TurnID, text: String) {
-        self.turnID = turnID
-        self.text = text
-    }
+    public let reply: ConversationReply
 
     public init(turnID: TurnID, reply: ConversationReply) {
-        self.init(turnID: turnID, text: reply.text)
+        self.turnID = turnID
+        self.reply = reply
+    }
+
+    public var text: String {
+        reply.text
     }
 }
 
@@ -541,6 +541,81 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public var activeTurnID: TurnID? {
         guard case .running(let turnID) = status else { return nil }
         return turnID
+    }
+
+    public mutating func apply(_ event: ConversationEvent) {
+        switch event {
+        case .capabilitiesChanged(let capabilities):
+            self.capabilities = capabilities
+            revision &+= 1
+
+        case .messageQueued(let pending):
+            rememberAcceptedMessage(pending.message.id)
+            pendingMessages.append(pending)
+            revision &+= 1
+
+        case .replyQueued(let pending):
+            if !pendingReplies.contains(pending) {
+                pendingReplies.append(pending)
+            }
+            // Queueing the terminal reply is the durable completion barrier.
+            // It is deliberately applied before turnCompleted is emitted so
+            // a crash between journal writes cannot lose the reply.
+            if activeTurnID == pending.turnID {
+                activeMessage = nil
+                status = .idle
+            }
+            revision &+= 1
+
+        case .replyDelivered(let turnID):
+            pendingReplies.removeAll { $0.turnID == turnID }
+            revision &+= 1
+
+        case .turnStarted(let pending):
+            rememberAcceptedMessage(pending.message.id)
+            if let index = pendingMessages.firstIndex(where: { $0.turnID == pending.turnID }) {
+                pendingMessages.remove(at: index)
+            }
+            activeMessage = pending
+            status = .running(pending.turnID)
+            revision &+= 1
+
+        case .turnCompleted(let turnID):
+            guard activeTurnID == turnID else { return }
+            activeMessage = nil
+            status = .idle
+            revision &+= 1
+
+        case .turnFailed(let turnID, let failure):
+            guard activeTurnID == turnID else { return }
+            activeMessage = nil
+            status = .failed(failure)
+            revision &+= 1
+
+        case .reset:
+            activeMessage = nil
+            pendingMessages.removeAll(keepingCapacity: true)
+            pendingReplies.removeAll(keepingCapacity: true)
+            status = .idle
+            revision &+= 1
+        }
+    }
+
+    public var requiresRecovery: Bool {
+        switch status {
+        case .running:
+            true
+        case .idle, .failed:
+            !pendingMessages.isEmpty || !pendingReplies.isEmpty
+        }
+    }
+
+    private mutating func rememberAcceptedMessage(_ messageID: MessageID) {
+        guard !acceptedMessageIDs.contains(messageID) else { return }
+        acceptedMessageIDs.append(messageID)
+        if acceptedMessageIDs.count > 256 {
+            acceptedMessageIDs.removeFirst(acceptedMessageIDs.count - 256)
+        }
     }
 }
 

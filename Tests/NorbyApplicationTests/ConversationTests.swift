@@ -37,7 +37,7 @@ struct ConversationTests {
             turnID: TurnID()
         )
 
-        var record = ConversationRecord(conversationID: conversationID)
+        var record = ConversationState(conversationID: conversationID)
         record.apply(.turnStarted(first))
         record.apply(.messageQueued(second))
 
@@ -46,7 +46,10 @@ struct ConversationTests {
         #expect(record.pendingMessages == [second])
         #expect(record.requiresRecovery)
 
-        let reply = PendingConversationReply(turnID: first.turnID, text: "answer")
+        let reply = PendingConversationReply(
+            turnID: first.turnID,
+            reply: ConversationReply("answer")!
+        )
         record.apply(.replyQueued(reply))
         #expect(record.status == .idle)
         #expect(record.activeMessage == nil)
@@ -62,7 +65,7 @@ struct ConversationTests {
 
     @Test
     func failedConversationDoesNotAutomaticallyRetry() {
-        var record = ConversationRecord(conversationID: conversationID)
+        var record = ConversationState(conversationID: conversationID)
         let message = PendingConversationMessage(
             message: InboundMessage(
                 conversationID: conversationID,
@@ -87,7 +90,7 @@ struct ConversationTests {
     func recoveryFindsQueuedRepliesInAConversationJournal() {
         let reply = PendingConversationReply(
             turnID: TurnID(),
-            text: "answer"
+            reply: ConversationReply("answer")!
         )
         let journal = ConversationJournal(
             conversationID: conversationID,

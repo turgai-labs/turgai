@@ -227,7 +227,10 @@ struct ConversationReducerTests {
         #expect(completed.status == .idle)
         #expect(
             completed.pendingReplies == [
-                PendingConversationReply(turnID: turnID, text: "hello")
+                PendingConversationReply(
+                    turnID: turnID,
+                    reply: ConversationReply("hello")!
+                )
             ])
         #expect(effects.isEmpty)
 
