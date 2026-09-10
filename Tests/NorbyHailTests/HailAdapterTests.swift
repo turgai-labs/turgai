@@ -136,7 +136,7 @@ struct HailAdapterTests {
     func weatherToolUsesClockAndGeocodingNetworkEffects() throws {
         let tool = WeatherTool()
         let effect = try tool.effect(
-            for: .init(location: "London", days: 1, fromHour: 9)
+            for: .init(place: "London", country: nil, days: 1, fromHour: 9)
         )
 
         #expect(effect.left.name == "location")
@@ -152,27 +152,27 @@ struct HailAdapterTests {
 
         #expect(throws: ToolError.invalidArgument("days", value: "0")) {
             try tool.effect(
-                for: .init(location: "London", days: 0, fromHour: nil)
+                for: .init(place: "London", country: nil, days: 0, fromHour: nil)
             )
         }
     }
 
     @Test
     func weatherHorizonIsAnExplicitToolValue() throws {
-        let weekly = WeatherTool.Input(location: "London", days: 7, fromHour: nil)
+        let weekly = WeatherTool.Input(place: "London", country: nil, days: 7, fromHour: nil)
         let json = weekly.generatedContent.jsonString
         #expect(json.contains("\"days\":7"))
         #expect(json.contains("\"fromHour\":null"))
 
-        let hourly = WeatherTool.Input(location: "London", days: 1, fromHour: 9)
+        let hourly = WeatherTool.Input(place: "London", country: nil, days: 1, fromHour: 9)
         let hourlyJSON = hourly.generatedContent.jsonString
         #expect(hourlyJSON.contains("\"days\":1"))
         #expect(hourlyJSON.contains("\"fromHour\":9"))
 
         let decoded = try WeatherTool.Input(
-            GeneratedContent(json: #"{"location":"London","days":1,"fromHour":9}"#)
+            GeneratedContent(json: #"{"place":"London","country":null,"days":1,"fromHour":9}"#)
         )
-        #expect(decoded.location == "London")
+        #expect(decoded.place == "London")
         #expect(decoded.days == 1)
         #expect(decoded.fromHour == 9)
     }

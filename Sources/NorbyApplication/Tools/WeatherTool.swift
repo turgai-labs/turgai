@@ -26,10 +26,11 @@ public struct WeatherTool {
     public init() {}
 
     public func effect(for input: Input) throws -> Effect {
-        let location = try validatedLocation(input.location)
+        let place = try validatedPlace(input.place)
+        let country = try validatedCountry(input.country)
         _ = try validatedHorizon(input)
         let locationEffect = try LocationTool().effect(
-            for: LocationTool.Input(query: location)
+            for: LocationTool.Input(place: place, country: country)
         )
         return
             locationEffect
@@ -41,7 +42,7 @@ public struct WeatherTool {
         token: borrowing EffectToken<Effect>
     ) async throws -> String {
         let location = try await token.withLeft { locationToken in
-            let locationQuery = try validatedLocation(input.location)
+            let locationQuery = try validatedPlace(input.place)
             do {
                 let places = try await LocationEffect.run(in: locationToken)
                 guard let place = places.first else {
@@ -287,15 +288,25 @@ public struct WeatherTool {
         return result
     }
 
-    private func validatedLocation(_ value: String) throws -> String {
-        let location = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !location.isEmpty else {
-            throw ToolError.invalidArgument("location", value: value)
+    private func validatedPlace(_ value: String) throws -> String {
+        let place = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !place.isEmpty else {
+            throw ToolError.invalidArgument("place", value: value)
         }
-        guard location.count <= 200 else {
-            throw ToolError.invalidArgument("location", value: "location is too long")
+        guard place.count <= 200 else {
+            throw ToolError.invalidArgument("place", value: "place is too long")
         }
-        return location
+        return place
+    }
+
+    private func validatedCountry(_ value: String?) throws -> String? {
+        guard let value else { return nil }
+        let country = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !country.isEmpty else { return nil }
+        guard country.count <= 100 else {
+            throw ToolError.invalidArgument("country", value: "country is too long")
+        }
+        return country
     }
 
     private func validatedHorizon(_ input: Input) throws -> ForecastHorizon {
@@ -368,7 +379,10 @@ extension WeatherTool {
 
     @Generable
     public struct Input: Sendable {
-        public let location: String
+        @Guide(description: "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address.")
+        public let place: String
+        @Guide(description: "An optional country name used to disambiguate the place.")
+        public let country: String?
         public let days: Int
         public let fromHour: Int?
     }

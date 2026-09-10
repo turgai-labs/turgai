@@ -18,7 +18,10 @@ public struct LocationTool {
 
     @Generable
     public struct Input: Sendable {
-        public let query: String
+        @Guide(description: "The actual city, town, or place name, such as Haar or Munich.")
+        public let place: String
+        @Guide(description: "An optional country name used to disambiguate the place.")
+        public let country: String?
     }
 
     public enum Error: Swift.Error, Equatable, Sendable {
@@ -32,17 +35,18 @@ public struct LocationTool {
 
     public let name = "location"
     public let description =
-        "Resolve a place name into coordinates and its IANA time zone. Use the place you know from the conversation or memory. Use the returned time_zone with now, weather, timers, or schedules; this tool does not save the location."
+        "Resolve a city, town, or place name into coordinates and its IANA time zone. Pass the actual place name separately from an optional country; do not include districts, counties, or a full address in the place field. Use the returned time_zone with now, weather, timers, or schedules; this tool does not save the location."
 
     public init() {}
 
     public func effect(for input: Input) throws -> Effect {
-        let query = try validatedQuery(input.query)
+        let place = try validatedPlace(input.place)
+        let country = try validatedCountry(input.country)
         var components = URLComponents(
             string: "https://geocoding-api.open-meteo.com/v1/search"
         )!
         components.queryItems = [
-            URLQueryItem(name: "name", value: query),
+            URLQueryItem(name: "name", value: place),
             URLQueryItem(name: "count", value: "5"),
             URLQueryItem(name: "language", value: "en"),
             URLQueryItem(name: "format", value: "json"),
@@ -51,7 +55,8 @@ public struct LocationTool {
             throw Error.invalidURL
         }
         return LocationEffect(
-            query: query,
+            query: place,
+            country: country,
             network: NetworkEffect(
                 host: "geocoding-api.open-meteo.com",
                 operation: "geocode",
@@ -81,11 +86,19 @@ public struct LocationTool {
         return output
     }
 
-    private func validatedQuery(_ value: String) throws -> String {
-        let query = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { throw Error.emptyQuery }
-        guard query.count <= 200 else { throw Error.queryTooLong }
-        return query
+    private func validatedPlace(_ value: String) throws -> String {
+        let place = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !place.isEmpty else { throw Error.emptyQuery }
+        guard place.count <= 200 else { throw Error.queryTooLong }
+        return place
+    }
+
+    private func validatedCountry(_ value: String?) throws -> String? {
+        guard let value else { return nil }
+        let country = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !country.isEmpty else { return nil }
+        guard country.count <= 100 else { throw Error.queryTooLong }
+        return country
     }
 
 }
@@ -99,6 +112,7 @@ public struct LocationEffect: CompositeScopedEffect, Sendable {
 
     public let name = "location"
     public let query: String
+    public let country: String?
     public let network: NetworkEffect
 
     public struct Result: Codable, Sendable, Equatable {
@@ -143,9 +157,11 @@ public struct LocationEffect: CompositeScopedEffect, Sendable {
 
     public init(
         query: String,
+        country: String? = nil,
         network: NetworkEffect
     ) {
         self.query = query
+        self.country = country
         self.network = network
     }
 
@@ -156,8 +172,8 @@ public struct LocationEffect: CompositeScopedEffect, Sendable {
     public static func run(
         in token: borrowing EffectToken<LocationEffect>
     ) async throws -> [Result] {
-        let configuration = token.withConfiguration { ($0.query, $0.network) }
-        let response = try await token.withChild(configuration.1) { networkToken in
+        let configuration = token.withConfiguration { ($0.query, $0.country, $0.network) }
+        let response = try await token.withChild(configuration.2) { networkToken in
             try await NetworkEffect.run(in: networkToken)
         }
         guard (200..<300).contains(response.statusCode) else {
@@ -200,9 +216,17 @@ public struct LocationEffect: CompositeScopedEffect, Sendable {
                 timeZone: timezone
             )
         }
-        guard !results.isEmpty else {
+        let matchingCountry: [Result]
+        if let country = configuration.1 {
+            matchingCountry = results.filter {
+                $0.country?.localizedCaseInsensitiveContains(country) == true
+            }
+        } else {
+            matchingCountry = results
+        }
+        guard !matchingCountry.isEmpty else {
             throw Error.locationNotFound(configuration.0)
         }
-        return results
+        return matchingCountry
     }
 }
