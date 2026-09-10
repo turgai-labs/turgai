@@ -136,7 +136,7 @@ struct HailAdapterTests {
     func weatherToolUsesClockAndGeocodingNetworkEffects() throws {
         let tool = WeatherTool()
         let effect = try tool.effect(
-            for: .init(place: "London", country: nil, days: 1, fromHour: 9)
+            for: .init(place: "London", region: nil, country: nil, days: 1, fromHour: 9)
         )
 
         #expect(effect.left.name == "location")
@@ -147,24 +147,41 @@ struct HailAdapterTests {
     }
 
     @Test
+    func weatherToolCarriesAdministrativeRegionToLocationEffect() throws {
+        let effect = try WeatherTool().effect(
+            for: .init(
+                place: "Haar",
+                region: "Landkreis München",
+                country: "Germany",
+                days: 1,
+                fromHour: nil
+            )
+        )
+
+        #expect(effect.left.query == "Haar")
+        #expect(effect.left.region == "Landkreis München")
+        #expect(effect.left.country == "Germany")
+    }
+
+    @Test
     func weatherToolRejectsInvalidForecastRange() {
         let tool = WeatherTool()
 
         #expect(throws: ToolError.invalidArgument("days", value: "0")) {
             try tool.effect(
-                for: .init(place: "London", country: nil, days: 0, fromHour: nil)
+                for: .init(place: "London", region: nil, country: nil, days: 0, fromHour: nil)
             )
         }
     }
 
     @Test
     func weatherHorizonIsAnExplicitToolValue() throws {
-        let weekly = WeatherTool.Input(place: "London", country: nil, days: 7, fromHour: nil)
+        let weekly = WeatherTool.Input(place: "London", region: nil, country: nil, days: 7, fromHour: nil)
         let json = weekly.generatedContent.jsonString
         #expect(json.contains("\"days\":7"))
         #expect(json.contains("\"fromHour\":null"))
 
-        let hourly = WeatherTool.Input(place: "London", country: nil, days: 1, fromHour: 9)
+        let hourly = WeatherTool.Input(place: "London", region: nil, country: nil, days: 1, fromHour: 9)
         let hourlyJSON = hourly.generatedContent.jsonString
         #expect(hourlyJSON.contains("\"days\":1"))
         #expect(hourlyJSON.contains("\"fromHour\":9"))

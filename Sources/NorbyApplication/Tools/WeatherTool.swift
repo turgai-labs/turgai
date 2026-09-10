@@ -12,25 +12,25 @@ import Hail
 /// This intentionally talks to Open-Meteo directly. The tool is small enough
 /// that introducing a provider abstraction would add more surface than value
 /// at this stage.
-@Tool
+@Tool(
+    "weather",
+    description: "Get structured current weather and forecast data for a place. A one-day forecast is hourly; longer forecasts are daily. Pass a city, place name, or postal code, and use region or country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
+)
 public struct WeatherTool {
     public typealias Effect = CombinedEffect<LocationEffect, ClockEffect>
 
     private static let maximumResponseBytes = 512 * 1024
     private static let userAgent = "Norby/1.0 (+https://github.com/akbashev/norby)"
 
-    public let name = "weather"
-    public let description =
-        "Get structured current weather and forecast data for a place. A one-day forecast is hourly; longer forecasts are daily. The result includes the tool clock, timezone, and local date/time components. Pass a city, place name, or postal code; include the country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
-
     public init() {}
 
     public func effect(for input: Input) throws -> Effect {
         let place = try validatedPlace(input.place)
+        let region = try validatedRegion(input.region)
         let country = try validatedCountry(input.country)
         _ = try validatedHorizon(input)
         let locationEffect = try LocationTool().effect(
-            for: LocationTool.Input(place: place, country: country)
+            for: LocationTool.Input(place: place, region: region, country: country)
         )
         return
             locationEffect
@@ -309,6 +309,14 @@ public struct WeatherTool {
         return country
     }
 
+    private func validatedRegion(_ value: String?) throws -> String? {
+        guard let value else { return nil }
+        let region = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !region.isEmpty else { return nil }
+        guard region.count <= 200 else { throw ToolError.invalidArgument("region", value: region) }
+        return region
+    }
+
     private func validatedHorizon(_ input: Input) throws -> ForecastHorizon {
         let days = input.days
         guard (1...7).contains(days) else {
@@ -381,6 +389,8 @@ extension WeatherTool {
     public struct Input: Sendable {
         @Guide(description: "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address.")
         public let place: String
+        @Guide(description: "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+        public let region: String?
         @Guide(description: "An optional country name used to disambiguate the place.")
         public let country: String?
         public let days: Int

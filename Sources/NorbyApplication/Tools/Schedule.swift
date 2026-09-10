@@ -243,7 +243,7 @@ public struct TriggerScheduleEffect: ScopedEffect, Sendable {
     }
 }
 
-@Tool
+@Tool("schedule")
 public struct ScheduleTools: Sendable {
     @Generable
     public enum Action: Sendable {
@@ -397,7 +397,7 @@ public struct ScheduleTools: Sendable {
             weekdays: weekdays)
     }
 
-    @Command("create")
+    @Command("create", description: "Create a recurring schedule that delivers a message or performs a task.")
     public func create(_ input: CreateInput) throws -> CreateScheduleEffect {
         let target = try ScheduleTarget(context: context)
         let action = try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)
@@ -407,7 +407,7 @@ public struct ScheduleTools: Sendable {
                 ownerID: target.ownerID, conversationID: target.conversationID, action: action, recurrence: recurrence),
             recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
     }
-    @Command("replace")
+    @Command("replace", description: "Replace an existing recurring schedule with a new recurrence and action.")
     public func replace(_ input: ReplaceInput) throws -> ReplaceScheduleEffect {
         guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
         let target = try ScheduleTarget(context: context)
@@ -416,16 +416,16 @@ public struct ScheduleTools: Sendable {
         return ReplaceScheduleEffect(
             id: id, recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
     }
-    @Command("cancel")
+    @Command("cancel", description: "Cancel an existing recurring schedule.")
     public func cancel(_ input: CancelInput) throws -> CancelScheduleEffect {
         guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
         return CancelScheduleEffect(scheduleID: id)
     }
-    @Command("list")
+    @Command("list", description: "List the active recurring schedules for this conversation.")
     public func list(_ input: ListInput) throws -> ListSchedulesEffect {
         ListSchedulesEffect(conversationID: try ScheduleTarget(context: context).conversationID)
     }
-    @Command("trigger")
+    @Command("trigger", description: "Trigger an existing recurring schedule immediately.")
     public func trigger(_ input: TriggerInput) throws -> TriggerScheduleEffect {
         guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
         return TriggerScheduleEffect(scheduleID: id)

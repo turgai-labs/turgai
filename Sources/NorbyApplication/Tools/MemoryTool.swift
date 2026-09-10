@@ -159,7 +159,10 @@ public struct MemoryEffect: ScopedEffect, Sendable {
 ///
 /// It is scoped to the current user and observation by the application
 /// composition root, then applies proposals through Norby's memory actor.
-@Tool
+@Tool(
+    "memory",
+    description: "Add or revise a durable, user-specific fact established by the user's message. supporting_text must be copied from that message, never from an assistant reply or tool result. Use add for a new fact and revise with the exact fact_id shown in memory context when correcting an existing fact. Do not store one-off task parameters, secrets, credentials, or sensitive information."
+)
 public struct MemoryTool {
     @Generable
     public enum Operation: String, Codable, Sendable, Equatable, CaseIterable {
@@ -207,10 +210,6 @@ public struct MemoryTool {
         public let stability: Stability
 
     }
-
-    public let name = "memory"
-    public let description =
-        "Add or revise a durable, user-specific fact established by the user's message. supporting_text must be copied from that message, never from an assistant reply or tool result. Use add for a new fact and revise with the exact fact_id shown in memory context when correcting an existing fact. Do not store one-off task parameters, secrets, credentials, or sensitive information."
 
     private let userID: NorbyDomain.UserID
     private let observation: MemoryObservation

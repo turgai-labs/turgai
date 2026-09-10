@@ -465,7 +465,7 @@ public struct ListTimersEffect: ScopedEffect, Sendable {
     }
 }
 
-@Tool
+@Tool("timer")
 public struct TimerTools: Sendable {
     @Generable
     public enum Action: Sendable {
@@ -583,7 +583,7 @@ public struct TimerTools: Sendable {
         }
     }
 
-    @Command("create")
+    @Command("create", description: "Create a one-shot timer that delivers a message or performs a task later.")
     public func create(_ input: CreateInput) throws -> CreateTimerEffect {
         let target = try TimerTarget(context: context)
         return CreateTimerEffect(
@@ -593,7 +593,7 @@ public struct TimerTools: Sendable {
                 snapshotPolicy: snapshotPolicy))
     }
 
-    @Command("replace")
+    @Command("replace", description: "Replace an existing one-shot timer with a new action and trigger.")
     public func replace(_ input: ReplaceInput) throws -> ReplaceTimerEffect {
         guard let id = WorkflowID.timerID(from: input.timerID) else { throw Error.emptyTimerID }
         let target = try TimerTarget(context: context)
@@ -604,13 +604,13 @@ public struct TimerTools: Sendable {
                 snapshotPolicy: snapshotPolicy))
     }
 
-    @Command("cancel")
+    @Command("cancel", description: "Cancel an existing one-shot timer.")
     public func cancel(_ input: CancelInput) throws -> CancelTimerEffect {
         guard let id = WorkflowID.timerID(from: input.timerID) else { throw Error.emptyTimerID }
         return CancelTimerEffect(timerID: id)
     }
 
-    @Command("list")
+    @Command("list", description: "List the active one-shot timers for this conversation.")
     public func list(_ input: ListInput) throws -> ListTimersEffect {
         ListTimersEffect(conversationID: try TimerTarget(context: context).conversationID)
     }
