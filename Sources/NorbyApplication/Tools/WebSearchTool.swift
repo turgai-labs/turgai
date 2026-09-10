@@ -10,7 +10,8 @@ import Hail
 ///
 /// The tool deliberately returns bounded, plain text. Web content is reference
 /// material for the model, not additional instructions for the agent.
-public struct WebSearchTool: Tool {
+@Tool
+public struct WebSearchTool {
     public enum Action: String, Codable, Sendable {
         case search
         case open
@@ -54,33 +55,32 @@ public struct WebSearchTool: Tool {
 
     public init() {}
 
-    public var schema: LLMToolSchema {
-        LLMToolSchema(
-            type: "function",
-            function: LLMToolSchema.FunctionSchema(
-                name: name,
-                description: description,
-                parameters: LLMToolSchema.ParameterSchema(
-                    type: "object",
-                    properties: [
-                        "action": LLMToolSchema.PropertySchema(
-                            type: "string",
-                            description: "The action to perform: 'search' or 'open'.",
-                            enumValues: ["search", "open"]
-                        ),
-                        "query": LLMToolSchema.PropertySchema(
-                            type: "string",
-                            description: "For 'search': the web search query.",
-                            enumValues: nil
-                        ),
-                        "url": LLMToolSchema.PropertySchema(
-                            type: "string",
-                            description: "For 'open': an http(s) URL returned by a previous search.",
-                            enumValues: nil
-                        ),
-                    ],
-                    required: ["action"]
-                )
+    public var schema: ToolDefinition {
+        ToolDefinition(
+            name: name,
+            description: description,
+            parameters: ToolSchema.object(
+                name: "WebSearchArguments",
+                description: "Arguments for searching or opening the web.",
+                properties: [
+                    .init(
+                        name: "action",
+                        description: "The action to perform: search or open.",
+                        schema: ToolSchema.string(name: "WebSearchAction", choices: ["search", "open"])
+                    ),
+                    .init(
+                        name: "query",
+                        description: "For search: the web search query.",
+                        schema: ToolSchema.string(name: "SearchQuery"),
+                        isOptional: true
+                    ),
+                    .init(
+                        name: "url",
+                        description: "For open: an http(s) URL returned by a previous search.",
+                        schema: ToolSchema.string(name: "OpenURL"),
+                        isOptional: true
+                    )
+                ]
             )
         )
     }

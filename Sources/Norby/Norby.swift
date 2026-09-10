@@ -34,7 +34,7 @@ struct Norby: AsyncParsableCommand {
     )
     var telegramChatIDs: String?
 
-    @Option(help: "Model route. Defaults to NORBY_MODEL or ollama/qwen3.5:9b")
+    @Option(help: "Model identifier. Defaults to NORBY_MODEL or ollama/qwen3.5:9b")
     var model: String?
 
     @Option(help: "Ollama base URL. Defaults to OLLAMA_BASE_URL or http://127.0.0.1:11434.")
@@ -68,7 +68,7 @@ struct Norby: AsyncParsableCommand {
         ).conversationJournals()
         let persistedConversationIDs = conversationJournals.map(\.conversationID)
 
-        let modelRoute =
+        let modelIdentifier =
             firstNonEmpty(model, environment["NORBY_MODEL"])
             ?? "ollama/qwen3.5:9b"
         let ollamaURLString =
@@ -82,7 +82,7 @@ struct Norby: AsyncParsableCommand {
             environment: environment
         )
         let runtimeConfiguration = HailRuntimeConfiguration(
-            modelRoute: modelRoute,
+            modelIdentifier: modelIdentifier,
             ollamaBaseURL: ollamaURL,
             contextWindow: configuredContextWindow
         )
@@ -100,9 +100,8 @@ struct Norby: AsyncParsableCommand {
                         systemPrompt:
                             "You are a local conversational assistant. Be helpful, concise, honest, and natural."
                             + "\n\n" + MemoryRetrieval.capabilityInstruction,
-                        model: modelRoute
+                        model: modelIdentifier
                     ),
-                    limits: .init(),
                     persona: NorbyAgentProfile.persona
                 )
             },
@@ -124,15 +123,15 @@ struct Norby: AsyncParsableCommand {
                     NowTool(),
                     WeatherTool(),
                     FetchAttachmentTool(resolver: attachmentResolver),
-                    ScheduleTool(
-                        context: context,
-                        snapshotPolicy: runtimeConfiguration.snapshotPolicy
-                    ),
-                    TimerTool(
-                        context: context,
-                        snapshotPolicy: runtimeConfiguration.snapshotPolicy
-                    ),
                 ]
+                tools += ScheduleTools(
+                    context: context,
+                    snapshotPolicy: runtimeConfiguration.snapshotPolicy
+                ).tools
+                tools += TimerTools(
+                    context: context,
+                    snapshotPolicy: runtimeConfiguration.snapshotPolicy
+                ).tools
                 if let userID, let sourceMessage {
                     let user: NorbyApplication.User
                     let expectedGeneration: MemoryGeneration
@@ -170,8 +169,15 @@ struct Norby: AsyncParsableCommand {
             authorityProvider: { _, workspace in
                 CompositeAuthority
                     .workspaceDefault(root: workspace.rootPath)
-                    .grantingAll(for: Schedule.self)
-                    .grantingAll(for: Timer.self)
+                    .grantingAll(for: CreateScheduleEffect.self)
+                    .grantingAll(for: ReplaceScheduleEffect.self)
+                    .grantingAll(for: CancelScheduleEffect.self)
+                    .grantingAll(for: ListSchedulesEffect.self)
+                    .grantingAll(for: TriggerScheduleEffect.self)
+                    .grantingAll(for: CreateTimerEffect.self)
+                    .grantingAll(for: ReplaceTimerEffect.self)
+                    .grantingAll(for: CancelTimerEffect.self)
+                    .grantingAll(for: ListTimersEffect.self)
             }
         )
         let eventStore = FileEventStore(client: persistenceClient)
@@ -196,7 +202,7 @@ struct Norby: AsyncParsableCommand {
         }
 
         try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
-        ActorSystemDependency.prepare(.live(on: system))
+        ActorSystemDependency<MemoryEffect>.prepare(.live(on: system))
         let virtualNode = await VirtualNode(actorSystem: system)
         let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
             actorSystem: system
@@ -235,7 +241,7 @@ struct Norby: AsyncParsableCommand {
         }
         logger.info("Norby is ready")
         logger.info("Workspace: \(workspaceRoot)")
-        logger.info("Model: \(runtimeConfiguration.modelRoute)")
+        logger.info("Model: \(runtimeConfiguration.modelIdentifier)")
         logger.info("Waiting for Telegram messages")
 
         let serviceGroup = ServiceGroup(

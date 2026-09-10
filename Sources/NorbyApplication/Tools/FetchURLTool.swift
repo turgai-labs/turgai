@@ -11,7 +11,8 @@ import UniformTypeIdentifiers
 ///
 /// The tool preserves the HTTP body and content type without interpreting
 /// application-level media. Hail's selected model adapter performs that map.
-public struct FetchURLTool: Tool {
+@Tool
+public struct FetchURLTool {
     public struct Input: Codable, Sendable {
         public let url: String
         public let mimeType: String?
@@ -43,28 +44,26 @@ public struct FetchURLTool: Tool {
 
     public init() {}
 
-    public var schema: LLMToolSchema {
-        LLMToolSchema(
-            type: "function",
-            function: LLMToolSchema.FunctionSchema(
-                name: name,
-                description: description,
-                parameters: LLMToolSchema.ParameterSchema(
-                    type: "object",
-                    properties: [
-                        "url": LLMToolSchema.PropertySchema(
-                            type: "string",
-                            description: "The complete HTTP(S) URL to fetch.",
-                            enumValues: nil
-                        ),
-                        "mime_type": LLMToolSchema.PropertySchema(
-                            type: "string",
-                            description: "Optional MIME type when it is already known, for example image/jpeg.",
-                            enumValues: nil
-                        ),
-                    ],
-                    required: ["url"]
-                )
+    public var schema: ToolDefinition {
+        ToolDefinition(
+            name: name,
+            description: description,
+            parameters: ToolSchema.object(
+                name: "FetchURLArguments",
+                description: "Arguments for fetching a URL.",
+                properties: [
+                    .init(
+                        name: "url",
+                        description: "The complete HTTP(S) URL to fetch.",
+                        schema: ToolSchema.string(name: "URL")
+                    ),
+                    .init(
+                        name: "mime_type",
+                        description: "Optional MIME type when it is already known, for example image/jpeg.",
+                        schema: ToolSchema.string(name: "MIMEType"),
+                        isOptional: true
+                    )
+                ]
             )
         )
     }

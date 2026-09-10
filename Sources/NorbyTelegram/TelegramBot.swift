@@ -43,7 +43,16 @@ public actor TelegramConnection {
         guard !finished else { return false }
 
         switch event {
-        case .message(let message, let telegramMessageID, let turnID, let capabilities):
+        case .message(
+            let message,
+            let telegramMessageID,
+            let turnID,
+            let supportsDrafts
+        ):
+            await publisher.setDraftsEnabled(
+                supportsDrafts,
+                for: message.conversationID
+            )
             do {
                 try await publisher.markSeen(
                     conversationID: message.conversationID,
@@ -56,8 +65,7 @@ public actor TelegramConnection {
             return await sendToApplication(
                 .message(
                     message,
-                    turnID: turnID,
-                    capabilities: capabilities
+                    turnID: turnID
                 )
             )
 
@@ -91,6 +99,9 @@ public actor TelegramConnection {
                 )
             )
 
+        case .command(let command):
+            return await sendToApplication(.command(command))
+
         case .start(let conversationID, _, _):
             do {
                 try await publisher.sendText(
@@ -98,7 +109,8 @@ public actor TelegramConnection {
                     text: """
                         Hi — I'm Norby, an assistant running locally on this machine. \
                         Send me a message to get started. Use /reset to clear this conversation, \
-                        /memory to inspect saved memory, /context for runtime diagnostics, or /forget to clear it.
+                        /memory to inspect saved memory, /context for runtime diagnostics, /reminders to list one-shot reminders, \
+                        /tasks to list recurring tasks, or /forget to clear saved memory.
                         """
                 )
             } catch {
@@ -281,28 +293,20 @@ public actor TelegramBot {
         )
     }
 
-    public static func capabilities(for chat: TelegramChat) -> ChannelCapabilities {
-        ChannelCapabilities(
-            supportsDrafts: chat.type == "private",
-            supportsTyping: true,
-            maximumTextLength: 4_096,
-            supportsThreads: false
-        )
-    }
-
     public static func event(
         for update: TelegramUpdate,
         messageID: MessageID,
         turnID: TurnID,
         attachments: [Attachment] = []
     ) -> TelegramInboundEvent? {
-        guard let message = update.message,
-            let sender = message.from
+        let callbackQuery = update.callbackQuery
+        guard let message = update.message ?? callbackQuery?.message,
+            let sender = callbackQuery?.from ?? message.from
         else {
             return nil
         }
 
-        let text = message.text ?? message.caption ?? ""
+        let text = callbackQuery?.data ?? message.text ?? message.caption ?? ""
         guard
             !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !attachments.isEmpty
@@ -324,35 +328,87 @@ public actor TelegramBot {
             handle: sender.username
         )
         switch command(in: text) {
-        case "/start":
+        case .start:
             return .start(
                 conversationID: conversationID,
                 participantID: participantID,
                 userID: userID
             )
-        case "/reset":
+        case .reset:
             return .reset(
                 conversationID: conversationID,
                 participantID: participantID,
                 userID: userID
             )
-        case "/memory":
+        case .memory:
             return .memory(
                 conversationID: conversationID,
                 participantID: participantID,
                 userID: userID
             )
-        case "/forget":
+        case .forget:
             return .forget(
                 conversationID: conversationID,
                 participantID: participantID,
                 userID: userID
             )
-        case "/context":
+        case .context:
             return .context(
                 conversationID: conversationID,
                 participantID: participantID,
                 userID: userID
+            )
+        case .reminders:
+            return .command(
+                .reminders(
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+        case .tasks:
+            return .command(
+                .tasks(
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+        case .pauseTask:
+            return .command(
+                .pauseTask(
+                    id: argument(in: text) ?? "",
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+        case .unpauseTask:
+            return .command(
+                .unpauseTask(
+                    id: argument(in: text) ?? "",
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+        case .cancelTask:
+            return .command(
+                .cancelTask(
+                    id: argument(in: text) ?? "",
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+        case .cancelReminder:
+            return .command(
+                .cancelReminder(
+                    id: argument(in: text) ?? "",
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
             )
         default:
             return .message(
@@ -368,7 +424,7 @@ public actor TelegramBot {
                 ),
                 telegramMessageID: message.messageID,
                 turnID: turnID,
-                capabilities: capabilities(for: message.chat)
+                supportsDrafts: message.chat.type == "private"
             )
         }
     }
@@ -387,9 +443,12 @@ public actor TelegramBot {
             try Task.checkCancellation()
 
             let ids = idFactory()
-            if let chatID = update.message?.chat.id,
+            if let chatID = update.message?.chat.id ?? update.callbackQuery?.message?.chat.id,
                 allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID)
             {
+                if let callbackQuery = update.callbackQuery {
+                    try? await client.answerCallbackQuery(callbackQuery.id)
+                }
                 let attachments = attachments(for: update.message)
                 if let event = Self.event(
                     for: update,
@@ -489,7 +548,7 @@ public actor TelegramBot {
         }
     }
 
-    private static func command(in text: String) -> String? {
+    private static func command(in text: String) -> TelegramCommand? {
         guard
             let firstWord =
                 text
@@ -502,7 +561,16 @@ public actor TelegramBot {
         }
 
         let command = firstWord.dropFirst().split(separator: "@", maxSplits: 1).first ?? ""
-        return "/" + command.lowercased()
+        return TelegramCommand(rawValue: command.lowercased())
+    }
+
+    private static func argument(in text: String) -> String? {
+        let parts = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+        guard parts.count >= 2 else { return nil }
+        let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : String(value)
     }
 }
 
@@ -515,6 +583,16 @@ extension TelegramInboundEvent {
         case .memory(let conversationID, _, _): conversationID
         case .forget(let conversationID, _, _): conversationID
         case .context(let conversationID, _, _): conversationID
-        }
+        case .command(let command):
+            switch command {
+            case .reminders(let conversationID, _, _),
+                .tasks(let conversationID, _, _),
+                .pauseTask(_, let conversationID, _, _),
+                .unpauseTask(_, let conversationID, _, _),
+                .cancelTask(_, let conversationID, _, _),
+                .cancelReminder(_, let conversationID, _, _):
+                conversationID
+            }
     }
+}
 }

@@ -178,32 +178,6 @@ public struct ConversationPersistenceID: RawRepresentable, Hashable, Codable, Se
     }
 }
 
-public struct ChannelCapabilities: Hashable, Codable, Sendable {
-    public let supportsDrafts: Bool
-    public let supportsTyping: Bool
-    public let maximumTextLength: Int
-    public let supportsThreads: Bool
-
-    public init(
-        supportsDrafts: Bool,
-        supportsTyping: Bool,
-        maximumTextLength: Int,
-        supportsThreads: Bool
-    ) {
-        self.supportsDrafts = supportsDrafts
-        self.supportsTyping = supportsTyping
-        self.maximumTextLength = max(1, maximumTextLength)
-        self.supportsThreads = supportsThreads
-    }
-
-    public static let `default` = ChannelCapabilities(
-        supportsDrafts: false,
-        supportsTyping: false,
-        maximumTextLength: 4_096,
-        supportsThreads: false
-    )
-}
-
 public enum AttachmentKind: String, Codable, Sendable {
     case image
     case file
@@ -367,11 +341,47 @@ public struct InboundMessage: Hashable, Codable, Sendable {
 ///
 /// Channel adapters translate their provider-specific updates into this
 /// value before they enter the application connection layer.
+public enum ConversationCommand: Sendable, Equatable {
+    case reminders(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    case tasks(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    case pauseTask(
+        id: String,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    case unpauseTask(
+        id: String,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    case cancelTask(
+        id: String,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    case cancelReminder(
+        id: String,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+}
+
 public enum ConversationInput: Sendable, Equatable {
     case message(
         InboundMessage,
-        turnID: TurnID,
-        capabilities: ChannelCapabilities
+        turnID: TurnID
     )
     case connect(ConversationID)
     case reset(ConversationID)
@@ -390,6 +400,7 @@ public enum ConversationInput: Sendable, Equatable {
         participantID: ParticipantID,
         userID: UserID
     )
+    case command(ConversationCommand)
 }
 
 public struct PendingConversationMessage: Hashable, Codable, Sendable {
@@ -459,14 +470,34 @@ public struct PendingConversationReply: Hashable, Codable, Sendable {
     }
 }
 
+/// A completed conversation exchange waiting for background memory
+/// extraction. The request is part of the conversation journal so cancelling
+/// the model work cannot lose it.
+public struct PendingMemoryObservation: Hashable, Codable, Sendable {
+    public let turnID: TurnID
+    public let message: InboundMessage
+    public let response: String?
+
+    public init(
+        turnID: TurnID,
+        message: InboundMessage,
+        response: String?
+    ) {
+        self.turnID = turnID
+        self.message = message
+        self.response = response
+    }
+}
+
 public enum ConversationEvent: Codable, Sendable, Equatable {
-    case capabilitiesChanged(ChannelCapabilities)
     case messageQueued(PendingConversationMessage)
     case replyQueued(PendingConversationReply)
     case replyDelivered(TurnID)
     case turnStarted(PendingConversationMessage)
     case turnCompleted(TurnID)
     case turnFailed(TurnID, ConversationFailure)
+    case memoryObservationQueued(PendingMemoryObservation)
+    case memoryObservationsCompleted([TurnID])
     case reset
 }
 
@@ -510,32 +541,29 @@ public enum ConversationStatus: Hashable, Codable, Sendable {
 
 public struct ConversationState: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
-    public internal(set) var capabilities: ChannelCapabilities
     public internal(set) var status: ConversationStatus
     public internal(set) var acceptedMessageIDs: [MessageID]
     public internal(set) var pendingMessages: [PendingConversationMessage]
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var activeMessage: PendingConversationMessage?
-    public internal(set) var revision: UInt64
+    public internal(set) var pendingMemoryObservations: [PendingMemoryObservation]
 
     public init(
         conversationID: ConversationID,
-        capabilities: ChannelCapabilities = .default,
         status: ConversationStatus = .idle,
         acceptedMessageIDs: [MessageID] = [],
         pendingMessages: [PendingConversationMessage] = [],
         pendingReplies: [PendingConversationReply] = [],
         activeMessage: PendingConversationMessage? = nil,
-        revision: UInt64 = 0
+        pendingMemoryObservations: [PendingMemoryObservation] = []
     ) {
         self.conversationID = conversationID
-        self.capabilities = capabilities
         self.status = status
         self.acceptedMessageIDs = acceptedMessageIDs
         self.pendingMessages = pendingMessages
         self.pendingReplies = pendingReplies
         self.activeMessage = activeMessage
-        self.revision = revision
+        self.pendingMemoryObservations = pendingMemoryObservations
     }
 
     public var activeTurnID: TurnID? {
@@ -545,14 +573,9 @@ public struct ConversationState: Hashable, Codable, Sendable {
 
     public mutating func apply(_ event: ConversationEvent) {
         switch event {
-        case .capabilitiesChanged(let capabilities):
-            self.capabilities = capabilities
-            revision &+= 1
-
         case .messageQueued(let pending):
             rememberAcceptedMessage(pending.message.id)
             pendingMessages.append(pending)
-            revision &+= 1
 
         case .replyQueued(let pending):
             if !pendingReplies.contains(pending) {
@@ -565,11 +588,9 @@ public struct ConversationState: Hashable, Codable, Sendable {
                 activeMessage = nil
                 status = .idle
             }
-            revision &+= 1
 
         case .replyDelivered(let turnID):
             pendingReplies.removeAll { $0.turnID == turnID }
-            revision &+= 1
 
         case .turnStarted(let pending):
             rememberAcceptedMessage(pending.message.id)
@@ -578,26 +599,32 @@ public struct ConversationState: Hashable, Codable, Sendable {
             }
             activeMessage = pending
             status = .running(pending.turnID)
-            revision &+= 1
 
         case .turnCompleted(let turnID):
             guard activeTurnID == turnID else { return }
             activeMessage = nil
             status = .idle
-            revision &+= 1
 
         case .turnFailed(let turnID, let failure):
             guard activeTurnID == turnID else { return }
             activeMessage = nil
             status = .failed(failure)
-            revision &+= 1
+
+        case .memoryObservationQueued(let observation):
+            guard !pendingMemoryObservations.contains(where: { $0.turnID == observation.turnID }) else {
+                return
+            }
+            pendingMemoryObservations.append(observation)
+
+        case .memoryObservationsCompleted(let turnIDs):
+            pendingMemoryObservations.removeAll { turnIDs.contains($0.turnID) }
 
         case .reset:
             activeMessage = nil
             pendingMessages.removeAll(keepingCapacity: true)
             pendingReplies.removeAll(keepingCapacity: true)
+            pendingMemoryObservations.removeAll(keepingCapacity: true)
             status = .idle
-            revision &+= 1
         }
     }
 
@@ -606,7 +633,9 @@ public struct ConversationState: Hashable, Codable, Sendable {
         case .running:
             true
         case .idle, .failed:
-            !pendingMessages.isEmpty || !pendingReplies.isEmpty
+            !pendingMessages.isEmpty
+                || !pendingReplies.isEmpty
+                || !pendingMemoryObservations.isEmpty
         }
     }
 
@@ -650,9 +679,25 @@ public enum ReplyEvent: Hashable, Codable, Sendable {
     case failed(conversationID: ConversationID, turnID: TurnID?, message: String)
 }
 
+public struct OutboundAction: Hashable, Codable, Sendable {
+    public let label: String
+    public let command: String
+
+    public init(label: String, command: String) {
+        self.label = label
+        self.command = command
+    }
+}
+
 public enum OutboundEvent: Hashable, Codable, Sendable {
     case reply(ReplyEvent)
     case notice(conversationID: ConversationID, turnID: TurnID?, text: String)
+    case noticeWithActions(
+        conversationID: ConversationID,
+        turnID: TurnID?,
+        text: String,
+        actions: [OutboundAction]
+    )
     case reset(conversationID: ConversationID)
 }
 
@@ -665,8 +710,7 @@ public enum ConversationEffect: Hashable, Codable, Sendable {
 public enum ConversationAction: Sendable {
     case receive(
         message: InboundMessage,
-        turnID: TurnID,
-        capabilities: ChannelCapabilities
+        turnID: TurnID
     )
     case modelCompleted(turnID: TurnID, completion: ConversationCompletion)
     case replyDelivered(turnID: TurnID)
@@ -684,7 +728,7 @@ public func reduce(
     var effects: [ConversationEffect] = []
 
     switch action {
-    case .receive(let message, let turnID, let capabilities):
+    case .receive(let message, let turnID):
         guard message.conversationID == state.conversationID else {
             return (state, [])
         }
@@ -731,10 +775,6 @@ public func reduce(
             )
         }
 
-        if next.activeTurnID == nil, next.capabilities != capabilities {
-            next.capabilities = capabilities
-        }
-
         switch next.status {
         case .running:
             next.pendingMessages.append(
@@ -758,6 +798,20 @@ public func reduce(
     case .modelCompleted(let turnID, let completion):
         guard isActive(turnID, in: next.status) else {
             return (state, [])
+        }
+
+        if let activeMessage = next.activeMessage {
+            let response: String? = switch completion {
+            case .reply(let reply): reply.text
+            case .void: nil
+            }
+            next.pendingMemoryObservations.append(
+                PendingMemoryObservation(
+                    turnID: turnID,
+                    message: activeMessage.message,
+                    response: response
+                )
+            )
         }
 
         if case .reply(let reply) = completion {
@@ -802,6 +856,7 @@ public func reduce(
         next.status = .idle
         next.pendingMessages.removeAll(keepingCapacity: true)
         next.pendingReplies.removeAll(keepingCapacity: true)
+        next.pendingMemoryObservations.removeAll(keepingCapacity: true)
         next.activeMessage = nil
         effects.append(.publish(.reset(conversationID: next.conversationID)))
 
@@ -841,9 +896,6 @@ public func reduce(
         return (state, effects)
     }
 
-    if next != state {
-        next.revision += 1
-    }
     return (next, effects)
 }
 
@@ -897,7 +949,6 @@ private func fail(
     var next = state
     next.status = .failed(failure)
     next.activeMessage = nil
-    next.revision += 1
     return (
         next,
         []

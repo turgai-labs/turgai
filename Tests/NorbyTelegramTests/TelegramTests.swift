@@ -184,7 +184,7 @@ struct TelegramTests {
         #expect(received.count == 2)
         let participantID = TelegramBot.participantID(for: 7)
         let userID = UserID(participantID: participantID)
-        if case .message(let message, _, let capabilities) = received[0] {
+        if case .message(let message, _) = received[0] {
             #expect(message.text == "hello Norby")
             #expect(message.participantID == participantID)
             #expect(message.userID == userID)
@@ -196,7 +196,6 @@ struct TelegramTests {
                     )
             )
             #expect(message.receivedAt == Date(timeIntervalSince1970: 101))
-            #expect(capabilities.supportsDrafts)
         } else {
             Issue.record("Expected the first application input to be a message")
         }
@@ -315,7 +314,7 @@ struct TelegramTests {
         let runTask = Task { try await bot.run() }
 
         let received = await consumer.value
-        if case .message(let message, _, _) = received {
+        if case .message(let message, _) = received {
             #expect(message.text == "What is this?")
             #expect(message.attachments.count == 1)
             #expect(message.attachments.first?.kind == AttachmentKind.image)
@@ -343,6 +342,7 @@ struct TelegramTests {
         )
         let conversationID = TelegramBot.conversationID(for: 42)
         let turnID = TurnID()
+        await publisher.setDraftsEnabled(true, for: conversationID)
 
         try await publisher.publish(
             .reply(
@@ -420,6 +420,7 @@ struct TelegramTests {
         )
         let conversationID = TelegramBot.conversationID(for: 42)
         let turnID = TurnID()
+        await publisher.setDraftsEnabled(true, for: conversationID)
 
         try await publisher.publish(
             .reply(
@@ -456,6 +457,7 @@ struct TelegramTests {
         )
         let conversationID = TelegramBot.conversationID(for: 42)
         let turnID = TurnID()
+        await publisher.setDraftsEnabled(true, for: conversationID)
 
         try await publisher.markSeen(
             conversationID: conversationID,
@@ -503,6 +505,7 @@ struct TelegramTests {
         )
         let conversationID = TelegramBot.conversationID(for: 42)
         let turnID = TurnID()
+        await publisher.setDraftsEnabled(true, for: conversationID)
 
         await #expect(throws: TelegramAPIError.rateLimited(retryAfter: .milliseconds(1))) {
             try await publisher.publish(

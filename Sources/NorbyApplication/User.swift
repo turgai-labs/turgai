@@ -77,6 +77,17 @@ public struct UserRecord: Codable, Sendable, Equatable {
     }
 }
 
+public enum ExtractionPreparation: Codable, Sendable, Equatable {
+    case ready(ExtractionInput)
+    case alreadyHandled
+}
+
+public enum ExtractionOutcome: Codable, Sendable, Equatable {
+    case committed(MemoryUpdate)
+    case stale
+    case alreadyHandled
+}
+
 /// Events in one user's journal. Memory facts will be added beside these
 /// identity events later; they will not require a second user store.
 public enum UserEvent: Codable, Sendable, Equatable {
@@ -159,69 +170,69 @@ public distributed actor User {
         try await emit(event: .participantUnlinked(participantID, at: Date()))
     }
 
-    /// Records one raw observation. This is idempotent by source ID.
-    public distributed func recordObservation(
-        _ observation: MemoryObservation
-    ) async throws -> ObservationID {
-        guard state.memory.accepts(observation) else { return observation.id }
-        let reference = try await ensureObservation(observation)
-        return reference.id
-    }
-
-    /// Records the observation and returns the memory generation in which
-    /// extraction began. A later logical forget advances that generation;
-    /// callers must pass it back when committing the extracted proposals.
-    public distributed func beginMemoryObservation(
-        _ observation: MemoryObservation
-    ) async throws -> MemoryGeneration? {
-        guard state.memory.accepts(observation) else { return nil }
-        _ = try await ensureObservation(observation)
-        return state.memory.generation
-    }
-
-    /// Persists a completed observation and applies candidates produced by an
-    /// extractor. This overload keeps the original domain boundary for
-    /// callers that only produce additions.
-    public distributed func recordCompletedObservation(
-        _ observation: MemoryObservation,
-        candidates: [FactCandidate]
-    ) async throws -> MemoryUpdate {
-        try await recordCompletedObservation(
-            observation,
-            proposals: candidates.map(MemoryProposal.add)
+    /// Captures one immutable extraction view from one actor state.
+    /// Pending conversation observations are not written here; the
+    /// conversation journal already owns their durability.
+    public distributed func prepareExtraction(
+        _ observations: [MemoryObservation]
+    ) -> ExtractionPreparation {
+        let pending = observations.filter {
+            state.memory.accepts($0)
+                && !state.memory.containsObservation(for: $0.sourceID)
+        }
+        guard !pending.isEmpty else { return .alreadyHandled }
+        return .ready(
+            ExtractionInput(
+                observations: pending,
+                generation: state.memory.generation,
+                existingFacts: Array(state.memory.currentFacts().suffix(32)),
+                previousObservations: state.memory.recentObservations(limit: 8)
+            )
         )
     }
 
-    /// Persists a completed observation and applies extractor proposals.
-    /// Extraction is deliberately outside this aggregate; this method owns
-    /// only durable memory policy and journaling.
-    public distributed func recordCompletedObservation(
-        _ observation: MemoryObservation,
-        proposals: [MemoryProposal],
-        expectedGeneration: MemoryGeneration? = nil
-    ) async throws -> MemoryUpdate {
-        guard
-            expectedGeneration == nil
-                || expectedGeneration == state.memory.generation
-        else {
-            // The extraction started before /forget. Its result is stale and
-            // must not recreate facts in the new logical memory generation.
-            return MemoryUpdate()
-        }
-        guard state.memory.accepts(observation) else { return MemoryUpdate() }
-
-        let reference = try await ensureObservation(observation)
-
-        var changes: [MemoryFactChange] = []
-        for proposal in proposals {
-            if let change = try await recordProposalInJournal(proposal) {
-                changes.append(change)
+    /// Applies the pure extraction decision as one memory journal event.
+    public distributed func commitExtraction(
+        _ input: ExtractionInput,
+        proposals: [MemoryProposal]
+    ) async throws -> ExtractionOutcome {
+        switch MemoryExtraction.decide(
+            state: state.memory,
+            input: input,
+            proposals: proposals
+        ) {
+        case .stale:
+            return .stale
+        case .alreadyHandled:
+            return .alreadyHandled
+        case .commit(let commit):
+            try await emit(event: .memory(.extractionCommitted(commit)))
+            // `emit` persists and applies the event, but it suspends. A
+            // reentrant `/forget` may therefore have established a newer
+            // generation before this method resumes. Do not report a commit
+            // that the current projection no longer contains.
+            guard state.memory.generation == commit.generation,
+                commit.processedSources.allSatisfy({
+                    state.memory.containsObservation(for: $0)
+                })
+            else {
+                return .stale
             }
+            return .committed(
+                MemoryUpdate(
+                    observationRecorded: true,
+                    factChanges: commit.changes.map(Self.change(from:))
+                )
+            )
         }
-        return MemoryUpdate(
-            observationRecorded: reference.recorded,
-            factChanges: changes
-        )
+    }
+
+    private static func change(from event: MemoryFactEvent) -> MemoryFactChange {
+        switch event {
+        case .factAccepted: .accepted
+        case .factReinforced: .reinforced
+        case .factSuperseded: .superseded
+        }
     }
 
     /// Applies deterministic policy to an extractor or explicit-memory

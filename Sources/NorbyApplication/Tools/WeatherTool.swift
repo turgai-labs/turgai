@@ -11,7 +11,8 @@ import Hail
 /// This intentionally talks to Open-Meteo directly. The tool is small enough
 /// that introducing a provider abstraction would add more surface than value
 /// at this stage.
-public struct WeatherTool: Tool {
+@Tool
+public struct WeatherTool {
     public typealias Effect = CombinedEffect<LocationEffect, ClockEffect>
 
     private static let maximumResponseBytes = 512 * 1024
@@ -23,35 +24,31 @@ public struct WeatherTool: Tool {
 
     public init() {}
 
-    public var schema: LLMToolSchema {
-        LLMToolSchema(
-            type: "function",
-            function: LLMToolSchema.FunctionSchema(
-                name: name,
-                description: description,
-                parameters: LLMToolSchema.ParameterSchema(
-                    type: "object",
-                    properties: [
-                        "location": LLMToolSchema.PropertySchema(
-                            type: "string",
-                            description: "City, place name, or postal code, preferably with a country.",
-                            enumValues: nil
-                        ),
-                        "days": LLMToolSchema.PropertySchema(
-                            type: "integer",
-                            description:
-                                "Forecast length in days, from 1 to 7. One day returns hourly weather; seven days returns the upcoming week by day.",
-                            enumValues: nil,
-                        ),
-                        "from_hour": LLMToolSchema.PropertySchema(
-                            type: "integer",
-                            description:
-                                "Optional local hour from which today's hourly forecast should start, from 0 to 23. Only used when days is 1.",
-                            enumValues: nil
-                        ),
-                    ],
-                    required: ["location", "days"]
-                )
+    public var schema: ToolDefinition {
+        ToolDefinition(
+            name: name,
+            description: description,
+            parameters: ToolSchema.object(
+                name: "WeatherArguments",
+                description: "Arguments for retrieving weather.",
+                properties: [
+                    .init(
+                        name: "location",
+                        description: "City, place name, or postal code, preferably with a country.",
+                        schema: ToolSchema.string(name: "WeatherLocation")
+                    ),
+                    .init(
+                        name: "days",
+                        description: "Forecast length in days, from 1 to 7.",
+                        schema: ToolSchema.integer()
+                    ),
+                    .init(
+                        name: "from_hour",
+                        description: "Optional local hour from which today's hourly forecast should start, from 0 to 23.",
+                        schema: ToolSchema.integer(),
+                        isOptional: true
+                    )
+                ]
             )
         )
     }

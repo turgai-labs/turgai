@@ -7,7 +7,7 @@ import Hail
 #endif
 
 public struct HailRuntimeConfiguration: Sendable {
-    public let modelRoute: String
+    public let modelIdentifier: String
     public let ollamaBaseURL: URL
     public let temperature: Double
     public let contextWindow: Int?
@@ -16,7 +16,7 @@ public struct HailRuntimeConfiguration: Sendable {
     public let snapshotPolicy: AgentSnapshotPolicy
 
     public init(
-        modelRoute: String = "ollama/qwen3.5:9b",
+        modelIdentifier: String = "ollama/qwen3.5:9b",
         ollamaBaseURL: URL = URL(string: "http://127.0.0.1:11434")!,
         temperature: Double = 0.2,
         contextWindow: Int? = nil,
@@ -27,7 +27,7 @@ public struct HailRuntimeConfiguration: Sendable {
             retention: .keepLast(2)
         )
     ) {
-        self.modelRoute = modelRoute
+        self.modelIdentifier = modelIdentifier
         self.ollamaBaseURL = ollamaBaseURL
         self.temperature = temperature
         self.contextWindow = contextWindow
@@ -42,19 +42,19 @@ public struct HailRuntimeConfiguration: Sendable {
         turnToolsProvider: AgentRuntimePlugin.TurnToolsProvider? = nil,
         authorityProvider: AgentRuntimePlugin.AuthorityProvider? = nil
     ) throws -> AgentRuntimePlugin {
-        let model = try AgentModelReference(modelRoute)
+        let model = try AgentModel(modelIdentifier)
         let routerConfiguration = try ModelRouterConfiguration(
             temperature: temperature,
             baseURLs: [.ollama: ollamaBaseURL],
             contextWindowResolver: ModelContextWindowResolver(
-                configured: { route in
-                    guard route.identifier == model.rawValue else { return nil }
+                configured: { candidate in
+                    guard candidate.identifier == model.identifier else { return nil }
                     return contextWindow
                 },
-                discovered: { route, baseURL in
-                    guard route.provider == .ollama else { return nil }
+                discovered: { candidate, baseURL in
+                    guard candidate.provider == .ollama else { return nil }
                     return try await OllamaContextWindowProvider.resolve(
-                        model: route.model,
+                        model: candidate.id.rawValue,
                         baseURL: baseURL
                     )
                 }

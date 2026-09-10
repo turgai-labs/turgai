@@ -63,15 +63,6 @@ struct ConversationReducerTests {
         #expect(message.userID == UserID(participantID: participantID))
     }
 
-    private var capabilities: ChannelCapabilities {
-        ChannelCapabilities(
-            supportsDrafts: true,
-            supportsTyping: true,
-            maximumTextLength: 4_096,
-            supportsThreads: false
-        )
-    }
-
     private func makeMessage(
         id: UUID = UUID(),
         text: String,
@@ -96,14 +87,11 @@ struct ConversationReducerTests {
 
     @Test
     func receivingMessageStartsTurnAndPersists() {
-        let state = ConversationState(
-            conversationID: conversationID,
-            capabilities: capabilities
-        )
+        let state = ConversationState(conversationID: conversationID)
 
         let (next, effects) = reduce(
             state,
-            .receive(message: makeMessage(text: "  hello  "), turnID: makeTurnID(1), capabilities: capabilities)
+            .receive(message: makeMessage(text: "  hello  "), turnID: makeTurnID(1))
         )
 
         guard case .running(let turnID) = next.status else {
@@ -111,7 +99,6 @@ struct ConversationReducerTests {
             return
         }
         #expect(next.pendingMessages.isEmpty)
-        #expect(next.revision == 1)
         #expect(
             effects.contains(where: { effect in
                 if case .runReply(let request) = effect {
@@ -128,7 +115,7 @@ struct ConversationReducerTests {
         let initial = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             initial,
-            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), capabilities: .default)
+            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1))
         )
         guard case .running(let firstTurnID) = running.status else {
             Issue.record("Expected first turn to be running")
@@ -137,7 +124,7 @@ struct ConversationReducerTests {
 
         let (queued, _) = reduce(
             running,
-            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), capabilities: .default)
+            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2))
         )
         #expect(queued.pendingMessages.count == 1)
 
@@ -172,8 +159,7 @@ struct ConversationReducerTests {
             initial,
             .receive(
                 message: message,
-                turnID: makeTurnID(1),
-                capabilities: .default
+                turnID: makeTurnID(1)
             )
         )
         guard case .running(let turnID) = running.status else {
@@ -192,8 +178,7 @@ struct ConversationReducerTests {
             completed,
             .receive(
                 message: message,
-                turnID: makeTurnID(2),
-                capabilities: .default
+                turnID: makeTurnID(2)
             )
         )
 
@@ -203,13 +188,10 @@ struct ConversationReducerTests {
 
     @Test
     func modelCompletionDoesNotPublishBecauseReplyScopeOwnsDelivery() {
-        let state = ConversationState(
-            conversationID: conversationID,
-            capabilities: capabilities
-        )
+        let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), capabilities: capabilities)
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1))
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -244,13 +226,10 @@ struct ConversationReducerTests {
 
     @Test
     func voidCompletionClosesTurnWithoutQueueingReply() {
-        let state = ConversationState(
-            conversationID: conversationID,
-            capabilities: capabilities
-        )
+        let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1), capabilities: capabilities)
+            .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1))
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -334,7 +313,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), capabilities: .default)
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1))
         )
         let staleTurnID = makeTurnID(99)
 
@@ -355,7 +334,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), capabilities: .default)
+            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1))
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -363,7 +342,7 @@ struct ConversationReducerTests {
         }
         let (queued, _) = reduce(
             running,
-            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), capabilities: .default)
+            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2))
         )
         let failure = ConversationFailure(kind: .model, message: "Ollama unavailable")
         let (failed, failureEffects) = reduce(
@@ -405,7 +384,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), capabilities: .default)
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1))
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -425,7 +404,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (next, effects) = reduce(
             state,
-            .receive(message: makeMessage(text: " \n\t "), turnID: makeTurnID(1), capabilities: .default)
+            .receive(message: makeMessage(text: " \n\t "), turnID: makeTurnID(1))
         )
 
         #expect(next == state)
@@ -448,7 +427,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), capabilities: .default)
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1))
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -457,7 +436,7 @@ struct ConversationReducerTests {
 
         let (next, effects) = reduce(
             running,
-            .receive(message: makeMessage(text: "  "), turnID: makeTurnID(2), capabilities: .default)
+            .receive(message: makeMessage(text: "  "), turnID: makeTurnID(2))
         )
 
         #expect(next == running)

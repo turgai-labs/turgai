@@ -266,20 +266,41 @@ public enum MemoryProposal: Hashable, Codable, Sendable {
     case revise(factID: MemoryFactID, candidate: FactCandidate)
 }
 
-/// The bounded context supplied to a model-backed memory extractor.
-public struct MemoryExtractionContext: Sendable {
-    public let observation: MemoryObservation
-    public let previousObservations: [MemoryObservation]
+/// The immutable input captured for one memory extraction.
+public struct ExtractionInput: Codable, Sendable, Equatable {
+    public let observations: [MemoryObservation]
+    public let generation: MemoryGeneration
     public let existingFacts: [MemoryFact]
+    public let previousObservations: [MemoryObservation]
 
     public init(
-        observation: MemoryObservation,
-        previousObservations: [MemoryObservation] = [],
-        existingFacts: [MemoryFact] = []
+        observations: [MemoryObservation],
+        generation: MemoryGeneration,
+        existingFacts: [MemoryFact],
+        previousObservations: [MemoryObservation] = []
     ) {
-        self.observation = observation
-        self.previousObservations = previousObservations
+        self.observations = observations
+        self.generation = generation
         self.existingFacts = existingFacts
+        self.previousObservations = previousObservations
+    }
+
+    /// The conversation context in the order in which exchanges occurred.
+    /// Separate storage for current and preceding observations must not become
+    /// prompt order.
+    public var chronologicalObservations: [MemoryObservation] {
+        (previousObservations + observations)
+            .enumerated()
+            .sorted {
+                if $0.element.observedAt != $1.element.observedAt {
+                    return $0.element.observedAt < $1.element.observedAt
+                }
+                if $0.element.sourceID != $1.element.sourceID {
+                    return $0.element.sourceID.rawValue.uuidString < $1.element.sourceID.rawValue.uuidString
+                }
+                return $0.offset < $1.offset
+            }
+            .map(\.element)
     }
 }
 

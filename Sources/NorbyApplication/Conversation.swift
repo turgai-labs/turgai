@@ -1,5 +1,6 @@
 import Distributed
 import DistributedCluster
+import DurableWorkflows
 import EventSourcing
 import Hail
 import NorbyDomain
@@ -106,6 +107,76 @@ private enum MemoryPresentation {
     }
 }
 
+private enum DeferredActionPresentation {
+    private enum Command {
+        static let cancelReminder = "/cancel-reminder"
+        static let pauseTask = "/pause-task"
+        static let unpauseTask = "/unpause-task"
+        static let cancelTask = "/cancel-task"
+    }
+
+    static func reminders(_ values: [(WorkflowID, Date, DeferredAction)]) -> (String, [OutboundAction]) {
+        guard !values.isEmpty else { return ("No active reminders.", []) }
+        var lines: [String] = []
+        var actions: [OutboundAction] = []
+        for (id, fireAt, action) in values {
+            lines.append(action.content)
+            lines.append("  Action: \(action.kind == .deliverPreparedMessage ? "deliver prepared message" : "perform task")")
+            lines.append("  At: \(fireAt.formatted(date: .abbreviated, time: .shortened))")
+            actions.append(
+                OutboundAction(
+                    label: "Cancel",
+                    command: "\(Command.cancelReminder) \(WorkflowID.compactTimerID(id))"
+                )
+            )
+        }
+        return (lines.joined(separator: "\n"), actions)
+    }
+
+    static func tasks(
+        _ values: [(ScheduleID, Date, Date?, Date?, Bool, DeferredAction)]
+    ) -> (String, [OutboundAction]) {
+        guard !values.isEmpty else { return ("No active tasks.", []) }
+        var lines: [String] = []
+        var actions: [OutboundAction] = []
+        for (id, createdAt, lastFiredAt, nextFireAt, paused, action) in values {
+            lines.append(action.content)
+            lines.append("  Action: \(action.kind == .deliverPreparedMessage ? "deliver prepared message" : "perform task")")
+            lines.append("  Created: \(createdAt.formatted(date: .abbreviated, time: .shortened))")
+            if let lastFiredAt {
+                lines.append("  Last run: \(lastFiredAt.formatted(date: .abbreviated, time: .shortened))")
+            }
+            lines.append(
+                "  Next: \(nextFireAt?.formatted(date: .abbreviated, time: .shortened) ?? "unknown")"
+            )
+            lines.append("  Status: \(paused ? "paused" : "active")")
+            actions.append(
+                OutboundAction(
+                    label: paused ? "Resume" : "Pause",
+                    command: paused
+                        ? "\(Command.unpauseTask) \(ScheduleID.compactScheduleID(id))"
+                        : "\(Command.pauseTask) \(ScheduleID.compactScheduleID(id))"
+                )
+            )
+            actions.append(
+                OutboundAction(
+                    label: "Cancel",
+                    command: "\(Command.cancelTask) \(ScheduleID.compactScheduleID(id))"
+                )
+            )
+        }
+        return (lines.joined(separator: "\n"), actions)
+    }
+
+    static func action(_ verb: String, id: String) -> String {
+        "Task \(id) \(verb)."
+    }
+
+    static func reminderAction(_ verb: String, id: String) -> String {
+        "Reminder \(id) \(verb)."
+    }
+}
+
 /// Human-readable rendering of Hail's context diagnostics for the /context
 /// command. Identifiers and request IDs are omitted on purpose: they mean
 /// nothing in a chat message.
@@ -187,10 +258,36 @@ private actor ConversationPhase {
     }
 }
 
-private struct MemoryExtractionRequest: Sendable {
-    let turnID: NorbyDomain.TurnID
-    let observation: MemoryObservation
+private struct ExtractionBatch: Sendable {
+    let id: UUID
     let userID: NorbyDomain.UserID
+    let pending: [PendingMemoryObservation]
+
+    var observations: [MemoryObservation] {
+        pending.map { item in
+            MemoryObservation(
+                id: ObservationID(rawValue: item.message.id.rawValue),
+                sourceID: MemorySourceID(rawValue: item.message.id.rawValue),
+                text: item.message.text,
+                response: item.response,
+                observedAt: item.message.receivedAt
+            )
+        }
+    }
+
+    var turnIDs: [NorbyDomain.TurnID] { pending.map(\.turnID) }
+}
+
+private struct MemoryExtractionAttempt: Sendable {
+    let id: UUID
+    let batch: ExtractionBatch
+    var task: Task<Void, Never>?
+}
+
+public enum MemoryExtractionCompletion: Codable, Sendable, Equatable {
+    case completed(ExtractionOutcome)
+    case failed
+    case cancelled
 }
 
 /// The application-side interpreter for one scoped model output.
@@ -310,20 +407,17 @@ public distributed actor Conversation {
 
     public struct Config: Codable, Sendable {
         public let conversationID: ConversationID
-        public let capabilities: ChannelCapabilities
         public let agentDirectoryID: AgentDirectoryID
         public let agentRole: String
         public let snapshotPolicy: AgentSnapshotPolicy
 
         public init(
             conversationID: ConversationID,
-            capabilities: ChannelCapabilities = .default,
             agentDirectoryID: AgentDirectoryID = "agent-directory",
             agentRole: String = "conversation",
             snapshotPolicy: AgentSnapshotPolicy = .default
         ) {
             self.conversationID = conversationID
-            self.capabilities = capabilities
             self.agentDirectoryID = agentDirectoryID
             self.agentRole = agentRole
             self.snapshotPolicy = snapshotPolicy
@@ -342,18 +436,17 @@ public distributed actor Conversation {
     private let memoryExtractor: HailMemoryCandidateExtractor
     private let connectionRegistry = ConversationConnectionRegistry()
     private var modelTask: Task<Void, Never>?
-    private var memoryTasks: [NorbyDomain.TurnID: Task<Void, Never>] = [:]
-    private var activeMemoryExtractions: [NorbyDomain.TurnID: MemoryExtractionRequest] = [:]
-    private var pendingMemoryExtractions: [MemoryExtractionRequest] = []
+    private var extraction: MemoryExtractionAttempt?
+
+    private static let memoryExtractionBatchLimit = 8
 
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
         self.conversationID = dependency.conversationID
         self.state = ConversationState(
-            conversationID: dependency.conversationID,
-            capabilities: dependency.capabilities
+            conversationID: dependency.conversationID
         )
-        self.memoryExtractor = HailMemoryCandidateExtractor(actorSystem: actorSystem)
+        self.memoryExtractor = try HailMemoryCandidateExtractor(actorSystem: actorSystem)
         let adapter = HailAgentAdapter(
             actorSystem: actorSystem,
             agentDirectoryID: dependency.agentDirectoryID,
@@ -379,7 +472,6 @@ public distributed actor Conversation {
     public static func resolve(
         on actorSystem: ClusterSystem,
         conversationID: ConversationID,
-        capabilities: ChannelCapabilities = .default,
         agentDirectoryID: AgentDirectoryID = "agent-directory",
         agentRole: String = "conversation",
         snapshotPolicy: AgentSnapshotPolicy = .default
@@ -388,7 +480,6 @@ public distributed actor Conversation {
             identifiedBy: actorID(for: conversationID),
             dependency: Config(
                 conversationID: conversationID,
-                capabilities: capabilities,
                 agentDirectoryID: agentDirectoryID,
                 agentRole: agentRole,
                 snapshotPolicy: snapshotPolicy
@@ -403,8 +494,8 @@ public distributed actor Conversation {
         let noConnections = await connectionRegistry.isEmpty()
         return state.activeTurnID == nil
             && noConnections
-            && memoryTasks.isEmpty
-            && pendingMemoryExtractions.isEmpty
+            && extraction == nil
+            && state.pendingMemoryObservations.isEmpty
     }
 
     public distributed func currentRecord() -> ConversationState {
@@ -427,8 +518,7 @@ public distributed actor Conversation {
 
     public distributed func send(
         _ message: InboundMessage,
-        turnID: NorbyDomain.TurnID,
-        capabilities: ChannelCapabilities
+        turnID: NorbyDomain.TurnID
     ) async throws {
         guard message.conversationID == conversationID else {
             throw ConversationActorError.conversationMismatch
@@ -437,8 +527,7 @@ public distributed actor Conversation {
         try await dispatch(
             .receive(
                 message: message,
-                turnID: turnID,
-                capabilities: capabilities
+                turnID: turnID
             )
         )
     }
@@ -524,6 +613,157 @@ public distributed actor Conversation {
         )
     }
 
+    public distributed func showReminders() async throws {
+        let descriptions = try await actorSystem.workflows.listWorkflows(workflow: TimerWorkflow.self)
+        let decoder = JSONDecoder()
+        let reminders = descriptions.compactMap { description -> (WorkflowID, Date, DeferredAction)? in
+            guard case .running = description.status,
+                let inputData = description.inputData,
+                let input = try? decoder.decode(Timer.Input.self, from: inputData),
+                input.request.conversationID == conversationID
+            else { return nil }
+            return (description.id, input.fireAt, input.request.action)
+        }
+        .sorted { $0.1 < $1.1 }
+        let presentation = DeferredActionPresentation.reminders(reminders)
+        await publish(
+            .noticeWithActions(
+                conversationID: conversationID,
+                turnID: nil,
+                text: presentation.0,
+                actions: presentation.1
+            )
+        )
+    }
+
+    public distributed func showTasks() async throws {
+        let descriptions = try await actorSystem.workflows.listSchedules(workflow: ScheduleWorkflow.self)
+        let decoder = JSONDecoder()
+        let tasks = descriptions.compactMap { description -> (ScheduleID, Date, Date?, Date?, Bool, DeferredAction)? in
+            guard let request = try? decoder.decode(Schedule.Request.self, from: description.inputData),
+                request.conversationID == conversationID
+            else { return nil }
+            return (
+                description.id,
+                description.createdAt,
+                description.lastFiredAt,
+                description.nextFireAt,
+                description.paused,
+                request.action
+            )
+        }
+        .sorted { left, right in
+            switch (left.3, right.3) {
+            case (let left?, let right?): return left < right
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return left.0.rawValue < right.0.rawValue
+            }
+        }
+        let presentation = DeferredActionPresentation.tasks(tasks)
+        await publish(
+            .noticeWithActions(
+                conversationID: conversationID,
+                turnID: nil,
+                text: presentation.0,
+                actions: presentation.1
+            )
+        )
+    }
+
+    public distributed func pauseTask(id: String) async throws {
+        guard let id = ScheduleID.scheduleID(from: id) else {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Usage: /pause-task <task-id>"))
+            return
+        }
+        let workflows = actorSystem.workflows
+        guard try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
+            guard description.id == id,
+                let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
+            else { return false }
+            return request.conversationID == conversationID
+        }) else {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
+            return
+        }
+        try await workflows.pauseSchedule(
+            id: id,
+            workflow: ScheduleWorkflow.self,
+            reason: "Telegram command"
+        )
+        await publish(.notice(conversationID: conversationID, turnID: nil, text: DeferredActionPresentation.action("paused", id: id.rawValue)))
+    }
+
+    public distributed func unpauseTask(id: String) async throws {
+        guard let id = ScheduleID.scheduleID(from: id) else {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Usage: /unpause-task <task-id>"))
+            return
+        }
+        let workflows = actorSystem.workflows
+        guard try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
+            guard description.id == id,
+                let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
+            else { return false }
+            return request.conversationID == conversationID
+        }) else {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
+            return
+        }
+        try await workflows.unpauseSchedule(
+            id: id,
+            workflow: ScheduleWorkflow.self,
+            reason: "Telegram command"
+        )
+        await publish(.notice(conversationID: conversationID, turnID: nil, text: DeferredActionPresentation.action("unpaused", id: id.rawValue)))
+    }
+
+    public distributed func cancelTask(id: String) async throws {
+        guard let id = ScheduleID.scheduleID(from: id) else {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Usage: /cancel-task <task-id>"))
+            return
+        }
+        let workflows = actorSystem.workflows
+        guard try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
+            guard description.id == id,
+                let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
+            else { return false }
+            return request.conversationID == conversationID
+        }) else {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
+            return
+        }
+        try await workflows.cancelSchedule(
+            id: id,
+            workflow: ScheduleWorkflow.self
+        )
+        await publish(.notice(conversationID: conversationID, turnID: nil, text: DeferredActionPresentation.action("cancelled", id: id.rawValue)))
+    }
+
+    public distributed func cancelReminder(id: String) async throws {
+        guard let id = WorkflowID.timerID(from: id) else {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Usage: /cancel-reminder <reminder-id>"))
+            return
+        }
+        let workflows = actorSystem
+        let descriptions = try await workflows.workflows.listWorkflows(workflow: TimerWorkflow.self)
+        guard descriptions.contains(where: { description in
+            guard description.id == id,
+                case .running = description.status,
+                let inputData = description.inputData,
+                let input = try? JSONDecoder().decode(Timer.Input.self, from: inputData)
+            else { return false }
+            return input.request.conversationID == conversationID
+        }) else {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Reminder not found."))
+            return
+        }
+        try await workflows.workflows.cancel(
+            type: TimerWorkflow.self,
+            options: WorkflowOptions(id: id)
+        )
+        await publish(.notice(conversationID: conversationID, turnID: nil, text: DeferredActionPresentation.reminderAction("cancelled", id: id.rawValue)))
+    }
+
     public distributed func clearFailure() async throws {
         try await dispatch(.clearFailure)
     }
@@ -542,18 +782,37 @@ public distributed actor Conversation {
     }
 
     private func resumeAfterReplay() async throws {
-        guard state.activeTurnID != nil || !state.pendingMessages.isEmpty else {
-            return
+        if state.activeTurnID != nil || !state.pendingMessages.isEmpty {
+            guard state.activeMessage != nil || state.activeTurnID == nil else {
+                actorSystem.log.error(
+                    "Recovered running conversation without an active message",
+                    metadata: ["conversationID": .string(conversationID.stableKey)]
+                )
+                return
+            }
+            try await dispatch(.resume)
         }
 
-        guard state.activeMessage != nil || state.activeTurnID == nil else {
-            actorSystem.log.error(
-                "Recovered running conversation without an active message",
-                metadata: ["conversationID": .string(conversationID.stableKey)]
-            )
+        guard state.activeTurnID == nil else {
             return
         }
-        try await dispatch(.resume)
+        startPendingMemoryExtractionIfIdle()
+    }
+
+    private static func nextBatch(
+        from pending: [PendingMemoryObservation],
+        limit: Int
+    ) -> ExtractionBatch? {
+        guard let first = pending.first else { return nil }
+        let selected = pending
+            .filter { $0.message.userID == first.message.userID }
+            .prefix(limit)
+        guard !selected.isEmpty else { return nil }
+        return ExtractionBatch(
+            id: UUID(),
+            userID: first.message.userID,
+            pending: Array(selected)
+        )
     }
 
     private func startModel(for request: ModelRequest) {
@@ -704,9 +963,6 @@ public distributed actor Conversation {
         // Ollama server is commonly configured with one parallel slot; if the
         // extractor is created first, it can occupy that slot between two
         // user messages and make the next reply appear to hang.
-        if case .modelCompleted = action {
-            startMemoryExtraction(from: previous, action: action)
-        }
         startPendingMemoryExtractionIfIdle()
     }
 
@@ -792,161 +1048,137 @@ public distributed actor Conversation {
         }
     }
 
-    /// Queues one application-owned background operation for a completed turn.
-    /// It is started only after all queued conversation turns have finished.
-    private func startMemoryExtraction(
-        from previous: ConversationState,
-        action: ConversationAction
-    ) {
-        guard
-            case .modelCompleted(let turnID, let completion) = action,
-            previous.activeTurnID == turnID,
-            let activeMessage = previous.activeMessage
-        else {
-            return
-        }
-
-        let response: String? =
-            switch completion {
-            case .reply(let reply): reply.text
-            case .void: nil
-            }
-
-        let request = MemoryExtractionRequest(
-            turnID: turnID,
-            observation: MemoryObservation(
-                id: ObservationID(rawValue: activeMessage.message.id.rawValue),
-                sourceID: MemorySourceID(rawValue: activeMessage.message.id.rawValue),
-                text: activeMessage.message.text,
-                response: response,
-                observedAt: activeMessage.message.receivedAt
-            ),
-            userID: activeMessage.message.userID
-        )
-        pendingMemoryExtractions.append(request)
-    }
-
-    /// Starts extraction only while the conversation is genuinely idle. A
-    /// completed turn may already have another user message queued; launching
-    /// the extractor in that gap would compete with the next model request on
-    /// a single-slot local server. The request stays in this small in-memory
-    /// queue and is picked up after the last queued turn completes.
+    /// Starts one owned extraction while the conversation is idle.
     private func startPendingMemoryExtractionIfIdle() {
         guard
             state.activeTurnID == nil,
             state.pendingMessages.isEmpty,
             modelTask == nil,
-            memoryTasks.isEmpty,
-            let request = pendingMemoryExtractions.first
+            extraction == nil,
+            let batch = Self.nextBatch(
+                from: state.pendingMemoryObservations,
+                limit: Self.memoryExtractionBatchLimit
+            )
         else {
             return
         }
 
-        pendingMemoryExtractions.removeFirst()
-        activeMemoryExtractions[request.turnID] = request
         let actorSystem = self.actorSystem
         let memoryExtractor = self.memoryExtractor
         let conversationID = self.conversationID
 
         let task = Task(priority: .background) {
-            [weak self, actorSystem, memoryExtractor, request, conversationID]
+            [weak self, actorSystem, memoryExtractor, batch, conversationID]
             in
-            let update = await Self.recordCompletedMemory(
-                observation: request.observation,
-                userID: request.userID,
+            let completion = await Self.process(
+                batch: batch,
                 conversationID: conversationID,
                 actorSystem: actorSystem,
                 memoryExtractor: memoryExtractor
             )
             try? await self?.memoryExtractionCompleted(
-                turnID: request.turnID,
-                update: update
+                attemptID: batch.id,
+                completion: completion
             )
         }
-        memoryTasks[request.turnID] = task
+        extraction = MemoryExtractionAttempt(id: batch.id, batch: batch, task: task)
     }
 
     public distributed func memoryExtractionCompleted(
-        turnID: NorbyDomain.TurnID,
-        update: MemoryUpdate?
+        attemptID: UUID,
+        completion: MemoryExtractionCompletion
     ) async {
-        guard memoryTasks.removeValue(forKey: turnID) != nil else {
-            // The extraction was cancelled in favour of a foreground turn.
-            // Its task may still be unwinding; its request is already queued.
-            return
-        }
-        activeMemoryExtractions[turnID] = nil
-        guard let update, update.shouldNotify else {
+        guard let attempt = extraction, attempt.id == attemptID else { return }
+        switch completion {
+        case .cancelled:
+            extraction = nil
+            // The captured observations remain pending. A foreground turn may
+            // have caused this cancellation, so let the idle path claim them.
             startPendingMemoryExtractionIfIdle()
             return
-        }
+        case .failed:
+            // Keep the observations pending, but do not immediately retry a
+            // provider failure in a tight loop. The next idle opportunity or
+            // recovery will claim them again.
+            extraction = nil
+            return
+        case .completed(let outcome):
+            let update: MemoryUpdate?
+            switch outcome {
+            case .committed(let value): update = value
+            case .stale, .alreadyHandled: update = nil
+            }
 
-        await publish(
-            .notice(
-                conversationID: conversationID,
-                turnID: turnID,
-                text: Self.memoryNotice(for: update)
-            )
-        )
-        startPendingMemoryExtractionIfIdle()
+            if let update, update.shouldNotify {
+                await publish(
+                    .notice(
+                        conversationID: conversationID,
+                        turnID: attempt.batch.turnIDs.last,
+                        text: Self.memoryNotice(for: update)
+                    )
+                )
+            }
+
+            do {
+                try await emit(event: .memoryObservationsCompleted(attempt.batch.turnIDs))
+            } catch {
+                // A committed User event is safe to retry: User recognizes
+                // the captured sources as already handled. Leave the source
+                // observations pending for the next idle/recovery attempt.
+                actorSystem.log.warning(
+                    "Could not acknowledge memory extraction",
+                    metadata: [
+                        "conversationID": .string(conversationID.stableKey),
+                        "attemptID": .string(attemptID.uuidString),
+                        "error": .string(String(describing: error)),
+                    ]
+                )
+                extraction = nil
+                return
+            }
+
+            extraction = nil
+            startPendingMemoryExtractionIfIdle()
+        }
     }
 
     private func cancelActiveMemoryExtractions() {
-        guard !memoryTasks.isEmpty else { return }
-
-        let requests = memoryTasks.keys.compactMap { activeMemoryExtractions[$0] }
-        pendingMemoryExtractions.insert(contentsOf: requests, at: 0)
-
-        memoryTasks.values.forEach { $0.cancel() }
-        memoryTasks.removeAll(keepingCapacity: true)
-        activeMemoryExtractions.removeAll(keepingCapacity: true)
+        extraction?.task?.cancel()
     }
 
-    /// Persists the completed user/assistant pair in the background. The User
-    /// aggregate owns observation persistence, extraction, and policy.
-    private static func recordCompletedMemory(
-        observation: MemoryObservation,
-        userID: NorbyDomain.UserID,
+    private static func process(
+        batch: ExtractionBatch,
         conversationID: ConversationID,
         actorSystem: ClusterSystem,
         memoryExtractor: HailMemoryCandidateExtractor
-    ) async -> MemoryUpdate? {
+    ) async -> MemoryExtractionCompletion {
         do {
+            let user = try await User.resolve(on: actorSystem, userID: batch.userID)
+            let preparation = try await user.prepareExtraction(batch.observations)
             try Task.checkCancellation()
-            let user = try await User.resolve(on: actorSystem, userID: userID)
-            guard let generation = try await user.beginMemoryObservation(observation) else {
-                return nil
-            }
-            let userRecord = try await user.currentRecord()
-            let context = MemoryExtractionContext(
-                observation: observation,
-                previousObservations: userRecord.memory.previousObservations(
-                    before: observation.sourceID,
-                    limit: 8
-                ),
-                existingFacts: Array(
-                    userRecord.memory.currentFacts().suffix(32)
+            switch preparation {
+            case .alreadyHandled:
+                return .completed(.alreadyHandled)
+            case .ready(let input):
+                let proposals = try await memoryExtractor.extract(from: input)
+                try Task.checkCancellation()
+                return .completed(
+                    try await user.commitExtraction(input, proposals: proposals)
                 )
-            )
-            let proposals = try await memoryExtractor.extract(from: context)
-            try Task.checkCancellation()
-            return try await user.recordCompletedObservation(
-                observation,
-                proposals: proposals,
-                expectedGeneration: generation
-            )
+            }
         } catch is CancellationError {
-            return nil
+            return .cancelled
         } catch {
+            if Task.isCancelled { return .cancelled }
             actorSystem.log.warning(
                 "Could not record completed user memory",
                 metadata: [
                     "conversationID": .string(conversationID.stableKey),
-                    "userID": .string(userID.rawValue),
+                    "userID": .string(batch.userID.rawValue),
                     "error": .string(String(describing: error)),
                 ]
             )
-            return nil
+            return .failed
         }
     }
 
@@ -996,9 +1228,6 @@ public distributed actor Conversation {
         }
 
         var events: [ConversationEvent] = []
-        if previous.capabilities != next.capabilities {
-            events.append(.capabilitiesChanged(next.capabilities))
-        }
 
         // Persist the terminal output before the lifecycle bookkeeping. The
         // reply event is the recovery point if the process crashes between
@@ -1024,6 +1253,13 @@ public distributed actor Conversation {
                 from: previous.pendingMessages,
                 to: next.pendingMessages
             ).map(ConversationEvent.messageQueued))
+
+        events.append(
+            contentsOf: newPendingMemoryObservations(
+                from: previous.pendingMemoryObservations,
+                to: next.pendingMemoryObservations
+            ).map(ConversationEvent.memoryObservationQueued)
+        )
 
         events.append(
             contentsOf: deliveredReplies(
@@ -1069,6 +1305,14 @@ public distributed actor Conversation {
             }
         }
         return added
+    }
+
+    private func newPendingMemoryObservations(
+        from previous: [PendingMemoryObservation],
+        to next: [PendingMemoryObservation]
+    ) -> [PendingMemoryObservation] {
+        let previousTurnIDs = Set(previous.map(\.turnID))
+        return next.filter { !previousTurnIDs.contains($0.turnID) }
     }
 
     private func deliveredReplies(

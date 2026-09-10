@@ -1,5 +1,6 @@
 import DistributedCluster
 import DurableWorkflows
+import Hail
 import NorbyDomain
 import Synchronization
 
@@ -28,7 +29,17 @@ import Synchronization
 /// process-wide and node-local: durable work firing later, possibly after a
 /// restart, runs in a fresh process and must keep using its own
 /// `context.system`, never this facade.
-public struct ActorSystemDependency: Sendable {
+///
+/// The narrowed slice of the node's actor system exposed to effect-backed
+/// tools. Application actors must use their explicit `actorSystem` property.
+/// This facade is intentionally not a general actor-system dependency; it
+/// exists only at the tool/effect boundary.
+///
+/// `Effect` is a ceremonial ownership label. It does not alter the stored
+/// capabilities or runtime behavior; it makes a tool call visibly name the
+/// effect whose execution needs those capabilities. Keep this dependency in
+/// tools and effects, not in application actors.
+public struct ActorSystemDependency<Effect: ScopedEffect>: Sendable {
     public var workflows: WorkflowActions
     public var virtualActors: VirtualActorActions
 
@@ -38,8 +49,8 @@ public struct ActorSystemDependency: Sendable {
     }
 
     /// The facade over a live node.
-    public static func live(on actorSystem: ClusterSystem) -> ActorSystemDependency {
-        ActorSystemDependency(
+    public static func live(on actorSystem: ClusterSystem) -> ActorSystemDependency<Effect> {
+        ActorSystemDependency<Effect>(
             workflows: WorkflowActions(
                 startTimer: { id, input, retryPolicy in
                     try await actorSystem.workflows.start(
@@ -73,6 +84,20 @@ public struct ActorSystemDependency: Sendable {
                         workflow: ScheduleWorkflow.self
                     )
                 },
+                pauseSchedule: { id, reason in
+                    try await actorSystem.workflows.pauseSchedule(
+                        id: id,
+                        workflow: ScheduleWorkflow.self,
+                        reason: reason
+                    )
+                },
+                unpauseSchedule: { id, reason in
+                    try await actorSystem.workflows.unpauseSchedule(
+                        id: id,
+                        workflow: ScheduleWorkflow.self,
+                        reason: reason
+                    )
+                },
                 triggerSchedule: { id in
                     try await actorSystem.workflows.triggerSchedule(
                         id: id,
@@ -103,6 +128,8 @@ public struct WorkflowActions: Sendable {
             ScheduleOverlapPolicy
         ) async throws -> Void
     public var cancelSchedule: @Sendable (ScheduleID) async throws -> Void
+    public var pauseSchedule: @Sendable (ScheduleID, String?) async throws -> Void
+    public var unpauseSchedule: @Sendable (ScheduleID, String?) async throws -> Void
     public var triggerSchedule: @Sendable (ScheduleID) async throws -> ScheduleTriggerOutcome
     public var listSchedules: @Sendable () async throws -> [ScheduleDescription]
 
@@ -116,6 +143,8 @@ public struct WorkflowActions: Sendable {
                 ScheduleOverlapPolicy
             ) async throws -> Void,
         cancelSchedule: @escaping @Sendable (ScheduleID) async throws -> Void,
+        pauseSchedule: @escaping @Sendable (ScheduleID, String?) async throws -> Void = { _, _ in },
+        unpauseSchedule: @escaping @Sendable (ScheduleID, String?) async throws -> Void = { _, _ in },
         triggerSchedule: @escaping @Sendable (ScheduleID) async throws -> ScheduleTriggerOutcome,
         listSchedules: @escaping @Sendable () async throws -> [ScheduleDescription]
     ) {
@@ -124,6 +153,8 @@ public struct WorkflowActions: Sendable {
         self.listTimers = listTimers
         self.schedule = schedule
         self.cancelSchedule = cancelSchedule
+        self.pauseSchedule = pauseSchedule
+        self.unpauseSchedule = unpauseSchedule
         self.triggerSchedule = triggerSchedule
         self.listSchedules = listSchedules
     }
@@ -140,39 +171,53 @@ public struct VirtualActorActions: Sendable {
 }
 
 private enum ActorSystemDependencyStorage {
+    struct Values: Sendable {
+        let workflows: WorkflowActions
+        let virtualActors: VirtualActorActions
+    }
+
     /// Task-local override, set only by ``withActorSystemDependency(_:operation:)``.
     @TaskLocal
-    static var override: ActorSystemDependency?
+    static var override: Values?
 
     /// The production facade, registered once via ``ActorSystemDependency/prepare(_:)``.
-    static let prepared = Mutex<ActorSystemDependency?>(nil)
+    static let prepared = Mutex<Values?>(nil)
 }
 
 extension ActorSystemDependency {
     /// Registers the production facade. Called exactly once at the
     /// application boundary, before any tool or effect runs.
-    public static func prepare(_ dependency: ActorSystemDependency) {
+    public static func prepare(_ dependency: ActorSystemDependency<Effect>) {
         ActorSystemDependencyStorage.prepared.withLock { prepared in
             precondition(
                 prepared == nil,
                 "ActorSystemDependency.prepare must run exactly once, at the application boundary."
             )
-            prepared = dependency
+            prepared = ActorSystemDependencyStorage.Values(
+                workflows: dependency.workflows,
+                virtualActors: dependency.virtualActors
+            )
         }
     }
 
     /// The facade for the current context: the task-local override when one
     /// is installed, otherwise the registered production facade.
-    public static var current: ActorSystemDependency {
+    public static var current: ActorSystemDependency<Effect> {
         if let override = ActorSystemDependencyStorage.override {
-            return override
+            return ActorSystemDependency(
+                workflows: override.workflows,
+                virtualActors: override.virtualActors
+            )
         }
         guard let prepared = ActorSystemDependencyStorage.prepared.withLock({ $0 }) else {
             preconditionFailure(
                 "ActorSystemDependency was read before prepare(_:) ran at the application boundary."
             )
         }
-        return prepared
+        return ActorSystemDependency(
+            workflows: prepared.workflows,
+            virtualActors: prepared.virtualActors
+        )
     }
 }
 
@@ -180,11 +225,15 @@ extension ActorSystemDependency {
 /// change behavior — tests and deliberately scoped experiments. Production
 /// code registers once with ``ActorSystemDependency/prepare(_:)`` and reads
 /// ``ActorSystemDependency/current`` ambiently.
-public func withActorSystemDependency<Result>(
-    _ dependency: ActorSystemDependency,
+public func withActorSystemDependency<Effect: ScopedEffect, Result>(
+    _ dependency: ActorSystemDependency<Effect>,
     operation: () async throws -> Result
 ) async rethrows -> Result {
-    try await ActorSystemDependencyStorage.$override.withValue(dependency) {
+    let values = ActorSystemDependencyStorage.Values(
+        workflows: dependency.workflows,
+        virtualActors: dependency.virtualActors
+    )
+    return try await ActorSystemDependencyStorage.$override.withValue(values) {
         try await operation()
     }
 }

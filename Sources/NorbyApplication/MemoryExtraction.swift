@@ -6,14 +6,20 @@ import NorbyMemory
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
-    import Foundation
+import Foundation
 #endif
+
+public enum ExtractionError: Error, Sendable, Equatable {
+    case missingReport
+    case invalidReport(String)
+    case invalidCandidate
+}
 
 /// Typed output used by the model-backed memory extractor. The model returns
 /// neutral strings for enum-like values; the application converts them into
 /// domain values only after the response crosses the model boundary.
-public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
-    public struct Candidate: Generable, Codable, Sendable {
+public struct MemoryExtractionOutput: Codable, Sendable {
+    public struct Candidate: Codable, Sendable, ConvertibleFromGeneratedContent {
         public let operation: String
         public let factID: String
         public let namespace: String
@@ -54,8 +60,8 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
 
         public init(_ content: GeneratedContent) throws {
             self.init(
-                operation: try content.value(String.self, forProperty: "operation"),
-                factID: try content.value(String.self, forProperty: "factID"),
+                operation: try content.value(String?.self, forProperty: "operation") ?? "add",
+                factID: try content.value(String?.self, forProperty: "factID") ?? "",
                 namespace: try content.value(String.self, forProperty: "namespace"),
                 predicate: try content.value(String.self, forProperty: "predicate"),
                 value: try content.value(String.self, forProperty: "value"),
@@ -68,51 +74,6 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
             )
         }
 
-        public var generatedContent: GeneratedContent {
-            GeneratedContent(properties: [
-                "operation": operation,
-                "factID": factID,
-                "namespace": namespace,
-                "predicate": predicate,
-                "value": value,
-                "valueKind": valueKind,
-                "confidence": confidence,
-                "importance": importance,
-                "stability": stability,
-                "evidenceIDs": evidenceIDs,
-                "supportingText": supportingText,
-            ])
-        }
-
-        public static var generationSchema: GenerationSchema {
-            GenerationSchema(
-                type: Candidate.self,
-                description: "One proposed durable personal fact.",
-                properties: [
-                    .init(name: "operation", description: "add or revise", type: String.self),
-                    .init(
-                        name: "factID", description: "Existing fact ID for revise; empty for add.", type: String.self),
-                    .init(name: "namespace", description: "Memory namespace.", type: String.self),
-                    .init(name: "predicate", description: "Canonical predicate.", type: String.self),
-                    .init(name: "value", description: "Fact value.", type: String.self),
-                    .init(name: "valueKind", description: "Value kind.", type: String.self),
-                    .init(name: "confidence", description: "Confidence from 0 to 1.", type: Double.self),
-                    .init(name: "importance", description: "Importance from 0 to 1.", type: Double.self),
-                    .init(name: "stability", description: "Expected stability.", type: String.self),
-                    .init(
-                        name: "evidenceIDs",
-                        description: "Observation IDs containing the user's supporting statements.",
-                        type: [String].self
-                    ),
-                    .init(
-                        name: "supportingText",
-                        description:
-                            "A short verbatim quote from a user's supporting statement; never quote the assistant or a tool.",
-                        type: String.self
-                    ),
-                ]
-            )
-        }
     }
 
     public let candidates: [Candidate]
@@ -125,129 +86,42 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
         self.candidates = try content.value([Candidate].self, forProperty: "candidates")
     }
 
-    public var generatedContent: GeneratedContent {
-        GeneratedContent(properties: ["candidates": candidates])
-    }
+    static let reportToolName = "report_memory_extraction"
 
-    public static var generationSchema: GenerationSchema {
-        GenerationSchema(
-            type: MemoryExtractionOutput.self,
-            description: "Durable personal facts found in one completed exchange.",
+    static func reportToolDefinition() throws -> ToolDefinition {
+        let candidate = DynamicGenerationSchema(
+            name: "MemoryCandidate",
+            description: "One proposed durable personal fact.",
             properties: [
-                .init(
-                    name: "candidates",
-                    description: "Facts supported by the exchange.",
-                    type: [Candidate].self
-                )
+                .init(name: "operation", description: "add or revise; omit for add.", schema: DynamicGenerationSchema(name: "MemoryOperation", anyOf: ["add", "revise"]), isOptional: true),
+                .init(name: "factID", description: "Existing fact ID for revise; omit for add.", schema: DynamicGenerationSchema(type: String.self), isOptional: true),
+                .init(name: "namespace", description: "The memory namespace.", schema: DynamicGenerationSchema(name: "MemoryNamespace", anyOf: MemoryNamespace.allCases.map(\.rawValue))),
+                .init(name: "predicate", description: "Canonical predicate.", schema: DynamicGenerationSchema(type: String.self)),
+                .init(name: "value", description: "Fact value.", schema: DynamicGenerationSchema(type: String.self)),
+                .init(name: "valueKind", description: "How to interpret the value.", schema: DynamicGenerationSchema(name: "MemoryValueKind", anyOf: ["text", "person", "place", "date", "preference"])),
+                .init(name: "confidence", description: "Confidence from 0 to 1.", schema: DynamicGenerationSchema(type: Double.self)),
+                .init(name: "importance", description: "Importance from 0 to 1.", schema: DynamicGenerationSchema(type: Double.self)),
+                .init(name: "stability", description: "Expected stability.", schema: DynamicGenerationSchema(name: "MemoryStability", anyOf: MemoryStability.allCases.map(\.rawValue))),
+                .init(name: "evidenceIDs", description: "Observation IDs containing the user's supporting statements.", schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(type: String.self))),
+                .init(name: "supportingText", description: "A short verbatim quote from a user's supporting statement.", schema: DynamicGenerationSchema(type: String.self)),
             ]
         )
-    }
-
-    public static let reportToolName = "report_memory_extraction"
-
-    public static var outputContract: AgentOutputContract {
-        .reportTool(name: reportToolName, schema: reportToolSchema)
-    }
-
-    private static let reportToolSchema = LLMToolSchema(
-        type: "function",
-        function: LLMToolSchema.FunctionSchema(
+        let output = try GenerationSchema(
+            root: DynamicGenerationSchema(
+                name: "MemoryExtractionOutput",
+                description: "Durable personal facts found in one completed exchange.",
+                properties: [
+                    .init(name: "candidates", description: "Facts supported by the exchange.", schema: DynamicGenerationSchema(arrayOf: candidate))
+                ]
+            ),
+            dependencies: []
+        )
+        return ToolDefinition(
             name: reportToolName,
             description: "Report durable personal facts found in one completed exchange.",
-            parameters: LLMToolSchema.ParameterSchema(
-                type: "object",
-                properties: [
-                    "candidates": LLMToolSchema.PropertySchema(
-                        type: "array",
-                        description: "Facts supported by the exchange.",
-                        enumValues: nil,
-                        items: LLMToolSchema.PropertySchema(
-                            type: "object",
-                            description: "One proposed memory fact.",
-                            enumValues: nil,
-                            properties: [
-                                "namespace": LLMToolSchema.PropertySchema(
-                                    type: "string",
-                                    description: "Memory namespace.",
-                                    enumValues: MemoryNamespace.allCases.map(\.rawValue)
-                                ),
-                                "operation": LLMToolSchema.PropertySchema(
-                                    type: "string",
-                                    description: "Use add for a new fact or revise for a correction.",
-                                    enumValues: ["add", "revise"]
-                                ),
-                                "factID": LLMToolSchema.PropertySchema(
-                                    type: "string",
-                                    description: "Existing fact ID for revise; empty for add.",
-                                    enumValues: nil
-                                ),
-                                "predicate": LLMToolSchema.PropertySchema(
-                                    type: "string",
-                                    description: "Canonical predicate.",
-                                    enumValues: nil
-                                ),
-                                "value": LLMToolSchema.PropertySchema(
-                                    type: "string",
-                                    description: "Fact value.",
-                                    enumValues: nil
-                                ),
-                                "valueKind": LLMToolSchema.PropertySchema(
-                                    type: "string",
-                                    description: "Value kind.",
-                                    enumValues: ["text", "person", "place", "date", "preference"]
-                                ),
-                                "confidence": LLMToolSchema.PropertySchema(
-                                    type: "number",
-                                    description: "Confidence from 0 to 1.",
-                                    enumValues: nil
-                                ),
-                                "importance": LLMToolSchema.PropertySchema(
-                                    type: "number",
-                                    description: "Importance from 0 to 1.",
-                                    enumValues: nil
-                                ),
-                                "stability": LLMToolSchema.PropertySchema(
-                                    type: "string",
-                                    description: "Expected stability.",
-                                    enumValues: MemoryStability.allCases.map(\.rawValue)
-                                ),
-                                "evidenceIDs": LLMToolSchema.PropertySchema(
-                                    type: "array",
-                                    description: "Observation IDs containing the user's supporting statements.",
-                                    enumValues: nil,
-                                    items: LLMToolSchema.PropertySchema(
-                                        type: "string",
-                                        description: "An observation ID.",
-                                        enumValues: nil
-                                    )
-                                ),
-                                "supportingText": LLMToolSchema.PropertySchema(
-                                    type: "string",
-                                    description:
-                                        "A short verbatim quote from a user's supporting statement; never quote the assistant or a tool.",
-                                    enumValues: nil
-                                ),
-                            ],
-                            required: [
-                                "operation",
-                                "factID",
-                                "namespace",
-                                "predicate",
-                                "value",
-                                "valueKind",
-                                "confidence",
-                                "importance",
-                                "stability",
-                                "evidenceIDs",
-                                "supportingText",
-                            ]
-                        )
-                    )
-                ],
-                required: ["candidates"]
-            )
+            parameters: output
         )
-    )
+    }
 }
 
 /// Extracts memory through a standalone model endpoint. It deliberately does
@@ -255,18 +129,17 @@ public struct MemoryExtractionOutput: AgentOutput, Codable, Sendable {
 /// reports cannot pollute the user's durable chat history.
 public struct HailMemoryCandidateExtractor: Sendable {
     private let actorSystem: ClusterSystem
+    private let reportTool: ToolDefinition
 
-    public init(actorSystem: ClusterSystem) {
+    public init(actorSystem: ClusterSystem) throws {
         self.actorSystem = actorSystem
+        self.reportTool = try MemoryExtractionOutput.reportToolDefinition()
     }
 
-    public func extract(from observation: MemoryObservation) async throws -> [MemoryProposal] {
-        try await extract(
-            from: MemoryExtractionContext(observation: observation)
-        )
-    }
-
-    public func extract(from context: MemoryExtractionContext) async throws -> [MemoryProposal] {
+    public func extract(from input: ExtractionInput) async throws -> [MemoryProposal] {
+        guard let firstObservation = input.observations.first else {
+            throw ExtractionError.missingReport
+        }
         let model = await actorSystem.agentRuntime.defaultModel.rawValue
         // Extraction is structured reconciliation, not conversation: request
         // non-thinking generation so background work stays cheap. The
@@ -276,67 +149,61 @@ public struct HailMemoryCandidateExtractor: Sendable {
             for: model,
             agentID: "memory-extractor",
             contextID: AgentContextID(
-                "memory-extractor-\(context.observation.sourceID.rawValue.uuidString)"
+                "memory-extractor-\(firstObservation.sourceID.rawValue.uuidString)"
             ),
             executionPolicy: .autonomousWorkspace,
             reasoningEffort: ReasoningEffort.none
         )
-        let input = ModelInput(messages: [
+        let modelInput = ModelInput(messages: [
             LLMMessage(role: .system, content: Self.instructions),
-            LLMMessage(role: .user, content: Self.prompt(for: context)),
+            LLMMessage(role: .user, content: Self.prompt(for: input)),
         ])
 
         for await event in endpoint.stream(
-            input: input,
-            tools: nil,
-            responseType: MemoryExtractionOutput.self
+            input: modelInput,
+            tools: [reportTool]
         ) {
+            try Task.checkCancellation()
             switch event {
-            case .generated(let output):
-                return output.candidates.compactMap {
-                    Self.proposal(from: $0, context: context)
+            case .toolCall(let call) where call.name == MemoryExtractionOutput.reportToolName:
+                do {
+                    let output = try MemoryExtractionOutput(
+                        try GeneratedContent(json: call.arguments.json)
+                    )
+                    return try output.candidates.map { try Self.proposal(from: $0, input: input) }
+                } catch {
+                    throw ExtractionError.invalidReport(String(describing: error))
                 }
+            case .toolCall:
+                continue
             case .failed(let error):
-                // Memory extraction is best effort. A report-tool contract
-                // that produces no usable response means that this exchange
-                // yielded no proposals; it must not turn into an application
-                // warning or affect the completed conversation turn.
-                if case .invalidResponse = error {
-                    return []
-                }
                 throw error
+            case .generated:
+                throw ExtractionError.missingReport
             default:
                 continue
             }
         }
 
-        return []
+        try Task.checkCancellation()
+        throw ExtractionError.missingReport
     }
 
     private static let instructions =
         "Reconcile the completed exchange with the supplied active memory. Return only durable facts about the user that this exchange actually establishes or corrects. Assistant text, tool results, weather locations, search targets, quoted text, and existing memory are context, never evidence by themselves. Return an empty list when the exchange adds nothing. Use add only for a genuinely new fact. Use revise with the exact existing factID when the exchange repeats, clarifies, or corrects a supplied fact; never create a second fact because predicate wording changed. Every candidate must list one or more evidenceIDs and a supportingText that is copied verbatim from a user's statement with only whitespace or case differences; never quote the assistant or a tool. The quote must establish the fact, not merely provide a parameter for a one-off task. Understand any language, and ignore secrets and sensitive information."
 
-    private static func prompt(for context: MemoryExtractionContext) -> String {
-        var sections = [
-            "Completed exchange:",
-            "Evidence-capable user observation ID: \(context.observation.id.rawValue.uuidString)",
-            "User statement: \(context.observation.text)",
-            "Assistant response (context only): \(context.observation.response ?? "(none)")",
-        ]
+    private static func prompt(for input: ExtractionInput) -> String {
+        var sections = ["Conversation window in chronological order:"]
+        sections.append(
+            input.chronologicalObservations.map { observation in
+                "Evidence-capable user observation ID: \(observation.id.rawValue.uuidString)\nUser statement: \(observation.text)\nAssistant response (context only): \(observation.response ?? "(none)")"
+            }.joined(separator: "\n---\n")
+        )
 
-        if !context.previousObservations.isEmpty {
-            sections.append("Previous exchanges:")
-            sections.append(
-                context.previousObservations.map { observation in
-                    "Evidence-capable user observation ID: \(observation.id.rawValue.uuidString)\nUser statement: \(observation.text)\nAssistant response (context only): \(observation.response ?? "(none)")"
-                }.joined(separator: "\n---\n")
-            )
-        }
-
-        if !context.existingFacts.isEmpty {
+        if !input.existingFacts.isEmpty {
             sections.append("Current active memory facts:")
             sections.append(
-                context.existingFacts.map { fact in
+                input.existingFacts.map { fact in
                     "factID=\(fact.id.rawValue.uuidString) [\(fact.namespace.rawValue)] \(fact.predicate) = \(fact.value.rendered)"
                 }.joined(separator: "\n")
             )
@@ -346,22 +213,22 @@ public struct HailMemoryCandidateExtractor: Sendable {
 
     private static func proposal(
         from output: MemoryExtractionOutput.Candidate,
-        context: MemoryExtractionContext
-    ) -> MemoryProposal? {
+        input: ExtractionInput
+    ) throws -> MemoryProposal {
         guard
             let namespace = MemoryNamespace(rawValue: output.namespace),
             let stability = MemoryStability(rawValue: output.stability)
         else {
-            return nil
+            throw ExtractionError.invalidCandidate
         }
 
         let predicate = output.predicate.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = output.value.trimmingCharacters(in: .whitespacesAndNewlines)
         let supportingText = output.supportingText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !predicate.isEmpty, !value.isEmpty, value.count <= 500 else {
-            return nil
+            throw ExtractionError.invalidCandidate
         }
-        guard !supportingText.isEmpty else { return nil }
+        guard !supportingText.isEmpty else { throw ExtractionError.invalidCandidate }
 
         let memoryValue: MemoryValue
         switch output.valueKind {
@@ -373,28 +240,35 @@ public struct HailMemoryCandidateExtractor: Sendable {
             memoryValue = .place(value)
         case "date":
             guard let date = ISO8601DateFormatter().date(from: value) else {
-                return nil
+                throw ExtractionError.invalidCandidate
             }
             memoryValue = .date(date)
         case "preference":
             guard let preference = Bool(value) else {
-                return nil
+                throw ExtractionError.invalidCandidate
             }
             memoryValue = .preference(preference)
         default:
-            return nil
+            throw ExtractionError.invalidCandidate
         }
 
         let allowedEvidenceIDs = Set(
-            ([context.observation] + context.previousObservations).map(\.id)
+            (input.observations + input.previousObservations).map(\.id)
         )
-        let evidence = output.evidenceIDs.compactMap { value in
-            UUID(uuidString: value).map(ObservationID.init(rawValue:))
+        let evidence = try output.evidenceIDs.map { value in
+            guard let uuid = UUID(uuidString: value) else {
+                throw ExtractionError.invalidCandidate
+            }
+            return ObservationID(rawValue: uuid)
         }
         guard !evidence.isEmpty,
             evidence.allSatisfy(allowedEvidenceIDs.contains)
         else {
-            return nil
+            throw ExtractionError.invalidCandidate
+        }
+
+        guard let observedAt = input.observations.last?.observedAt else {
+            throw ExtractionError.invalidCandidate
         }
 
         let candidate = FactCandidate(
@@ -406,15 +280,15 @@ public struct HailMemoryCandidateExtractor: Sendable {
             confidence: output.confidence,
             importance: output.importance,
             stability: stability,
-            observedAt: context.observation.observedAt
+            observedAt: observedAt
         )
         guard
             MemoryEvidence.supports(
                 candidate,
-                in: [context.observation] + context.previousObservations
+                in: input.observations + input.previousObservations
             )
         else {
-            return nil
+            throw ExtractionError.invalidCandidate
         }
 
         switch output.operation.lowercased() {
@@ -422,14 +296,14 @@ public struct HailMemoryCandidateExtractor: Sendable {
             return .add(candidate)
         case "revise":
             guard let uuid = UUID(uuidString: output.factID) else {
-                return nil
+                throw ExtractionError.invalidCandidate
             }
             return .revise(
                 factID: MemoryFactID(rawValue: uuid),
                 candidate: candidate
             )
         default:
-            return nil
+            throw ExtractionError.invalidCandidate
         }
     }
 }

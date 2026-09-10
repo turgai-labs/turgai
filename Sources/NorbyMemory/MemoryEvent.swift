@@ -9,7 +9,7 @@
 /// Facts are proposals over observations, not direct mutations. Rejected
 /// candidates produce no event at all, so the journal remains the complete
 /// audit trail of what was accepted, reinforced, superseded, or removed.
-public enum MemoryEvent: Codable, Sendable, Equatable {
+public indirect enum MemoryEvent: Codable, Sendable, Equatable {
     /// Logically forgets the active memory projection. Earlier journal events
     /// remain available to infrastructure readers, but replay after this
     /// boundary starts a fresh memory generation.
@@ -24,4 +24,32 @@ public enum MemoryEvent: Codable, Sendable, Equatable {
     case factSuperseded(MemoryFactID, by: MemoryFact)
     case factExpired(MemoryFactID)
     case factForgotten(MemoryFactID)
+    case extractionCommitted(MemoryExtractionCommit)
+}
+
+/// One atomic memory extraction result. The contained events are fact-level
+/// changes only; lifecycle events such as `cleared` cannot be nested here.
+public struct MemoryExtractionCommit: Codable, Sendable, Equatable {
+    public let generation: MemoryGeneration
+    public let processedSources: [MemorySourceID]
+    public let observations: [MemoryObservation]
+    public let changes: [MemoryFactEvent]
+
+    public init(
+        generation: MemoryGeneration,
+        processedSources: [MemorySourceID],
+        observations: [MemoryObservation],
+        changes: [MemoryFactEvent]
+    ) {
+        self.generation = generation
+        self.processedSources = processedSources
+        self.observations = observations
+        self.changes = changes
+    }
+}
+
+public enum MemoryFactEvent: Codable, Sendable, Equatable {
+    case factAccepted(MemoryFact)
+    case factReinforced(MemoryFactID, evidence: [ObservationID], confidence: Double)
+    case factSuperseded(MemoryFactID, by: MemoryFact)
 }

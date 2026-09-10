@@ -46,6 +46,33 @@ public struct TelegramReplyParameters: Codable, Equatable, Sendable {
     }
 }
 
+public struct TelegramInlineKeyboardButton: Codable, Equatable, Sendable {
+    public let text: String
+    public let callbackData: String?
+
+    public init(text: String, callbackData: String? = nil) {
+        self.text = text
+        self.callbackData = callbackData
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case callbackData = "callback_data"
+    }
+}
+
+public struct TelegramInlineKeyboardMarkup: Codable, Equatable, Sendable {
+    public let inlineKeyboard: [[TelegramInlineKeyboardButton]]
+
+    public init(inlineKeyboard: [[TelegramInlineKeyboardButton]]) {
+        self.inlineKeyboard = inlineKeyboard
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case inlineKeyboard = "inline_keyboard"
+    }
+}
+
 /// File bytes fetched through Telegram's authenticated file endpoint.
 /// The temporary token-bearing URL is deliberately not exposed.
 public struct TelegramFileData: Sendable {
@@ -63,6 +90,7 @@ private enum TelegramAPIMethod: String, Sendable {
     case getFile
     case sendChatAction
     case setMessageReaction
+    case answerCallbackQuery
     case sendMessageDraft
     case sendMessage
     case editMessageText
@@ -77,6 +105,8 @@ public struct TelegramAPIClient: Sendable {
     public var sendChatAction: @Sendable (_ chatID: Int64, _ action: String) async throws -> Void
     public var setMessageReaction:
         @Sendable (_ chatID: Int64, _ messageID: Int64, _ reaction: TelegramReaction?) async throws -> Void
+    public var answerCallbackQuery:
+        @Sendable (_ callbackQueryID: String) async throws -> Void
     public var sendMessageDraft:
         @Sendable (_ chatID: Int64, _ draftID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws ->
             Void
@@ -84,6 +114,11 @@ public struct TelegramAPIClient: Sendable {
         @Sendable (
             _ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?,
             _ replyParameters: TelegramReplyParameters?
+        ) async throws -> TelegramMessage
+    public var sendMessageWithMarkup:
+        @Sendable (
+            _ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?,
+            _ replyParameters: TelegramReplyParameters?, _ replyMarkup: TelegramInlineKeyboardMarkup?
         ) async throws -> TelegramMessage
     public var editMessageText:
         @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws ->
@@ -96,6 +131,8 @@ public struct TelegramAPIClient: Sendable {
         setMessageReaction:
             @escaping @Sendable (_ chatID: Int64, _ messageID: Int64, _ reaction: TelegramReaction?) async throws ->
             Void,
+        answerCallbackQuery:
+            @escaping @Sendable (_ callbackQueryID: String) async throws -> Void = { _ in },
         sendMessageDraft:
             @escaping @Sendable (_ chatID: Int64, _ draftID: Int64, _ text: String, _ parseMode: TelegramParseMode?)
             async throws -> Void,
@@ -104,6 +141,11 @@ public struct TelegramAPIClient: Sendable {
                 _ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?,
                 _ replyParameters: TelegramReplyParameters?
             ) async throws -> TelegramMessage,
+        sendMessageWithMarkup:
+            (@Sendable (
+                _ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?,
+                _ replyParameters: TelegramReplyParameters?, _ replyMarkup: TelegramInlineKeyboardMarkup?
+            ) async throws -> TelegramMessage)? = nil,
         editMessageText:
             @escaping @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?)
             async throws -> Void
@@ -112,8 +154,12 @@ public struct TelegramAPIClient: Sendable {
         self.downloadFile = downloadFile
         self.sendChatAction = sendChatAction
         self.setMessageReaction = setMessageReaction
+        self.answerCallbackQuery = answerCallbackQuery
         self.sendMessageDraft = sendMessageDraft
         self.sendMessage = sendMessage
+        self.sendMessageWithMarkup = sendMessageWithMarkup ?? { chatID, text, parseMode, replyParameters, _ in
+            try await sendMessage(chatID, text, parseMode, replyParameters)
+        }
         self.editMessageText = editMessageText
     }
 }
@@ -402,6 +448,14 @@ extension TelegramAPIClient {
                     timeout: .seconds(Int64(requestTimeout.rounded(.up)))
                 )
             },
+            answerCallbackQuery: { callbackQueryID in
+                _ = try await call(
+                    method: .answerCallbackQuery,
+                    body: AnswerCallbackQueryRequest(callbackQueryID: callbackQueryID),
+                    result: Bool.self,
+                    timeout: .seconds(Int64(requestTimeout.rounded(.up)))
+                )
+            },
             sendMessageDraft: { chatID, draftID, text, parseMode in
                 _ = try await call(
                     method: .sendMessageDraft,
@@ -422,7 +476,22 @@ extension TelegramAPIClient {
                         chatID: chatID,
                         text: text,
                         parseMode: parseMode,
-                        replyParameters: replyParameters
+                        replyParameters: replyParameters,
+                        replyMarkup: nil
+                    ),
+                    result: TelegramMessage.self,
+                    timeout: .seconds(Int64(requestTimeout.rounded(.up)))
+                )
+            },
+            sendMessageWithMarkup: { chatID, text, parseMode, replyParameters, replyMarkup in
+                try await call(
+                    method: .sendMessage,
+                    body: SendMessageRequest(
+                        chatID: chatID,
+                        text: text,
+                        parseMode: parseMode,
+                        replyParameters: replyParameters,
+                        replyMarkup: replyMarkup
                     ),
                     result: TelegramMessage.self,
                     timeout: .seconds(Int64(requestTimeout.rounded(.up)))
@@ -521,6 +590,14 @@ private struct SendChatActionRequest: Encodable, Sendable {
     }
 }
 
+private struct AnswerCallbackQueryRequest: Encodable, Sendable {
+    let callbackQueryID: String
+
+    private enum CodingKeys: String, CodingKey {
+        case callbackQueryID = "callback_query_id"
+    }
+}
+
 private struct TelegramReactionType: Encodable, Sendable {
     let type: String
     let emoji: String
@@ -543,12 +620,14 @@ private struct SendMessageRequest: Encodable, Sendable {
     let text: String
     let parseMode: TelegramParseMode?
     let replyParameters: TelegramReplyParameters?
+    let replyMarkup: TelegramInlineKeyboardMarkup?
 
     private enum CodingKeys: String, CodingKey {
         case chatID = "chat_id"
         case text
         case parseMode = "parse_mode"
         case replyParameters = "reply_parameters"
+        case replyMarkup = "reply_markup"
     }
 }
 

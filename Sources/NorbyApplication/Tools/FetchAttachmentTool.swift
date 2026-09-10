@@ -93,7 +93,8 @@ public actor AttachmentResolver {
 
 /// Fetches an attachment through the channel that owns its opaque reference.
 /// Public web resources continue to use ``FetchURLTool``.
-public struct FetchAttachmentTool: Tool {
+@Tool
+public struct FetchAttachmentTool {
     public struct Input: Codable, Sendable {
         public let attachmentID: String
         public let mimeType: String?
@@ -119,28 +120,26 @@ public struct FetchAttachmentTool: Tool {
         self.resolver = resolver
     }
 
-    public var schema: LLMToolSchema {
-        LLMToolSchema(
-            type: "function",
-            function: LLMToolSchema.FunctionSchema(
-                name: name,
-                description: description,
-                parameters: LLMToolSchema.ParameterSchema(
-                    type: "object",
-                    properties: [
-                        "attachment_id": LLMToolSchema.PropertySchema(
-                            type: "string",
-                            description: "The exact opaque attachment_id from the user's message.",
-                            enumValues: nil
-                        ),
-                        "mime_type": LLMToolSchema.PropertySchema(
-                            type: "string",
-                            description: "The attachment MIME type when listed in the user's message.",
-                            enumValues: nil
-                        ),
-                    ],
-                    required: ["attachment_id"]
-                )
+    public var schema: ToolDefinition {
+        ToolDefinition(
+            name: name,
+            description: description,
+            parameters: ToolSchema.object(
+                name: "FetchAttachmentArguments",
+                description: "Arguments for fetching an attachment.",
+                properties: [
+                    .init(
+                        name: "attachment_id",
+                        description: "The exact opaque attachment_id from the user's message.",
+                        schema: ToolSchema.string(name: "AttachmentID")
+                    ),
+                    .init(
+                        name: "mime_type",
+                        description: "The attachment MIME type when listed in the user's message.",
+                        schema: ToolSchema.string(name: "AttachmentMIMEType"),
+                        isOptional: true
+                    )
+                ]
             )
         )
     }

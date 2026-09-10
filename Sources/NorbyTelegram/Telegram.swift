@@ -157,19 +157,59 @@ public struct TelegramMessage: Codable, Equatable, Sendable {
     }
 }
 
+public struct TelegramCallbackQuery: Codable, Equatable, Sendable {
+    public let id: String
+    public let from: TelegramUser
+    public let message: TelegramMessage?
+    public let data: String?
+
+    public init(
+        id: String,
+        from: TelegramUser,
+        message: TelegramMessage? = nil,
+        data: String? = nil
+    ) {
+        self.id = id
+        self.from = from
+        self.message = message
+        self.data = data
+    }
+}
+
 public struct TelegramUpdate: Codable, Equatable, Sendable {
     public let updateID: Int64
     public let message: TelegramMessage?
+    public let callbackQuery: TelegramCallbackQuery?
 
-    public init(updateID: Int64, message: TelegramMessage? = nil) {
+    public init(
+        updateID: Int64,
+        message: TelegramMessage? = nil,
+        callbackQuery: TelegramCallbackQuery? = nil
+    ) {
         self.updateID = updateID
         self.message = message
+        self.callbackQuery = callbackQuery
     }
 
     private enum CodingKeys: String, CodingKey {
         case updateID = "update_id"
         case message
+        case callbackQuery = "callback_query"
     }
+}
+
+public enum TelegramCommand: String, Sendable, Equatable {
+    case start
+    case reset
+    case memory
+    case forget
+    case context
+    case reminders
+    case tasks
+    case pauseTask = "pause-task"
+    case unpauseTask = "unpause-task"
+    case cancelTask = "cancel-task"
+    case cancelReminder = "cancel-reminder"
 }
 
 public enum TelegramInboundEvent: Equatable, Sendable {
@@ -177,7 +217,7 @@ public enum TelegramInboundEvent: Equatable, Sendable {
         InboundMessage,
         telegramMessageID: Int64,
         turnID: TurnID,
-        capabilities: ChannelCapabilities
+        supportsDrafts: Bool
     )
     case start(
         conversationID: ConversationID,
@@ -204,6 +244,7 @@ public enum TelegramInboundEvent: Equatable, Sendable {
         participantID: ParticipantID,
         userID: UserID
     )
+    case command(ConversationCommand)
 }
 
 public protocol TelegramOffsetStore: Sendable {
@@ -306,6 +347,7 @@ public actor TelegramEventPublisher {
     private let clock = ContinuousClock()
     private var sourceMessageIDs: [ConversationID: [TurnID: Int64]] = [:]
     private var draftIDs: [ConversationID: [TurnID: Int64]] = [:]
+    private var draftEnabledConversations: Set<ConversationID> = []
     private var lastSentDraftText: [DraftKey: String] = [:]
     private var lastTypingActionReservation: [ConversationID: ContinuousClock.Instant] = [:]
     private var nextDraftID: Int64 = 1
@@ -352,6 +394,9 @@ public actor TelegramEventPublisher {
                 }
 
             case .partial(let conversationID, let turnID, let text):
+                guard draftEnabledConversations.contains(conversationID) else {
+                    return
+                }
                 let chatID = try chatID(for: conversationID)
                 let html = TelegramHTMLFormatter.streamingFirstChunk(
                     markdown: text,
@@ -366,7 +411,8 @@ public actor TelegramEventPublisher {
 
             case .keepAlive(let conversationID, let turnID, let phase):
                 guard phase == .thinking || phase == .typing else { return }
-                if let html = lastSentDraftText[
+                if draftEnabledConversations.contains(conversationID),
+                    let html = lastSentDraftText[
                     DraftKey(conversationID: conversationID, turnID: turnID)
                 ] {
                     let chatID = try chatID(for: conversationID)
@@ -467,13 +513,50 @@ public actor TelegramEventPublisher {
                 )
             }
 
+        case .noticeWithActions(let conversationID, let turnID, let text, let actions):
+            let chatID = try chatID(for: conversationID)
+            let replyTo = replyParameters(
+                conversationID: conversationID,
+                turnID: turnID
+            )
+            let chunks = TelegramHTMLFormatter.chunks(
+                markdown: text,
+                maximumLength: maximumTextLength
+            )
+            let markup = TelegramInlineKeyboardMarkup(
+                inlineKeyboard: actions.map { action in
+                    [TelegramInlineKeyboardButton(text: action.label, callbackData: action.command)]
+                }
+            )
+            for (index, chunk) in chunks.enumerated() {
+                _ = try await client.sendMessageWithMarkup(
+                    chatID,
+                    chunk,
+                    .html,
+                    replyTo,
+                    index == chunks.index(before: chunks.endIndex) ? markup : nil
+                )
+            }
+
         case .reset(let conversationID):
             sourceMessageIDs[conversationID] = nil
             draftIDs[conversationID] = nil
+            draftEnabledConversations.remove(conversationID)
             lastSentDraftText = lastSentDraftText.filter {
                 $0.key.conversationID != conversationID
             }
             lastTypingActionReservation[conversationID] = nil
+        }
+    }
+
+    public func setDraftsEnabled(
+        _ enabled: Bool,
+        for conversationID: ConversationID
+    ) {
+        if enabled {
+            draftEnabledConversations.insert(conversationID)
+        } else {
+            draftEnabledConversations.remove(conversationID)
         }
     }
 

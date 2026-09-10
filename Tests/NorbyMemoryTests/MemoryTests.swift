@@ -30,6 +30,54 @@ struct MemoryTests {
     }
 
     @Test
+    func extractionDecisionCommitsTheBatchAndRecognizesRepeatedCommit() {
+        let observation = MemoryObservation(
+            id: observationID,
+            sourceID: sourceID,
+            text: "I live in Haar",
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        let input = ExtractionInput(
+            observations: [observation],
+            generation: .initial,
+            existingFacts: []
+        )
+        let candidate = FactCandidate(
+            namespace: .environment,
+            predicate: "lives_in",
+            value: .place("Haar"),
+            evidence: [observationID],
+            supportingText: "I live in Haar",
+            confidence: 1,
+            importance: 1,
+            stability: .mutable,
+            observedAt: observation.observedAt
+        )
+
+        guard case .commit(let commit) = MemoryExtraction.decide(
+            state: MemoryProjection(),
+            input: input,
+            proposals: [.add(candidate)]
+        ) else {
+            Issue.record("expected a memory extraction commit")
+            return
+        }
+
+        var projection = MemoryProjection()
+        projection.apply(.extractionCommitted(commit))
+        #expect(projection.containsObservation(for: sourceID))
+        #expect(projection.currentFacts().count == 1)
+
+        #expect(
+            MemoryExtraction.decide(
+                state: projection,
+                input: input,
+                proposals: [.add(candidate)]
+            ) == .alreadyHandled
+        )
+    }
+
+    @Test
     func clearingMemoryStartsANewGenerationAndRemovesTheProjection() {
         let observation = MemoryObservation(
             id: observationID,
@@ -165,6 +213,47 @@ struct MemoryTests {
                 .previousObservations(before: second.sourceID, limit: 2)
                 .map(\.id) == [first.id]
         )
+    }
+
+    @Test
+    func extractionInputMergesCurrentAndPreviousObservationsChronologically() {
+        let question = MemoryObservation(
+            sourceID: MemorySourceID(rawValue: UUID()),
+            text: "Where do you live?",
+            response: "I don't know yet — where are you based?",
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        let correction = MemoryObservation(
+            sourceID: MemorySourceID(rawValue: UUID()),
+            text: "Sorry, I meant Haar.",
+            response: "Thanks, I updated the location context.",
+            observedAt: Date(timeIntervalSince1970: 2)
+        )
+        let answer = MemoryObservation(
+            sourceID: MemorySourceID(rawValue: UUID()),
+            text: "Haar, Landkreis München",
+            response: "Got it.",
+            observedAt: Date(timeIntervalSince1970: 3)
+        )
+        let followUp = MemoryObservation(
+            sourceID: MemorySourceID(rawValue: UUID()),
+            text: "Use that for weather and reminders.",
+            response: "Understood.",
+            observedAt: Date(timeIntervalSince1970: 4)
+        )
+        let input = ExtractionInput(
+            observations: [followUp, answer],
+            generation: .initial,
+            existingFacts: [],
+            previousObservations: [correction, question]
+        )
+
+        #expect(input.chronologicalObservations.map(\.id) == [
+            question.id,
+            correction.id,
+            answer.id,
+            followUp.id,
+        ])
     }
 
     @Test

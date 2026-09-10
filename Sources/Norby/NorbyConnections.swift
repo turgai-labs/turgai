@@ -254,6 +254,12 @@ private enum UserCommand {
     case memory
     case forget
     case context
+    case reminders
+    case tasks
+    case pauseTask(String)
+    case unpauseTask(String)
+    case cancelTask(String)
+    case cancelReminder(String)
 }
 
 actor LiveSession {
@@ -354,7 +360,7 @@ actor LiveSession {
                 return false
             }
 
-        case .message(let message, let turnID, let capabilities):
+        case .message(let message, let turnID):
             do {
                 let user = try await User.resolve(
                     on: actorSystem,
@@ -365,7 +371,6 @@ actor LiveSession {
                 let conversation = try await Conversation.resolve(
                     on: actorSystem,
                     conversationID: message.conversationID,
-                    capabilities: capabilities,
                     snapshotPolicy: snapshotPolicy
                 )
                 try await attach(
@@ -374,8 +379,7 @@ actor LiveSession {
                 )
                 try await conversation.send(
                     message,
-                    turnID: turnID,
-                    capabilities: capabilities
+                    turnID: turnID
                 )
                 return true
             } catch {
@@ -440,6 +444,52 @@ actor LiveSession {
                 participantID: participantID,
                 userID: userID
             )
+
+        case .command(let command):
+            switch command {
+            case .reminders(let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .reminders,
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            case .tasks(let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .tasks,
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            case .pauseTask(let id, let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .pauseTask(id),
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            case .unpauseTask(let id, let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .unpauseTask(id),
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            case .cancelTask(let id, let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .cancelTask(id),
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            case .cancelReminder(let id, let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .cancelReminder(id),
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            }
         }
     }
 
@@ -470,6 +520,18 @@ actor LiveSession {
                 try await conversation.forgetMemory(for: userID)
             case .context:
                 try await conversation.showContext()
+            case .reminders:
+                try await conversation.showReminders()
+            case .tasks:
+                try await conversation.showTasks()
+            case .pauseTask(let id):
+                try await conversation.pauseTask(id: id)
+            case .unpauseTask(let id):
+                try await conversation.unpauseTask(id: id)
+            case .cancelTask(let id):
+                try await conversation.cancelTask(id: id)
+            case .cancelReminder(let id):
+                try await conversation.cancelReminder(id: id)
             }
             return true
         } catch {

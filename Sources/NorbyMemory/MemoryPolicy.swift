@@ -28,6 +28,74 @@ public enum MemoryDecision: Hashable, Sendable {
             .factSuperseded(oldFactID, by: replacement)
         }
     }
+
+    public var factEvent: MemoryFactEvent? {
+        switch self {
+        case .rejected:
+            nil
+        case .accepted(let fact):
+            .factAccepted(fact)
+        case .reinforced(let factID, let evidence, let confidence):
+            .factReinforced(factID, evidence: evidence, confidence: confidence)
+        case .superseded(let oldFactID, let replacement):
+            .factSuperseded(oldFactID, by: replacement)
+        }
+    }
+}
+
+public enum MemoryCommitDecision: Sendable, Equatable {
+    case stale
+    case alreadyHandled
+    case commit(MemoryExtractionCommit)
+}
+
+/// Namespace for the pure memory-extraction decisions.
+public enum MemoryExtraction {
+    /// Reconciles one captured extraction against one memory snapshot.
+    /// No actor state or journal is consulted while this function runs.
+    public static func decide(
+        state: MemoryProjection,
+        input: ExtractionInput,
+        proposals: [MemoryProposal],
+        policy: MemoryPolicy = MemoryPolicy()
+    ) -> MemoryCommitDecision {
+        guard input.generation == state.generation else { return .stale }
+        guard input.observations.allSatisfy(state.accepts) else { return .stale }
+
+        let observations = input.observations + input.previousObservations
+        guard !input.observations.isEmpty,
+            !input.observations.allSatisfy({ state.containsObservation(for: $0.sourceID) })
+        else {
+            return .alreadyHandled
+        }
+
+        var projected = state
+        var changes: [MemoryFactEvent] = []
+        for proposal in proposals {
+            let candidate: FactCandidate
+            switch proposal {
+            case .add(let value), .revise(_, let value):
+                candidate = value
+            }
+            guard MemoryEvidence.supports(candidate, in: observations) else { continue }
+            guard let event = policy.decide(
+                proposal: proposal,
+                against: projected.currentFacts(),
+                factID: MemoryFactID()
+            ).factEvent else { continue }
+            projected.applyFactEvent(event)
+            changes.append(event)
+        }
+
+        return .commit(
+            MemoryExtractionCommit(
+                generation: input.generation,
+                processedSources: input.observations.map(\.sourceID),
+                observations: input.observations,
+                changes: changes
+            )
+        )
+    }
 }
 
 /// Pure policy for turning an extractor proposal into a memory transition.

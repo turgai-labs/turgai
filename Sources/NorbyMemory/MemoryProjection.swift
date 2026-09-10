@@ -100,17 +100,13 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
             )
 
         case .factAccepted(let fact):
-            facts.append(fact)
+            applyFactEvent(.factAccepted(fact))
 
         case .factReinforced(let id, let evidence, let confidence):
-            guard let index = facts.firstIndex(where: { $0.id == id }) else { return }
-            facts[index].reinforce(evidence: evidence, confidence: confidence)
+            applyFactEvent(.factReinforced(id, evidence: evidence, confidence: confidence))
 
         case .factSuperseded(let id, let replacement):
-            if let index = facts.firstIndex(where: { $0.id == id }) {
-                facts[index].transition(to: .superseded(by: replacement.id))
-            }
-            facts.append(replacement)
+            applyFactEvent(.factSuperseded(id, by: replacement))
 
         case .factExpired(let id):
             guard let index = facts.firstIndex(where: { $0.id == id }) else { return }
@@ -119,6 +115,36 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         case .factForgotten(let id):
             guard let index = facts.firstIndex(where: { $0.id == id }) else { return }
             facts[index].transition(to: .forgotten)
+
+        case .extractionCommitted(let commit):
+            guard commit.generation == generation else { return }
+            for observation in commit.observations {
+                guard accepts(observation),
+                    !observations.contains(where: { $0.sourceID == observation.sourceID })
+                else { continue }
+                observations.append(observation)
+            }
+            if observations.count > Self.observationTailLimit {
+                observations.removeFirst(observations.count - Self.observationTailLimit)
+            }
+            for change in commit.changes {
+                applyFactEvent(change)
+            }
+        }
+    }
+
+    public mutating func applyFactEvent(_ event: MemoryFactEvent) {
+        switch event {
+        case .factAccepted(let fact):
+            facts.append(fact)
+        case .factReinforced(let id, let evidence, let confidence):
+            guard let index = facts.firstIndex(where: { $0.id == id }) else { return }
+            facts[index].reinforce(evidence: evidence, confidence: confidence)
+        case .factSuperseded(let id, let replacement):
+            if let index = facts.firstIndex(where: { $0.id == id }) {
+                facts[index].transition(to: .superseded(by: replacement.id))
+            }
+            facts.append(replacement)
         }
     }
 
