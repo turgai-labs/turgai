@@ -411,7 +411,6 @@ public struct TimerScheduledResult: Sendable {
 }
 
 public struct CreateTimerEffect: ScopedEffect, Sendable {
-    public typealias Output = TimerScheduledResult
     public let name = "timer.create"
     public let trigger: Timer.Trigger
     public let request: Timer.Request
@@ -429,7 +428,6 @@ public struct CreateTimerEffect: ScopedEffect, Sendable {
 }
 
 public struct ReplaceTimerEffect: ScopedEffect, Sendable {
-    public typealias Output = TimerScheduledResult
     public let name = "timer.replace"
     public let timerID: WorkflowID
     public let trigger: Timer.Trigger
@@ -449,7 +447,6 @@ public struct ReplaceTimerEffect: ScopedEffect, Sendable {
 }
 
 public struct CancelTimerEffect: ScopedEffect, Sendable {
-    public typealias Output = Void
     public let name = "timer.cancel"
     public let timerID: WorkflowID
     public static func run(in token: borrowing EffectToken<Self>) async throws {
@@ -459,7 +456,6 @@ public struct CancelTimerEffect: ScopedEffect, Sendable {
 }
 
 public struct ListTimersEffect: ScopedEffect, Sendable {
-    public typealias Output = [Timer.Info]
     public let name = "timer.list"
     public let conversationID: ConversationID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> [Timer.Info] {

@@ -96,7 +96,6 @@ public struct LocationTool {
 /// provider call that interprets it. It does not persist or imply a current
 /// user location.
 public struct LocationEffect: CompositeScopedEffect, Sendable {
-    public typealias Output = [Result]
 
     public let name = "location"
     public let query: String

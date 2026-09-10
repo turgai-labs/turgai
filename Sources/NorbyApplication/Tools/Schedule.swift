@@ -185,7 +185,6 @@ public struct ScheduleScheduledResult: Sendable {
 }
 
 public struct CreateScheduleEffect: ScopedEffect, Sendable {
-    public typealias Output = ScheduleScheduledResult
     public let name = "schedule.create"
     public let id: ScheduleID
     public let recurrence: Calendar.RecurrenceRule
@@ -199,7 +198,6 @@ public struct CreateScheduleEffect: ScopedEffect, Sendable {
 }
 
 public struct ReplaceScheduleEffect: ScopedEffect, Sendable {
-    public typealias Output = ScheduleScheduledResult
     public let name = "schedule.replace"
     public let id: ScheduleID
     public let recurrence: Calendar.RecurrenceRule
@@ -214,7 +212,6 @@ public struct ReplaceScheduleEffect: ScopedEffect, Sendable {
 }
 
 public struct CancelScheduleEffect: ScopedEffect, Sendable {
-    public typealias Output = Void
     public let name = "schedule.cancel"
     public let scheduleID: ScheduleID
     public static func run(in token: borrowing EffectToken<Self>) async throws {
@@ -224,7 +221,6 @@ public struct CancelScheduleEffect: ScopedEffect, Sendable {
 }
 
 public struct ListSchedulesEffect: ScopedEffect, Sendable {
-    public typealias Output = [Schedule.Info]
     public let name = "schedule.list"
     public let conversationID: ConversationID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> [Schedule.Info] {
@@ -235,7 +231,6 @@ public struct ListSchedulesEffect: ScopedEffect, Sendable {
 }
 
 public struct TriggerScheduleEffect: ScopedEffect, Sendable {
-    public typealias Output = ScheduleTriggerOutcome
     public let name = "schedule.trigger"
     public let scheduleID: ScheduleID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> ScheduleTriggerOutcome {

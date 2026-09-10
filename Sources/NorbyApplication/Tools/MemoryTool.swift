@@ -15,7 +15,6 @@ import NorbyMemory
 /// here so the dependency is visibly tied to the memory effect rather than a
 /// broad coordination capability.
 public struct MemoryEffect: ScopedEffect, Sendable {
-    public typealias Output = String
 
     public let name = "memory"
     public let input: MemoryTool.Input
