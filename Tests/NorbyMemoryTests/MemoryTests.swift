@@ -54,11 +54,13 @@ struct MemoryTests {
             observedAt: observation.observedAt
         )
 
-        guard case .commit(let commit) = MemoryExtraction.decide(
-            state: MemoryProjection(),
-            input: input,
-            proposals: [.add(candidate)]
-        ) else {
+        guard
+            case .commit(let commit) = MemoryExtraction.decide(
+                state: MemoryProjection(),
+                input: input,
+                proposals: [.add(candidate)]
+            )
+        else {
             Issue.record("expected a memory extraction commit")
             return
         }
@@ -248,12 +250,13 @@ struct MemoryTests {
             previousObservations: [correction, question]
         )
 
-        #expect(input.chronologicalObservations.map(\.id) == [
-            question.id,
-            correction.id,
-            answer.id,
-            followUp.id,
-        ])
+        #expect(
+            input.chronologicalObservations.map(\.id) == [
+                question.id,
+                correction.id,
+                answer.id,
+                followUp.id,
+            ])
     }
 
     @Test

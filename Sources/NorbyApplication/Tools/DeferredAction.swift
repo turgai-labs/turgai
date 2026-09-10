@@ -62,11 +62,15 @@ private struct DeferredToolTarget: Sendable {
     }
 
     func timerRequest(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Timer.Request {
-        Timer.Request(ownerID: ownerID, conversationID: conversationID, participantID: participantID, action: action, snapshotPolicy: snapshotPolicy)
+        Timer.Request(
+            ownerID: ownerID, conversationID: conversationID, participantID: participantID, action: action,
+            snapshotPolicy: snapshotPolicy)
     }
 
     func scheduleRequest(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Schedule.Request {
-        Schedule.Request(ownerID: ownerID, conversationID: conversationID, participantID: participantID, action: action, snapshotPolicy: snapshotPolicy)
+        Schedule.Request(
+            ownerID: ownerID, conversationID: conversationID, participantID: participantID, action: action,
+            snapshotPolicy: snapshotPolicy)
     }
 }
 
@@ -74,10 +78,14 @@ enum DeferredActionToolSupport {
     static func make(kind: DeferredAction.Kind, message: String?, instruction: String?) throws -> DeferredAction {
         switch kind {
         case .deliverPreparedMessage:
-            guard let message, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw TimerTools.Error.emptyMessage }
+            guard let message, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw TimerTools.Error.emptyMessage
+            }
             return .deliverPreparedMessage(message: message.trimmingCharacters(in: .whitespacesAndNewlines))
         case .performTask:
-            guard let instruction, !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw TimerTools.Error.emptyInstruction }
+            guard let instruction, !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw TimerTools.Error.emptyInstruction
+            }
             return .performTask(instruction: instruction.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
@@ -86,14 +94,18 @@ enum DeferredActionToolSupport {
 struct TimerTarget {
     private let value: DeferredToolTarget
     init(context: AgentTurnContext) throws { value = try DeferredToolTarget(context: context) }
-    func request(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Timer.Request { value.timerRequest(action: action, snapshotPolicy: snapshotPolicy) }
+    func request(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Timer.Request {
+        value.timerRequest(action: action, snapshotPolicy: snapshotPolicy)
+    }
     var conversationID: ConversationID { value.conversationID }
 }
 
 struct ScheduleTarget {
     private let value: DeferredToolTarget
     init(context: AgentTurnContext) throws { value = try DeferredToolTarget(context: context) }
-    func request(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Schedule.Request { value.scheduleRequest(action: action, snapshotPolicy: snapshotPolicy) }
+    func request(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Schedule.Request {
+        value.scheduleRequest(action: action, snapshotPolicy: snapshotPolicy)
+    }
     var ownerID: NorbyDomain.UserID { value.ownerID }
     var conversationID: ConversationID { value.conversationID }
 }

@@ -124,14 +124,16 @@ struct Norby: AsyncParsableCommand {
                     WeatherTool(),
                     FetchAttachmentTool(resolver: attachmentResolver),
                 ]
-                tools += ScheduleTools(
-                    context: context,
-                    snapshotPolicy: runtimeConfiguration.snapshotPolicy
-                ).tools
-                tools += TimerTools(
-                    context: context,
-                    snapshotPolicy: runtimeConfiguration.snapshotPolicy
-                ).tools
+                tools +=
+                    ScheduleTools(
+                        context: context,
+                        snapshotPolicy: runtimeConfiguration.snapshotPolicy
+                    ).tools
+                tools +=
+                    TimerTools(
+                        context: context,
+                        snapshotPolicy: runtimeConfiguration.snapshotPolicy
+                    ).tools
                 if let userID, let sourceMessage {
                     let user: NorbyApplication.User
                     let expectedGeneration: MemoryGeneration

@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import Hail
 
 #if canImport(FoundationEssentials)
@@ -15,12 +16,9 @@ import Hail
 public struct LocationTool {
     public typealias Effect = LocationEffect
 
-    public struct Input: Codable, Sendable {
+    @Generable
+    public struct Input: Sendable {
         public let query: String
-
-        public init(query: String) {
-            self.query = query
-        }
     }
 
     public enum Error: Swift.Error, Equatable, Sendable {
@@ -37,24 +35,6 @@ public struct LocationTool {
         "Resolve a place name into coordinates and its IANA time zone. Use the place you know from the conversation or memory. Use the returned time_zone with now, weather, timers, or schedules; this tool does not save the location."
 
     public init() {}
-
-    public var schema: ToolDefinition {
-        ToolDefinition(
-            name: name,
-            description: description,
-            parameters: ToolSchema.object(
-                name: "LocationArguments",
-                description: "Arguments for resolving a place.",
-                properties: [
-                    .init(
-                        name: "query",
-                        description: "A city, place, or postal code, preferably with a country or region when ambiguous.",
-                        schema: ToolSchema.string(name: "PlaceQuery")
-                    )
-                ]
-            )
-        )
-    }
 
     public func effect(for input: Input) throws -> Effect {
         let query = try validatedQuery(input.query)
@@ -109,13 +89,6 @@ public struct LocationTool {
     }
 
 }
-import Hail
-
-#if canImport(FoundationEssentials)
-    import FoundationEssentials
-#else
-    import Foundation
-#endif
 
 /// The semantic capability to resolve one place supplied by the agent.
 ///

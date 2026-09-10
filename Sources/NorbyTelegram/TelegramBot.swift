@@ -565,7 +565,8 @@ public actor TelegramBot {
     }
 
     private static func argument(in text: String) -> String? {
-        let parts = text
+        let parts =
+            text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: \.isWhitespace)
         guard parts.count >= 2 else { return nil }
@@ -593,6 +594,6 @@ extension TelegramInboundEvent {
                 .cancelReminder(_, let conversationID, _, _):
                 conversationID
             }
+        }
     }
-}
 }

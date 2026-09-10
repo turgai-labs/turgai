@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import CryptoKit
 import DistributedCluster
 import DurableWorkflows
@@ -176,16 +177,6 @@ public struct Schedule: Sendable {
         NorbyDomain.TurnID(rawValue: norbyDeterministicUUID("turn:\(workflowID.rawValue)"))
     }
 }
-import DurableWorkflows
-import Hail
-import AnyLanguageModel
-import NorbyDomain
-
-#if canImport(FoundationEssentials)
-import FoundationEssentials
-#else
-import Foundation
-#endif
 
 public struct ScheduleScheduledResult: Sendable {
     public let id: ScheduleID
@@ -201,7 +192,8 @@ public struct CreateScheduleEffect: ScopedEffect, Sendable {
     public let request: Schedule.Request
     public static func run(in token: borrowing EffectToken<Self>) async throws -> ScheduleScheduledResult {
         let (id, recurrence, request) = token.withConfiguration { ($0.id, $0.recurrence, $0.request) }
-        try await Schedule.schedule(id: id, recurrence: recurrence, request: request, workflows: ActorSystemDependency<Self>.current.workflows)
+        try await Schedule.schedule(
+            id: id, recurrence: recurrence, request: request, workflows: ActorSystemDependency<Self>.current.workflows)
         return ScheduleScheduledResult(id: id, action: request.action.kind, replaced: false)
     }
 }
@@ -226,7 +218,8 @@ public struct CancelScheduleEffect: ScopedEffect, Sendable {
     public let name = "schedule.cancel"
     public let scheduleID: ScheduleID
     public static func run(in token: borrowing EffectToken<Self>) async throws {
-        try await Schedule.cancel(token.withConfiguration { $0.scheduleID }, workflows: ActorSystemDependency<Self>.current.workflows)
+        try await Schedule.cancel(
+            token.withConfiguration { $0.scheduleID }, workflows: ActorSystemDependency<Self>.current.workflows)
     }
 }
 
@@ -235,7 +228,9 @@ public struct ListSchedulesEffect: ScopedEffect, Sendable {
     public let name = "schedule.list"
     public let conversationID: ConversationID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> [Schedule.Info] {
-        try await Schedule.list(conversationID: token.withConfiguration { $0.conversationID }, workflows: ActorSystemDependency<Self>.current.workflows)
+        try await Schedule.list(
+            conversationID: token.withConfiguration { $0.conversationID },
+            workflows: ActorSystemDependency<Self>.current.workflows)
     }
 }
 
@@ -244,7 +239,9 @@ public struct TriggerScheduleEffect: ScopedEffect, Sendable {
     public let name = "schedule.trigger"
     public let scheduleID: ScheduleID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> ScheduleTriggerOutcome {
-        switch try await Schedule.trigger(token.withConfiguration { $0.scheduleID }, workflows: ActorSystemDependency<Self>.current.workflows) {
+        switch try await Schedule.trigger(
+            token.withConfiguration { $0.scheduleID }, workflows: ActorSystemDependency<Self>.current.workflows)
+        {
         case .triggered: .triggered
         case .skipped: .skipped
         }
@@ -253,12 +250,47 @@ public struct TriggerScheduleEffect: ScopedEffect, Sendable {
 
 @Tool
 public struct ScheduleTools: Sendable {
+    @Generable
+    public enum Action: Sendable {
+        case deliverPreparedMessage
+        case performTask
+    }
+
+    @Generable
+    public enum Frequency: Sendable {
+        case daily
+        case weekly
+    }
+
+    @Generable
+    public enum Weekday: Sendable {
+        case sunday, monday, tuesday, wednesday, thursday, friday, saturday
+    }
+
+    @Generable
+    public struct RecurrenceInput: Sendable {
+        public let frequency: Frequency
+        public let interval: Int
+        public let timeZone: String
+        public let hour: Int
+        public let minute: Int
+        public let weekdays: [Weekday]
+    }
+
     public struct Recurrence: Codable, Sendable, Equatable {
         public enum Frequency: String, Codable, Sendable, Equatable, CaseIterable { case daily, weekly }
         public enum Weekday: String, Codable, Sendable, Equatable, CaseIterable {
             case sunday, monday, tuesday, wednesday, thursday, friday, saturday
             var foundationValue: Locale.Weekday {
-                switch self { case .sunday: .sunday; case .monday: .monday; case .tuesday: .tuesday; case .wednesday: .wednesday; case .thursday: .thursday; case .friday: .friday; case .saturday: .saturday }
+                switch self {
+                case .sunday: .sunday
+                case .monday: .monday
+                case .tuesday: .tuesday
+                case .wednesday: .wednesday
+                case .thursday: .thursday
+                case .friday: .friday
+                case .saturday: .saturday
+                }
             }
         }
         public let frequency: Frequency
@@ -267,91 +299,194 @@ public struct ScheduleTools: Sendable {
         public let hour: Int
         public let minute: Int
         public let weekdays: [Weekday]
-        private enum CodingKeys: String, CodingKey { case frequency, interval, timeZone = "time_zone", hour, minute, weekdays }
-        public init(frequency: Frequency, interval: Int = 1, timeZone: TimeZone, hour: Int, minute: Int, weekdays: [Weekday] = []) { self.frequency = frequency; self.interval = interval; self.timeZone = timeZone; self.hour = hour; self.minute = minute; self.weekdays = weekdays }
+        private enum CodingKeys: String, CodingKey {
+            case frequency, interval
+            case timeZone = "time_zone"
+            case hour, minute, weekdays
+        }
+        public init(
+            frequency: Frequency, interval: Int = 1, timeZone: TimeZone, hour: Int, minute: Int,
+            weekdays: [Weekday] = []
+        ) {
+            self.frequency = frequency
+            self.interval = interval
+            self.timeZone = timeZone
+            self.hour = hour
+            self.minute = minute
+            self.weekdays = weekdays
+        }
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            frequency = try c.decode(Frequency.self, forKey: .frequency); interval = try c.decode(Int.self, forKey: .interval)
+            frequency = try c.decode(Frequency.self, forKey: .frequency)
+            interval = try c.decode(Int.self, forKey: .interval)
             let id = try c.decode(String.self, forKey: .timeZone)
-            guard let zone = TimeZone(identifier: id) else { throw DecodingError.dataCorruptedError(forKey: .timeZone, in: c, debugDescription: "Invalid IANA timezone: \(id)") }
-            timeZone = zone; hour = try c.decode(Int.self, forKey: .hour); minute = try c.decode(Int.self, forKey: .minute); weekdays = try c.decode([Weekday].self, forKey: .weekdays)
+            guard let zone = TimeZone(identifier: id) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .timeZone, in: c, debugDescription: "Invalid IANA timezone: \(id)")
+            }
+            timeZone = zone
+            hour = try c.decode(Int.self, forKey: .hour)
+            minute = try c.decode(Int.self, forKey: .minute)
+            weekdays = try c.decode([Weekday].self, forKey: .weekdays)
         }
-        public func encode(to encoder: Encoder) throws { var c = encoder.container(keyedBy: CodingKeys.self); try c.encode(frequency, forKey: .frequency); try c.encode(interval, forKey: .interval); try c.encode(timeZone.identifier, forKey: .timeZone); try c.encode(hour, forKey: .hour); try c.encode(minute, forKey: .minute); try c.encode(weekdays, forKey: .weekdays) }
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(frequency, forKey: .frequency)
+            try c.encode(interval, forKey: .interval)
+            try c.encode(timeZone.identifier, forKey: .timeZone)
+            try c.encode(hour, forKey: .hour)
+            try c.encode(minute, forKey: .minute)
+            try c.encode(weekdays, forKey: .weekdays)
+        }
         func foundationRule() throws -> Calendar.RecurrenceRule {
             guard interval > 0 else { throw Error.invalidInterval(interval) }
             guard (0...23).contains(hour) else { throw Error.invalidHour(hour) }
             guard (0...59).contains(minute) else { throw Error.invalidMinute(minute) }
-            guard frequency == .weekly ? !weekdays.isEmpty : weekdays.isEmpty else { throw frequency == .weekly ? Error.missingWeekdays : Error.invalidWeekdays }
-            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timeZone
-            return Calendar.RecurrenceRule(calendar: calendar, frequency: frequency == .daily ? .daily : .weekly, interval: interval, weekdays: weekdays.map { .every($0.foundationValue) }, hours: [hour], minutes: [minute])
+            guard frequency == .weekly ? !weekdays.isEmpty : weekdays.isEmpty else {
+                throw frequency == .weekly ? Error.missingWeekdays : Error.invalidWeekdays
+            }
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = timeZone
+            return Calendar.RecurrenceRule(
+                calendar: calendar, frequency: frequency == .daily ? .daily : .weekly, interval: interval,
+                weekdays: weekdays.map { .every($0.foundationValue) }, hours: [hour], minutes: [minute])
         }
     }
 
-    public enum Error: Swift.Error, Equatable, Sendable { case emptyScheduleID, invalidInterval(Int), invalidHour(Int), invalidMinute(Int), missingWeekdays, invalidWeekdays }
+    public enum Error: Swift.Error, Equatable, Sendable {
+        case emptyScheduleID
+        case invalidInterval(Int)
+        case invalidHour(Int)
+        case invalidMinute(Int)
+        case missingWeekdays, invalidWeekdays
+        case invalidTimeZone(String)
+    }
     public let context: AgentTurnContext
     public let snapshotPolicy: AgentSnapshotPolicy
-    public init(context: AgentTurnContext, snapshotPolicy: AgentSnapshotPolicy = .default) { self.context = context; self.snapshotPolicy = snapshotPolicy }
+    public init(context: AgentTurnContext, snapshotPolicy: AgentSnapshotPolicy = .default) {
+        self.context = context
+        self.snapshotPolicy = snapshotPolicy
+    }
+
+    private func deferredAction(kind: Action, message: String?, instruction: String?) throws -> DeferredAction {
+        let domainKind: DeferredAction.Kind =
+            switch kind {
+            case .deliverPreparedMessage: .deliverPreparedMessage
+            case .performTask: .performTask
+            }
+        return try DeferredActionToolSupport.make(kind: domainKind, message: message, instruction: instruction)
+    }
+
+    private func recurrence(_ input: RecurrenceInput) throws -> Recurrence {
+        guard let timeZone = TimeZone(identifier: input.timeZone) else {
+            throw Error.invalidTimeZone(input.timeZone)
+        }
+        let frequency: Recurrence.Frequency =
+            switch input.frequency {
+            case .daily: .daily
+            case .weekly: .weekly
+            }
+        let weekdays = input.weekdays.map { weekday -> Recurrence.Weekday in
+            switch weekday {
+            case .sunday: .sunday
+            case .monday: .monday
+            case .tuesday: .tuesday
+            case .wednesday: .wednesday
+            case .thursday: .thursday
+            case .friday: .friday
+            case .saturday: .saturday
+            }
+        }
+        return Recurrence(
+            frequency: frequency, interval: input.interval, timeZone: timeZone, hour: input.hour, minute: input.minute,
+            weekdays: weekdays)
+    }
 
     @Command("create")
-    public func create(_ input: Create.Input) throws -> CreateScheduleEffect {
-        let target = try ScheduleTarget(context: context); let action = try DeferredActionToolSupport.make(kind: input.action, message: input.message, instruction: input.instruction); let recurrence = try input.recurrence.foundationRule()
-        return CreateScheduleEffect(id: ScheduleID(ownerID: target.ownerID, conversationID: target.conversationID, action: action, recurrence: recurrence), recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
+    public func create(_ input: CreateInput) throws -> CreateScheduleEffect {
+        let target = try ScheduleTarget(context: context)
+        let action = try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)
+        let recurrence = try recurrence(input.recurrence).foundationRule()
+        return CreateScheduleEffect(
+            id: ScheduleID(
+                ownerID: target.ownerID, conversationID: target.conversationID, action: action, recurrence: recurrence),
+            recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
     }
     @Command("replace")
-    public func replace(_ input: Replace.Input) throws -> ReplaceScheduleEffect {
+    public func replace(_ input: ReplaceInput) throws -> ReplaceScheduleEffect {
         guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
-        let target = try ScheduleTarget(context: context); let action = try DeferredActionToolSupport.make(kind: input.action, message: input.message, instruction: input.instruction); let recurrence = try input.recurrence.foundationRule()
-        return ReplaceScheduleEffect(id: id, recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
+        let target = try ScheduleTarget(context: context)
+        let action = try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)
+        let recurrence = try recurrence(input.recurrence).foundationRule()
+        return ReplaceScheduleEffect(
+            id: id, recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
     }
     @Command("cancel")
-    public func cancel(_ input: Cancel.Input) throws -> CancelScheduleEffect { guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }; return CancelScheduleEffect(scheduleID: id) }
+    public func cancel(_ input: CancelInput) throws -> CancelScheduleEffect {
+        guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
+        return CancelScheduleEffect(scheduleID: id)
+    }
     @Command("list")
-    public func list(_ input: List.Input) throws -> ListSchedulesEffect { ListSchedulesEffect(conversationID: try ScheduleTarget(context: context).conversationID) }
+    public func list(_ input: ListInput) throws -> ListSchedulesEffect {
+        ListSchedulesEffect(conversationID: try ScheduleTarget(context: context).conversationID)
+    }
     @Command("trigger")
-    public func trigger(_ input: Trigger.Input) throws -> TriggerScheduleEffect { guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }; return TriggerScheduleEffect(scheduleID: id) }
+    public func trigger(_ input: TriggerInput) throws -> TriggerScheduleEffect {
+        guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
+        return TriggerScheduleEffect(scheduleID: id)
+    }
 
-    public func render(_ output: ScheduleScheduledResult) -> String { Self.renderScheduled(id: output.id, action: output.action, replaced: output.replaced) }
+    public func render(_ output: ScheduleScheduledResult) -> String {
+        Self.renderScheduled(id: output.id, action: output.action, replaced: output.replaced)
+    }
     public func render(_ output: [Schedule.Info]) -> String { Self.renderListed(output) }
     public func render(_ output: Void) -> String { "Recurring schedule cancelled." }
-    public func render(_ output: ScheduleTriggerOutcome) -> String { switch output { case .triggered: "Recurring schedule triggered."; case .skipped: "Recurring schedule was not triggered because an occurrence is already running." } }
-    static func renderScheduled(id: ScheduleID, action: DeferredAction.Kind, replaced: Bool) -> String { let prefix = switch action { case .deliverPreparedMessage: replaced ? "Recurring prepared message replaced." : "Recurring prepared message scheduled."; case .performTask: replaced ? "Recurring task replaced." : "Recurring task scheduled." }; return prefix + " schedule_id: " + id.rawValue + "." }
-    static func renderListed(_ schedules: [Schedule.Info]) -> String { guard !schedules.isEmpty else { return "No active recurring schedules." }; return schedules.map { ["schedule_id=\($0.id.rawValue)", "action=\($0.action.kind.rawValue)", "content=\($0.action.content)", "next_fire_at=\($0.nextFireAt?.ISO8601Format() ?? "none")"].joined(separator: " | ") }.joined(separator: "\n") }
+    public func render(_ output: ScheduleTriggerOutcome) -> String {
+        switch output {
+        case .triggered: "Recurring schedule triggered."
+        case .skipped: "Recurring schedule was not triggered because an occurrence is already running."
+        }
+    }
+    static func renderScheduled(id: ScheduleID, action: DeferredAction.Kind, replaced: Bool) -> String {
+        let prefix =
+            switch action {
+            case .deliverPreparedMessage:
+                replaced ? "Recurring prepared message replaced." : "Recurring prepared message scheduled."
+            case .performTask: replaced ? "Recurring task replaced." : "Recurring task scheduled."
+            }
+        return prefix + " schedule_id: " + id.rawValue + "."
+    }
+    static func renderListed(_ schedules: [Schedule.Info]) -> String {
+        guard !schedules.isEmpty else { return "No active recurring schedules." }
+        return schedules.map {
+            [
+                "schedule_id=\($0.id.rawValue)", "action=\($0.action.kind.rawValue)", "content=\($0.action.content)",
+                "next_fire_at=\($0.nextFireAt?.ISO8601Format() ?? "none")",
+            ].joined(separator: " | ")
+        }.joined(separator: "\n")
+    }
 
-    public struct Create { public struct Input: Codable, Sendable { public let action: DeferredAction.Kind; public let message: String?; public let instruction: String?; public let recurrence: Recurrence; public static var generationSchema: GenerationSchema { ScheduleSchemas.createParameters } } }
-    public struct Replace { public struct Input: Codable, Sendable { public let scheduleID: String; public let action: DeferredAction.Kind; public let message: String?; public let instruction: String?; public let recurrence: Recurrence; public static var generationSchema: GenerationSchema { ScheduleSchemas.replaceParameters } } }
-    public struct Cancel { public struct Input: Codable, Sendable { public let scheduleID: String; public static var generationSchema: GenerationSchema { ScheduleSchemas.cancelParameters } } }
-    public struct List { public struct Input: Codable, Sendable { public static var generationSchema: GenerationSchema { ScheduleSchemas.listParameters } } }
-    public struct Trigger { public struct Input: Codable, Sendable { public let scheduleID: String; public static var generationSchema: GenerationSchema { ScheduleSchemas.triggerParameters } } }
-}
-
-enum ScheduleSchemas {
-    static let action = TimerSchemas.action
-    static let recurrence = DynamicGenerationSchema(
-        name: "ScheduleRecurrence",
-        description: "A recurring local calendar time.",
-        properties: [
-            .init(name: "frequency", schema: ToolSchema.string(name: "ScheduleFrequency", choices: ScheduleTools.Recurrence.Frequency.allCases.map(\.rawValue))),
-            .init(name: "interval", schema: ToolSchema.integer()),
-            .init(name: "time_zone", schema: ToolSchema.string(name: "ScheduleTimeZone")),
-            .init(name: "hour", schema: ToolSchema.integer()),
-            .init(name: "minute", schema: ToolSchema.integer()),
-            .init(
-                name: "weekdays",
-                description: "Empty for daily; one or more weekday names for weekly.",
-                schema: DynamicGenerationSchema(
-                    arrayOf: ToolSchema.string(
-                        name: "ScheduleWeekday",
-                        choices: ScheduleTools.Recurrence.Weekday.allCases.map(\.rawValue)
-                    )
-                )
-            )
-        ]
-    )
-    static let createParameters = ToolSchema.object(name: "CreateScheduleArguments", description: "Create a recurring schedule.", properties: [.init(name: "action", schema: action), .init(name: "message", schema: ToolSchema.string(name: "ScheduleMessage"), isOptional: true), .init(name: "instruction", schema: ToolSchema.string(name: "ScheduleInstruction"), isOptional: true), .init(name: "recurrence", schema: recurrence)])
-    static let replaceParameters = ToolSchema.object(name: "ReplaceScheduleArguments", description: "Replace a recurring schedule.", properties: [.init(name: "schedule_id", schema: ToolSchema.string(name: "ScheduleID")), .init(name: "action", schema: action), .init(name: "message", schema: ToolSchema.string(name: "ScheduleMessage"), isOptional: true), .init(name: "instruction", schema: ToolSchema.string(name: "ScheduleInstruction"), isOptional: true), .init(name: "recurrence", schema: recurrence)])
-    static let cancelParameters = ToolSchema.object(name: "CancelScheduleArguments", description: "Cancel a recurring schedule.", properties: [.init(name: "schedule_id", schema: ToolSchema.string(name: "ScheduleID"))])
-    static let listParameters = ToolSchema.object(name: "ListScheduleArguments", description: "List recurring schedules.", properties: [])
-    static let triggerParameters = ToolSchema.object(name: "TriggerScheduleArguments", description: "Run a recurring schedule immediately.", properties: [.init(name: "schedule_id", schema: ToolSchema.string(name: "ScheduleID"))])
+    @Generable
+    public struct CreateInput: Sendable {
+        public let action: Action
+        public let message: String?
+        public let instruction: String?
+        public let recurrence: RecurrenceInput
+    }
+    @Generable
+    public struct ReplaceInput: Sendable {
+        public let scheduleID: String
+        public let action: Action
+        public let message: String?
+        public let instruction: String?
+        public let recurrence: RecurrenceInput
+    }
+    @Generable
+    public struct CancelInput: Sendable { public let scheduleID: String }
+    @Generable
+    public struct ListInput: Sendable {}
+    @Generable
+    public struct TriggerInput: Sendable { public let scheduleID: String }
 }
 
 /// Stable identity for one recurring action in one conversation. Calling the

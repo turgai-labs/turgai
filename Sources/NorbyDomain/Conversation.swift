@@ -801,10 +801,11 @@ public func reduce(
         }
 
         if let activeMessage = next.activeMessage {
-            let response: String? = switch completion {
-            case .reply(let reply): reply.text
-            case .void: nil
-            }
+            let response: String? =
+                switch completion {
+                case .reply(let reply): reply.text
+                case .void: nil
+                }
             next.pendingMemoryObservations.append(
                 PendingMemoryObservation(
                     turnID: turnID,

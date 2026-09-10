@@ -105,8 +105,7 @@ public struct TelegramAPIClient: Sendable {
     public var sendChatAction: @Sendable (_ chatID: Int64, _ action: String) async throws -> Void
     public var setMessageReaction:
         @Sendable (_ chatID: Int64, _ messageID: Int64, _ reaction: TelegramReaction?) async throws -> Void
-    public var answerCallbackQuery:
-        @Sendable (_ callbackQueryID: String) async throws -> Void
+    public var answerCallbackQuery: @Sendable (_ callbackQueryID: String) async throws -> Void
     public var sendMessageDraft:
         @Sendable (_ chatID: Int64, _ draftID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws ->
             Void
@@ -142,10 +141,12 @@ public struct TelegramAPIClient: Sendable {
                 _ replyParameters: TelegramReplyParameters?
             ) async throws -> TelegramMessage,
         sendMessageWithMarkup:
-            (@Sendable (
-                _ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?,
-                _ replyParameters: TelegramReplyParameters?, _ replyMarkup: TelegramInlineKeyboardMarkup?
-            ) async throws -> TelegramMessage)? = nil,
+            (
+                @Sendable (
+                    _ chatID: Int64, _ text: String, _ parseMode: TelegramParseMode?,
+                    _ replyParameters: TelegramReplyParameters?, _ replyMarkup: TelegramInlineKeyboardMarkup?
+                ) async throws -> TelegramMessage
+            )? = nil,
         editMessageText:
             @escaping @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?)
             async throws -> Void
@@ -157,9 +158,10 @@ public struct TelegramAPIClient: Sendable {
         self.answerCallbackQuery = answerCallbackQuery
         self.sendMessageDraft = sendMessageDraft
         self.sendMessage = sendMessage
-        self.sendMessageWithMarkup = sendMessageWithMarkup ?? { chatID, text, parseMode, replyParameters, _ in
-            try await sendMessage(chatID, text, parseMode, replyParameters)
-        }
+        self.sendMessageWithMarkup =
+            sendMessageWithMarkup ?? { chatID, text, parseMode, replyParameters, _ in
+                try await sendMessage(chatID, text, parseMode, replyParameters)
+            }
         self.editMessageText = editMessageText
     }
 }

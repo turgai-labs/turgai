@@ -413,8 +413,9 @@ public actor TelegramEventPublisher {
                 guard phase == .thinking || phase == .typing else { return }
                 if draftEnabledConversations.contains(conversationID),
                     let html = lastSentDraftText[
-                    DraftKey(conversationID: conversationID, turnID: turnID)
-                ] {
+                        DraftKey(conversationID: conversationID, turnID: turnID)
+                    ]
+                {
                     let chatID = try chatID(for: conversationID)
                     let draftID = draftID(for: conversationID, turnID: turnID)
                     // Telegram drafts are ephemeral. Refresh the current

@@ -1,11 +1,6 @@
+import AnyLanguageModel
 import NorbyApplication
 import Testing
-
-#if canImport(FoundationEssentials)
-    import FoundationEssentials
-#else
-    import Foundation
-#endif
 
 struct DeferredActionTests {
     @Test func deliverPreparedMessagePreservesTheFinalMessage() {
@@ -20,40 +15,51 @@ struct DeferredActionTests {
         #expect(action.content == "Check the weather")
     }
 
-    @Test func timerOperationsHaveIndependentInputs() throws {
-        let cancel = try JSONDecoder().decode(TimerTools.Cancel.Input.self, from: Data(#"{"timerID":"norby-timer-123"}"#.utf8))
+    @Test func timerCommandsHaveIndependentInputs() throws {
+        let cancel = try TimerTools.CancelInput(
+            GeneratedContent(json: #"{"timerID":"norby-timer-123"}"#)
+        )
         #expect(cancel.timerID == "norby-timer-123")
-        _ = try JSONDecoder().decode(TimerTools.List.Input.self, from: Data(#"{}"#.utf8))
-        let create = try JSONDecoder().decode(TimerTools.Create.Input.self, from: Data(#"{"action":"deliver_prepared_message","message":"Eat","trigger":{"kind":"after","amount":5,"unit":"minutes"}}"#.utf8))
-        guard case .after(let duration) = create.trigger else { Issue.record("Expected after trigger"); return }
-        #expect(duration == .seconds(300))
+        _ = try TimerTools.ListInput(GeneratedContent(json: #"{}"#))
     }
 
     @Test func timerCreateRequiresItsFields() {
-        #expect(throws: DecodingError.self) {
-            try JSONDecoder().decode(TimerTools.Create.Input.self, from: Data(#"{"action":"deliver_prepared_message"}"#.utf8))
+        #expect(throws: Error.self) {
+            try TimerTools.CreateInput(
+                GeneratedContent(json: #"{"action":"deliverPreparedMessage"}"#)
+            )
         }
     }
 
     @Test func timerOccurrenceKeepsCalendarComponentsTyped() throws {
-        let input = try JSONDecoder().decode(TimerTools.Create.Input.self, from: Data(#"{"action":"deliver_prepared_message","message":"Check doors","trigger":{"kind":"at","at":{"components":{"day":9,"month":9,"year":2026,"hour":9,"minute":0},"time_zone":"Europe/Berlin"}}}"#.utf8))
-        guard case .at(let occurrence) = input.trigger else { Issue.record("Expected at trigger"); return }
-        #expect(occurrence.components.day == 9)
-        #expect(occurrence.timeZone.identifier == "Europe/Berlin")
+        let input = try TimerTools.OccurrenceInput(
+            GeneratedContent(
+                json: #"{"components":{"day":9,"month":9,"year":2026,"hour":9,"minute":0},"timeZone":"Europe/Berlin"}"#)
+        )
+        #expect(input.components.day == 9)
+        #expect(input.timeZone == "Europe/Berlin")
     }
 
     @Test func timerRejectsRelativeOffsetCalendarShape() {
-        #expect(throws: DecodingError.self) {
-            try JSONDecoder().decode(TimerTools.Create.Input.self, from: Data(#"{"action":"deliver_prepared_message","message":"Check doors","trigger":{"kind":"at","at":{"offset":{"day":2},"matching":{"hour":9},"time_zone":"Europe/Berlin"}}}"#.utf8))
+        #expect(throws: Error.self) {
+            try TimerTools.OccurrenceInput(
+                GeneratedContent(json: #"{"offset":{"day":2},"matching":{"hour":9},"timeZone":"Europe/Berlin"}"#)
+            )
         }
     }
 
-    @Test func scheduleOperationsHaveIndependentInputs() throws {
-        let trigger = try JSONDecoder().decode(ScheduleTools.Trigger.Input.self, from: Data(#"{"scheduleID":"daily-report"}"#.utf8))
+    @Test func scheduleCommandsHaveIndependentInputs() throws {
+        let trigger = try ScheduleTools.TriggerInput(
+            GeneratedContent(json: #"{"scheduleID":"daily-report"}"#)
+        )
         #expect(trigger.scheduleID == "daily-report")
-        let input = try JSONDecoder().decode(ScheduleTools.Create.Input.self, from: Data(#"{"action":"deliver_prepared_message","message":"Check doors","recurrence":{"frequency":"daily","interval":1,"time_zone":"Europe/Berlin","hour":22,"minute":0,"weekdays":[]}}"#.utf8))
-        #expect(input.recurrence.timeZone.identifier == "Europe/Berlin")
-        let encoded = try JSONEncoder().encode(input)
-        #expect(String(decoding: encoded, as: UTF8.self).contains("\"time_zone\":\"Europe\\/Berlin\""))
+
+        let recurrence = try ScheduleTools.RecurrenceInput(
+            GeneratedContent(
+                json:
+                    #"{"frequency":"daily","interval":1,"timeZone":"Europe/Berlin","hour":22,"minute":0,"weekdays":[]}"#
+            )
+        )
+        #expect(recurrence.timeZone == "Europe/Berlin")
     }
 }

@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import Hail
 import NorbyApplication
 import NorbyDomain
@@ -135,7 +136,7 @@ struct HailAdapterTests {
     func weatherToolUsesClockAndGeocodingNetworkEffects() throws {
         let tool = WeatherTool()
         let effect = try tool.effect(
-            for: .init(location: "London", horizon: .today(from: 9))
+            for: .init(location: "London", days: 1, fromHour: 9)
         )
 
         #expect(effect.left.name == "location")
@@ -151,30 +152,25 @@ struct HailAdapterTests {
 
         #expect(throws: ToolError.invalidArgument("days", value: "0")) {
             try tool.effect(
-                for: .init(location: "London", horizon: .days(0))
+                for: .init(location: "London", days: 0, fromHour: nil)
             )
         }
     }
 
     @Test
     func weatherHorizonIsAnExplicitToolValue() throws {
-        let data = try JSONEncoder().encode(
-            WeatherTool.Input(location: "London", horizon: .upcomingWeek)
-        )
-        let json = String(decoding: data, as: UTF8.self)
+        let weekly = WeatherTool.Input(location: "London", days: 7, fromHour: nil)
+        let json = weekly.generatedContent.jsonString
         #expect(json.contains("\"days\":7"))
-        #expect(!json.contains("from_hour"))
+        #expect(json.contains("\"fromHour\":null"))
 
-        let hourly = try JSONEncoder().encode(
-            WeatherTool.Input(location: "London", horizon: .today(from: 9))
-        )
-        let hourlyJSON = String(decoding: hourly, as: UTF8.self)
+        let hourly = WeatherTool.Input(location: "London", days: 1, fromHour: 9)
+        let hourlyJSON = hourly.generatedContent.jsonString
         #expect(hourlyJSON.contains("\"days\":1"))
-        #expect(hourlyJSON.contains("\"from_hour\":9"))
+        #expect(hourlyJSON.contains("\"fromHour\":9"))
 
-        let decoded = try JSONDecoder().decode(
-            WeatherTool.Input.self,
-            from: Data(#"{"location":"London","days":1,"from_hour":9}"#.utf8)
+        let decoded = try WeatherTool.Input(
+            GeneratedContent(json: #"{"location":"London","days":1,"fromHour":9}"#)
         )
         #expect(decoded.location == "London")
         #expect(decoded.days == 1)
@@ -219,20 +215,20 @@ struct HailAdapterTests {
         let tool = WebSearchTool()
 
         let searchEffect = try tool.effect(
-            for: WebSearchTool.Input(action: .search, query: "weather in Munich")
+            for: WebSearchTool.Input(action: .search, query: "weather in Munich", url: nil)
         )
         #expect(searchEffect.host == "html.duckduckgo.com")
         #expect(searchEffect.operation == "search")
 
         let openEffect = try tool.effect(
-            for: WebSearchTool.Input(action: .open, url: "https://example.com")
+            for: WebSearchTool.Input(action: .open, query: nil, url: "https://example.com")
         )
         #expect(openEffect.host == "example.com")
         #expect(openEffect.operation == "open")
 
         #expect(throws: WebSearchTool.Error.unsupportedURLScheme) {
             try tool.effect(
-                for: WebSearchTool.Input(action: .open, url: "file:///tmp/secrets")
+                for: WebSearchTool.Input(action: .open, query: nil, url: "file:///tmp/secrets")
             )
         }
     }

@@ -78,11 +78,13 @@ public enum MemoryExtraction {
                 candidate = value
             }
             guard MemoryEvidence.supports(candidate, in: observations) else { continue }
-            guard let event = policy.decide(
-                proposal: proposal,
-                against: projected.currentFacts(),
-                factID: MemoryFactID()
-            ).factEvent else { continue }
+            guard
+                let event = policy.decide(
+                    proposal: proposal,
+                    against: projected.currentFacts(),
+                    factID: MemoryFactID()
+                ).factEvent
+            else { continue }
             projected.applyFactEvent(event)
             changes.append(event)
         }

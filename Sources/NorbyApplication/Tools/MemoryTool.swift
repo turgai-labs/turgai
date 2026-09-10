@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import Hail
 import NorbyDomain
 import NorbyMemory
@@ -161,11 +162,13 @@ public struct MemoryEffect: ScopedEffect, Sendable {
 /// composition root, then applies proposals through Norby's memory actor.
 @Tool
 public struct MemoryTool {
+    @Generable
     public enum Operation: String, Codable, Sendable, Equatable, CaseIterable {
         case add
         case revise
     }
 
+    @Generable
     public enum Namespace: String, Codable, Sendable, Equatable, CaseIterable {
         case profile
         case preference
@@ -174,6 +177,7 @@ public struct MemoryTool {
         case environment
     }
 
+    @Generable
     public enum ValueKind: String, Codable, Sendable, Equatable, CaseIterable {
         case text
         case person
@@ -182,6 +186,7 @@ public struct MemoryTool {
         case preference
     }
 
+    @Generable
     public enum Stability: String, Codable, Sendable, Equatable, CaseIterable {
         case transient
         case situational
@@ -189,6 +194,7 @@ public struct MemoryTool {
         case stable
     }
 
+    @Generable
     public struct Input: Codable, Sendable {
         public let operation: Operation
         public let factID: String?
@@ -201,56 +207,6 @@ public struct MemoryTool {
         public let importance: Double
         public let stability: Stability
 
-        private enum CodingKeys: String, CodingKey {
-            case operation
-            case factID = "fact_id"
-            case namespace
-            case predicate
-            case value
-            case valueKind = "value_kind"
-            case supportingText = "supporting_text"
-            case confidence
-            case importance
-            case stability
-        }
-
-        public init(
-            operation: Operation = .add,
-            factID: String? = nil,
-            namespace: Namespace,
-            predicate: String,
-            value: String,
-            valueKind: ValueKind = .text,
-            supportingText: String,
-            confidence: Double = 0.9,
-            importance: Double = 0.5,
-            stability: Stability = .mutable
-        ) {
-            self.operation = operation
-            self.factID = factID
-            self.namespace = namespace
-            self.predicate = predicate
-            self.value = value
-            self.valueKind = valueKind
-            self.supportingText = supportingText
-            self.confidence = confidence
-            self.importance = importance
-            self.stability = stability
-        }
-
-        public init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            self.operation = try container.decodeIfPresent(Operation.self, forKey: .operation) ?? .add
-            self.factID = try container.decodeIfPresent(String.self, forKey: .factID)
-            self.namespace = try container.decode(Namespace.self, forKey: .namespace)
-            self.predicate = try container.decode(String.self, forKey: .predicate)
-            self.value = try container.decode(String.self, forKey: .value)
-            self.valueKind = try container.decode(ValueKind.self, forKey: .valueKind)
-            self.supportingText = try container.decode(String.self, forKey: .supportingText)
-            self.confidence = try container.decode(Double.self, forKey: .confidence)
-            self.importance = try container.decode(Double.self, forKey: .importance)
-            self.stability = try container.decode(Stability.self, forKey: .stability)
-        }
     }
 
     public let name = "memory"
@@ -269,29 +225,6 @@ public struct MemoryTool {
         self.userID = userID
         self.observation = observation
         self.expectedGeneration = expectedGeneration
-    }
-
-    public var schema: ToolDefinition {
-        ToolDefinition(
-            name: name,
-            description: description,
-            parameters: ToolSchema.object(
-                name: "MemoryArguments",
-                description: "Arguments for changing one durable memory fact.",
-                properties: [
-                    .init(name: "namespace", description: "Memory category.", schema: ToolSchema.string(name: "MemoryNamespace", choices: Namespace.allCases.map(\.rawValue))),
-                    .init(name: "operation", description: "Use add for a new fact or revise an existing fact.", schema: ToolSchema.string(name: "MemoryOperation", choices: Operation.allCases.map(\.rawValue))),
-                    .init(name: "fact_id", description: "Existing fact ID for revise.", schema: ToolSchema.string(name: "MemoryFactID"), isOptional: true),
-                    .init(name: "predicate", description: "A short stable property name.", schema: ToolSchema.string(name: "MemoryPredicate")),
-                    .init(name: "value", description: "The value to remember.", schema: ToolSchema.string(name: "MemoryValue")),
-                    .init(name: "value_kind", description: "How to interpret the value.", schema: ToolSchema.string(name: "MemoryValueKind", choices: ValueKind.allCases.map(\.rawValue))),
-                    .init(name: "supporting_text", description: "A short quote from the user's message establishing the fact.", schema: ToolSchema.string(name: "SupportingText")),
-                    .init(name: "confidence", description: "Confidence from 0 to 1.", schema: ToolSchema.number()),
-                    .init(name: "importance", description: "Importance from 0 to 1.", schema: ToolSchema.number()),
-                    .init(name: "stability", description: "How likely the fact is to change.", schema: ToolSchema.string(name: "MemoryStability", choices: Stability.allCases.map(\.rawValue)))
-                ]
-            )
-        )
     }
 
     public func effect(for input: Input) throws -> MemoryEffect {

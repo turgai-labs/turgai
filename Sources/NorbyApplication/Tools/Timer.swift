@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import DistributedCluster
 import DurableWorkflows
 import Hail
@@ -155,7 +156,8 @@ public struct Timer: Sendable {
                     throw DecodingError.dataCorruptedError(
                         forKey: .at,
                         in: container,
-                        debugDescription: "kind=at requires an at object with components and time_zone; occurrence is not a valid key"
+                        debugDescription:
+                            "kind=at requires an at object with components and time_zone; occurrence is not a valid key"
                     )
                 }
                 self = .at(try container.decode(Occurrence.self, forKey: .at))
@@ -263,7 +265,8 @@ public struct Timer: Sendable {
         switch trigger {
         case .after(let duration):
             let components = duration.components
-            let interval = Double(components.seconds)
+            let interval =
+                Double(components.seconds)
                 + Double(components.attoseconds) / 1_000_000_000_000_000_000
             let fireAt = now.addingTimeInterval(interval)
             guard fireAt.timeIntervalSince1970.isFinite else {
@@ -398,16 +401,6 @@ public struct Timer: Sendable {
         NorbyDomain.TurnID(rawValue: norbyDeterministicUUID("turn:\(workflowID.rawValue)"))
     }
 }
-import DurableWorkflows
-import Hail
-import AnyLanguageModel
-import NorbyDomain
-
-#if canImport(FoundationEssentials)
-    import FoundationEssentials
-#else
-    import Foundation
-#endif
 
 public struct TimerScheduledResult: Sendable {
     public let id: WorkflowID
@@ -426,9 +419,12 @@ public struct CreateTimerEffect: ScopedEffect, Sendable {
         let (trigger, request) = token.withConfiguration { ($0.trigger, $0.request) }
         let now = try await token.withChild(ClockEffect()) { try await ClockEffect.run(in: $0) }
         let fireAt = try Timer.fireAt(for: trigger, after: now)
-        let id = WorkflowID(ownerID: request.ownerID, conversationID: request.conversationID, action: request.action, fireAt: fireAt)
-        try await Timer.start(id: id, fireAt: fireAt, request: request, workflows: ActorSystemDependency<Self>.current.workflows)
-        return TimerScheduledResult(id: id, action: request.action.kind, fireAt: fireAt, timeZone: trigger.timeZoneIdentifier, replaced: false)
+        let id = WorkflowID(
+            ownerID: request.ownerID, conversationID: request.conversationID, action: request.action, fireAt: fireAt)
+        try await Timer.start(
+            id: id, fireAt: fireAt, request: request, workflows: ActorSystemDependency<Self>.current.workflows)
+        return TimerScheduledResult(
+            id: id, action: request.action.kind, fireAt: fireAt, timeZone: trigger.timeZoneIdentifier, replaced: false)
     }
 }
 
@@ -442,11 +438,13 @@ public struct ReplaceTimerEffect: ScopedEffect, Sendable {
         let (timerID, trigger, request) = token.withConfiguration { ($0.timerID, $0.trigger, $0.request) }
         let now = try await token.withChild(ClockEffect()) { try await ClockEffect.run(in: $0) }
         let fireAt = try Timer.fireAt(for: trigger, after: now)
-        let id = WorkflowID(ownerID: request.ownerID, conversationID: request.conversationID, action: request.action, fireAt: fireAt)
+        let id = WorkflowID(
+            ownerID: request.ownerID, conversationID: request.conversationID, action: request.action, fireAt: fireAt)
         let workflows = ActorSystemDependency<Self>.current.workflows
         try await Timer.cancel(timerID, workflows: workflows)
         try await Timer.start(id: id, fireAt: fireAt, request: request, workflows: workflows)
-        return TimerScheduledResult(id: id, action: request.action.kind, fireAt: fireAt, timeZone: trigger.timeZoneIdentifier, replaced: true)
+        return TimerScheduledResult(
+            id: id, action: request.action.kind, fireAt: fireAt, timeZone: trigger.timeZoneIdentifier, replaced: true)
     }
 }
 
@@ -455,7 +453,8 @@ public struct CancelTimerEffect: ScopedEffect, Sendable {
     public let name = "timer.cancel"
     public let timerID: WorkflowID
     public static func run(in token: borrowing EffectToken<Self>) async throws {
-        try await Timer.cancel(token.withConfiguration { $0.timerID }, workflows: ActorSystemDependency<Self>.current.workflows)
+        try await Timer.cancel(
+            token.withConfiguration { $0.timerID }, workflows: ActorSystemDependency<Self>.current.workflows)
     }
 }
 
@@ -464,20 +463,83 @@ public struct ListTimersEffect: ScopedEffect, Sendable {
     public let name = "timer.list"
     public let conversationID: ConversationID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> [Timer.Info] {
-        try await Timer.list(conversationID: token.withConfiguration { $0.conversationID }, workflows: ActorSystemDependency<Self>.current.workflows)
+        try await Timer.list(
+            conversationID: token.withConfiguration { $0.conversationID },
+            workflows: ActorSystemDependency<Self>.current.workflows)
     }
 }
 
 @Tool
 public struct TimerTools: Sendable {
+    @Generable
+    public enum Action: Sendable {
+        case deliverPreparedMessage
+        case performTask
+    }
+
+    @Generable
+    public enum TriggerKind: Sendable {
+        case after
+        case at
+    }
+
+    @Generable
+    public enum DurationUnit: Sendable {
+        case seconds
+        case minutes
+        case hours
+        case days
+        case weeks
+    }
+
+    @Generable
+    public struct CalendarComponentsInput: Sendable {
+        public let year: Int?
+        public let month: Int?
+        public let day: Int?
+        public let hour: Int?
+        public let minute: Int?
+        public let second: Int?
+        public let weekday: Int?
+
+        func dateComponents() -> DateComponents {
+            var components = DateComponents()
+            components.calendar = Calendar(identifier: .gregorian)
+            components.year = year
+            components.month = month
+            components.day = day
+            components.hour = hour
+            components.minute = minute
+            components.second = second
+            components.weekday = weekday
+            return components
+        }
+    }
+
+    @Generable
+    public struct OccurrenceInput: Sendable {
+        public let components: CalendarComponentsInput
+        public let timeZone: String
+    }
+
+    @Generable
+    public struct TriggerInput: Sendable {
+        public let kind: TriggerKind
+        public let amount: Int?
+        public let unit: DurationUnit?
+        public let at: OccurrenceInput?
+    }
+
     public enum Error: Swift.Error, Equatable, Sendable, CustomStringConvertible {
-        case emptyMessage, emptyInstruction, emptyTimerID
-        case invalidConversationID(String), invalidParticipantID(String)
+        case emptyMessage, emptyInstruction, emptyTimerID, invalidTrigger
+        case invalidConversationID(String)
+        case invalidParticipantID(String)
         public var description: String {
             switch self {
             case .emptyMessage: "deliver_prepared_message requires a non-empty message"
             case .emptyInstruction: "perform_task requires a non-empty instruction"
             case .emptyTimerID: "timer_id must not be empty"
+            case .invalidTrigger: "invalid timer trigger"
             case .invalidConversationID(let value): "invalid conversation_id: \(value)"
             case .invalidParticipantID(let value): "invalid participant_id: \(value)"
             }
@@ -486,59 +548,135 @@ public struct TimerTools: Sendable {
 
     public let context: AgentTurnContext
     public let snapshotPolicy: AgentSnapshotPolicy
-    public init(context: AgentTurnContext, snapshotPolicy: AgentSnapshotPolicy = .default) { self.context = context; self.snapshotPolicy = snapshotPolicy }
+    public init(context: AgentTurnContext, snapshotPolicy: AgentSnapshotPolicy = .default) {
+        self.context = context
+        self.snapshotPolicy = snapshotPolicy
+    }
+
+    private func deferredAction(kind: Action, message: String?, instruction: String?) throws -> DeferredAction {
+        let domainKind: DeferredAction.Kind =
+            switch kind {
+            case .deliverPreparedMessage: .deliverPreparedMessage
+            case .performTask: .performTask
+            }
+        return try DeferredActionToolSupport.make(kind: domainKind, message: message, instruction: instruction)
+    }
+
+    private func trigger(_ input: TriggerInput) throws -> Timer.Trigger {
+        switch input.kind {
+        case .after:
+            guard let amount = input.amount, let unit = input.unit else {
+                throw Error.invalidTrigger
+            }
+            let secondsPerUnit: Int64 =
+                switch unit {
+                case .seconds: 1
+                case .minutes: 60
+                case .hours: 3_600
+                case .days: 86_400
+                case .weeks: 604_800
+                }
+            let seconds = Int64(amount).multipliedReportingOverflow(by: secondsPerUnit)
+            guard amount >= 0, !seconds.overflow else { throw Error.invalidTrigger }
+            return .after(.seconds(seconds.partialValue))
+        case .at:
+            guard let occurrence = input.at,
+                let timeZone = TimeZone(identifier: occurrence.timeZone)
+            else { throw Error.invalidTrigger }
+            return .at(Timer.Occurrence(components: occurrence.components.dateComponents(), timeZone: timeZone))
+        }
+    }
 
     @Command("create")
-    public func create(_ input: Create.Input) throws -> CreateTimerEffect {
+    public func create(_ input: CreateInput) throws -> CreateTimerEffect {
         let target = try TimerTarget(context: context)
-        return CreateTimerEffect(trigger: input.trigger, request: target.request(action: try DeferredActionToolSupport.make(kind: input.action, message: input.message, instruction: input.instruction), snapshotPolicy: snapshotPolicy))
+        return CreateTimerEffect(
+            trigger: try trigger(input.trigger),
+            request: target.request(
+                action: try deferredAction(kind: input.action, message: input.message, instruction: input.instruction),
+                snapshotPolicy: snapshotPolicy))
     }
 
     @Command("replace")
-    public func replace(_ input: Replace.Input) throws -> ReplaceTimerEffect {
+    public func replace(_ input: ReplaceInput) throws -> ReplaceTimerEffect {
         guard let id = WorkflowID.timerID(from: input.timerID) else { throw Error.emptyTimerID }
         let target = try TimerTarget(context: context)
-        return ReplaceTimerEffect(timerID: id, trigger: input.trigger, request: target.request(action: try DeferredActionToolSupport.make(kind: input.action, message: input.message, instruction: input.instruction), snapshotPolicy: snapshotPolicy))
+        return ReplaceTimerEffect(
+            timerID: id, trigger: try trigger(input.trigger),
+            request: target.request(
+                action: try deferredAction(kind: input.action, message: input.message, instruction: input.instruction),
+                snapshotPolicy: snapshotPolicy))
     }
 
     @Command("cancel")
-    public func cancel(_ input: Cancel.Input) throws -> CancelTimerEffect {
+    public func cancel(_ input: CancelInput) throws -> CancelTimerEffect {
         guard let id = WorkflowID.timerID(from: input.timerID) else { throw Error.emptyTimerID }
         return CancelTimerEffect(timerID: id)
     }
 
     @Command("list")
-    public func list(_ input: List.Input) throws -> ListTimersEffect { ListTimersEffect(conversationID: try TimerTarget(context: context).conversationID) }
+    public func list(_ input: ListInput) throws -> ListTimersEffect {
+        ListTimersEffect(conversationID: try TimerTarget(context: context).conversationID)
+    }
 
-    public func render(_ output: TimerScheduledResult) -> String { Self.renderScheduled(id: output.id, action: output.action, fireAt: output.fireAt, timeZone: output.timeZone, replaced: output.replaced) }
+    public func render(_ output: TimerScheduledResult) -> String {
+        Self.renderScheduled(
+            id: output.id, action: output.action, fireAt: output.fireAt, timeZone: output.timeZone,
+            replaced: output.replaced)
+    }
     public func render(_ output: [Timer.Info]) -> String { Self.renderListed(output) }
     public func render(_ output: Void) -> String { "One-shot timer cancelled." }
 
-    static func renderScheduled(id: WorkflowID, action: DeferredAction.Kind, fireAt: Date, timeZone: String?, replaced: Bool) -> String {
-        let prefix = switch action { case .deliverPreparedMessage: replaced ? "One-shot prepared message replaced." : "One-shot prepared message scheduled."; case .performTask: replaced ? "One-shot task replaced." : "One-shot task scheduled." }
-        let plannedTime = if let timeZone, let zone = TimeZone(identifier: timeZone) { fireAt.formatted(Date.FormatStyle(date: .complete, time: .shortened, timeZone: zone)) + " (\(timeZone))" } else { fireAt.ISO8601Format() }
+    static func renderScheduled(
+        id: WorkflowID, action: DeferredAction.Kind, fireAt: Date, timeZone: String?, replaced: Bool
+    ) -> String {
+        let prefix =
+            switch action {
+            case .deliverPreparedMessage:
+                replaced ? "One-shot prepared message replaced." : "One-shot prepared message scheduled."
+            case .performTask: replaced ? "One-shot task replaced." : "One-shot task scheduled."
+            }
+        let plannedTime =
+            if let timeZone, let zone = TimeZone(identifier: timeZone) {
+                fireAt.formatted(Date.FormatStyle(date: .complete, time: .shortened, timeZone: zone)) + " (\(timeZone))"
+            } else { fireAt.ISO8601Format() }
         return "\(prefix) Scheduled for \(plannedTime). The timer ID is \(id.rawValue)."
     }
 
     static func renderListed(_ timers: [Timer.Info]) -> String {
         guard !timers.isEmpty else { return "No active one-shot timers." }
-        return timers.map { ["timer_id=\($0.id.rawValue)", "action=\($0.action.kind.rawValue)", "content=\($0.action.content)", "fire_at=\($0.fireAt.ISO8601Format())"].joined(separator: " | ") }.joined(separator: "\n")
+        return timers.map {
+            [
+                "timer_id=\($0.id.rawValue)", "action=\($0.action.kind.rawValue)", "content=\($0.action.content)",
+                "fire_at=\($0.fireAt.ISO8601Format())",
+            ].joined(separator: " | ")
+        }.joined(separator: "\n")
     }
 
-    public struct Create { public struct Input: Codable, Sendable { public let action: DeferredAction.Kind; public let message: String?; public let instruction: String?; public let trigger: Timer.Trigger; public static var generationSchema: GenerationSchema { TimerSchemas.createParameters } } }
-    public struct Replace { public struct Input: Codable, Sendable { public let timerID: String; public let action: DeferredAction.Kind; public let message: String?; public let instruction: String?; public let trigger: Timer.Trigger; public static var generationSchema: GenerationSchema { TimerSchemas.replaceParameters } } }
-    public struct Cancel { public struct Input: Codable, Sendable { public let timerID: String; public static var generationSchema: GenerationSchema { TimerSchemas.cancelParameters } } }
-    public struct List { public struct Input: Codable, Sendable { public static var generationSchema: GenerationSchema { TimerSchemas.listParameters } } }
-}
+    @Generable
+    public struct CreateInput: Sendable {
+        public let action: Action
+        public let message: String?
+        public let instruction: String?
+        public let trigger: TriggerInput
+    }
 
-enum TimerSchemas {
-    static let calendarComponents = DynamicGenerationSchema(name: "CalendarComponents", description: "Calendar components such as day, hour, minute, weekday, month, or year.", properties: [.init(name: "year", schema: ToolSchema.integer(), isOptional: true), .init(name: "month", schema: ToolSchema.integer(), isOptional: true), .init(name: "day", schema: ToolSchema.integer(), isOptional: true), .init(name: "hour", schema: ToolSchema.integer(), isOptional: true), .init(name: "minute", schema: ToolSchema.integer(), isOptional: true), .init(name: "second", schema: ToolSchema.integer(), isOptional: true), .init(name: "weekday", schema: ToolSchema.integer(), isOptional: true)])
-    static let trigger = DynamicGenerationSchema(name: "TimerTrigger", description: "Use kind=after with amount and unit, or kind=at with an at object.", properties: [.init(name: "kind", schema: ToolSchema.string(name: "TriggerKind", choices: Timer.Trigger.Kind.allCases.map(\.rawValue))), .init(name: "amount", schema: ToolSchema.integer(), isOptional: true), .init(name: "unit", schema: ToolSchema.string(name: "DurationUnit", choices: Timer.Trigger.Unit.allCases.map(\.rawValue)), isOptional: true), .init(name: "at", schema: DynamicGenerationSchema(name: "CalendarTriggerValue", properties: [.init(name: "components", schema: calendarComponents), .init(name: "time_zone", schema: ToolSchema.string(name: "TimeZone"))]), isOptional: true)])
-    static let action = ToolSchema.string(name: "DeferredAction", description: "deliver_prepared_message sends fixed message text; perform_task executes the instruction with tools and reports the result when due.", choices: DeferredAction.Kind.allCases.map(\.rawValue))
-    static let createParameters = ToolSchema.object(name: "CreateTimerArguments", description: "Create one timer. Use deliver_prepared_message with message, or perform_task with instruction.", properties: [.init(name: "action", schema: action), .init(name: "message", schema: ToolSchema.string(name: "TimerMessage"), isOptional: true), .init(name: "instruction", schema: ToolSchema.string(name: "TimerInstruction"), isOptional: true), .init(name: "trigger", schema: trigger)])
-    static let replaceParameters = ToolSchema.object(name: "ReplaceTimerArguments", description: "Replace one timer. Use deliver_prepared_message with message, or perform_task with instruction.", properties: [.init(name: "timer_id", schema: ToolSchema.string(name: "TimerID")), .init(name: "action", schema: action), .init(name: "message", schema: ToolSchema.string(name: "TimerMessage"), isOptional: true), .init(name: "instruction", schema: ToolSchema.string(name: "TimerInstruction"), isOptional: true), .init(name: "trigger", schema: trigger)])
-    static let cancelParameters = ToolSchema.object(name: "CancelTimerArguments", description: "Cancel one timer.", properties: [.init(name: "timer_id", schema: ToolSchema.string(name: "TimerID"))])
-    static let listParameters = ToolSchema.object(name: "ListTimerArguments", description: "List active timers.", properties: [])
+    @Generable
+    public struct ReplaceInput: Sendable {
+        public let timerID: String
+        public let action: Action
+        public let message: String?
+        public let instruction: String?
+        public let trigger: TriggerInput
+    }
+
+    @Generable
+    public struct CancelInput: Sendable {
+        public let timerID: String
+    }
+
+    @Generable
+    public struct ListInput: Sendable {}
 }
 
 extension WorkflowID {

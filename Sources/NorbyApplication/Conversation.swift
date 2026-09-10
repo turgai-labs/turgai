@@ -121,7 +121,8 @@ private enum DeferredActionPresentation {
         var actions: [OutboundAction] = []
         for (id, fireAt, action) in values {
             lines.append(action.content)
-            lines.append("  Action: \(action.kind == .deliverPreparedMessage ? "deliver prepared message" : "perform task")")
+            lines.append(
+                "  Action: \(action.kind == .deliverPreparedMessage ? "deliver prepared message" : "perform task")")
             lines.append("  At: \(fireAt.formatted(date: .abbreviated, time: .shortened))")
             actions.append(
                 OutboundAction(
@@ -141,7 +142,8 @@ private enum DeferredActionPresentation {
         var actions: [OutboundAction] = []
         for (id, createdAt, lastFiredAt, nextFireAt, paused, action) in values {
             lines.append(action.content)
-            lines.append("  Action: \(action.kind == .deliverPreparedMessage ? "deliver prepared message" : "perform task")")
+            lines.append(
+                "  Action: \(action.kind == .deliverPreparedMessage ? "deliver prepared message" : "perform task")")
             lines.append("  Created: \(createdAt.formatted(date: .abbreviated, time: .shortened))")
             if let lastFiredAt {
                 lines.append("  Last run: \(lastFiredAt.formatted(date: .abbreviated, time: .shortened))")
@@ -677,12 +679,14 @@ public distributed actor Conversation {
             return
         }
         let workflows = actorSystem.workflows
-        guard try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
-            guard description.id == id,
-                let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
-            else { return false }
-            return request.conversationID == conversationID
-        }) else {
+        guard
+            try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
+                guard description.id == id,
+                    let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
+                else { return false }
+                return request.conversationID == conversationID
+            })
+        else {
             await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
             return
         }
@@ -691,7 +695,10 @@ public distributed actor Conversation {
             workflow: ScheduleWorkflow.self,
             reason: "Telegram command"
         )
-        await publish(.notice(conversationID: conversationID, turnID: nil, text: DeferredActionPresentation.action("paused", id: id.rawValue)))
+        await publish(
+            .notice(
+                conversationID: conversationID, turnID: nil,
+                text: DeferredActionPresentation.action("paused", id: id.rawValue)))
     }
 
     public distributed func unpauseTask(id: String) async throws {
@@ -700,12 +707,14 @@ public distributed actor Conversation {
             return
         }
         let workflows = actorSystem.workflows
-        guard try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
-            guard description.id == id,
-                let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
-            else { return false }
-            return request.conversationID == conversationID
-        }) else {
+        guard
+            try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
+                guard description.id == id,
+                    let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
+                else { return false }
+                return request.conversationID == conversationID
+            })
+        else {
             await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
             return
         }
@@ -714,7 +723,10 @@ public distributed actor Conversation {
             workflow: ScheduleWorkflow.self,
             reason: "Telegram command"
         )
-        await publish(.notice(conversationID: conversationID, turnID: nil, text: DeferredActionPresentation.action("unpaused", id: id.rawValue)))
+        await publish(
+            .notice(
+                conversationID: conversationID, turnID: nil,
+                text: DeferredActionPresentation.action("unpaused", id: id.rawValue)))
     }
 
     public distributed func cancelTask(id: String) async throws {
@@ -723,12 +735,14 @@ public distributed actor Conversation {
             return
         }
         let workflows = actorSystem.workflows
-        guard try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
-            guard description.id == id,
-                let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
-            else { return false }
-            return request.conversationID == conversationID
-        }) else {
+        guard
+            try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
+                guard description.id == id,
+                    let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
+                else { return false }
+                return request.conversationID == conversationID
+            })
+        else {
             await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
             return
         }
@@ -736,24 +750,30 @@ public distributed actor Conversation {
             id: id,
             workflow: ScheduleWorkflow.self
         )
-        await publish(.notice(conversationID: conversationID, turnID: nil, text: DeferredActionPresentation.action("cancelled", id: id.rawValue)))
+        await publish(
+            .notice(
+                conversationID: conversationID, turnID: nil,
+                text: DeferredActionPresentation.action("cancelled", id: id.rawValue)))
     }
 
     public distributed func cancelReminder(id: String) async throws {
         guard let id = WorkflowID.timerID(from: id) else {
-            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Usage: /cancel-reminder <reminder-id>"))
+            await publish(
+                .notice(conversationID: conversationID, turnID: nil, text: "Usage: /cancel-reminder <reminder-id>"))
             return
         }
         let workflows = actorSystem
         let descriptions = try await workflows.workflows.listWorkflows(workflow: TimerWorkflow.self)
-        guard descriptions.contains(where: { description in
-            guard description.id == id,
-                case .running = description.status,
-                let inputData = description.inputData,
-                let input = try? JSONDecoder().decode(Timer.Input.self, from: inputData)
-            else { return false }
-            return input.request.conversationID == conversationID
-        }) else {
+        guard
+            descriptions.contains(where: { description in
+                guard description.id == id,
+                    case .running = description.status,
+                    let inputData = description.inputData,
+                    let input = try? JSONDecoder().decode(Timer.Input.self, from: inputData)
+                else { return false }
+                return input.request.conversationID == conversationID
+            })
+        else {
             await publish(.notice(conversationID: conversationID, turnID: nil, text: "Reminder not found."))
             return
         }
@@ -761,7 +781,10 @@ public distributed actor Conversation {
             type: TimerWorkflow.self,
             options: WorkflowOptions(id: id)
         )
-        await publish(.notice(conversationID: conversationID, turnID: nil, text: DeferredActionPresentation.reminderAction("cancelled", id: id.rawValue)))
+        await publish(
+            .notice(
+                conversationID: conversationID, turnID: nil,
+                text: DeferredActionPresentation.reminderAction("cancelled", id: id.rawValue)))
     }
 
     public distributed func clearFailure() async throws {
@@ -804,7 +827,8 @@ public distributed actor Conversation {
         limit: Int
     ) -> ExtractionBatch? {
         guard let first = pending.first else { return nil }
-        let selected = pending
+        let selected =
+            pending
             .filter { $0.message.userID == first.message.userID }
             .prefix(limit)
         guard !selected.isEmpty else { return nil }

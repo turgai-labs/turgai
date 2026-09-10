@@ -11,7 +11,7 @@ let package = Package(
         .library(name: "NorbyHail", targets: ["NorbyHail"]),
         .library(name: "NorbyApplication", targets: ["NorbyApplication"]),
         .library(name: "NorbyTelegram", targets: ["NorbyTelegram"]),
-        .executable(name: "Norby", targets: ["Norby"])
+        .executable(name: "Norby", targets: ["Norby"]),
     ],
     dependencies: [
         .package(path: "../hail"),
@@ -52,7 +52,7 @@ let package = Package(
         .package(
             url: "https://github.com/apple/swift-log.git",
             from: "1.6.0"
-        )
+        ),
     ],
     targets: [
         .target(name: "NorbyDomain"),
@@ -66,7 +66,7 @@ let package = Package(
                 "NorbyDomain",
                 .product(name: "Hail", package: "hail"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
-                .product(name: "DistributedCluster", package: "swift-distributed-actors")
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
             ]
         ),
         .target(
@@ -82,7 +82,7 @@ let package = Package(
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
-                .product(name: "DurableWorkflows", package: "cluster-durable-workflows")
+                .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
             ]
         ),
         .target(
@@ -92,7 +92,7 @@ let package = Package(
                 "NorbyApplication",
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
-                .product(name: "Logging", package: "swift-log")
+                .product(name: "Logging", package: "swift-log"),
             ]
         ),
         .executableTarget(
@@ -110,7 +110,7 @@ let package = Package(
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
-                .product(name: "Logging", package: "swift-log")
+                .product(name: "Logging", package: "swift-log"),
             ]
         ),
         .testTarget(
@@ -141,7 +141,7 @@ let package = Package(
             name: "NorbyPersistence",
             dependencies: [
                 "NorbyDomain",
-                .product(name: "EventSourcing", package: "cluster-event-sourcing")
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
             ]
         ),
         .testTarget(
@@ -149,9 +149,9 @@ let package = Package(
             dependencies: [
                 "NorbyDomain",
                 "NorbyPersistence",
-                .product(name: "EventSourcing", package: "cluster-event-sourcing")
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
             ]
-        )
+        ),
     ],
     swiftLanguageModes: [.v6]
 )

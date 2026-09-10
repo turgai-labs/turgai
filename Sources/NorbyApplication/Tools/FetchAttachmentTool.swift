@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import Hail
 
 #if canImport(FoundationEssentials)
@@ -95,19 +96,10 @@ public actor AttachmentResolver {
 /// Public web resources continue to use ``FetchURLTool``.
 @Tool
 public struct FetchAttachmentTool {
-    public struct Input: Codable, Sendable {
+    @Generable
+    public struct Input: Sendable {
         public let attachmentID: String
         public let mimeType: String?
-
-        enum CodingKeys: String, CodingKey {
-            case attachmentID = "attachment_id"
-            case mimeType = "mime_type"
-        }
-
-        public init(attachmentID: String, mimeType: String? = nil) {
-            self.attachmentID = attachmentID
-            self.mimeType = mimeType
-        }
     }
 
     public let name = "fetch_attachment"
@@ -118,30 +110,6 @@ public struct FetchAttachmentTool {
 
     public init(resolver: AttachmentResolver) {
         self.resolver = resolver
-    }
-
-    public var schema: ToolDefinition {
-        ToolDefinition(
-            name: name,
-            description: description,
-            parameters: ToolSchema.object(
-                name: "FetchAttachmentArguments",
-                description: "Arguments for fetching an attachment.",
-                properties: [
-                    .init(
-                        name: "attachment_id",
-                        description: "The exact opaque attachment_id from the user's message.",
-                        schema: ToolSchema.string(name: "AttachmentID")
-                    ),
-                    .init(
-                        name: "mime_type",
-                        description: "The attachment MIME type when listed in the user's message.",
-                        schema: ToolSchema.string(name: "AttachmentMIMEType"),
-                        isOptional: true
-                    )
-                ]
-            )
-        )
     }
 
     public func effect(for input: Input) throws -> NetworkEffect {

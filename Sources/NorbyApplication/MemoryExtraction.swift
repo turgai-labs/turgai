@@ -6,7 +6,7 @@ import NorbyMemory
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
-import Foundation
+    import Foundation
 #endif
 
 public enum ExtractionError: Error, Sendable, Equatable {
@@ -93,17 +93,41 @@ public struct MemoryExtractionOutput: Codable, Sendable {
             name: "MemoryCandidate",
             description: "One proposed durable personal fact.",
             properties: [
-                .init(name: "operation", description: "add or revise; omit for add.", schema: DynamicGenerationSchema(name: "MemoryOperation", anyOf: ["add", "revise"]), isOptional: true),
-                .init(name: "factID", description: "Existing fact ID for revise; omit for add.", schema: DynamicGenerationSchema(type: String.self), isOptional: true),
-                .init(name: "namespace", description: "The memory namespace.", schema: DynamicGenerationSchema(name: "MemoryNamespace", anyOf: MemoryNamespace.allCases.map(\.rawValue))),
-                .init(name: "predicate", description: "Canonical predicate.", schema: DynamicGenerationSchema(type: String.self)),
+                .init(
+                    name: "operation", description: "add or revise; omit for add.",
+                    schema: DynamicGenerationSchema(name: "MemoryOperation", anyOf: ["add", "revise"]), isOptional: true
+                ),
+                .init(
+                    name: "factID", description: "Existing fact ID for revise; omit for add.",
+                    schema: DynamicGenerationSchema(type: String.self), isOptional: true),
+                .init(
+                    name: "namespace", description: "The memory namespace.",
+                    schema: DynamicGenerationSchema(
+                        name: "MemoryNamespace", anyOf: MemoryNamespace.allCases.map(\.rawValue))),
+                .init(
+                    name: "predicate", description: "Canonical predicate.",
+                    schema: DynamicGenerationSchema(type: String.self)),
                 .init(name: "value", description: "Fact value.", schema: DynamicGenerationSchema(type: String.self)),
-                .init(name: "valueKind", description: "How to interpret the value.", schema: DynamicGenerationSchema(name: "MemoryValueKind", anyOf: ["text", "person", "place", "date", "preference"])),
-                .init(name: "confidence", description: "Confidence from 0 to 1.", schema: DynamicGenerationSchema(type: Double.self)),
-                .init(name: "importance", description: "Importance from 0 to 1.", schema: DynamicGenerationSchema(type: Double.self)),
-                .init(name: "stability", description: "Expected stability.", schema: DynamicGenerationSchema(name: "MemoryStability", anyOf: MemoryStability.allCases.map(\.rawValue))),
-                .init(name: "evidenceIDs", description: "Observation IDs containing the user's supporting statements.", schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(type: String.self))),
-                .init(name: "supportingText", description: "A short verbatim quote from a user's supporting statement.", schema: DynamicGenerationSchema(type: String.self)),
+                .init(
+                    name: "valueKind", description: "How to interpret the value.",
+                    schema: DynamicGenerationSchema(
+                        name: "MemoryValueKind", anyOf: ["text", "person", "place", "date", "preference"])),
+                .init(
+                    name: "confidence", description: "Confidence from 0 to 1.",
+                    schema: DynamicGenerationSchema(type: Double.self)),
+                .init(
+                    name: "importance", description: "Importance from 0 to 1.",
+                    schema: DynamicGenerationSchema(type: Double.self)),
+                .init(
+                    name: "stability", description: "Expected stability.",
+                    schema: DynamicGenerationSchema(
+                        name: "MemoryStability", anyOf: MemoryStability.allCases.map(\.rawValue))),
+                .init(
+                    name: "evidenceIDs", description: "Observation IDs containing the user's supporting statements.",
+                    schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(type: String.self))),
+                .init(
+                    name: "supportingText", description: "A short verbatim quote from a user's supporting statement.",
+                    schema: DynamicGenerationSchema(type: String.self)),
             ]
         )
         let output = try GenerationSchema(
@@ -111,7 +135,9 @@ public struct MemoryExtractionOutput: Codable, Sendable {
                 name: "MemoryExtractionOutput",
                 description: "Durable personal facts found in one completed exchange.",
                 properties: [
-                    .init(name: "candidates", description: "Facts supported by the exchange.", schema: DynamicGenerationSchema(arrayOf: candidate))
+                    .init(
+                        name: "candidates", description: "Facts supported by the exchange.",
+                        schema: DynamicGenerationSchema(arrayOf: candidate))
                 ]
             ),
             dependencies: []

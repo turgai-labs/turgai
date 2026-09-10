@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import Hail
 
 #if canImport(FoundationEssentials)
@@ -23,35 +24,6 @@ public struct WeatherTool {
         "Get structured current weather and forecast data for a place. A one-day forecast is hourly; longer forecasts are daily. The result includes the tool clock, timezone, and local date/time components. Pass a city, place name, or postal code; include the country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
 
     public init() {}
-
-    public var schema: ToolDefinition {
-        ToolDefinition(
-            name: name,
-            description: description,
-            parameters: ToolSchema.object(
-                name: "WeatherArguments",
-                description: "Arguments for retrieving weather.",
-                properties: [
-                    .init(
-                        name: "location",
-                        description: "City, place name, or postal code, preferably with a country.",
-                        schema: ToolSchema.string(name: "WeatherLocation")
-                    ),
-                    .init(
-                        name: "days",
-                        description: "Forecast length in days, from 1 to 7.",
-                        schema: ToolSchema.integer()
-                    ),
-                    .init(
-                        name: "from_hour",
-                        description: "Optional local hour from which today's hourly forecast should start, from 0 to 23.",
-                        schema: ToolSchema.integer(),
-                        isOptional: true
-                    )
-                ]
-            )
-        )
-    }
 
     public func effect(for input: Input) throws -> Effect {
         let location = try validatedLocation(input.location)
@@ -394,31 +366,11 @@ extension WeatherTool {
         }
     }
 
-    public struct Input: Codable, Sendable {
+    @Generable
+    public struct Input: Sendable {
         public let location: String
         public let days: Int
         public let fromHour: Int?
-
-        enum CodingKeys: String, CodingKey {
-            case location
-            case days
-            case fromHour = "from_hour"
-        }
-
-        public init(
-            location: String,
-            horizon: ForecastHorizon = .today
-        ) {
-            self.location = location
-            switch horizon {
-            case .currentDay(let fromHour):
-                self.days = 1
-                self.fromHour = fromHour
-            case .days(let days):
-                self.days = days
-                self.fromHour = nil
-            }
-        }
     }
 
     public enum Error: Swift.Error, Equatable, Sendable {
