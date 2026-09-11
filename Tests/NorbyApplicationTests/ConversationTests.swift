@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import NorbyApplication
 import NorbyDomain
 import NorbyMemory
@@ -118,13 +119,20 @@ struct ConversationTests {
     }
 
     @Test
-    func memoryToolUsesStableSnakeCaseInputKeys() throws {
-        let input = try JSONDecoder().decode(
-            MemoryTool.Input.self,
-            from: Data(
-                #"{"operation":"revise","fact_id":"00000000-0000-0000-0000-000000000003","namespace":"profile","predicate":"name","value":"Ada","value_kind":"person","supporting_text":"My name is Ada","confidence":0.98,"importance":0.9,"stability":"stable"}"#
-                    .utf8
-            )
+    func memoryToolDecodesGeneratedInputKeys() throws {
+        let input = try MemoryTool.Input(
+            GeneratedContent(properties: [
+                "operation": "revise",
+                "factID": "00000000-0000-0000-0000-000000000003",
+                "namespace": "profile",
+                "predicate": "name",
+                "value": "Ada",
+                "valueKind": "person",
+                "supportingText": "My name is Ada",
+                "confidence": 0.98,
+                "importance": 0.9,
+                "stability": "stable",
+            ])
         )
 
         #expect(input.operation == .revise)

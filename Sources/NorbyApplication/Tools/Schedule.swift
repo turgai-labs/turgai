@@ -431,16 +431,18 @@ public struct ScheduleTools: Sendable {
         return TriggerScheduleEffect(scheduleID: id)
     }
 
-    public func render(_ output: ScheduleScheduledResult) -> String {
-        Self.renderScheduled(id: output.id, action: output.action, replaced: output.replaced)
+    public func render(_ output: ScheduleScheduledResult) -> ToolOutput {
+        .text(Self.renderScheduled(id: output.id, action: output.action, replaced: output.replaced))
     }
-    public func render(_ output: [Schedule.Info]) -> String { Self.renderListed(output) }
-    public func render(_ output: Void) -> String { "Recurring schedule cancelled." }
-    public func render(_ output: ScheduleTriggerOutcome) -> String {
-        switch output {
-        case .triggered: "Recurring schedule triggered."
-        case .skipped: "Recurring schedule was not triggered because an occurrence is already running."
-        }
+    public func render(_ output: [Schedule.Info]) -> ToolOutput { .text(Self.renderListed(output)) }
+    public func render(_ output: Void) -> ToolOutput { .text("Recurring schedule cancelled.") }
+    public func render(_ output: ScheduleTriggerOutcome) -> ToolOutput {
+        let text: String =
+            switch output {
+            case .triggered: "Recurring schedule triggered."
+            case .skipped: "Recurring schedule was not triggered because an occurrence is already running."
+            }
+        return .text(text)
     }
     static func renderScheduled(id: ScheduleID, action: DeferredAction.Kind, replaced: Bool) -> String {
         let prefix =

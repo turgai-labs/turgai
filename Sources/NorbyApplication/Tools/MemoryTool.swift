@@ -161,7 +161,8 @@ public struct MemoryEffect: ScopedEffect, Sendable {
 /// composition root, then applies proposals through Norby's memory actor.
 @Tool(
     "memory",
-    description: "Add or revise a durable, user-specific fact established by the user's message. supporting_text must be copied from that message, never from an assistant reply or tool result. Use add for a new fact and revise with the exact fact_id shown in memory context when correcting an existing fact. Do not store one-off task parameters, secrets, credentials, or sensitive information."
+    description:
+        "Add or revise a durable, user-specific fact established by the user's message. supporting_text must be copied from that message, never from an assistant reply or tool result. Use add for a new fact and revise with the exact fact_id shown in memory context when correcting an existing fact. Do not store one-off task parameters, secrets, credentials, or sensitive information."
 )
 public struct MemoryTool {
     @Generable
@@ -235,12 +236,12 @@ public struct MemoryTool {
         )
     }
 
-    public func run(
+    public func runOutput(
         input: Input,
         token: borrowing EffectToken<MemoryEffect>
-    ) async throws -> String {
+    ) async throws -> ToolOutput {
         _ = input
-        return try await MemoryEffect.run(in: token)
+        return .text(try await MemoryEffect.run(in: token))
     }
 
 }

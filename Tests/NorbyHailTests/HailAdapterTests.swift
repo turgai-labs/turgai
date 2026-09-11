@@ -56,18 +56,15 @@ struct HailAdapterTests {
 
     @Test
     func mapsTypedPartialAndCompletionUpdates() {
-        let partial = ChatResponse(content: "hel")
+        let partial = "hel"
         let timestamp = Date(timeIntervalSince1970: 1)
-        let partialUpdate: AgentUpdate<ChatResponse> = .run(
-            .event(
-                .modelOutputPartialUpdated(
-                    content: partial,
-                    at: timestamp
-                )
-            )
+        let partialUpdate = AgentRunEvent<String>.modelOutputPartialUpdated(
+            content: partial,
+            at: timestamp
         )
-        let completedUpdate: AgentUpdate<ChatResponse> = .run(
-            .event(.responseRecorded(content: ChatResponse(content: "hello"), at: timestamp))
+        let completedUpdate = AgentRunEvent<String>.responseRecorded(
+            content: "hello",
+            at: timestamp
         )
 
         let partialEvents = HailStructuredUpdateMapper.map(partialUpdate)
@@ -82,13 +79,13 @@ struct HailAdapterTests {
             return
         }
         #expect(partialValue == partial)
-        #expect(completedValue == ChatResponse(content: "hello"))
+        #expect(completedValue == "hello")
     }
 
     @Test
     func mapsHailProgressWithoutLeakingHailValues() {
         let activity = AgentActivity.turn(
-            .progress(.text("partial")),
+            .progress(.narration(GeneratedContent("partial"))),
             at: Date(timeIntervalSince1970: 1)
         )
 

@@ -49,13 +49,9 @@ private struct DeferredToolTarget: Sendable {
         guard let conversationID = ConversationID(stableKey: context.agentID.contextID.rawValue) else {
             throw TimerTools.Error.invalidConversationID(context.agentID.contextID.rawValue)
         }
-        guard case .text(let sender, _, _) = context.message else {
-            throw TimerTools.Error.invalidParticipantID("non-text message")
-        }
-        let prefix = "participant:\(conversationID.channel.rawValue):"
-        guard sender.hasPrefix(prefix) else { throw TimerTools.Error.invalidParticipantID(sender) }
-        let participant = String(sender.dropFirst(prefix.count))
-        guard !participant.isEmpty else { throw TimerTools.Error.invalidParticipantID(sender) }
+        let participant = conversationID.externalAddress.rawValue
+        guard !participant.isEmpty else { throw TimerTools.Error.invalidParticipantID(participant) }
+        let sender = "participant:\(conversationID.channel.rawValue):\(participant)"
         ownerID = NorbyDomain.UserID(rawValue: sender)
         self.conversationID = conversationID
         participantID = ParticipantID(channel: conversationID.channel, rawValue: participant)

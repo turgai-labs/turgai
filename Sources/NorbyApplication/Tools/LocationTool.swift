@@ -14,7 +14,8 @@ import Hail
 /// receives a typed geographic result that can be used by a following tool.
 @Tool(
     "location",
-    description: "Resolve a city, town, or place name into coordinates and its IANA time zone. Pass the actual place name separately from optional region and country fields; use region for a state, province, county, or Landkreis such as Landkreis München. Use the returned time_zone with now, weather, timers, or schedules; this tool does not save the location."
+    description:
+        "Resolve a city, town, or place name into coordinates and its IANA time zone. Pass the actual place name separately from optional region and country fields; use region for a state, province, county, or Landkreis such as Landkreis München. Use the returned time_zone with now, weather, timers, or schedules; this tool does not save the location."
 )
 public struct LocationTool {
     public typealias Effect = LocationEffect
@@ -23,7 +24,9 @@ public struct LocationTool {
     public struct Input: Sendable {
         @Guide(description: "The actual city, town, or place name, such as Haar or Munich.")
         public let place: String
-        @Guide(description: "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+        @Guide(
+            description:
+                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
         public let region: String?
         @Guide(description: "An optional country name used to disambiguate the place.")
         public let country: String?
@@ -75,10 +78,10 @@ public struct LocationTool {
         )
     }
 
-    public func run(
+    public func runOutput(
         input: Input,
         token: borrowing EffectToken<Effect>
-    ) async throws -> String {
+    ) async throws -> ToolOutput {
         let results = try await LocationEffect.run(in: token)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -86,7 +89,7 @@ public struct LocationTool {
         guard let output = String(data: data, encoding: .utf8) else {
             throw Error.invalidResponse
         }
-        return output
+        return .text(output)
     }
 
     private func validatedPlace(_ value: String) throws -> String {

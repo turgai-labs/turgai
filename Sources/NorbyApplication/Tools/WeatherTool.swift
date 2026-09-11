@@ -14,7 +14,8 @@ import Hail
 /// at this stage.
 @Tool(
     "weather",
-    description: "Get structured current weather and forecast data for a place. A one-day forecast is hourly; longer forecasts are daily. Pass a city, place name, or postal code, and use region or country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
+    description:
+        "Get structured current weather and forecast data for a place. A one-day forecast is hourly; longer forecasts are daily. Pass a city, place name, or postal code, and use region or country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
 )
 public struct WeatherTool {
     public typealias Effect = CombinedEffect<LocationEffect, ClockEffect>
@@ -37,10 +38,10 @@ public struct WeatherTool {
             .combined(with: ClockEffect())
     }
 
-    public func run(
+    public func runOutput(
         input: Input,
         token: borrowing EffectToken<Effect>
-    ) async throws -> String {
+    ) async throws -> ToolOutput {
         let location = try await token.withLeft { locationToken in
             let locationQuery = try validatedPlace(input.place)
             do {
@@ -79,7 +80,7 @@ public struct WeatherTool {
             horizon: horizon,
             now: now
         )
-        return try encode(report)
+        return .text(try encode(report))
     }
 
     private func forecastEffect(
@@ -387,9 +388,14 @@ extension WeatherTool {
 
     @Generable
     public struct Input: Sendable {
-        @Guide(description: "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address.")
+        @Guide(
+            description:
+                "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
+        )
         public let place: String
-        @Guide(description: "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+        @Guide(
+            description:
+                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
         public let region: String?
         @Guide(description: "An optional country name used to disambiguate the place.")
         public let country: String?

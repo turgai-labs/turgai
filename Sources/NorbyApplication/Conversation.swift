@@ -260,38 +260,6 @@ private actor ConversationPhase {
     }
 }
 
-private struct ExtractionBatch: Sendable {
-    let id: UUID
-    let userID: NorbyDomain.UserID
-    let pending: [PendingMemoryObservation]
-
-    var observations: [MemoryObservation] {
-        pending.map { item in
-            MemoryObservation(
-                id: ObservationID(rawValue: item.message.id.rawValue),
-                sourceID: MemorySourceID(rawValue: item.message.id.rawValue),
-                text: item.message.text,
-                response: item.response,
-                observedAt: item.message.receivedAt
-            )
-        }
-    }
-
-    var turnIDs: [NorbyDomain.TurnID] { pending.map(\.turnID) }
-}
-
-private struct MemoryExtractionAttempt: Sendable {
-    let id: UUID
-    let batch: ExtractionBatch
-    var task: Task<Void, Never>?
-}
-
-public enum MemoryExtractionCompletion: Codable, Sendable, Equatable {
-    case completed(ExtractionOutcome)
-    case failed
-    case cancelled
-}
-
 /// The application-side interpreter for one scoped model output.
 ///
 /// It resolves the live connections for every lifecycle event. This matters
@@ -435,12 +403,8 @@ public distributed actor Conversation {
 
     private let conversationID: ConversationID
     private let peer: HailConversationPeer
-    private let memoryExtractor: HailMemoryCandidateExtractor
     private let connectionRegistry = ConversationConnectionRegistry()
     private var modelTask: Task<Void, Never>?
-    private var extraction: MemoryExtractionAttempt?
-
-    private static let memoryExtractionBatchLimit = 8
 
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
@@ -448,7 +412,6 @@ public distributed actor Conversation {
         self.state = ConversationState(
             conversationID: dependency.conversationID
         )
-        self.memoryExtractor = try HailMemoryCandidateExtractor(actorSystem: actorSystem)
         let adapter = HailAgentAdapter(
             actorSystem: actorSystem,
             agentDirectoryID: dependency.agentDirectoryID,
@@ -496,8 +459,6 @@ public distributed actor Conversation {
         let noConnections = await connectionRegistry.isEmpty()
         return state.activeTurnID == nil
             && noConnections
-            && extraction == nil
-            && state.pendingMemoryObservations.isEmpty
     }
 
     public distributed func currentRecord() -> ConversationState {
@@ -816,27 +777,6 @@ public distributed actor Conversation {
             try await dispatch(.resume)
         }
 
-        guard state.activeTurnID == nil else {
-            return
-        }
-        startPendingMemoryExtractionIfIdle()
-    }
-
-    private static func nextBatch(
-        from pending: [PendingMemoryObservation],
-        limit: Int
-    ) -> ExtractionBatch? {
-        guard let first = pending.first else { return nil }
-        let selected =
-            pending
-            .filter { $0.message.userID == first.message.userID }
-            .prefix(limit)
-        guard !selected.isEmpty else { return nil }
-        return ExtractionBatch(
-            id: UUID(),
-            userID: first.message.userID,
-            pending: Array(selected)
-        )
     }
 
     private func startModel(for request: ModelRequest) {
@@ -943,12 +883,6 @@ public distributed actor Conversation {
         let action = requestedAction
 
         let (next, effects) = reduce(previous, action)
-        if case .receive = action, next != previous {
-            // Memory extraction is background work, but it shares the local
-            // model slot with foreground conversation turns. A new message
-            // always wins; the cancelled request is put back in the queue.
-            cancelActiveMemoryExtractions()
-        }
         for event in events(for: action, from: previous, to: next) {
             try await emit(event: event)
         }
@@ -983,11 +917,6 @@ public distributed actor Conversation {
             }
         }
 
-        // Launch the next conversation turn before starting extraction. The
-        // Ollama server is commonly configured with one parallel slot; if the
-        // extractor is created first, it can occupy that slot between two
-        // user messages and make the next reply appear to hang.
-        startPendingMemoryExtractionIfIdle()
     }
 
     /// Delivers terminal replies from the durable projection and removes each
@@ -1072,157 +1001,6 @@ public distributed actor Conversation {
         }
     }
 
-    /// Starts one owned extraction while the conversation is idle.
-    private func startPendingMemoryExtractionIfIdle() {
-        guard
-            state.activeTurnID == nil,
-            state.pendingMessages.isEmpty,
-            modelTask == nil,
-            extraction == nil,
-            let batch = Self.nextBatch(
-                from: state.pendingMemoryObservations,
-                limit: Self.memoryExtractionBatchLimit
-            )
-        else {
-            return
-        }
-
-        let actorSystem = self.actorSystem
-        let memoryExtractor = self.memoryExtractor
-        let conversationID = self.conversationID
-
-        let task = Task(priority: .background) {
-            [weak self, actorSystem, memoryExtractor, batch, conversationID]
-            in
-            let completion = await Self.process(
-                batch: batch,
-                conversationID: conversationID,
-                actorSystem: actorSystem,
-                memoryExtractor: memoryExtractor
-            )
-            try? await self?.memoryExtractionCompleted(
-                attemptID: batch.id,
-                completion: completion
-            )
-        }
-        extraction = MemoryExtractionAttempt(id: batch.id, batch: batch, task: task)
-    }
-
-    public distributed func memoryExtractionCompleted(
-        attemptID: UUID,
-        completion: MemoryExtractionCompletion
-    ) async {
-        guard let attempt = extraction, attempt.id == attemptID else { return }
-        switch completion {
-        case .cancelled:
-            extraction = nil
-            // The captured observations remain pending. A foreground turn may
-            // have caused this cancellation, so let the idle path claim them.
-            startPendingMemoryExtractionIfIdle()
-            return
-        case .failed:
-            // Keep the observations pending, but do not immediately retry a
-            // provider failure in a tight loop. The next idle opportunity or
-            // recovery will claim them again.
-            extraction = nil
-            return
-        case .completed(let outcome):
-            let update: MemoryUpdate?
-            switch outcome {
-            case .committed(let value): update = value
-            case .stale, .alreadyHandled: update = nil
-            }
-
-            if let update, update.shouldNotify {
-                await publish(
-                    .notice(
-                        conversationID: conversationID,
-                        turnID: attempt.batch.turnIDs.last,
-                        text: Self.memoryNotice(for: update)
-                    )
-                )
-            }
-
-            do {
-                try await emit(event: .memoryObservationsCompleted(attempt.batch.turnIDs))
-            } catch {
-                // A committed User event is safe to retry: User recognizes
-                // the captured sources as already handled. Leave the source
-                // observations pending for the next idle/recovery attempt.
-                actorSystem.log.warning(
-                    "Could not acknowledge memory extraction",
-                    metadata: [
-                        "conversationID": .string(conversationID.stableKey),
-                        "attemptID": .string(attemptID.uuidString),
-                        "error": .string(String(describing: error)),
-                    ]
-                )
-                extraction = nil
-                return
-            }
-
-            extraction = nil
-            startPendingMemoryExtractionIfIdle()
-        }
-    }
-
-    private func cancelActiveMemoryExtractions() {
-        extraction?.task?.cancel()
-    }
-
-    private static func process(
-        batch: ExtractionBatch,
-        conversationID: ConversationID,
-        actorSystem: ClusterSystem,
-        memoryExtractor: HailMemoryCandidateExtractor
-    ) async -> MemoryExtractionCompletion {
-        do {
-            let user = try await User.resolve(on: actorSystem, userID: batch.userID)
-            let preparation = try await user.prepareExtraction(batch.observations)
-            try Task.checkCancellation()
-            switch preparation {
-            case .alreadyHandled:
-                return .completed(.alreadyHandled)
-            case .ready(let input):
-                let proposals = try await memoryExtractor.extract(from: input)
-                try Task.checkCancellation()
-                return .completed(
-                    try await user.commitExtraction(input, proposals: proposals)
-                )
-            }
-        } catch is CancellationError {
-            return .cancelled
-        } catch {
-            if Task.isCancelled { return .cancelled }
-            actorSystem.log.warning(
-                "Could not record completed user memory",
-                metadata: [
-                    "conversationID": .string(conversationID.stableKey),
-                    "userID": .string(batch.userID.rawValue),
-                    "error": .string(String(describing: error)),
-                ]
-            )
-            return .failed
-        }
-    }
-
-    private static func memoryNotice(for update: MemoryUpdate) -> String {
-        let newCount = update.newFactCount
-        let updatedCount = update.updatedFactCount
-        switch (newCount, updatedCount) {
-        case (let newCount, 0):
-            return newCount == 1
-                ? "Noted down 1 fact."
-                : "Noted down \(newCount) facts."
-        case (0, let updatedCount):
-            return updatedCount == 1
-                ? "Updated 1 existing fact."
-                : "Updated \(updatedCount) existing facts."
-        default:
-            return "Noted down \(newCount) facts and updated \(updatedCount) existing facts."
-        }
-    }
-
     private func action(for event: ConversationModelEvent) -> ConversationAction {
         switch event {
         case .completed(let turnID, let completion):
@@ -1279,13 +1057,6 @@ public distributed actor Conversation {
             ).map(ConversationEvent.messageQueued))
 
         events.append(
-            contentsOf: newPendingMemoryObservations(
-                from: previous.pendingMemoryObservations,
-                to: next.pendingMemoryObservations
-            ).map(ConversationEvent.memoryObservationQueued)
-        )
-
-        events.append(
             contentsOf: deliveredReplies(
                 from: previous.pendingReplies,
                 to: next.pendingReplies
@@ -1329,14 +1100,6 @@ public distributed actor Conversation {
             }
         }
         return added
-    }
-
-    private func newPendingMemoryObservations(
-        from previous: [PendingMemoryObservation],
-        to next: [PendingMemoryObservation]
-    ) -> [PendingMemoryObservation] {
-        let previousTurnIDs = Set(previous.map(\.turnID))
-        return next.filter { !previousTurnIDs.contains($0.turnID) }
     }
 
     private func deliveredReplies(

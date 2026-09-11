@@ -470,9 +470,9 @@ public struct PendingConversationReply: Hashable, Codable, Sendable {
     }
 }
 
-/// A completed conversation exchange waiting for background memory
-/// extraction. The request is part of the conversation journal so cancelling
-/// the model work cannot lose it.
+/// Legacy journal payload retained only so conversations written before
+/// compaction-owned memory extraction can still replay. New conversations do
+/// not enqueue or process this value.
 public struct PendingMemoryObservation: Hashable, Codable, Sendable {
     public let turnID: TurnID
     public let message: InboundMessage
@@ -496,6 +496,8 @@ public enum ConversationEvent: Codable, Sendable, Equatable {
     case turnStarted(PendingConversationMessage)
     case turnCompleted(TurnID)
     case turnFailed(TurnID, ConversationFailure)
+    // Replay-only legacy events. The current reducer ignores them; compaction
+    // will obtain extraction input from the durable model transcript instead.
     case memoryObservationQueued(PendingMemoryObservation)
     case memoryObservationsCompleted([TurnID])
     case reset
@@ -546,16 +548,13 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public internal(set) var pendingMessages: [PendingConversationMessage]
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var activeMessage: PendingConversationMessage?
-    public internal(set) var pendingMemoryObservations: [PendingMemoryObservation]
-
     public init(
         conversationID: ConversationID,
         status: ConversationStatus = .idle,
         acceptedMessageIDs: [MessageID] = [],
         pendingMessages: [PendingConversationMessage] = [],
         pendingReplies: [PendingConversationReply] = [],
-        activeMessage: PendingConversationMessage? = nil,
-        pendingMemoryObservations: [PendingMemoryObservation] = []
+        activeMessage: PendingConversationMessage? = nil
     ) {
         self.conversationID = conversationID
         self.status = status
@@ -563,7 +562,6 @@ public struct ConversationState: Hashable, Codable, Sendable {
         self.pendingMessages = pendingMessages
         self.pendingReplies = pendingReplies
         self.activeMessage = activeMessage
-        self.pendingMemoryObservations = pendingMemoryObservations
     }
 
     public var activeTurnID: TurnID? {
@@ -610,20 +608,13 @@ public struct ConversationState: Hashable, Codable, Sendable {
             activeMessage = nil
             status = .failed(failure)
 
-        case .memoryObservationQueued(let observation):
-            guard !pendingMemoryObservations.contains(where: { $0.turnID == observation.turnID }) else {
-                return
-            }
-            pendingMemoryObservations.append(observation)
-
-        case .memoryObservationsCompleted(let turnIDs):
-            pendingMemoryObservations.removeAll { turnIDs.contains($0.turnID) }
+        case .memoryObservationQueued, .memoryObservationsCompleted:
+            break
 
         case .reset:
             activeMessage = nil
             pendingMessages.removeAll(keepingCapacity: true)
             pendingReplies.removeAll(keepingCapacity: true)
-            pendingMemoryObservations.removeAll(keepingCapacity: true)
             status = .idle
         }
     }
@@ -635,7 +626,6 @@ public struct ConversationState: Hashable, Codable, Sendable {
         case .idle, .failed:
             !pendingMessages.isEmpty
                 || !pendingReplies.isEmpty
-                || !pendingMemoryObservations.isEmpty
         }
     }
 
@@ -800,21 +790,6 @@ public func reduce(
             return (state, [])
         }
 
-        if let activeMessage = next.activeMessage {
-            let response: String? =
-                switch completion {
-                case .reply(let reply): reply.text
-                case .void: nil
-                }
-            next.pendingMemoryObservations.append(
-                PendingMemoryObservation(
-                    turnID: turnID,
-                    message: activeMessage.message,
-                    response: response
-                )
-            )
-        }
-
         if case .reply(let reply) = completion {
             next.pendingReplies.append(
                 PendingConversationReply(turnID: turnID, reply: reply)
@@ -857,7 +832,6 @@ public func reduce(
         next.status = .idle
         next.pendingMessages.removeAll(keepingCapacity: true)
         next.pendingReplies.removeAll(keepingCapacity: true)
-        next.pendingMemoryObservations.removeAll(keepingCapacity: true)
         next.activeMessage = nil
         effects.append(.publish(.reset(conversationID: next.conversationID)))
 

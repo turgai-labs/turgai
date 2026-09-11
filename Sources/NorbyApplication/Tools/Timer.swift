@@ -615,13 +615,14 @@ public struct TimerTools: Sendable {
         ListTimersEffect(conversationID: try TimerTarget(context: context).conversationID)
     }
 
-    public func render(_ output: TimerScheduledResult) -> String {
-        Self.renderScheduled(
-            id: output.id, action: output.action, fireAt: output.fireAt, timeZone: output.timeZone,
-            replaced: output.replaced)
+    public func render(_ output: TimerScheduledResult) -> ToolOutput {
+        .text(
+            Self.renderScheduled(
+                id: output.id, action: output.action, fireAt: output.fireAt, timeZone: output.timeZone,
+                replaced: output.replaced))
     }
-    public func render(_ output: [Timer.Info]) -> String { Self.renderListed(output) }
-    public func render(_ output: Void) -> String { "One-shot timer cancelled." }
+    public func render(_ output: [Timer.Info]) -> ToolOutput { .text(Self.renderListed(output)) }
+    public func render(_ output: Void) -> ToolOutput { .text("One-shot timer cancelled.") }
 
     static func renderScheduled(
         id: WorkflowID, action: DeferredAction.Kind, fireAt: Date, timeZone: String?, replaced: Bool

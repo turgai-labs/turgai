@@ -9,6 +9,8 @@ import NorbyMemory
     import Foundation
 #endif
 
+private let memoryReportToolName = "report_memory_extraction"
+
 public enum ExtractionError: Error, Sendable, Equatable {
     case missingReport
     case invalidReport(String)
@@ -18,75 +20,31 @@ public enum ExtractionError: Error, Sendable, Equatable {
 /// Typed output used by the model-backed memory extractor. The model returns
 /// neutral strings for enum-like values; the application converts them into
 /// domain values only after the response crosses the model boundary.
+@Generable
 public struct MemoryExtractionOutput: Codable, Sendable {
-    public struct Candidate: Codable, Sendable, ConvertibleFromGeneratedContent {
+    @Generable
+    public struct Candidate: Codable, Sendable {
+        @Guide(description: "add for a new fact, revise when correcting an existing fact")
         public let operation: String
-        public let factID: String
+        @Guide(description: "The existing fact identifier for revise; omit for add")
+        public let factID: String?
+        @Guide(description: "The memory namespace")
         public let namespace: String
+        @Guide(description: "The canonical fact predicate")
         public let predicate: String
+        @Guide(description: "The fact value")
         public let value: String
+        @Guide(description: "text, person, place, date, or preference")
         public let valueKind: String
         public let confidence: Double
         public let importance: Double
+        @Guide(description: "transient, situational, mutable, or stable")
         public let stability: String
         public let evidenceIDs: [String]
         public let supportingText: String
-
-        public init(
-            operation: String = "add",
-            factID: String = "",
-            namespace: String,
-            predicate: String,
-            value: String,
-            valueKind: String,
-            confidence: Double,
-            importance: Double,
-            stability: String,
-            evidenceIDs: [String] = [],
-            supportingText: String = ""
-        ) {
-            self.operation = operation
-            self.factID = factID
-            self.namespace = namespace
-            self.predicate = predicate
-            self.value = value
-            self.valueKind = valueKind
-            self.confidence = confidence
-            self.importance = importance
-            self.stability = stability
-            self.evidenceIDs = evidenceIDs
-            self.supportingText = supportingText
-        }
-
-        public init(_ content: GeneratedContent) throws {
-            self.init(
-                operation: try content.value(String?.self, forProperty: "operation") ?? "add",
-                factID: try content.value(String?.self, forProperty: "factID") ?? "",
-                namespace: try content.value(String.self, forProperty: "namespace"),
-                predicate: try content.value(String.self, forProperty: "predicate"),
-                value: try content.value(String.self, forProperty: "value"),
-                valueKind: try content.value(String.self, forProperty: "valueKind"),
-                confidence: try content.value(Double.self, forProperty: "confidence"),
-                importance: try content.value(Double.self, forProperty: "importance"),
-                stability: try content.value(String.self, forProperty: "stability"),
-                evidenceIDs: try content.value([String].self, forProperty: "evidenceIDs"),
-                supportingText: try content.value(String.self, forProperty: "supportingText")
-            )
-        }
-
     }
 
     public let candidates: [Candidate]
-
-    public init(candidates: [Candidate]) {
-        self.candidates = candidates
-    }
-
-    public init(_ content: GeneratedContent) throws {
-        self.candidates = try content.value([Candidate].self, forProperty: "candidates")
-    }
-
-    static let reportToolName = "report_memory_extraction"
 
     static func reportToolDefinition() throws -> ToolDefinition {
         let candidate = DynamicGenerationSchema(
@@ -143,23 +101,22 @@ public struct MemoryExtractionOutput: Codable, Sendable {
             dependencies: []
         )
         return ToolDefinition(
-            name: reportToolName,
+            name: memoryReportToolName,
             description: "Report durable personal facts found in one completed exchange.",
             parameters: output
         )
     }
 }
 
-/// Extracts memory through a standalone model endpoint. It deliberately does
-/// not use the conversation Agent, so extraction prompts and structured
-/// reports cannot pollute the user's durable chat history.
+/// Extracts memory through a standalone model endpoint when context compaction
+/// asks for it. It deliberately does not use the conversation Agent, so
+/// extraction prompts and structured reports cannot pollute the user's durable
+/// chat history. Conversation turns never invoke this extractor directly.
 public struct HailMemoryCandidateExtractor: Sendable {
     private let actorSystem: ClusterSystem
-    private let reportTool: ToolDefinition
 
-    public init(actorSystem: ClusterSystem) throws {
+    public init(actorSystem: ClusterSystem) {
         self.actorSystem = actorSystem
-        self.reportTool = try MemoryExtractionOutput.reportToolDefinition()
     }
 
     public func extract(from input: ExtractionInput) async throws -> [MemoryProposal] {
@@ -168,9 +125,8 @@ public struct HailMemoryCandidateExtractor: Sendable {
         }
         let model = await actorSystem.agentRuntime.defaultModel.rawValue
         // Extraction is structured reconciliation, not conversation: request
-        // non-thinking generation so background work stays cheap. The
-        // endpoint is cached per effort level, so conversational turns keep
-        // the model's default reasoning.
+        // non-thinking generation. The endpoint is cached per effort level,
+        // so conversational turns keep the model's default reasoning.
         let endpoint = try await actorSystem.agentRuntime.endpoint(
             for: model,
             agentID: "memory-extractor",
@@ -180,32 +136,37 @@ public struct HailMemoryCandidateExtractor: Sendable {
             executionPolicy: .autonomousWorkspace,
             reasoningEffort: ReasoningEffort.none
         )
-        let modelInput = ModelInput(messages: [
-            LLMMessage(role: .system, content: Self.instructions),
-            LLMMessage(role: .user, content: Self.prompt(for: input)),
-        ])
+        let entries: [Transcript.Entry] = [
+            .instructions(
+                .init(
+                    segments: [.text(.init(content: Self.instructions))],
+                    toolDefinitions: []
+                )
+            ),
+            .prompt(.init(segments: [.text(.init(content: Self.prompt(for: input)))])),
+        ]
 
         for await event in endpoint.stream(
-            input: modelInput,
-            tools: [reportTool]
+            input: input,
+            entries: entries,
+            tools: [],
+            authority: FullAuthority(),
+            generating: MemoryExtractionOutput.self,
+            purpose: .generation
         ) {
             try Task.checkCancellation()
             switch event {
-            case .toolCall(let call) where call.name == MemoryExtractionOutput.reportToolName:
+            case .toolsRequested:
+                throw ExtractionError.invalidReport(
+                    "Memory extraction must produce structured output, not a tool call.")
+            case .generated(let output):
                 do {
-                    let output = try MemoryExtractionOutput(
-                        try GeneratedContent(json: call.arguments.json)
-                    )
                     return try output.candidates.map { try Self.proposal(from: $0, input: input) }
                 } catch {
                     throw ExtractionError.invalidReport(String(describing: error))
                 }
-            case .toolCall:
-                continue
             case .failed(let error):
                 throw error
-            case .generated:
-                throw ExtractionError.missingReport
             default:
                 continue
             }
@@ -321,7 +282,9 @@ public struct HailMemoryCandidateExtractor: Sendable {
         case "add":
             return .add(candidate)
         case "revise":
-            guard let uuid = UUID(uuidString: output.factID) else {
+            guard let factID = output.factID,
+                let uuid = UUID(uuidString: factID)
+            else {
                 throw ExtractionError.invalidCandidate
             }
             return .revise(
