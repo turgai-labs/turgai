@@ -10,7 +10,9 @@ import Hail
 /// The one report generated when Hail compacts a conversation. The summary is
 /// the only part projected into future model context; candidates remain
 /// application-owned data and are reconciled against the User actor.
-@Generable
+@Generable(
+    description: "The durable compaction report for a personal-assistant conversation.\n\nProduce two summary sections. summary.keyPoints holds stable facts and decisions needed to continue the conversation. summary.openThreads holds unresolved questions or tasks that still matter. Be concise; drop small talk and superseded details.\n\nAlso extract durable memories about the user into memories: facts worth remembering across conversations, such as preferences, personal details, and ongoing plans. Only extract what the conversation actually supports; do not invent facts. supportingText must be a short verbatim quote from the user's own message; facts without a matching verbatim quote are rejected, so never paraphrase. Small talk and one-off questions need no memory; leave memories empty rather than filling it."
+)
 public struct ConversationCompactionReport: Codable, Sendable {
     @Generable
     public struct Summary: Codable, Sendable {
@@ -24,15 +26,25 @@ public struct ConversationCompactionReport: Codable, Sendable {
     public struct MemoryCandidate: Codable, Sendable {
         @Guide(description: "add for a new fact, revise when correcting an existing fact")
         public let operation: String
+        @Guide(description: "UUID of the fact to correct; required only for revise, null otherwise")
         public let factID: String?
+        @Guide(description: "Fact group: profile, preference, relationship, project, or environment")
         public let namespace: String
+        @Guide(description: "A short stable attribute name for the fact, e.g. drinksCoffee or school")
         public let predicate: String
+        @Guide(description: "The fact's content, in the form valueKind describes")
         public let value: String
+        @Guide(description: "The value's form: text, person, place, date (ISO8601), or preference (true or false)")
         public let valueKind: String
+        @Guide(description: "Certainty the fact is true, between 0 and 1")
         public let confidence: Double
+        @Guide(description: "How much the fact matters for future conversations, between 0 and 1")
         public let importance: Double
+        @Guide(description: "How likely the fact is to change: transient, situational, mutable, or stable")
         public let stability: String
-        @Guide(description: "A short quote copied from the user's supporting message")
+        @Guide(
+            description: "A short verbatim quote copied from the user's own message. Facts without a verbatim quote that matches the conversation are rejected, so never paraphrase."
+        )
         public let supportingText: String
     }
 

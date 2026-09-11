@@ -80,6 +80,93 @@ struct MemoryTests {
     }
 
     @Test
+    func rejectedCandidatesLeaveObservationsPending() {
+        let observation = MemoryObservation(
+            id: observationID,
+            sourceID: sourceID,
+            text: "My name is Ada",
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        let input = ExtractionInput(
+            observations: [observation],
+            generation: .initial,
+            existingFacts: []
+        )
+        let candidate = FactCandidate(
+            namespace: .profile,
+            predicate: "name",
+            value: .person("Ada"),
+            evidence: [observationID],
+            supportingText: "a quote that appears nowhere in the observation",
+            confidence: 1,
+            importance: 1,
+            stability: .stable,
+            observedAt: observation.observedAt
+        )
+
+        let decision = MemoryExtraction.decide(
+            state: MemoryProjection(),
+            input: input,
+            proposals: [.add(candidate)]
+        )
+
+        #expect(decision == .alreadyHandled)
+        var projection = MemoryProjection()
+        projection.apply(.observationRecorded(observation))
+        #expect(!projection.isProcessed(observation))
+    }
+
+    @Test
+    func onlyObservationsSupportingAcceptedFactsAreConsumed() {
+        let first = MemoryObservation(
+            id: observationID,
+            sourceID: sourceID,
+            text: "I live in Haar",
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        let secondSourceID = MemorySourceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000004")!)
+        let second = MemoryObservation(
+            id: ObservationID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000005")!),
+            sourceID: secondSourceID,
+            text: "thanks",
+            observedAt: Date(timeIntervalSince1970: 2)
+        )
+        let input = ExtractionInput(
+            observations: [first, second],
+            generation: .initial,
+            existingFacts: []
+        )
+        let candidate = FactCandidate(
+            namespace: .environment,
+            predicate: "lives_in",
+            value: .place("Haar"),
+            evidence: [observationID],
+            supportingText: "I live in Haar",
+            confidence: 1,
+            importance: 1,
+            stability: .mutable,
+            observedAt: first.observedAt
+        )
+
+        guard
+            case .commit(let commit) = MemoryExtraction.decide(
+                state: MemoryProjection(),
+                input: input,
+                proposals: [.add(candidate)]
+            )
+        else {
+            Issue.record("expected a memory extraction commit")
+            return
+        }
+
+        #expect(commit.processedSources == [sourceID])
+        var projection = MemoryProjection()
+        projection.apply(.extractionCommitted(commit))
+        #expect(projection.isProcessed(first))
+        #expect(!projection.isProcessed(second))
+    }
+
+    @Test
     func clearingMemoryStartsANewGenerationAndRemovesTheProjection() {
         let observation = MemoryObservation(
             id: observationID,
