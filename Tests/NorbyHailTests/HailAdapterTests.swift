@@ -1,9 +1,9 @@
 import AnyLanguageModel
 import Hail
-import NorbyApplication
 import NorbyDomain
 import Testing
 
+@testable import NorbyApplication
 @testable import NorbyHail
 
 #if canImport(FoundationEssentials)
@@ -83,13 +83,19 @@ struct HailAdapterTests {
     }
 
     @Test
-    func mapsHailProgressWithoutLeakingHailValues() {
+    func mapsHailProgressWithoutLeakingHailValues() throws {
         let activity = AgentActivity.turn(
             .progress(.narration(GeneratedContent("partial"))),
             at: Date(timeIntervalSince1970: 1)
         )
 
-        #expect(HailActivityMapper.map(activity) == [.text("partial")])
+        let events = HailActivityMapper.map(activity)
+        try #require(events.count == 1)
+        guard case .text(let fragment) = events[0] else {
+            Issue.record("Expected a text event, got \(events)")
+            return
+        }
+        #expect(fragment == "partial")
     }
 
     @Test
@@ -130,65 +136,56 @@ struct HailAdapterTests {
     }
 
     @Test
-    func weatherToolUsesClockAndGeocodingNetworkEffects() throws {
-        let tool = WeatherTool()
-        let effect = try tool.effect(
-            for: .init(place: "London", region: nil, country: nil, days: 1, fromHour: 9)
+    func weatherCommandsCarryGeocodingAndHorizon() throws {
+        let effect = try WeatherTools().hourly(
+            .init(place: "London", region: nil, country: nil)
         )
 
-        #expect(effect.left.name == "location")
-        #expect(effect.left.query == "London")
-        #expect(effect.left.network.host == "geocoding-api.open-meteo.com")
-        #expect(effect.left.network.operation == "geocode")
-        #expect(effect.right.name == "clock")
+        #expect(effect.geocoding.query == "London")
+        #expect(effect.geocoding.network.host == "geocoding-api.open-meteo.com")
+        #expect(effect.geocoding.network.operation == "geocode")
+        #expect(effect.horizon == .hourly)
     }
 
     @Test
-    func weatherToolCarriesAdministrativeRegionToLocationEffect() throws {
-        let effect = try WeatherTool().effect(
-            for: .init(
-                place: "Haar",
-                region: "Landkreis München",
-                country: "Germany",
-                days: 1,
-                fromHour: nil
-            )
+    func weatherCommandCarriesAdministrativeRegion() throws {
+        let effect = try WeatherTools().hourly(
+            .init(place: "Haar", region: "Landkreis München", country: "Germany")
         )
 
-        #expect(effect.left.query == "Haar")
-        #expect(effect.left.region == "Landkreis München")
-        #expect(effect.left.country == "Germany")
+        #expect(effect.geocoding.query == "Haar")
+        #expect(effect.geocoding.region == "Landkreis München")
+        #expect(effect.geocoding.country == "Germany")
     }
 
     @Test
-    func weatherToolRejectsInvalidForecastRange() {
-        let tool = WeatherTool()
-
+    func weatherRejectsInvalidCommandArguments() {
         #expect(throws: ToolError.invalidArgument("days", value: "0")) {
-            try tool.effect(
-                for: .init(place: "London", region: nil, country: nil, days: 0, fromHour: nil)
-            )
+            try WeatherTools().daily(.init(place: "London", region: nil, country: nil, days: 0))
         }
     }
 
     @Test
-    func weatherHorizonIsAnExplicitToolValue() throws {
-        let weekly = WeatherTool.Input(place: "London", region: nil, country: nil, days: 7, fromHour: nil)
-        let json = weekly.generatedContent.jsonString
-        #expect(json.contains("\"days\":7"))
-        #expect(json.contains("\"fromHour\":null"))
-
-        let hourly = WeatherTool.Input(place: "London", region: nil, country: nil, days: 1, fromHour: 9)
-        let hourlyJSON = hourly.generatedContent.jsonString
-        #expect(hourlyJSON.contains("\"days\":1"))
-        #expect(hourlyJSON.contains("\"fromHour\":9"))
-
-        let decoded = try WeatherTool.Input(
-            GeneratedContent(json: #"{"place":"London","country":null,"days":1,"fromHour":9}"#)
+    func weatherCommandInputsRoundTripThroughGeneratedContent() throws {
+        let hourlyJSON = WeatherTools.HourlyInput(
+            place: "London", region: nil, country: nil
+        ).generatedContent.jsonString
+        #expect(hourlyJSON.contains("\"place\":\"London\""))
+        let decodedHourly = try WeatherTools.HourlyInput(
+            GeneratedContent(json: #"{"place":"London","country":null}"#)
         )
-        #expect(decoded.place == "London")
-        #expect(decoded.days == 1)
-        #expect(decoded.fromHour == 9)
+        #expect(decodedHourly.place == "London")
+        #expect(decodedHourly.country == nil)
+
+        let dailyJSON = WeatherTools.DailyInput(
+            place: "London", region: nil, country: nil, days: 7
+        ).generatedContent.jsonString
+        #expect(dailyJSON.contains("\"days\":7"))
+        let decodedDaily = try WeatherTools.DailyInput(
+            GeneratedContent(json: #"{"place":"London","days":7}"#)
+        )
+        #expect(decodedDaily.place == "London")
+        #expect(decodedDaily.days == 7)
     }
 
     @Test
@@ -205,7 +202,7 @@ struct HailAdapterTests {
             }
             return response
         })
-        let request = ModelRequest(
+        let request = ConversationTurnRequest(
             conversationID: conversationID,
             turnID: TurnID(rawValue: UUID()),
             message: InboundMessage(
@@ -221,7 +218,13 @@ struct HailAdapterTests {
             await collector.append(event)
         }
         #expect(response.content == "hello")
-        #expect(await collector.events == [.text("partial")])
+        let events = await collector.events
+        try #require(events.count == 1)
+        guard case .text(let fragment) = events[0] else {
+            Issue.record("Expected a text event, got \(events)")
+            return
+        }
+        #expect(fragment == "partial")
     }
 
     @Test

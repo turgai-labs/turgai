@@ -77,11 +77,6 @@ public struct UserRecord: Codable, Sendable, Equatable {
     }
 }
 
-public enum ExtractionPreparation: Codable, Sendable, Equatable {
-    case ready(ExtractionInput)
-    case alreadyHandled
-}
-
 public enum ExtractionOutcome: Codable, Sendable, Equatable {
     case committed(MemoryUpdate)
     case stale
@@ -170,25 +165,14 @@ public distributed actor User {
         try await emit(event: .participantUnlinked(participantID, at: Date()))
     }
 
-    /// Captures one immutable extraction view from one actor state.
-    /// Pending conversation observations are not written here; the
-    /// conversation journal already owns their durability.
-    public distributed func prepareExtraction(
-        _ observations: [MemoryObservation]
-    ) -> ExtractionPreparation {
-        let pending = observations.filter {
-            state.memory.accepts($0)
-                && !state.memory.containsObservation(for: $0.sourceID)
-        }
-        guard !pending.isEmpty else { return .alreadyHandled }
-        return .ready(
-            ExtractionInput(
-                observations: pending,
-                generation: state.memory.generation,
-                existingFacts: Array(state.memory.currentFacts().suffix(32)),
-                previousObservations: state.memory.recentObservations(limit: 8)
-            )
-        )
+    /// Records user evidence before model work begins. Facts are not inferred
+    /// here; this event only makes the statement durable for a later unified
+    /// compaction report.
+    public distributed func recordObservation(_ observation: MemoryObservation) async throws {
+        guard state.memory.accepts(observation),
+            !state.memory.containsObservation(for: observation.sourceID)
+        else { return }
+        try await emit(event: .memory(.observationRecorded(observation)))
     }
 
     /// Applies the pure extraction decision as one memory journal event.
@@ -225,6 +209,93 @@ public distributed actor User {
                 )
             )
         }
+    }
+
+    /// Reconciles the memory candidates embedded in one conversation
+    /// compaction report. Evidence is resolved here, where the User aggregate
+    /// owns the durable observation history; the conversation never interprets
+    /// memory candidates.
+    public distributed func commitCompactionMemories(
+        observations: [MemoryObservation],
+        candidates: [ConversationCompactionReport.MemoryCandidate]
+    ) async throws -> ExtractionOutcome {
+        let pending = (state.memory.observations + observations).reduce(into: [MemoryObservation]()) {
+            result, observation in
+            guard state.memory.accepts(observation),
+                !state.memory.isProcessed(observation),
+                !result.contains(where: { $0.sourceID == observation.sourceID })
+            else { return }
+            result.append(observation)
+        }
+        guard !pending.isEmpty else { return .alreadyHandled }
+
+        let input = ExtractionInput(
+            observations: pending,
+            generation: state.memory.generation,
+            existingFacts: Array(state.memory.currentFacts().suffix(32)),
+            previousObservations: state.memory.recentObservations(limit: 32)
+        )
+        let evidence = state.memory.observations + pending
+        let proposals = candidates.compactMap { candidate in
+            Self.proposal(
+                from: candidate,
+                evidence: evidence,
+                observedAt: pending.last?.observedAt
+            )
+        }
+        return try await commitExtraction(input, proposals: proposals)
+    }
+
+    private static func proposal(
+        from candidate: ConversationCompactionReport.MemoryCandidate,
+        evidence: [MemoryObservation],
+        observedAt: Date?
+    ) -> MemoryProposal? {
+        let quote = normalize(candidate.supportingText)
+        guard !quote.isEmpty else { return nil }
+        let matches = evidence.filter { normalize($0.text).contains(quote) }
+        guard matches.count == 1, let source = matches.first,
+            let namespace = MemoryNamespace(rawValue: candidate.namespace),
+            let stability = MemoryStability(rawValue: candidate.stability),
+            let observedAt
+        else { return nil }
+
+        let value: MemoryValue
+        switch candidate.valueKind {
+        case "text": value = .text(candidate.value)
+        case "person": value = .person(candidate.value)
+        case "place": value = .place(candidate.value)
+        case "date":
+            guard let date = ISO8601DateFormatter().date(from: candidate.value) else { return nil }
+            value = .date(date)
+        case "preference":
+            guard let preference = Bool(candidate.value) else { return nil }
+            value = .preference(preference)
+        default: return nil
+        }
+
+        let fact = FactCandidate(
+            namespace: namespace,
+            predicate: candidate.predicate,
+            value: value,
+            evidence: [source.id],
+            supportingText: candidate.supportingText,
+            confidence: candidate.confidence,
+            importance: candidate.importance,
+            stability: stability,
+            observedAt: observedAt
+        )
+        switch candidate.operation.lowercased() {
+        case "add": return .add(fact)
+        case "revise":
+            guard let rawID = candidate.factID, let uuid = UUID(uuidString: rawID) else { return nil }
+            return .revise(factID: MemoryFactID(rawValue: uuid), candidate: fact)
+        default: return nil
+        }
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     private static func change(from event: MemoryFactEvent) -> MemoryFactChange {

@@ -182,8 +182,8 @@ public struct LocationEffect: CompositeScopedEffect, Sendable {
         self.network = network
     }
 
-    public func decision(using authority: any Authority) -> EffectDecision {
-        authority.decision(on: network)
+    public var childEffects: [any ScopedEffect] {
+        [network]
     }
 
     public static func run(

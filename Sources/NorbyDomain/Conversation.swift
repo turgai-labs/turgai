@@ -133,6 +133,13 @@ public struct ConversationID: Hashable, Codable, Sendable {
     public var stableKey: String {
         "\(channel.rawValue):\(externalAddress.rawValue)"
     }
+
+    /// The participant a direct user↔bot conversation belongs to. Channels
+    /// address direct conversations by the participant's own identity, so the
+    /// external address is that participant.
+    public var participantID: ParticipantID {
+        ParticipantID(channel: channel, rawValue: externalAddress.rawValue)
+    }
 }
 
 /// Stable event-store identity for a conversation.

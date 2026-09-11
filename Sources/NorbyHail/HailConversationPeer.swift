@@ -117,7 +117,7 @@ private struct HailConversationInput: Codable, Sendable {
 
 /// Hail activity translated into values that can be consumed by the
 /// application layer. The Hail `AgentActivity` type stays inside this target.
-public enum HailModelEvent: Hashable, Sendable {
+public enum HailModelEvent: Sendable {
     case started
     case status(String)
     case text(String)
@@ -125,6 +125,7 @@ public enum HailModelEvent: Hashable, Sendable {
     case tool(name: String)
     case usage(inputTokens: Int?, outputTokens: Int?, totalTokens: Int?)
     case contextUsage(usedTokens: Int, limitTokens: Int)
+    case compaction(output: GeneratedContent, context: GeneratedContent)
     case completed
 }
 
@@ -167,6 +168,8 @@ public enum HailActivityMapper {
                         limitTokens: usage.limitTokens
                     )
                 ]
+            case .compaction(let output, let context):
+                return [.compaction(output: output, context: context)]
             }
         case .message:
             // Display-only posts belong to the durable transcript, not to the

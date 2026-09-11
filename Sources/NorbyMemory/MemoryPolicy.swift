@@ -64,7 +64,7 @@ public enum MemoryExtraction {
 
         let observations = input.observations + input.previousObservations
         guard !input.observations.isEmpty,
-            !input.observations.allSatisfy({ state.containsObservation(for: $0.sourceID) })
+            !input.observations.allSatisfy(state.isProcessed)
         else {
             return .alreadyHandled
         }

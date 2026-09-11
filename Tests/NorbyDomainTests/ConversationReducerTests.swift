@@ -274,7 +274,7 @@ struct ConversationReducerTests {
         #expect(
             effects == [
                 .runReply(
-                    ModelRequest(
+                    ConversationTurnRequest(
                         conversationID: conversationID,
                         turnID: pending.turnID,
                         message: pending.message

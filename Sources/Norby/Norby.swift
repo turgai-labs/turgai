@@ -121,7 +121,6 @@ struct Norby: AsyncParsableCommand {
                     FetchURLTool(),
                     LocationTool(),
                     NowTool(),
-                    WeatherTool(),
                     FetchAttachmentTool(resolver: attachmentResolver),
                 ]
                 tools +=
@@ -129,6 +128,7 @@ struct Norby: AsyncParsableCommand {
                         context: context,
                         snapshotPolicy: runtimeConfiguration.snapshotPolicy
                     ).tools
+                tools += WeatherTools().tools
                 tools +=
                     TimerTools(
                         context: context,
@@ -180,7 +180,8 @@ struct Norby: AsyncParsableCommand {
                     .grantingAll(for: ReplaceTimerEffect.self)
                     .grantingAll(for: CancelTimerEffect.self)
                     .grantingAll(for: ListTimersEffect.self)
-            }
+            },
+            compactionOperation: NorbyCompactionOperation.make()
         )
         let eventStore = FileEventStore(client: persistenceClient)
         let snapshotStore = FileSnapshotStore(client: persistenceClient)

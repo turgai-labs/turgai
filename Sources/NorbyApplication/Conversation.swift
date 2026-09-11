@@ -766,6 +766,7 @@ public distributed actor Conversation {
     }
 
     private func resumeAfterReplay() async throws {
+        await recoverLatestCompactionReport()
         if state.activeTurnID != nil || !state.pendingMessages.isEmpty {
             guard state.activeMessage != nil || state.activeTurnID == nil else {
                 actorSystem.log.error(
@@ -777,6 +778,33 @@ public distributed actor Conversation {
             try await dispatch(.resume)
         }
 
+    }
+
+    /// Replays the durable Hail compaction result into the User aggregate. The
+    /// User projection tracks processed observation sources, so activation may
+    /// safely retry this handoff after a crash. A direct conversation belongs
+    /// to exactly one user: the participant the channel addresses it by.
+    private func recoverLatestCompactionReport() async {
+        guard let snapshot = try? await peer.contextSnapshot(),
+            let output = snapshot.latestCompactionOutput,
+            let report = try? ConversationCompactionReport(output)
+        else { return }
+
+        do {
+            let user = try await User.resolve(
+                on: actorSystem,
+                userID: NorbyDomain.UserID(participantID: conversationID.participantID)
+            )
+            _ = try await user.commitCompactionMemories(
+                observations: [],
+                candidates: report.memories
+            )
+        } catch {
+            actorSystem.log.warning(
+                "Could not recover compaction memory",
+                metadata: ["error": .string(String(describing: error))]
+            )
+        }
     }
 
     private func startModel(for request: ConversationTurnRequest) {
@@ -797,10 +825,25 @@ public distributed actor Conversation {
                 )
             },
             operation: { updates in
-                let turnContext = await Self.memoryContext(
-                    for: request,
-                    actorSystem: actorSystem,
-                    conversationID: conversationID
+                var turnContext = ["Current date and time: \(Self.timeAnchor())"]
+                turnContext.append(
+                    contentsOf: await Self.memoryContext(
+                        for: request,
+                        actorSystem: actorSystem,
+                        conversationID: conversationID
+                    )
+                )
+                let user = try await User.resolve(
+                    on: actorSystem,
+                    userID: request.message.userID
+                )
+                try await user.recordObservation(
+                    MemoryObservation(
+                        id: ObservationID(rawValue: request.message.id.rawValue),
+                        sourceID: MemorySourceID(rawValue: request.message.id.rawValue),
+                        text: request.message.text,
+                        observedAt: request.message.receivedAt
+                    )
                 )
                 let accumulator = ReplyTextAccumulator()
                 let response = try await peer.run(
@@ -808,6 +851,33 @@ public distributed actor Conversation {
                     turnContext: turnContext
                 ) { event in
                     switch event {
+                    case .compaction(let output, _):
+                        guard
+                            let report = try? ConversationCompactionReport(output),
+                            !request.message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        else { break }
+                        do {
+                            let user = try await User.resolve(
+                                on: actorSystem,
+                                userID: request.message.userID
+                            )
+                            let observation = MemoryObservation(
+                                id: ObservationID(rawValue: request.message.id.rawValue),
+                                sourceID: MemorySourceID(rawValue: request.message.id.rawValue),
+                                text: request.message.text,
+                                observedAt: request.message.receivedAt
+                            )
+                            _ = try await user.commitCompactionMemories(
+                                observations: [observation],
+                                candidates: report.memories
+                            )
+                        } catch {
+                            actorSystem.log.warning(
+                                "Could not commit compaction memory",
+                                metadata: ["error": .string(String(describing: error))]
+                            )
+                        }
+
                     case .reasoning:
                         await updates.send(.thinking)
 
@@ -999,6 +1069,43 @@ public distributed actor Conversation {
             )
             return []
         }
+    }
+
+    /// One stable time anchor per turn. The prompt carries no message
+    /// timestamps, so without this anchor a long-idle conversation drifts to
+    /// whatever time the most recent tool output happened to mention.
+    static func timeAnchor(
+        at date: Date = Date(),
+        timeZone: TimeZone = .current
+    ) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let components = calendar.dateComponents(
+            [.year, .month, .day, .hour, .minute, .weekday],
+            from: date
+        )
+        let weekdays = [
+            "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+        ]
+        let weekday =
+            components.weekday
+            .flatMap { (0..<7).contains($0 - 1) ? weekdays[$0 - 1] : nil } ?? ""
+        let offset = timeZone.secondsFromGMT(for: date)
+        let sign = offset < 0 ? "-" : "+"
+        let absolute = abs(offset)
+        return String(
+            format: "%04d-%02d-%02d %02d:%02d %@ (%@, UTC%@%02d:%02d)",
+            components.year ?? 0,
+            components.month ?? 0,
+            components.day ?? 0,
+            components.hour ?? 0,
+            components.minute ?? 0,
+            weekday,
+            timeZone.identifier,
+            sign,
+            absolute / 3600,
+            (absolute % 3600) / 60
+        )
     }
 
     private func action(for event: ConversationModelEvent) -> ConversationAction {

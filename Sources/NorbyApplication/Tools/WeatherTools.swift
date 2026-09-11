@@ -7,86 +7,76 @@ import Hail
     import Foundation
 #endif
 
-/// Looks up a place and returns its current weather plus a short forecast.
-///
-/// This intentionally talks to Open-Meteo directly. The tool is small enough
-/// that introducing a provider abstraction would add more surface than value
-/// at this stage.
-@Tool(
-    "weather",
-    description:
-        "Get structured current weather and forecast data for a place. A one-day forecast is hourly; longer forecasts are daily. Pass a city, place name, or postal code, and use region or country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
-)
-public struct WeatherTool {
-    public typealias Effect = CombinedEffect<LocationEffect, ClockEffect>
-
-    private static let maximumResponseBytes = 512 * 1024
-    private static let userAgent = "Norby/1.0 (+https://github.com/akbashev/norby)"
-
-    public init() {}
-
-    public func effect(for input: Input) throws -> Effect {
-        let place = try validatedPlace(input.place)
-        let region = try validatedRegion(input.region)
-        let country = try validatedCountry(input.country)
-        _ = try validatedHorizon(input)
-        let locationEffect = try LocationTool().effect(
-            for: LocationTool.Input(place: place, region: region, country: country)
-        )
-        return
-            locationEffect
-            .combined(with: ClockEffect())
+/// One weather capability, declared as what it needs: geocoding, the clock,
+/// and (spawned dynamically, once coordinates exist) one Open-Meteo request.
+/// Being composite, the effect introduces no authority domain of its own —
+/// its decision derives from the declared components.
+public struct WeatherEffect: CompositeScopedEffect, Sendable {
+    public enum Horizon: Sendable, Equatable {
+        case current
+        case hourly
+        case daily(days: Int)
     }
 
-    public func runOutput(
-        input: Input,
-        token: borrowing EffectToken<Effect>
-    ) async throws -> ToolOutput {
-        let location = try await token.withLeft { locationToken in
-            let locationQuery = try validatedPlace(input.place)
-            do {
-                let places = try await LocationEffect.run(in: locationToken)
-                guard let place = places.first else {
-                    throw Error.locationNotFound(locationQuery)
-                }
-                return place
-            } catch let error as LocationEffect.Error {
-                switch error {
-                case .invalidResponse:
-                    throw Error.invalidResponse
-                case .httpStatus(let status):
-                    throw Error.httpStatus(status)
-                case .locationNotFound(let query):
-                    throw Error.locationNotFound(query)
-                }
-            }
+    public let name = "weather"
+    public let geocoding: LocationEffect
+    public let clock: ClockEffect
+    public let horizon: Horizon
+
+    public init(geocoding: LocationEffect, clock: ClockEffect, horizon: Horizon) {
+        self.geocoding = geocoding
+        self.clock = clock
+        self.horizon = horizon
+    }
+
+    public var childEffects: [any ScopedEffect] {
+        [geocoding, clock]
+    }
+
+    public static func run(
+        in token: borrowing EffectToken<WeatherEffect>
+    ) async throws -> WeatherSupport.WeatherReport {
+        let configuration = token.withConfiguration { $0 }
+        let places = try await token.withChild(configuration.geocoding) { locationToken in
+            try await LocationEffect.run(in: locationToken)
         }
-        let now = try await token.withRight { clockToken in
+        // LocationEffect.run guarantees a non-empty result.
+        guard let location = places.first else {
+            throw LocationEffect.Error.locationNotFound(configuration.geocoding.query)
+        }
+        let now = try await token.withChild(configuration.clock) { clockToken in
             try await ClockEffect.run(in: clockToken)
         }
-
-        let horizon = try validatedHorizon(input)
-        let forecastEffect = try forecastEffect(
+        // The forecast request is genuinely dynamic: its coordinates only
+        // exist after geocoding. The spawned child is checked against the
+        // same authority at spawn time.
+        let forecastRequest = try WeatherSupport.forecastEffect(
             latitude: location.latitude,
             longitude: location.longitude,
-            horizon: horizon
+            horizon: configuration.horizon
         )
-        let forecast = try await token.withChild(forecastEffect) { networkToken in
+        let response = try await token.withChild(forecastRequest) { networkToken in
             try await NetworkEffect.run(in: networkToken)
         }
-        let report = try makeReport(
+        return try WeatherSupport.makeReport(
             location: location,
-            forecast: try decodeForecast(forecast),
-            horizon: horizon,
+            forecast: WeatherSupport.decodeForecast(response),
+            horizon: configuration.horizon,
             now: now
         )
-        return .text(try encode(report))
     }
+}
 
-    private func forecastEffect(
+/// Shared weather pipeline used by the weather commands. Presentation belongs
+/// to the model-facing conversation, not to this provider adapter.
+public enum WeatherSupport {
+    static let maximumResponseBytes = 512 * 1024
+    static let userAgent = "Norby/1.0 (+https://github.com/akbashev/norby)"
+
+    static func forecastEffect(
         latitude: Double,
         longitude: Double,
-        horizon: ForecastHorizon
+        horizon: WeatherEffect.Horizon
     ) throws -> NetworkEffect {
         var components = URLComponents(string: "https://api.open-meteo.com/v1/forecast")!
         components.queryItems = [
@@ -100,7 +90,9 @@ public struct WeatherTool {
             URLQueryItem(name: "timezone", value: "auto"),
         ]
         switch horizon {
-        case .currentDay:
+        case .current:
+            break
+        case .hourly:
             components.queryItems?.append(
                 URLQueryItem(name: "timeformat", value: "unixtime")
             )
@@ -112,7 +104,7 @@ public struct WeatherTool {
                 )
             )
             components.queryItems?.append(URLQueryItem(name: "forecast_days", value: "1"))
-        case .days(let days):
+        case .daily(let days):
             components.queryItems?.append(
                 URLQueryItem(
                     name: "daily",
@@ -130,15 +122,15 @@ public struct WeatherTool {
             request: NetworkRequest(
                 url: url.absoluteString,
                 headers: [
-                    "User-Agent": Self.userAgent,
+                    "User-Agent": userAgent,
                     "Accept": "application/json",
                 ],
-                maximumResponseBytes: Self.maximumResponseBytes
+                maximumResponseBytes: maximumResponseBytes
             )
         )
     }
 
-    private func decodeForecast(
+    static func decodeForecast(
         _ response: NetworkResponse
     ) throws -> ForecastResponse {
         guard (200..<300).contains(response.statusCode) else {
@@ -156,10 +148,10 @@ public struct WeatherTool {
         }
     }
 
-    private func makeReport(
+    static func makeReport(
         location: LocationEffect.Result,
         forecast: ForecastResponse,
-        horizon: ForecastHorizon,
+        horizon: WeatherEffect.Horizon,
         now: Date
     ) throws -> WeatherReport {
         guard let timeZone = TimeZone(identifier: forecast.timezone) else {
@@ -183,8 +175,12 @@ public struct WeatherTool {
         let daily: [WeatherDailyPoint]
         let fromLocalHour: Int?
         switch horizon {
-        case .currentDay(let fromHour):
-            let startHour = fromHour ?? localNow.hour
+        case .current:
+            hourly = []
+            daily = []
+            fromLocalHour = nil
+        case .hourly:
+            let startHour = localNow.hour
             fromLocalHour = startHour
             if let source = forecast.hourly {
                 hourly = try source.points
@@ -194,7 +190,7 @@ public struct WeatherTool {
                 hourly = []
             }
             daily = []
-        case .days(let days):
+        case .daily(let days):
             fromLocalHour = nil
             hourly = []
             if let source = forecast.daily {
@@ -233,7 +229,46 @@ public struct WeatherTool {
         )
     }
 
-    private func makeHourlyPoint(
+    static func validatedPlace(_ value: String) throws -> String {
+        let place = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !place.isEmpty else {
+            throw ToolError.invalidArgument("place", value: value)
+        }
+        guard place.count <= 200 else {
+            throw ToolError.invalidArgument("place", value: "place is too long")
+        }
+        return place
+    }
+
+    static func validatedCountry(_ value: String?) throws -> String? {
+        guard let value else { return nil }
+        let country = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !country.isEmpty else { return nil }
+        guard country.count <= 100 else {
+            throw ToolError.invalidArgument("country", value: "country is too long")
+        }
+        return country
+    }
+
+    static func validatedRegion(_ value: String?) throws -> String? {
+        guard let value else { return nil }
+        let region = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !region.isEmpty else { return nil }
+        guard region.count <= 200 else { throw ToolError.invalidArgument("region", value: region) }
+        return region
+    }
+
+    static func geocodingEffect(
+        place: String,
+        region: String?,
+        country: String?
+    ) throws -> LocationEffect {
+        try LocationTool().effect(
+            for: LocationTool.Input(place: place, region: region, country: country)
+        )
+    }
+
+    private static func makeHourlyPoint(
         _ point: Hourly.Point,
         in timeZone: TimeZone
     ) throws -> WeatherHourlyPoint {
@@ -252,7 +287,7 @@ public struct WeatherTool {
         )
     }
 
-    private func localDateTime(
+    private static func localDateTime(
         _ date: Date,
         in timeZone: TimeZone
     ) throws -> LocalDateTime {
@@ -278,73 +313,13 @@ public struct WeatherTool {
         )
     }
 
-    private func encode(_ report: WeatherReport) throws -> String {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(report)
-        guard let result = String(data: data, encoding: .utf8) else {
-            throw Error.invalidResponse
-        }
-        return result
-    }
-
-    private func validatedPlace(_ value: String) throws -> String {
-        let place = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !place.isEmpty else {
-            throw ToolError.invalidArgument("place", value: value)
-        }
-        guard place.count <= 200 else {
-            throw ToolError.invalidArgument("place", value: "place is too long")
-        }
-        return place
-    }
-
-    private func validatedCountry(_ value: String?) throws -> String? {
-        guard let value else { return nil }
-        let country = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !country.isEmpty else { return nil }
-        guard country.count <= 100 else {
-            throw ToolError.invalidArgument("country", value: "country is too long")
-        }
-        return country
-    }
-
-    private func validatedRegion(_ value: String?) throws -> String? {
-        guard let value else { return nil }
-        let region = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !region.isEmpty else { return nil }
-        guard region.count <= 200 else { throw ToolError.invalidArgument("region", value: region) }
-        return region
-    }
-
-    private func validatedHorizon(_ input: Input) throws -> ForecastHorizon {
-        let days = input.days
-        guard (1...7).contains(days) else {
-            throw ToolError.invalidArgument("days", value: String(days))
-        }
-
-        switch days {
-        case 1:
-            if let fromHour = input.fromHour, !(0...23).contains(fromHour) {
-                throw ToolError.invalidArgument("from_hour", value: String(fromHour))
-            }
-            return .currentDay(fromHour: input.fromHour)
-        default:
-            guard input.fromHour == nil else {
-                throw ToolError.invalidArgument("from_hour", value: "only valid when days is 1")
-            }
-            return .days(days)
-        }
-    }
-
-    private func compassDirection(_ degrees: Double) -> String {
+    private static func compassDirection(_ degrees: Double) -> String {
         let directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
         let index = Int((degrees + 22.5) / 45.0) % directions.count
         return directions[index]
     }
 
-    private func condition(_ code: Int) -> String {
+    static func condition(_ code: Int) -> String {
         switch code {
         case 0: "clear sky"
         case 1: "mainly clear"
@@ -361,63 +336,21 @@ public struct WeatherTool {
         default: "unknown conditions"
         }
     }
-}
 
-extension WeatherTool {
-    /// The domain meaning of the forecast requested by the caller.
-    public enum ForecastHorizon: Equatable, Sendable {
-        case currentDay(fromHour: Int?)
-        case days(Int)
-
-        public static let today = Self.currentDay(fromHour: nil)
-        public static let upcomingWeek = Self.days(7)
-
-        public static func today(from hour: Int) -> Self {
-            .currentDay(fromHour: hour)
-        }
-
-        var days: Int {
-            switch self {
-            case .currentDay:
-                1
-            case .days(let days):
-                days
-            }
-        }
-    }
-
-    @Generable
-    public struct Input: Sendable {
-        @Guide(
-            description:
-                "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
-        )
-        public let place: String
-        @Guide(
-            description:
-                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
-        public let region: String?
-        @Guide(description: "An optional country name used to disambiguate the place.")
-        public let country: String?
-        public let days: Int
-        public let fromHour: Int?
-    }
-
-    public enum Error: Swift.Error, Equatable, Sendable {
+    enum Error: Swift.Error, Equatable, Sendable {
         case invalidURL
-        case locationNotFound(String)
         case invalidResponse
         case httpStatus(Int)
     }
 
-    private struct ForecastResponse: Decodable {
+    struct ForecastResponse: Decodable {
         let timezone: String
         let current: Current
         let daily: Daily?
         let hourly: Hourly?
     }
 
-    private struct Current: Decodable {
+    struct Current: Decodable {
         let temperature: Double
         let apparentTemperature: Double
         let relativeHumidity: Double
@@ -437,74 +370,73 @@ extension WeatherTool {
         }
     }
 
-    /// Data returned to the model. Presentation belongs to the model-facing
-    /// conversation, not to this provider adapter.
-    private struct WeatherReport: Encodable, Sendable {
-        let location: WeatherLocation
-        let timezone: String
-        let toolNow: Date
-        let localNow: LocalDateTime
-        let requestedDays: Int
-        let fromLocalHour: Int?
-        let current: WeatherCurrent
-        let hourly: [WeatherHourlyPoint]
-        let daily: [WeatherDailyPoint]
-        let source: String
+    /// Data returned to the model.
+    public struct WeatherReport: Encodable, Sendable {
+        public let location: WeatherLocation
+        public let timezone: String
+        public let toolNow: Date
+        public let localNow: LocalDateTime
+        public let requestedDays: Int
+        public let fromLocalHour: Int?
+        public let current: WeatherCurrent
+        public let hourly: [WeatherHourlyPoint]
+        public let daily: [WeatherDailyPoint]
+        public let source: String
     }
 
-    private struct WeatherLocation: Encodable, Sendable {
-        let name: String
-        let region: String?
-        let country: String?
-        let latitude: Double
-        let longitude: Double
+    public struct WeatherLocation: Encodable, Sendable {
+        public let name: String
+        public let region: String?
+        public let country: String?
+        public let latitude: Double
+        public let longitude: Double
     }
 
-    private struct WeatherCurrent: Encodable, Sendable {
-        let temperatureCelsius: Double
-        let apparentTemperatureCelsius: Double
-        let relativeHumidityPercent: Double
-        let precipitationMillimeters: Double
-        let weatherCode: Int
-        let condition: String
-        let windSpeedKilometersPerHour: Double
-        let windDirectionDegrees: Double
-        let windDirection: String
+    public struct WeatherCurrent: Encodable, Sendable {
+        public let temperatureCelsius: Double
+        public let apparentTemperatureCelsius: Double
+        public let relativeHumidityPercent: Double
+        public let precipitationMillimeters: Double
+        public let weatherCode: Int
+        public let condition: String
+        public let windSpeedKilometersPerHour: Double
+        public let windDirectionDegrees: Double
+        public let windDirection: String
     }
 
-    private struct WeatherHourlyPoint: Encodable, Sendable {
-        let time: Date
-        let localTime: LocalDateTime
-        let temperatureCelsius: Double
-        let apparentTemperatureCelsius: Double
-        let precipitationProbabilityPercent: Int?
-        let precipitationMillimeters: Double
-        let weatherCode: Int
-        let condition: String
-        let windSpeedKilometersPerHour: Double
-        let windDirectionDegrees: Double
-        let windDirection: String
+    public struct WeatherHourlyPoint: Encodable, Sendable {
+        public let time: Date
+        public let localTime: LocalDateTime
+        public let temperatureCelsius: Double
+        public let apparentTemperatureCelsius: Double
+        public let precipitationProbabilityPercent: Int?
+        public let precipitationMillimeters: Double
+        public let weatherCode: Int
+        public let condition: String
+        public let windSpeedKilometersPerHour: Double
+        public let windDirectionDegrees: Double
+        public let windDirection: String
     }
 
-    private struct WeatherDailyPoint: Encodable, Sendable {
-        let date: String
-        let weatherCode: Int
-        let condition: String
-        let maximumTemperatureCelsius: Double
-        let minimumTemperatureCelsius: Double
-        let precipitationProbabilityPercent: Int?
+    public struct WeatherDailyPoint: Encodable, Sendable {
+        public let date: String
+        public let weatherCode: Int
+        public let condition: String
+        public let maximumTemperatureCelsius: Double
+        public let minimumTemperatureCelsius: Double
+        public let precipitationProbabilityPercent: Int?
     }
 
-    private struct LocalDateTime: Encodable, Sendable {
-        let year: Int
-        let month: Int
-        let day: Int
-        let hour: Int
-        let minute: Int
-        let weekday: Int
+    public struct LocalDateTime: Encodable, Sendable {
+        public let year: Int
+        public let month: Int
+        public let day: Int
+        public let hour: Int
+        public let minute: Int
+        public let weekday: Int
     }
 
-    private struct Daily: Decodable {
+    struct Daily: Decodable {
         struct Point {
             let date: String
             let weatherCode: Int
@@ -567,7 +499,7 @@ extension WeatherTool {
         }
     }
 
-    private struct Hourly: Decodable {
+    struct Hourly: Decodable {
         struct Point {
             let time: Date
             let temperature: Double
@@ -643,5 +575,137 @@ extension WeatherTool {
                 )
             }
         }
+    }
+}
+
+extension WeatherEffect.Horizon {
+    fileprivate var days: Int {
+        switch self {
+        case .current: 0
+        case .hourly: 1
+        case .daily(let days): days
+        }
+    }
+}
+
+/// Looks up a place and returns weather from Open-Meteo. Each command
+/// authorizes one ``WeatherEffect``; the pipeline (geocode, clock, forecast)
+/// is shared.
+@Tool(
+    "weather",
+    description:
+        "Get live weather for a place from Open-Meteo. Commands: weather_current (conditions now), weather_hourly (rest of today as an hourly table), weather_daily (multi-day outlook). Every report's localNow field is the authoritative current date and time at the location — trust it as a time anchor over your own sense of time. Pass a city, place name, or postal code, and use region or country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
+)
+public struct WeatherTools: Sendable {
+    public init() {}
+
+    @Command(
+        "current",
+        description: "Get the current weather conditions for a place."
+    )
+    public func current(_ input: CurrentInput) throws -> WeatherEffect {
+        try WeatherEffect(
+            geocoding: WeatherSupport.geocodingEffect(
+                place: WeatherSupport.validatedPlace(input.place),
+                region: WeatherSupport.validatedRegion(input.region),
+                country: WeatherSupport.validatedCountry(input.country)
+            ),
+            clock: ClockEffect(),
+            horizon: .current
+        )
+    }
+
+    @Command(
+        "hourly",
+        description:
+            "Get the remaining hours of today's weather for a place as an hourly table. The table starts at the current hour and never includes past hours."
+    )
+    public func hourly(_ input: HourlyInput) throws -> WeatherEffect {
+        try WeatherEffect(
+            geocoding: WeatherSupport.geocodingEffect(
+                place: WeatherSupport.validatedPlace(input.place),
+                region: WeatherSupport.validatedRegion(input.region),
+                country: WeatherSupport.validatedCountry(input.country)
+            ),
+            clock: ClockEffect(),
+            horizon: .hourly
+        )
+    }
+
+    @Command(
+        "daily",
+        description:
+            "Get a multi-day weather outlook for a place: per-day high and low temperatures, conditions, and precipitation chance."
+    )
+    public func daily(_ input: DailyInput) throws -> WeatherEffect {
+        guard (1...7).contains(input.days) else {
+            throw ToolError.invalidArgument("days", value: String(input.days))
+        }
+        return try WeatherEffect(
+            geocoding: WeatherSupport.geocodingEffect(
+                place: WeatherSupport.validatedPlace(input.place),
+                region: WeatherSupport.validatedRegion(input.region),
+                country: WeatherSupport.validatedCountry(input.country)
+            ),
+            clock: ClockEffect(),
+            horizon: .daily(days: input.days)
+        )
+    }
+
+    public func render(_ output: WeatherSupport.WeatherReport) -> ToolOutput {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(output) else {
+            return .text("{}")
+        }
+        return .text(String(decoding: data, as: UTF8.self))
+    }
+
+    @Generable
+    public struct CurrentInput: Sendable {
+        @Guide(
+            description:
+                "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
+        )
+        public let place: String
+        @Guide(
+            description:
+                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+        public let region: String?
+        @Guide(description: "An optional country name used to disambiguate the place.")
+        public let country: String?
+    }
+
+    @Generable
+    public struct HourlyInput: Sendable {
+        @Guide(
+            description:
+                "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
+        )
+        public let place: String
+        @Guide(
+            description:
+                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+        public let region: String?
+        @Guide(description: "An optional country name used to disambiguate the place.")
+        public let country: String?
+    }
+
+    @Generable
+    public struct DailyInput: Sendable {
+        @Guide(
+            description:
+                "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
+        )
+        public let place: String
+        @Guide(
+            description:
+                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+        public let region: String?
+        @Guide(description: "An optional country name used to disambiguate the place.")
+        public let country: String?
+        @Guide(description: "Number of days in the outlook, from 1 through 7.")
+        public let days: Int
     }
 }

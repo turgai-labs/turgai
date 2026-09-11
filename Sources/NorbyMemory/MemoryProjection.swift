@@ -19,6 +19,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
     /// predates `/forget` from re-entering the new generation.
     public private(set) var lastClearedAt: Date?
     public private(set) var observations: [MemoryObservation] = []
+    public private(set) var processedSources: Set<MemorySourceID> = []
     public private(set) var facts: [MemoryFact] = []
 
     public init(generation: MemoryGeneration = .initial) {
@@ -30,6 +31,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         case generation
         case lastClearedAt
         case observations
+        case processedSources
         case facts
     }
 
@@ -49,6 +51,11 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
                 [MemoryObservation].self,
                 forKey: .observations
             ) ?? []
+        processedSources =
+            try container.decodeIfPresent(
+                Set<MemorySourceID>.self,
+                forKey: .processedSources
+            ) ?? []
         facts =
             try container.decodeIfPresent(
                 [MemoryFact].self,
@@ -61,6 +68,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         try container.encode(generation, forKey: .generation)
         try container.encodeIfPresent(lastClearedAt, forKey: .lastClearedAt)
         try container.encode(observations, forKey: .observations)
+        try container.encode(processedSources, forKey: .processedSources)
         try container.encode(facts, forKey: .facts)
     }
 
@@ -68,6 +76,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         switch event {
         case .cleared(let at):
             observations.removeAll(keepingCapacity: true)
+            processedSources.removeAll(keepingCapacity: true)
             facts.removeAll(keepingCapacity: true)
             generation = generation.advancing()
             lastClearedAt = max(lastClearedAt ?? at, at)
@@ -79,9 +88,6 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
                 })
             else { return }
             observations.append(observation)
-            if observations.count > Self.observationTailLimit {
-                observations.removeFirst(observations.count - Self.observationTailLimit)
-            }
 
         case .observationCompleted(let sourceID, let response):
             guard
@@ -118,14 +124,12 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
 
         case .extractionCommitted(let commit):
             guard commit.generation == generation else { return }
+            processedSources.formUnion(commit.processedSources)
             for observation in commit.observations {
                 guard accepts(observation),
                     !observations.contains(where: { $0.sourceID == observation.sourceID })
                 else { continue }
                 observations.append(observation)
-            }
-            if observations.count > Self.observationTailLimit {
-                observations.removeFirst(observations.count - Self.observationTailLimit)
             }
             for change in commit.changes {
                 applyFactEvent(change)
@@ -198,6 +202,10 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
 
     public func containsObservation(for sourceID: MemorySourceID) -> Bool {
         observations.contains { $0.sourceID == sourceID }
+    }
+
+    public func isProcessed(_ observation: MemoryObservation) -> Bool {
+        processedSources.contains(observation.sourceID)
     }
 
     public func accepts(_ observation: MemoryObservation) -> Bool {

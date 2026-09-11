@@ -47,27 +47,6 @@ struct DeferredSchemaTests {
     }
 
     @Test
-    func memoryReportIncludesEveryReferencedDefinition() throws {
-        let data = try JSONEncoder().encode(
-            MemoryExtractionOutput.reportToolDefinition().parameters
-        )
-        let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        let definitions = try #require(root["$defs"] as? [String: Any])
-        func check(_ value: Any) {
-            if let object = value as? [String: Any] {
-                if let reference = object["$ref"] as? String {
-                    let name = String(reference.dropFirst("#/$defs/".count))
-                    #expect(definitions[name] != nil, "Missing schema definition: \(name)")
-                }
-                for child in object.values { check(child) }
-            } else if let array = value as? [Any] {
-                for child in array { check(child) }
-            }
-        }
-        check(root)
-    }
-
-    @Test
     func deferredToolsHaveSeparateNonUnionSchemas() throws {
         let definitions: [(String, GenerationSchema)] = [
             ("timer_create", TimerTools.CreateInput.generationSchema),

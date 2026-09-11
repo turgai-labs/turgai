@@ -40,7 +40,8 @@ public struct HailRuntimeConfiguration: Sendable {
         workspaceRoot: String,
         definitionProvider: AgentRuntimePlugin.DefinitionProvider? = nil,
         turnToolsProvider: AgentRuntimePlugin.TurnToolsProvider? = nil,
-        authorityProvider: AgentRuntimePlugin.AuthorityProvider? = nil
+        authorityProvider: AgentRuntimePlugin.AuthorityProvider? = nil,
+        compactionOperation: CompactionOperation? = nil
     ) throws -> AgentRuntimePlugin {
         let model = try AgentModel(modelIdentifier)
         let routerConfiguration = try ModelRouterConfiguration(
@@ -80,7 +81,8 @@ public struct HailRuntimeConfiguration: Sendable {
             definitionProvider: definitionProvider,
             contextCompactor: SlidingWindowCompactor(
                 outputReserve: compactionMaxOutputTokens
-            )
+            ),
+            compactionOperation: compactionOperation
         )
     }
 }

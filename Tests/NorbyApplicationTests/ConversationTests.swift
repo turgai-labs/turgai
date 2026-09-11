@@ -1,8 +1,9 @@
 import AnyLanguageModel
-import NorbyApplication
 import NorbyDomain
 import NorbyMemory
 import Testing
+
+@testable import NorbyApplication
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -139,5 +140,23 @@ struct ConversationTests {
         #expect(input.factID == "00000000-0000-0000-0000-000000000003")
         #expect(input.valueKind == .person)
         #expect(input.stability == .stable)
+    }
+
+    @Test
+    func timeAnchorRendersLocalDateTimeAndOffset() {
+        // 2026-09-11T12:11:00Z, a Friday.
+        let instant = Date(timeIntervalSince1970: 1_789_128_660)
+
+        let berlin = TimeZone(identifier: "Europe/Berlin")!
+        #expect(
+            Conversation.timeAnchor(at: instant, timeZone: berlin)
+                == "2026-09-11 14:11 Friday (Europe/Berlin, UTC+02:00)"
+        )
+
+        let newYork = TimeZone(identifier: "America/New_York")!
+        #expect(
+            Conversation.timeAnchor(at: instant, timeZone: newYork)
+                == "2026-09-11 08:11 Friday (America/New_York, UTC-04:00)"
+        )
     }
 }
