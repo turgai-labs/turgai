@@ -219,14 +219,14 @@ where Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Codable
 
     private let runHandler:
         @Sendable (
-            ModelRequest,
+            ConversationTurnRequest,
             @escaping EventHandler
         ) async throws -> Void
 
     public init(
         run:
             @escaping @Sendable (
-                ModelRequest,
+                ConversationTurnRequest,
                 @escaping EventHandler
             ) async throws -> Void
     ) {
@@ -234,7 +234,7 @@ where Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Codable
     }
 
     public func run(
-        to request: ModelRequest,
+        to request: ConversationTurnRequest,
         onEvent: @escaping EventHandler
     ) async throws {
         try await runHandler(request, onEvent)
@@ -250,7 +250,7 @@ public struct HailConversationPeer: Sendable {
 
     private let runHandler:
         @Sendable (
-            ModelRequest,
+            ConversationTurnRequest,
             [String],
             @escaping ActivityHandler
         ) async throws -> HailResponse
@@ -259,7 +259,7 @@ public struct HailConversationPeer: Sendable {
     public init(
         run:
             @escaping @Sendable (
-                ModelRequest,
+                ConversationTurnRequest,
                 @escaping ActivityHandler
             ) async throws -> HailResponse
     ) {
@@ -274,7 +274,7 @@ public struct HailConversationPeer: Sendable {
     public init(
         runWithContext:
             @escaping @Sendable (
-                ModelRequest,
+                ConversationTurnRequest,
                 [String],
                 @escaping ActivityHandler
             ) async throws -> HailResponse,
@@ -287,7 +287,7 @@ public struct HailConversationPeer: Sendable {
     }
 
     public func run(
-        to request: ModelRequest,
+        to request: ConversationTurnRequest,
         onActivity: @escaping ActivityHandler
     ) async throws -> HailResponse {
         try await run(
@@ -298,14 +298,14 @@ public struct HailConversationPeer: Sendable {
     }
 
     public func run(
-        to request: ModelRequest,
+        to request: ConversationTurnRequest,
         turnContext: [String],
         onActivity: @escaping ActivityHandler
     ) async throws -> HailResponse {
         try await runHandler(request, turnContext, onActivity)
     }
 
-    public func respond(to request: ModelRequest) async throws -> HailResponse {
+    public func respond(to request: ConversationTurnRequest) async throws -> HailResponse {
         try await run(to: request) { _ in }
     }
 

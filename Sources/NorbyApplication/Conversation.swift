@@ -779,7 +779,7 @@ public distributed actor Conversation {
 
     }
 
-    private func startModel(for request: ModelRequest) {
+    private func startModel(for request: ConversationTurnRequest) {
         modelTask?.cancel()
         let peer = self.peer
         let actorSystem = self.actorSystem
@@ -973,7 +973,7 @@ public distributed actor Conversation {
     /// request's tail context. The static capability guidance is part of the
     /// agent's system prompt, so it stays inside the reusable prompt prefix.
     private static func memoryContext(
-        for request: ModelRequest,
+        for request: ConversationTurnRequest,
         actorSystem: ClusterSystem,
         conversationID: ConversationID
     ) async -> [String] {

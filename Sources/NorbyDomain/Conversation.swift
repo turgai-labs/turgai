@@ -638,7 +638,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
     }
 }
 
-public struct ModelRequest: Hashable, Codable, Sendable {
+public struct ConversationTurnRequest: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
     public let turnID: TurnID
     public let message: InboundMessage
@@ -692,7 +692,7 @@ public enum OutboundEvent: Hashable, Codable, Sendable {
 }
 
 public enum ConversationEffect: Hashable, Codable, Sendable {
-    case runReply(ModelRequest)
+    case runReply(ConversationTurnRequest)
     case publish(OutboundEvent)
     case cancelModel(TurnID)
 }
@@ -897,8 +897,8 @@ private func startNextTurn(_ state: inout ConversationState) -> [ConversationEff
 private func modelRequest(
     for pending: PendingConversationMessage,
     conversationID: ConversationID
-) -> ModelRequest {
-    return ModelRequest(
+) -> ConversationTurnRequest {
+    return ConversationTurnRequest(
         conversationID: conversationID,
         turnID: pending.turnID,
         message: pending.message

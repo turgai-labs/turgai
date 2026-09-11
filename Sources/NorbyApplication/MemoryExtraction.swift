@@ -147,8 +147,7 @@ public struct HailMemoryCandidateExtractor: Sendable {
         ]
 
         for await event in endpoint.stream(
-            input: input,
-            entries: entries,
+            request: ModelRequest(input: input, entries: entries),
             tools: [],
             authority: FullAuthority(),
             generating: MemoryExtractionOutput.self,
