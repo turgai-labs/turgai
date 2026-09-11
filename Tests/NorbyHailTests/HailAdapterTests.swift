@@ -251,6 +251,27 @@ struct HailAdapterTests {
     }
 
     @Test
+    func webSearchLiveOutputIsCapped() {
+        let overflowing = String(repeating: "word ", count: 1_000)
+        #expect(overflowing.count > 3_000)
+
+        let searchOutput = WebSearchTool.searchResult(
+            query: "terms",
+            html: """
+                <a class="result__a" href="https://example.com/article">Title</a>
+                <a class="result__snippet">\(overflowing)</a>
+                """
+        )
+        #expect(searchOutput.count <= 3_000)
+
+        let pageOutput = WebSearchTool.openResult(
+            for: URL(string: "https://example.com/article")!,
+            page: "<p>\(overflowing)</p>"
+        )
+        #expect(pageOutput.count <= 3_000 + "Page: https://example.com/article\n\n".count)
+    }
+
+    @Test
     func fetchURLUsesSpecificMetadataOverGenericTransportType() {
         let imageURL = URL(string: "https://api.telegram.org/file/bot-redacted/photos/file_0.jpg")!
 

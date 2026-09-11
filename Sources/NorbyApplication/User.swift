@@ -253,6 +253,11 @@ public distributed actor User {
     ) -> MemoryProposal? {
         let quote = normalize(candidate.supportingText)
         guard !quote.isEmpty else { return nil }
+        let predicate = candidate.predicate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawValue = candidate.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !predicate.isEmpty, !rawValue.isEmpty,
+            predicate.count <= 500, rawValue.count <= 500
+        else { return nil }
         let matches = evidence.filter { normalize($0.text).contains(quote) }
         guard matches.count == 1, let source = matches.first,
             let namespace = MemoryNamespace(rawValue: candidate.namespace),
@@ -262,21 +267,21 @@ public distributed actor User {
 
         let value: MemoryValue
         switch candidate.valueKind {
-        case "text": value = .text(candidate.value)
-        case "person": value = .person(candidate.value)
-        case "place": value = .place(candidate.value)
+        case "text": value = .text(rawValue)
+        case "person": value = .person(rawValue)
+        case "place": value = .place(rawValue)
         case "date":
-            guard let date = ISO8601DateFormatter().date(from: candidate.value) else { return nil }
+            guard let date = ISO8601DateFormatter().date(from: rawValue) else { return nil }
             value = .date(date)
         case "preference":
-            guard let preference = Bool(candidate.value) else { return nil }
+            guard let preference = Bool(rawValue) else { return nil }
             value = .preference(preference)
         default: return nil
         }
 
         let fact = FactCandidate(
             namespace: namespace,
-            predicate: candidate.predicate,
+            predicate: predicate,
             value: value,
             evidence: [source.id],
             supportingText: candidate.supportingText,
@@ -285,13 +290,7 @@ public distributed actor User {
             stability: stability,
             observedAt: observedAt
         )
-        switch candidate.operation.lowercased() {
-        case "add": return .add(fact)
-        case "revise":
-            guard let rawID = candidate.factID, let uuid = UUID(uuidString: rawID) else { return nil }
-            return .revise(factID: MemoryFactID(rawValue: uuid), candidate: fact)
-        default: return nil
-        }
+        return .add(fact)
     }
 
     private static func normalize(_ value: String) -> String {

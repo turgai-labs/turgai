@@ -10,8 +10,10 @@
 /// tail of recent observations (extraction context) plus every fact with its
 /// status, so contradictions stay visible after supersession.
 public struct MemoryProjection: Codable, Sendable, Equatable {
-    /// Observations older than the tail remain in the journal, not in memory.
-    public static let observationTailLimit = 100
+    /// The observation tail is hard-bounded; older observations remain in
+    /// the journal, not in memory. `processedSources` is keyed by sourceID,
+    /// so trimming the tail never un-marks a consumed source.
+    public static let maximumObservations = 500
     public static let maximumCurrentFacts = 50
 
     public private(set) var generation: MemoryGeneration
@@ -87,7 +89,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
                     $0.id == observation.id || $0.sourceID == observation.sourceID
                 })
             else { return }
-            observations.append(observation)
+            appendObservation(observation)
 
         case .observationCompleted(let sourceID, let response):
             guard
@@ -129,11 +131,18 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
                 guard accepts(observation),
                     !observations.contains(where: { $0.sourceID == observation.sourceID })
                 else { continue }
-                observations.append(observation)
+                appendObservation(observation)
             }
             for change in commit.changes {
                 applyFactEvent(change)
             }
+        }
+    }
+
+    private mutating func appendObservation(_ observation: MemoryObservation) {
+        observations.append(observation)
+        if observations.count > Self.maximumObservations {
+            observations.removeFirst(observations.count - Self.maximumObservations)
         }
     }
 

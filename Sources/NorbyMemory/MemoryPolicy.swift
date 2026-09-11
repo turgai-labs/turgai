@@ -188,6 +188,25 @@ public struct MemoryPolicy: Equatable, Sendable {
                 return .rejected
             }
 
+            // The extractor never sees fact IDs, so a correction arrives as
+            // an add with a different value for the same attribute. Resolve
+            // the contradiction deterministically: the incoming claim
+            // supersedes the active fact it contradicts.
+            if let existing = facts.first(where: {
+                $0.status == .active
+                    && $0.namespace == candidate.namespace
+                    && $0.predicate == candidate.predicate
+            }) {
+                return .superseded(
+                    oldFactID: existing.id,
+                    replacement: makeFact(
+                        from: candidate,
+                        id: factID,
+                        preserving: existing
+                    )
+                )
+            }
+
             return .accepted(makeFact(from: candidate, id: factID))
 
         case .revise(let targetID, _):

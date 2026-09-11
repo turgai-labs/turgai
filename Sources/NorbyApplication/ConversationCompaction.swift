@@ -24,10 +24,6 @@ public struct ConversationCompactionReport: Codable, Sendable {
 
     @Generable
     public struct MemoryCandidate: Codable, Sendable {
-        @Guide(description: "add for a new fact, revise when correcting an existing fact")
-        public let operation: String
-        @Guide(description: "UUID of the fact to correct; required only for revise, null otherwise")
-        public let factID: String?
         @Guide(description: "Fact group: profile, preference, relationship, project, or environment")
         public let namespace: String
         @Guide(description: "A short stable attribute name for the fact, e.g. drinksCoffee or school")

@@ -30,6 +30,36 @@ struct MemoryTests {
     }
 
     @Test
+    func observationTailDropsOldestObservationsBeyondTheCap() {
+        var projection = MemoryProjection()
+        let first = MemoryObservation(
+            sourceID: sourceID,
+            text: "first",
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        projection.apply(.observationRecorded(first))
+
+        for index in 2...(MemoryProjection.maximumObservations + 1) {
+            projection.apply(
+                .observationRecorded(
+                    MemoryObservation(
+                        sourceID: MemorySourceID(),
+                        text: "message \(index)",
+                        observedAt: Date(timeIntervalSince1970: TimeInterval(index))
+                    )
+                )
+            )
+        }
+
+        #expect(projection.observations.count == MemoryProjection.maximumObservations)
+        #expect(!projection.containsObservation(for: sourceID))
+        #expect(
+            projection.recentObservations(limit: 1).first?.text
+                == "message \(MemoryProjection.maximumObservations + 1)"
+        )
+    }
+
+    @Test
     func extractionDecisionCommitsTheBatchAndRecognizesRepeatedCommit() {
         let observation = MemoryObservation(
             id: observationID,
@@ -430,7 +460,7 @@ struct MemoryTests {
     }
 
     @Test
-    func additionsDoNotReplaceDifferentFactsWithTheSamePredicate() {
+    func additionsSupersedeContradictionsAndLeaveOtherFactsAlone() {
         let berlin = MemoryFact(
             id: factID,
             namespace: .profile,
@@ -442,30 +472,88 @@ struct MemoryTests {
             stability: .mutable,
             observedAt: Date(timeIntervalSince1970: 1)
         )
-        let londonObservation = ObservationID(rawValue: UUID())
+        let policy = MemoryPolicy()
+
+        // Same namespace, predicate, and value: repeating an equivalent
+        // claim does not change memory.
+        let equivalent = FactCandidate(
+            namespace: .profile,
+            predicate: "home",
+            value: .place("Berlin"),
+            evidence: [observationID],
+            supportingText: "Berlin",
+            confidence: 0.95,
+            importance: 0.9,
+            stability: .mutable,
+            observedAt: Date(timeIntervalSince1970: 2)
+        )
+        #expect(
+            policy.decide(
+                proposal: .add(equivalent),
+                against: [berlin],
+                factID: MemoryFactID()
+            ) == .rejected
+        )
+
+        // Same namespace and predicate, different value: the contradiction
+        // is resolved in policy — the incoming claim supersedes the active
+        // fact, and the old fact is no longer active.
         let london = FactCandidate(
             namespace: .profile,
             predicate: "home",
             value: .place("London"),
-            evidence: [londonObservation],
+            evidence: [ObservationID(rawValue: UUID())],
             supportingText: "London",
             confidence: 0.8,
             importance: 0.8,
             stability: .mutable,
             observedAt: Date(timeIntervalSince1970: 2)
         )
-
         guard
-            case .accepted(let fact) = MemoryPolicy().decide(
+            case .superseded(let oldID, let replacement) = policy.decide(
                 proposal: .add(london),
                 against: [berlin],
                 factID: MemoryFactID()
             )
         else {
-            Issue.record("Expected a distinct addition to coexist with the old fact")
+            Issue.record("Expected the contradictory addition to supersede the active fact")
             return
         }
-        #expect(fact.value == .place("London"))
+        #expect(oldID == factID)
+        #expect(replacement.value == .place("London"))
+
+        var projection = MemoryProjection()
+        projection.apply(.factAccepted(berlin))
+        projection.apply(.factSuperseded(oldID, by: replacement))
+        #expect(projection.currentFacts().count == 1)
+        #expect(
+            projection.activeFact(namespace: .profile, predicate: "home")?.value
+                == .place("London")
+        )
+
+        // A different predicate is an independent second fact.
+        let employer = FactCandidate(
+            namespace: .profile,
+            predicate: "employer",
+            value: .text("Acme"),
+            evidence: [ObservationID(rawValue: UUID())],
+            supportingText: "Acme",
+            confidence: 0.8,
+            importance: 0.8,
+            stability: .mutable,
+            observedAt: Date(timeIntervalSince1970: 3)
+        )
+        guard
+            case .accepted(let second) = policy.decide(
+                proposal: .add(employer),
+                against: projection.currentFacts(),
+                factID: MemoryFactID()
+            )
+        else {
+            Issue.record("Expected the different-predicate addition to be accepted")
+            return
+        }
+        #expect(second.predicate == "employer")
     }
 
     @Test

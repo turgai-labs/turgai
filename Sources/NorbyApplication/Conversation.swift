@@ -837,14 +837,21 @@ public distributed actor Conversation {
                     on: actorSystem,
                     userID: request.message.userID
                 )
-                try await user.recordObservation(
-                    MemoryObservation(
-                        id: ObservationID(rawValue: request.message.id.rawValue),
-                        sourceID: MemorySourceID(rawValue: request.message.id.rawValue),
-                        text: request.message.text,
-                        observedAt: request.message.receivedAt
+                do {
+                    try await user.recordObservation(
+                        MemoryObservation(
+                            id: ObservationID(rawValue: request.message.id.rawValue),
+                            sourceID: MemorySourceID(rawValue: request.message.id.rawValue),
+                            text: request.message.text,
+                            observedAt: request.message.receivedAt
+                        )
                     )
-                )
+                } catch {
+                    actorSystem.log.warning(
+                        "Could not record memory observation",
+                        metadata: ["error": .string(String(describing: error))]
+                    )
+                }
                 let accumulator = ReplyTextAccumulator()
                 let response = try await peer.run(
                     to: request,
@@ -1035,9 +1042,10 @@ public distributed actor Conversation {
         }
     }
 
-    /// Retrieves memory immediately before a primary model turn. Retrieval is
-    /// best-effort: memory is useful context, but it must not make the
-    /// conversation unavailable while the separate User actor is recovering.
+    /// Retrieves memory immediately before a primary model turn. Memory is
+    /// best-effort, both here and when the turn's observation is recorded:
+    /// it is useful context, but it must not make the conversation
+    /// unavailable while the separate User actor is recovering.
     ///
     /// Returns only the retrieved facts — per-turn data that lives in the
     /// request's tail context. The static capability guidance is part of the

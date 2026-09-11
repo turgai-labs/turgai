@@ -47,8 +47,8 @@ public struct WebSearchTool {
     private static let maximumResponseBytes = 512 * 1024
     private static let maximumSearchResults = 5
     private static let maximumSnippetCharacters = 320
-    private static let maximumSearchOutputCharacters = 6_000
-    private static let maximumPageOutputCharacters = 6_000
+    private static let maximumSearchOutputCharacters = 3_000
+    private static let maximumPageOutputCharacters = 3_000
 
     public init() {}
 
@@ -101,15 +101,15 @@ public struct WebSearchTool {
         case .search:
             let query = try validatedQuery(input.query)
             let html = try await responseBody(from: token)
-            return .text(searchResult(query: query, html: html))
+            return .text(Self.searchResult(query: query, html: html))
         case .open:
             let url = try validatedURL(input.url)
             let page = try await responseBody(from: token)
-            return .text(openResult(for: url, page: page))
+            return .text(Self.openResult(for: url, page: page))
         }
     }
 
-    private func searchResult(query: String, html: String) -> String {
+    static func searchResult(query: String, html: String) -> String {
         let results = parseSearchResults(html)
         guard !results.isEmpty else {
             return "No web results found for: \(query)"
@@ -126,7 +126,7 @@ public struct WebSearchTool {
         return bounded(output, to: Self.maximumSearchOutputCharacters)
     }
 
-    private func openResult(for url: URL, page: String) -> String {
+    static func openResult(for url: URL, page: String) -> String {
         let text = htmlText(page)
         guard !text.isEmpty else {
             return "The page returned no readable text: \(url.absoluteString)"
@@ -187,7 +187,7 @@ public struct WebSearchTool {
         return url
     }
 
-    private func parseSearchResults(_ html: String) -> [SearchResult] {
+    private static func parseSearchResults(_ html: String) -> [SearchResult] {
         let linkPattern = #"(?is)<a[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>"#
         let snippetPattern = #"(?is)<a[^>]*class=["'][^"']*result__snippet[^"']*["'][^>]*>(.*?)</a>"#
         let links = captures(in: html, pattern: linkPattern)
@@ -201,7 +201,7 @@ public struct WebSearchTool {
         }
     }
 
-    private func captures(in text: String, pattern: String) -> [[String]] {
+    private static func captures(in text: String, pattern: String) -> [[String]] {
         guard let expression = try? NSRegularExpression(pattern: pattern) else {
             return []
         }
@@ -217,7 +217,7 @@ public struct WebSearchTool {
         }
     }
 
-    private func resultURL(from href: String) -> String {
+    private static func resultURL(from href: String) -> String {
         guard let url = URL(string: href), href.hasPrefix("/") else {
             return decodeHTMLEntities(href)
         }
@@ -232,7 +232,7 @@ public struct WebSearchTool {
         return "https://html.duckduckgo.com\(href)"
     }
 
-    private func htmlText(_ html: String) -> String {
+    private static func htmlText(_ html: String) -> String {
         var text = html
         for pattern in [#"(?is)<script\b[^>]*>.*?</script>"#, #"(?is)<style\b[^>]*>.*?</style>"#] {
             text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
@@ -246,7 +246,7 @@ public struct WebSearchTool {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func decodeHTMLEntities(_ value: String) -> String {
+    private static func decodeHTMLEntities(_ value: String) -> String {
         value
             .replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "&quot;", with: "\"")
@@ -257,7 +257,7 @@ public struct WebSearchTool {
             .replacingOccurrences(of: "&nbsp;", with: " ")
     }
 
-    private func bounded(_ value: String, to maximumCharacters: Int) -> String {
+    private static func bounded(_ value: String, to maximumCharacters: Int) -> String {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.count > maximumCharacters else { return normalized }
         guard maximumCharacters > 1 else { return String(normalized.prefix(maximumCharacters)) }

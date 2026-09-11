@@ -258,9 +258,11 @@ public enum MemoryEvidence {
 
 /// A model or application proposal over one user's memory.
 ///
-/// Additions do not replace a different fact with the same predicate. A
-/// revision must identify the active fact it is correcting; ``MemoryPolicy``
-/// validates that identity before producing a journal event.
+/// An addition that contradicts an active fact with the same namespace and
+/// predicate supersedes it; ``MemoryPolicy`` resolves the contradiction
+/// deterministically. A revision must identify the active fact it is
+/// correcting; ``MemoryPolicy`` validates that identity before producing a
+/// journal event.
 public enum MemoryProposal: Hashable, Codable, Sendable {
     case add(FactCandidate)
     case revise(factID: MemoryFactID, candidate: FactCandidate)
