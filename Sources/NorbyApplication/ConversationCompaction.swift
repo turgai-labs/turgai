@@ -93,6 +93,16 @@ public enum NorbyCompactionOperation {
                     -> GeneratedContent in
                 do {
                     let report = try ConversationCompactionReport(generated)
+                    // A schema-valid report can still be semantically empty
+                    // (observed from a small model under a tight output
+                    // budget). Archiving entries into an empty summary is
+                    // silent history loss, so the projection refuses it and
+                    // the runtime retries or continues un-compacted.
+                    guard !report.summary.keyPoints.isEmpty || !report.summary.openThreads.isEmpty else {
+                        throw AgentRuntimeError.modelMisbehavior(
+                            "Compaction report carried an empty summary"
+                        )
+                    }
                     return fitSummary(report.summary, budget: budget)
                 } catch let error as AgentRuntimeError {
                     throw error
