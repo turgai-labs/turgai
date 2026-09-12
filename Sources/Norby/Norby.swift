@@ -181,7 +181,6 @@ struct Norby: AsyncParsableCommand {
                     .grantingAll(for: CancelTimerEffect.self)
                     .grantingAll(for: ListTimersEffect.self)
             },
-            compactionOperation: NorbyCompactionOperation.make()
         )
         let eventStore = FileEventStore(client: persistenceClient)
         let snapshotStore = FileSnapshotStore(client: persistenceClient)
@@ -217,9 +216,12 @@ struct Norby: AsyncParsableCommand {
         try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
         let chatIDList = telegramChatIDs ?? environment["NORBY_TELEGRAM_CHAT_IDS"]
         let allowedChatIDs = Self.parseChatIDs(chatIDList)
+        let extractionModel = try? AgentModel(runtimeConfiguration.modelIdentifier).id.rawValue
         let connections = NorbyConnections(
             actorSystem: system,
-            snapshotPolicy: runtimeConfiguration.snapshotPolicy
+            snapshotPolicy: runtimeConfiguration.snapshotPolicy,
+            ollamaBaseURL: runtimeConfiguration.ollamaBaseURL,
+            memoryModel: extractionModel
         )
         let telegramService = try TelegramService(
             token: telegramBotToken,

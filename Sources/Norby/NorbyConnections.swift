@@ -178,16 +178,22 @@ public actor NorbyConnections: Service {
 
     private let actorSystem: ClusterSystem
     private let snapshotPolicy: AgentSnapshotPolicy
+    private let ollamaBaseURL: URL?
+    private let memoryModel: String?
     private let connectionStream: AsyncStream<Connection>
     private let connectionContinuation: AsyncStream<Connection>.Continuation
     private let outboundConnections = OutboundConnections()
 
     public init(
         actorSystem: ClusterSystem,
-        snapshotPolicy: AgentSnapshotPolicy = .default
+        snapshotPolicy: AgentSnapshotPolicy = .default,
+        ollamaBaseURL: URL? = nil,
+        memoryModel: String? = nil
     ) {
         self.actorSystem = actorSystem
         self.snapshotPolicy = snapshotPolicy
+        self.ollamaBaseURL = ollamaBaseURL
+        self.memoryModel = memoryModel
         (self.connectionStream, self.connectionContinuation) =
             AsyncStream<Connection>.makeStream()
     }
@@ -204,7 +210,9 @@ public actor NorbyConnections: Service {
             id: id,
             actorSystem: actorSystem,
             inbound: inbound,
-            snapshotPolicy: snapshotPolicy
+            snapshotPolicy: snapshotPolicy,
+            ollamaBaseURL: ollamaBaseURL,
+            memoryModel: memoryModel
         )
         connectionContinuation.yield(.live(session))
         return session.output
@@ -272,6 +280,8 @@ actor LiveSession {
     private let actorSystem: ClusterSystem
     private let inbound: AsyncChannel<ConversationInputDelivery>
     private let snapshotPolicy: AgentSnapshotPolicy
+    private let ollamaBaseURL: URL?
+    private let memoryModel: String?
     private let conversationConnection: ConversationConnection
     private let deliveryRegistry: OutboundDeliveryRegistry
     private var conversations: [ConversationID: Conversation] = [:]
@@ -281,12 +291,16 @@ actor LiveSession {
         id: String,
         actorSystem: ClusterSystem,
         inbound: AsyncChannel<ConversationInputDelivery>,
-        snapshotPolicy: AgentSnapshotPolicy
+        snapshotPolicy: AgentSnapshotPolicy,
+        ollamaBaseURL: URL? = nil,
+        memoryModel: String? = nil
     ) {
         self.id = id
         self.actorSystem = actorSystem
         self.inbound = inbound
         self.snapshotPolicy = snapshotPolicy
+        self.ollamaBaseURL = ollamaBaseURL
+        self.memoryModel = memoryModel
         self.output = OutputStream()
         self.deliveryRegistry = OutboundDeliveryRegistry()
         let output = self.output
@@ -342,7 +356,9 @@ actor LiveSession {
                 let conversation = try await Conversation.resolve(
                     on: actorSystem,
                     conversationID: conversationID,
-                    snapshotPolicy: snapshotPolicy
+                    snapshotPolicy: snapshotPolicy,
+                    ollamaBaseURL: ollamaBaseURL,
+                    memoryModel: memoryModel
                 )
                 try await attach(
                     to: conversation,
@@ -371,7 +387,9 @@ actor LiveSession {
                 let conversation = try await Conversation.resolve(
                     on: actorSystem,
                     conversationID: message.conversationID,
-                    snapshotPolicy: snapshotPolicy
+                    snapshotPolicy: snapshotPolicy,
+                    ollamaBaseURL: ollamaBaseURL,
+                    memoryModel: memoryModel
                 )
                 try await attach(
                     to: conversation,
@@ -400,7 +418,9 @@ actor LiveSession {
                 let conversation = try await Conversation.resolve(
                     on: actorSystem,
                     conversationID: conversationID,
-                    snapshotPolicy: snapshotPolicy
+                    snapshotPolicy: snapshotPolicy,
+                    ollamaBaseURL: ollamaBaseURL,
+                    memoryModel: memoryModel
                 )
                 try await attach(
                     to: conversation,
@@ -506,7 +526,9 @@ actor LiveSession {
             let conversation = try await Conversation.resolve(
                 on: actorSystem,
                 conversationID: conversationID,
-                snapshotPolicy: snapshotPolicy
+                snapshotPolicy: snapshotPolicy,
+                ollamaBaseURL: ollamaBaseURL,
+                memoryModel: memoryModel
             )
             try await attach(
                 to: conversation,

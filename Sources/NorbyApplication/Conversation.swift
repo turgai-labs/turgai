@@ -380,15 +380,24 @@ public distributed actor Conversation {
         public let agentDirectoryID: AgentDirectoryID
         public let agentRole: String
         public let snapshotPolicy: AgentSnapshotPolicy
+        /// Ollama base URL for the background memory-extraction endpoint.
+        /// Nil disables background extraction.
+        public let ollamaBaseURL: URL?
+        /// The model used for background memory extraction.
+        public let memoryModel: String?
 
         public init(
             conversationID: ConversationID,
             agentDirectoryID: AgentDirectoryID = "agent-directory",
             agentRole: String = "conversation",
-            snapshotPolicy: AgentSnapshotPolicy = .default
+            snapshotPolicy: AgentSnapshotPolicy = .default,
+            ollamaBaseURL: URL? = nil,
+            memoryModel: String? = nil
         ) {
             self.conversationID = conversationID
             self.agentDirectoryID = agentDirectoryID
+            self.ollamaBaseURL = ollamaBaseURL
+            self.memoryModel = memoryModel
             self.agentRole = agentRole
             self.snapshotPolicy = snapshotPolicy
         }
@@ -403,6 +412,7 @@ public distributed actor Conversation {
 
     private let conversationID: ConversationID
     private let peer: HailConversationPeer
+    private let memoryExtractionEndpoint: (any ModelEndpoint)?
     private let connectionRegistry = ConversationConnectionRegistry()
     private var modelTask: Task<Void, Never>?
 
@@ -419,6 +429,17 @@ public distributed actor Conversation {
             snapshotPolicy: dependency.snapshotPolicy
         )
         self.peer = try await adapter.peer(for: dependency.conversationID)
+        if let baseURL = dependency.ollamaBaseURL, let model = dependency.memoryModel {
+            self.memoryExtractionEndpoint = OllamaEndpoint(
+                model: model,
+                baseURL: baseURL,
+                temperature: 0.2,
+                numContext: 4096,
+                think: false
+            )
+        } else {
+            self.memoryExtractionEndpoint = nil
+        }
         try await actorSystem.journal.register(
             actor: self,
             with: Self.persistenceID(for: dependency.conversationID)
@@ -439,7 +460,9 @@ public distributed actor Conversation {
         conversationID: ConversationID,
         agentDirectoryID: AgentDirectoryID = "agent-directory",
         agentRole: String = "conversation",
-        snapshotPolicy: AgentSnapshotPolicy = .default
+        snapshotPolicy: AgentSnapshotPolicy = .default,
+        ollamaBaseURL: URL? = nil,
+        memoryModel: String? = nil
     ) async throws -> Conversation {
         try await actorSystem.virtualActors.getActor(
             identifiedBy: actorID(for: conversationID),
@@ -447,7 +470,9 @@ public distributed actor Conversation {
                 conversationID: conversationID,
                 agentDirectoryID: agentDirectoryID,
                 agentRole: agentRole,
-                snapshotPolicy: snapshotPolicy
+                snapshotPolicy: snapshotPolicy,
+                ollamaBaseURL: ollamaBaseURL,
+                memoryModel: memoryModel
             )
         )
     }
@@ -766,7 +791,6 @@ public distributed actor Conversation {
     }
 
     private func resumeAfterReplay() async throws {
-        await recoverLatestCompactionReport()
         if state.activeTurnID != nil || !state.pendingMessages.isEmpty {
             guard state.activeMessage != nil || state.activeTurnID == nil else {
                 actorSystem.log.error(
@@ -780,38 +804,12 @@ public distributed actor Conversation {
 
     }
 
-    /// Replays the durable Hail compaction result into the User aggregate. The
-    /// User projection tracks processed observation sources, so activation may
-    /// safely retry this handoff after a crash. A direct conversation belongs
-    /// to exactly one user: the participant the channel addresses it by.
-    private func recoverLatestCompactionReport() async {
-        guard let snapshot = try? await peer.contextSnapshot(),
-            let output = snapshot.latestCompactionOutput,
-            let report = try? ConversationCompactionReport(output)
-        else { return }
-
-        do {
-            let user = try await User.resolve(
-                on: actorSystem,
-                userID: NorbyDomain.UserID(participantID: conversationID.participantID)
-            )
-            _ = try await user.commitCompactionMemories(
-                observations: [],
-                candidates: report.memories
-            )
-        } catch {
-            actorSystem.log.warning(
-                "Could not recover compaction memory",
-                metadata: ["error": .string(String(describing: error))]
-            )
-        }
-    }
-
     private func startModel(for request: ConversationTurnRequest) {
         modelTask?.cancel()
         let peer = self.peer
         let actorSystem = self.actorSystem
         let conversationID = self.conversationID
+        let extractionEndpoint = memoryExtractionEndpoint
         let scope = ConversationScope(
             conversationID: conversationID,
             turnID: request.turnID,
@@ -823,6 +821,42 @@ public distributed actor Conversation {
                         completion: completion
                     )
                 )
+                guard
+                    let endpoint = extractionEndpoint,
+                    !request.message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty
+                else { return }
+                // Background memory extraction, off the turn's critical
+                // path. User reconciles candidates against durable
+                // observations, so overlapping or repeated passes never
+                // double-commit facts.
+                let userID = request.message.userID
+                let message = request.message
+                Task {
+                    do {
+                        let report = try await MemoryExtractionService.extract(
+                            endpoint: endpoint,
+                            messages: [message.text]
+                        )
+                        let user = try await User.resolve(on: actorSystem, userID: userID)
+                        _ = try await user.commitMemoryCandidates(
+                            observations: [
+                                MemoryObservation(
+                                    id: ObservationID(rawValue: message.id.rawValue),
+                                    sourceID: MemorySourceID(rawValue: message.id.rawValue),
+                                    text: message.text,
+                                    observedAt: message.receivedAt
+                                )
+                            ],
+                            candidates: report.memories
+                        )
+                    } catch {
+                        actorSystem.log.warning(
+                            "Background memory extraction failed",
+                            metadata: ["error": .string(String(describing: error))]
+                        )
+                    }
+                }
             },
             operation: { updates in
                 var turnContext = ["Current date and time: \(Self.timeAnchor())"]
@@ -858,33 +892,6 @@ public distributed actor Conversation {
                     turnContext: turnContext
                 ) { event in
                     switch event {
-                    case .compaction(let output, _):
-                        guard
-                            let report = try? ConversationCompactionReport(output),
-                            !request.message.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        else { break }
-                        do {
-                            let user = try await User.resolve(
-                                on: actorSystem,
-                                userID: request.message.userID
-                            )
-                            let observation = MemoryObservation(
-                                id: ObservationID(rawValue: request.message.id.rawValue),
-                                sourceID: MemorySourceID(rawValue: request.message.id.rawValue),
-                                text: request.message.text,
-                                observedAt: request.message.receivedAt
-                            )
-                            _ = try await user.commitCompactionMemories(
-                                observations: [observation],
-                                candidates: report.memories
-                            )
-                        } catch {
-                            actorSystem.log.warning(
-                                "Could not commit compaction memory",
-                                metadata: ["error": .string(String(describing: error))]
-                            )
-                        }
-
                     case .reasoning:
                         await updates.send(.thinking)
 

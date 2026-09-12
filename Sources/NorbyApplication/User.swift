@@ -211,13 +211,13 @@ public distributed actor User {
         }
     }
 
-    /// Reconciles the memory candidates embedded in one conversation
-    /// compaction report. Evidence is resolved here, where the User aggregate
-    /// owns the durable observation history; the conversation never interprets
-    /// memory candidates.
-    public distributed func commitCompactionMemories(
+    /// Reconciles memory candidates produced by one background extraction
+    /// pass. Evidence is resolved here, where the User aggregate owns the
+    /// durable observation history; the conversation never interprets memory
+    /// candidates.
+    public distributed func commitMemoryCandidates(
         observations: [MemoryObservation],
-        candidates: [ConversationCompactionMemoryCandidate]
+        candidates: [MemoryExtractionReport.MemoryExtractionCandidate]
     ) async throws -> ExtractionOutcome {
         let pending = (state.memory.observations + observations).reduce(into: [MemoryObservation]()) {
             result, observation in
@@ -247,7 +247,7 @@ public distributed actor User {
     }
 
     private static func proposal(
-        from candidate: ConversationCompactionMemoryCandidate,
+        from candidate: MemoryExtractionReport.MemoryExtractionCandidate,
         evidence: [MemoryObservation],
         observedAt: Date?
     ) -> MemoryProposal? {
