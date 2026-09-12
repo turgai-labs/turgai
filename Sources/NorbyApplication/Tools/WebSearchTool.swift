@@ -34,8 +34,8 @@ public struct WebSearchTool {
     private static let maximumResponseBytes = 512 * 1024
     private static let maximumSearchResults = 5
     private static let maximumSnippetCharacters = 320
-    private static let maximumSearchOutputCharacters = 3_000
-    private static let maximumPageOutputCharacters = 3_000
+    private static let maximumSearchOutputCharacters = 1_200
+    private static let maximumPageOutputCharacters = 1_200
 
     public init() {}
 

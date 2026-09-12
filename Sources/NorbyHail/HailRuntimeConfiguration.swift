@@ -80,6 +80,8 @@ public struct HailRuntimeConfiguration: Sendable {
             },
             definitionProvider: definitionProvider,
             contextCompactor: SlidingWindowCompactor(
+                threshold: 0.55,
+                keepRecent: 6,
                 outputReserve: compactionMaxOutputTokens
             ),
             compactionOperation: compactionOperation

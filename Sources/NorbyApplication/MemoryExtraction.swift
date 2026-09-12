@@ -58,8 +58,12 @@ public enum MemoryExtractionService {
         Only extract what the conversation actually supports; do not invent facts. \
         supportingText must be a short verbatim quote from the user's own \
         message; facts without a matching verbatim quote are rejected, so never \
-        paraphrase. Small talk and one-off questions need no memory; leave \
-        memories empty rather than filling it.
+        paraphrase.
+
+        Example: given the message "I usually drink tea in the mornings instead \
+        of coffee", one candidate is namespace=preference, predicate=morningDrink, \
+        value=tea, valueKind=text, stability=mutable, supportingText="I usually \
+        drink tea in the mornings instead of coffee".
 
         The messages follow.
         """
@@ -134,6 +138,27 @@ public enum MemoryExtractionService {
                 observedAt: snapshot.input.observations.last?.observedAt
             )
         }
+        let rejected = report.memories.count - proposals.count
+        if rejected > 0 {
+            actorSystem.log.warning(
+                "Memory extraction rejected candidates",
+                metadata: [
+                    "returned": "\(report.memories.count)",
+                    "kept": "\(proposals.count)",
+                    "rejectedQuotes": .string(
+                        report.memories.map(\.supportingText).joined(separator: " | ")
+                    ),
+                ]
+            )
+        } else {
+            actorSystem.log.info(
+                "Memory extraction pass",
+                metadata: [
+                    "observations": "\(snapshot.input.observations.count)",
+                    "candidates": "\(report.memories.count)",
+                ]
+            )
+        }
         return try await user.commitExtraction(snapshot.input, proposals: proposals)
     }
 
@@ -189,6 +214,12 @@ public enum MemoryExtractionService {
     }
 
     private static func normalize(_ value: String) -> String {
-        value.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        // Punctuation-tolerant: models quote loosely ("mornings," vs
+        // "mornings"), so matching ignores case, punctuation, and spacing.
+        value
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber || $0.isWhitespace }
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
     }
 }
