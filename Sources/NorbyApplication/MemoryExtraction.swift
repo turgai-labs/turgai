@@ -1,5 +1,8 @@
 import AnyLanguageModel
+import DistributedCluster
 import Hail
+import NorbyDomain
+import NorbyMemory
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -97,5 +100,85 @@ public enum MemoryExtractionService {
             }
         }
         throw AgentRuntimeError.modelMisbehavior("Memory extraction produced no report")
+    }
+
+    /// The full background pass Conversation schedules after a turn: extract
+    /// candidates for the messages, validate them against the user's durable
+    /// evidence, and commit the concrete proposals. User keeps only the
+    /// write-time guards; everything that interprets a candidate lives here.
+    public static func extractAndCommit(
+        endpoint: any ModelEndpoint,
+        messages: [String],
+        actorSystem: ClusterSystem,
+        userID: NorbyDomain.UserID
+    ) async throws -> ExtractionOutcome {
+        let report = try await extract(endpoint: endpoint, messages: messages)
+        let user = try await User.resolve(on: actorSystem, userID: userID)
+        let snapshot = try await user.extractionSnapshot()
+        guard !snapshot.input.observations.isEmpty else { return .alreadyHandled }
+        let evidence = snapshot.evidence + snapshot.input.observations
+        let proposals = report.memories.compactMap { candidate in
+            proposal(
+                from: candidate,
+                evidence: evidence,
+                observedAt: snapshot.input.observations.last?.observedAt
+            )
+        }
+        return try await user.commitExtraction(snapshot.input, proposals: proposals)
+    }
+
+    /// Maps one model candidate to a concrete proposal. Validation, not
+    /// trust: the supporting quote must match exactly one stored observation
+    /// verbatim, identifiers must parse, and values must coerce. Candidates
+    /// that fail are dropped here, before User ever sees them.
+    static func proposal(
+        from candidate: MemoryExtractionReport.MemoryExtractionCandidate,
+        evidence: [MemoryObservation],
+        observedAt: Date?
+    ) -> MemoryProposal? {
+        let quote = normalize(candidate.supportingText)
+        guard !quote.isEmpty else { return nil }
+        let predicate = candidate.predicate.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawValue = candidate.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !predicate.isEmpty, !rawValue.isEmpty,
+            predicate.count <= 500, rawValue.count <= 500
+        else { return nil }
+        let matches = evidence.filter { normalize($0.text).contains(quote) }
+        guard matches.count == 1, let source = matches.first,
+            let namespace = MemoryNamespace(rawValue: candidate.namespace),
+            let stability = MemoryStability(rawValue: candidate.stability),
+            let observedAt
+        else { return nil }
+
+        let value: MemoryValue
+        switch candidate.valueKind {
+        case "text": value = .text(rawValue)
+        case "person": value = .person(rawValue)
+        case "place": value = .place(rawValue)
+        case "date":
+            guard let date = ISO8601DateFormatter().date(from: rawValue) else { return nil }
+            value = .date(date)
+        case "preference":
+            guard let preference = Bool(rawValue) else { return nil }
+            value = .preference(preference)
+        default: return nil
+        }
+
+        let fact = FactCandidate(
+            namespace: namespace,
+            predicate: predicate,
+            value: value,
+            evidence: [source.id],
+            supportingText: candidate.supportingText,
+            confidence: candidate.confidence,
+            importance: candidate.importance,
+            stability: stability,
+            observedAt: observedAt
+        )
+        return .add(fact)
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 }

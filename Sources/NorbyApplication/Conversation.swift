@@ -830,25 +830,14 @@ public distributed actor Conversation {
                 // path. User reconciles candidates against durable
                 // observations, so overlapping or repeated passes never
                 // double-commit facts.
-                let userID = request.message.userID
                 let message = request.message
                 Task {
                     do {
-                        let report = try await MemoryExtractionService.extract(
+                        _ = try await MemoryExtractionService.extractAndCommit(
                             endpoint: endpoint,
-                            messages: [message.text]
-                        )
-                        let user = try await User.resolve(on: actorSystem, userID: userID)
-                        _ = try await user.commitMemoryCandidates(
-                            observations: [
-                                MemoryObservation(
-                                    id: ObservationID(rawValue: message.id.rawValue),
-                                    sourceID: MemorySourceID(rawValue: message.id.rawValue),
-                                    text: message.text,
-                                    observedAt: message.receivedAt
-                                )
-                            ],
-                            candidates: report.memories
+                            messages: [message.text],
+                            actorSystem: actorSystem,
+                            userID: message.userID
                         )
                     } catch {
                         actorSystem.log.warning(

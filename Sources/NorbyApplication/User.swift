@@ -77,6 +77,13 @@ public struct UserRecord: Codable, Sendable, Equatable {
     }
 }
 
+/// The read model for one background extraction pass.
+public struct MemoryExtractionSnapshot: Codable, Sendable {
+    public let input: ExtractionInput
+    /// Every stored observation, for verbatim candidate matching.
+    public let evidence: [MemoryObservation]
+}
+
 public enum ExtractionOutcome: Codable, Sendable, Equatable {
     case committed(MemoryUpdate)
     case stale
@@ -211,90 +218,22 @@ public distributed actor User {
         }
     }
 
-    /// Reconciles memory candidates produced by one background extraction
-    /// pass. Evidence is resolved here, where the User aggregate owns the
-    /// durable observation history; the conversation never interprets memory
-    /// candidates.
-    public distributed func commitMemoryCandidates(
-        observations: [MemoryObservation],
-        candidates: [MemoryExtractionReport.MemoryExtractionCandidate]
-    ) async throws -> ExtractionOutcome {
-        let pending = (state.memory.observations + observations).reduce(into: [MemoryObservation]()) {
-            result, observation in
-            guard state.memory.accepts(observation),
-                !state.memory.isProcessed(observation),
-                !result.contains(where: { $0.sourceID == observation.sourceID })
-            else { return }
-            result.append(observation)
+    /// The state slice one extraction pass needs: an immutable input built
+    /// from current state, plus the full evidence list for candidate
+    /// matching. Conversation owns all extraction logic; User exposes reads.
+    public distributed func extractionSnapshot() -> MemoryExtractionSnapshot {
+        let pending = state.memory.observations.filter {
+            state.memory.accepts($0) && !state.memory.isProcessed($0)
         }
-        guard !pending.isEmpty else { return .alreadyHandled }
-
-        let input = ExtractionInput(
-            observations: pending,
-            generation: state.memory.generation,
-            existingFacts: Array(state.memory.currentFacts().suffix(32)),
-            previousObservations: state.memory.recentObservations(limit: 32)
+        return MemoryExtractionSnapshot(
+            input: ExtractionInput(
+                observations: pending,
+                generation: state.memory.generation,
+                existingFacts: Array(state.memory.currentFacts().suffix(32)),
+                previousObservations: state.memory.recentObservations(limit: 32)
+            ),
+            evidence: state.memory.observations
         )
-        let evidence = state.memory.observations + pending
-        let proposals = candidates.compactMap { candidate in
-            Self.proposal(
-                from: candidate,
-                evidence: evidence,
-                observedAt: pending.last?.observedAt
-            )
-        }
-        return try await commitExtraction(input, proposals: proposals)
-    }
-
-    private static func proposal(
-        from candidate: MemoryExtractionReport.MemoryExtractionCandidate,
-        evidence: [MemoryObservation],
-        observedAt: Date?
-    ) -> MemoryProposal? {
-        let quote = normalize(candidate.supportingText)
-        guard !quote.isEmpty else { return nil }
-        let predicate = candidate.predicate.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawValue = candidate.value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !predicate.isEmpty, !rawValue.isEmpty,
-            predicate.count <= 500, rawValue.count <= 500
-        else { return nil }
-        let matches = evidence.filter { normalize($0.text).contains(quote) }
-        guard matches.count == 1, let source = matches.first,
-            let namespace = MemoryNamespace(rawValue: candidate.namespace),
-            let stability = MemoryStability(rawValue: candidate.stability),
-            let observedAt
-        else { return nil }
-
-        let value: MemoryValue
-        switch candidate.valueKind {
-        case "text": value = .text(rawValue)
-        case "person": value = .person(rawValue)
-        case "place": value = .place(rawValue)
-        case "date":
-            guard let date = ISO8601DateFormatter().date(from: rawValue) else { return nil }
-            value = .date(date)
-        case "preference":
-            guard let preference = Bool(rawValue) else { return nil }
-            value = .preference(preference)
-        default: return nil
-        }
-
-        let fact = FactCandidate(
-            namespace: namespace,
-            predicate: predicate,
-            value: value,
-            evidence: [source.id],
-            supportingText: candidate.supportingText,
-            confidence: candidate.confidence,
-            importance: candidate.importance,
-            stability: stability,
-            observedAt: observedAt
-        )
-        return .add(fact)
-    }
-
-    private static func normalize(_ value: String) -> String {
-        value.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     private static func change(from event: MemoryFactEvent) -> MemoryFactChange {
