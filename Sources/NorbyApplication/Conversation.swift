@@ -6,6 +6,7 @@ import Hail
 import NorbyDomain
 import NorbyHail
 import NorbyMemory
+import Synchronization
 import VirtualActors
 
 #if canImport(FoundationEssentials)
@@ -413,6 +414,10 @@ public distributed actor Conversation {
     private let conversationID: ConversationID
     private let peer: HailConversationPeer
     private let memoryExtractionEndpoint: (any ModelEndpoint)?
+    /// The pending extraction timer. A new completed turn cancels and
+    /// reschedules it, so extraction fires once per quiet period over
+    /// everything accumulated in User's pending set.
+    private let extractionScheduler = ExtractionScheduler()
     private let connectionRegistry = ConversationConnectionRegistry()
     private var modelTask: Task<Void, Never>?
 
@@ -804,12 +809,24 @@ public distributed actor Conversation {
 
     }
 
+    /// How long the conversation must be quiet before the accumulated
+    /// memory-extraction pass fires. Long enough for an exchange (ask, then
+    /// answer) to settle into one batch.
+    private static let extractionDebounceDelay: Duration = .seconds(240)
+
+    /// Reference box for the debounce timer; Mutex is noncopyable, and the
+    /// completion closure must capture the scheduler without consuming it.
+    private final class ExtractionScheduler: Sendable {
+        let state = Mutex<Task<Void, Never>?>(nil)
+    }
+
     private func startModel(for request: ConversationTurnRequest) {
         modelTask?.cancel()
         let peer = self.peer
         let actorSystem = self.actorSystem
         let conversationID = self.conversationID
         let extractionEndpoint = memoryExtractionEndpoint
+        let extractionScheduler = self.extractionScheduler
         let scope = ConversationScope(
             conversationID: conversationID,
             turnID: request.turnID,
@@ -826,24 +843,29 @@ public distributed actor Conversation {
                     !request.message.text.trimmingCharacters(in: .whitespacesAndNewlines)
                         .isEmpty
                 else { return }
-                // Background memory extraction, off the turn's critical
-                // path. User reconciles candidates against durable
-                // observations, so overlapping or repeated passes never
-                // double-commit facts.
-                let message = request.message
-                Task {
-                    do {
-                        _ = try await MemoryExtractionService.extractAndCommit(
-                            endpoint: endpoint,
-                            messages: [message.text],
-                            actorSystem: actorSystem,
-                            userID: message.userID
-                        )
-                    } catch {
-                        actorSystem.log.warning(
-                            "Background memory extraction failed",
-                            metadata: ["error": .string(String(describing: error))]
-                        )
+                // Debounced background memory extraction: cancel any
+                // pending pass and reschedule. The extraction fires only
+                // after the conversation has been quiet for a few minutes,
+                // over everything accumulated in User's pending set — one
+                // call per exchange, not per message.
+                let userID = request.message.userID
+                extractionScheduler.state.withLock { box in
+                    box?.cancel()
+                    box = Task {
+                        try? await Task.sleep(for: Self.extractionDebounceDelay)
+                        guard !Task.isCancelled else { return }
+                        do {
+                            _ = try await MemoryExtractionService.extractAndCommit(
+                                endpoint: endpoint,
+                                actorSystem: actorSystem,
+                                userID: userID
+                            )
+                        } catch {
+                            actorSystem.log.warning(
+                                "Background memory extraction failed",
+                                metadata: ["error": .string(String(describing: error))]
+                            )
+                        }
                     }
                 }
             },

@@ -102,18 +102,28 @@ public enum MemoryExtractionService {
         throw AgentRuntimeError.modelMisbehavior("Memory extraction produced no report")
     }
 
-    /// The full background pass Conversation schedules after a turn: extract
-    /// candidates for the messages, validate them against the user's durable
-    /// evidence, and commit the concrete proposals. User keeps only the
-    /// write-time guards; everything that interprets a candidate lives here.
+    /// The full background pass Conversation schedules after the
+    /// conversation goes quiet: extract candidates for everything
+    /// accumulated since the last pass, validate them against the user's
+    /// durable evidence, and commit the concrete proposals. The pending
+    /// observation set is the accumulator, so the batch is read here, not
+    /// threaded through callers. User keeps only the write-time guards;
+    /// everything that interprets a candidate lives here.
     public static func extractAndCommit(
         endpoint: any ModelEndpoint,
-        messages: [String],
         actorSystem: ClusterSystem,
         userID: NorbyDomain.UserID
     ) async throws -> ExtractionOutcome {
-        let report = try await extract(endpoint: endpoint, messages: messages)
         let user = try await User.resolve(on: actorSystem, userID: userID)
+        let pending = try await user.extractionSnapshot().input.observations
+        guard !pending.isEmpty else { return .alreadyHandled }
+
+        let report = try await extract(endpoint: endpoint, messages: pending.map(\.text))
+
+        // Re-read after the model call: turns that completed meanwhile added
+        // observations. The fresh snapshot is what the write-time guards
+        // validate against; anything newer simply stays pending for the
+        // next pass.
         let snapshot = try await user.extractionSnapshot()
         guard !snapshot.input.observations.isEmpty else { return .alreadyHandled }
         let evidence = snapshot.evidence + snapshot.input.observations
