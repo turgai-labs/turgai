@@ -245,33 +245,6 @@ public struct TriggerScheduleEffect: ScopedEffect, Sendable {
 
 @Tool("schedule")
 public struct ScheduleTools: Sendable {
-    @Generable
-    public enum Action: Sendable {
-        case deliverPreparedMessage
-        case performTask
-    }
-
-    @Generable
-    public enum Frequency: Sendable {
-        case daily
-        case weekly
-    }
-
-    @Generable
-    public enum Weekday: Sendable {
-        case sunday, monday, tuesday, wednesday, thursday, friday, saturday
-    }
-
-    @Generable
-    public struct RecurrenceInput: Sendable {
-        public let frequency: Frequency
-        public let interval: Int
-        public let timeZone: String
-        public let hour: Int
-        public let minute: Int
-        public let weekdays: [Weekday]
-    }
-
     public struct Recurrence: Codable, Sendable, Equatable {
         public enum Frequency: String, Codable, Sendable, Equatable, CaseIterable { case daily, weekly }
         public enum Weekday: String, Codable, Sendable, Equatable, CaseIterable {
@@ -363,7 +336,7 @@ public struct ScheduleTools: Sendable {
         self.snapshotPolicy = snapshotPolicy
     }
 
-    private func deferredAction(kind: Action, message: String?, instruction: String?) throws -> DeferredAction {
+    private func deferredAction(kind: ScheduleToolsAction, message: String?, instruction: String?) throws -> DeferredAction {
         let domainKind: DeferredAction.Kind =
             switch kind {
             case .deliverPreparedMessage: .deliverPreparedMessage
@@ -372,7 +345,7 @@ public struct ScheduleTools: Sendable {
         return try DeferredActionToolSupport.make(kind: domainKind, message: message, instruction: instruction)
     }
 
-    private func recurrence(_ input: RecurrenceInput) throws -> Recurrence {
+    private func recurrence(_ input: ScheduleToolsRecurrenceInput) throws -> Recurrence {
         guard let timeZone = TimeZone(identifier: input.timeZone) else {
             throw Error.invalidTimeZone(input.timeZone)
         }
@@ -398,7 +371,7 @@ public struct ScheduleTools: Sendable {
     }
 
     @Command("create", description: "Create a recurring schedule that delivers a message or performs a task.")
-    public func create(_ input: CreateInput) throws -> CreateScheduleEffect {
+    public func create(_ input: ScheduleToolsCreateInput) throws -> CreateScheduleEffect {
         let target = try ScheduleTarget(context: context)
         let action = try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)
         let recurrence = try recurrence(input.recurrence).foundationRule()
@@ -408,7 +381,7 @@ public struct ScheduleTools: Sendable {
             recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
     }
     @Command("replace", description: "Replace an existing recurring schedule with a new recurrence and action.")
-    public func replace(_ input: ReplaceInput) throws -> ReplaceScheduleEffect {
+    public func replace(_ input: ScheduleToolsReplaceInput) throws -> ReplaceScheduleEffect {
         guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
         let target = try ScheduleTarget(context: context)
         let action = try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)
@@ -417,16 +390,16 @@ public struct ScheduleTools: Sendable {
             id: id, recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
     }
     @Command("cancel", description: "Cancel an existing recurring schedule.")
-    public func cancel(_ input: CancelInput) throws -> CancelScheduleEffect {
+    public func cancel(_ input: ScheduleToolsCancelInput) throws -> CancelScheduleEffect {
         guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
         return CancelScheduleEffect(scheduleID: id)
     }
     @Command("list", description: "List the active recurring schedules for this conversation.")
-    public func list(_ input: ListInput) throws -> ListSchedulesEffect {
+    public func list(_ input: ScheduleToolsListInput) throws -> ListSchedulesEffect {
         ListSchedulesEffect(conversationID: try ScheduleTarget(context: context).conversationID)
     }
     @Command("trigger", description: "Trigger an existing recurring schedule immediately.")
-    public func trigger(_ input: TriggerInput) throws -> TriggerScheduleEffect {
+    public func trigger(_ input: ScheduleToolsTriggerInput) throws -> TriggerScheduleEffect {
         guard let id = ScheduleID.scheduleID(from: input.scheduleID) else { throw Error.emptyScheduleID }
         return TriggerScheduleEffect(scheduleID: id)
     }
@@ -462,29 +435,66 @@ public struct ScheduleTools: Sendable {
             ].joined(separator: " | ")
         }.joined(separator: "\n")
     }
-
-    @Generable
-    public struct CreateInput: Sendable {
-        public let action: Action
-        public let message: String?
-        public let instruction: String?
-        public let recurrence: RecurrenceInput
-    }
-    @Generable
-    public struct ReplaceInput: Sendable {
-        public let scheduleID: String
-        public let action: Action
-        public let message: String?
-        public let instruction: String?
-        public let recurrence: RecurrenceInput
-    }
-    @Generable
-    public struct CancelInput: Sendable { public let scheduleID: String }
-    @Generable
-    public struct ListInput: Sendable {}
-    @Generable
-    public struct TriggerInput: Sendable { public let scheduleID: String }
 }
+
+@Generable
+public enum ScheduleToolsAction: Sendable {
+    case deliverPreparedMessage
+    case performTask
+}
+
+@Generable
+public enum ScheduleToolsFrequency: Sendable {
+    case daily
+    case weekly
+}
+
+@Generable
+public enum ScheduleToolsWeekday: Sendable {
+    case sunday, monday, tuesday, wednesday, thursday, friday, saturday
+}
+
+// Formerly ScheduleTools.RecurrenceInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct ScheduleToolsRecurrenceInput: Sendable {
+    public let frequency: ScheduleToolsFrequency
+    public let interval: Int
+    public let timeZone: String
+    public let hour: Int
+    public let minute: Int
+    public let weekdays: [ScheduleToolsWeekday]
+}
+
+// Formerly ScheduleTools.CreateInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct ScheduleToolsCreateInput: Sendable {
+    public let action: ScheduleToolsAction
+    public let message: String?
+    public let instruction: String?
+    public let recurrence: ScheduleToolsRecurrenceInput
+}
+
+// Formerly ScheduleTools.ReplaceInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct ScheduleToolsReplaceInput: Sendable {
+    public let scheduleID: String
+    public let action: ScheduleToolsAction
+    public let message: String?
+    public let instruction: String?
+    public let recurrence: ScheduleToolsRecurrenceInput
+}
+
+// Formerly ScheduleTools.CancelInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct ScheduleToolsCancelInput: Sendable { public let scheduleID: String }
+
+// Formerly ScheduleTools.ListInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct ScheduleToolsListInput: Sendable {}
+
+// Formerly ScheduleTools.TriggerInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct ScheduleToolsTriggerInput: Sendable { public let scheduleID: String }
 
 /// Stable identity for one recurring action in one conversation. Calling the
 /// tool again with the same action and recurrence addresses the same durable

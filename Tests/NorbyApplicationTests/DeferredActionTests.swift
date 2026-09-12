@@ -16,23 +16,23 @@ struct DeferredActionTests {
     }
 
     @Test func timerCommandsHaveIndependentInputs() throws {
-        let cancel = try TimerTools.CancelInput(
+        let cancel = try TimerToolsCancelInput(
             GeneratedContent(json: #"{"timerID":"norby-timer-123"}"#)
         )
         #expect(cancel.timerID == "norby-timer-123")
-        _ = try TimerTools.ListInput(GeneratedContent(json: #"{}"#))
+        _ = try TimerToolsListInput(GeneratedContent(json: #"{}"#))
     }
 
     @Test func timerCreateRequiresItsFields() {
         #expect(throws: Error.self) {
-            try TimerTools.CreateInput(
+            try TimerToolsCreateInput(
                 GeneratedContent(json: #"{"action":"deliverPreparedMessage"}"#)
             )
         }
     }
 
     @Test func timerOccurrenceKeepsCalendarComponentsTyped() throws {
-        let input = try TimerTools.OccurrenceInput(
+        let input = try TimerToolsOccurrenceInput(
             GeneratedContent(
                 json: #"{"components":{"day":9,"month":9,"year":2026,"hour":9,"minute":0},"timeZone":"Europe/Berlin"}"#)
         )
@@ -42,19 +42,19 @@ struct DeferredActionTests {
 
     @Test func timerRejectsRelativeOffsetCalendarShape() {
         #expect(throws: Error.self) {
-            try TimerTools.OccurrenceInput(
+            try TimerToolsOccurrenceInput(
                 GeneratedContent(json: #"{"offset":{"day":2},"matching":{"hour":9},"timeZone":"Europe/Berlin"}"#)
             )
         }
     }
 
     @Test func scheduleCommandsHaveIndependentInputs() throws {
-        let trigger = try ScheduleTools.TriggerInput(
+        let trigger = try ScheduleToolsTriggerInput(
             GeneratedContent(json: #"{"scheduleID":"daily-report"}"#)
         )
         #expect(trigger.scheduleID == "daily-report")
 
-        let recurrence = try ScheduleTools.RecurrenceInput(
+        let recurrence = try ScheduleToolsRecurrenceInput(
             GeneratedContent(
                 json:
                     #"{"frequency":"daily","interval":1,"timeZone":"Europe/Berlin","hour":22,"minute":0,"weekdays":[]}"#

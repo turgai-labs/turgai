@@ -217,7 +217,7 @@ public distributed actor User {
     /// memory candidates.
     public distributed func commitCompactionMemories(
         observations: [MemoryObservation],
-        candidates: [ConversationCompactionReport.MemoryCandidate]
+        candidates: [ConversationCompactionMemoryCandidate]
     ) async throws -> ExtractionOutcome {
         let pending = (state.memory.observations + observations).reduce(into: [MemoryObservation]()) {
             result, observation in
@@ -247,7 +247,7 @@ public distributed actor User {
     }
 
     private static func proposal(
-        from candidate: ConversationCompactionReport.MemoryCandidate,
+        from candidate: ConversationCompactionMemoryCandidate,
         evidence: [MemoryObservation],
         observedAt: Date?
     ) -> MemoryProposal? {

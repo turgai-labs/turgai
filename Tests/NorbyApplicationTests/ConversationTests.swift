@@ -121,7 +121,7 @@ struct ConversationTests {
 
     @Test
     func memoryToolDecodesGeneratedInputKeys() throws {
-        let input = try MemoryTool.Input(
+        let input = try MemoryToolInput(
             GeneratedContent(properties: [
                 "operation": "revise",
                 "factID": "00000000-0000-0000-0000-000000000003",

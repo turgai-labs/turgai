@@ -13,10 +13,10 @@ struct DeferredSchemaTests {
     @Test
     func deferredEnumConstraintsMatchTheirDecoders() throws {
         for schema in [
-            TimerTools.CreateInput.generationSchema,
-            TimerTools.ReplaceInput.generationSchema,
-            ScheduleTools.CreateInput.generationSchema,
-            ScheduleTools.ReplaceInput.generationSchema,
+            TimerToolsCreateInput.generationSchema,
+            TimerToolsReplaceInput.generationSchema,
+            ScheduleToolsCreateInput.generationSchema,
+            ScheduleToolsReplaceInput.generationSchema,
         ] {
             let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(schema)) as? [String: Any])
             let definitions = json["$defs"] as? [String: Any] ?? [:]
@@ -49,15 +49,15 @@ struct DeferredSchemaTests {
     @Test
     func deferredToolsHaveSeparateNonUnionSchemas() throws {
         let definitions: [(String, GenerationSchema)] = [
-            ("timer_create", TimerTools.CreateInput.generationSchema),
-            ("timer_replace", TimerTools.ReplaceInput.generationSchema),
-            ("timer_cancel", TimerTools.CancelInput.generationSchema),
-            ("timer_list", TimerTools.ListInput.generationSchema),
-            ("schedule_create", ScheduleTools.CreateInput.generationSchema),
-            ("schedule_replace", ScheduleTools.ReplaceInput.generationSchema),
-            ("schedule_cancel", ScheduleTools.CancelInput.generationSchema),
-            ("schedule_list", ScheduleTools.ListInput.generationSchema),
-            ("schedule_trigger", ScheduleTools.TriggerInput.generationSchema),
+            ("timer_create", TimerToolsCreateInput.generationSchema),
+            ("timer_replace", TimerToolsReplaceInput.generationSchema),
+            ("timer_cancel", TimerToolsCancelInput.generationSchema),
+            ("timer_list", TimerToolsListInput.generationSchema),
+            ("schedule_create", ScheduleToolsCreateInput.generationSchema),
+            ("schedule_replace", ScheduleToolsReplaceInput.generationSchema),
+            ("schedule_cancel", ScheduleToolsCancelInput.generationSchema),
+            ("schedule_list", ScheduleToolsListInput.generationSchema),
+            ("schedule_trigger", ScheduleToolsTriggerInput.generationSchema),
         ]
         for (name, schema) in definitions {
             let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(schema)) as? [String: Any])

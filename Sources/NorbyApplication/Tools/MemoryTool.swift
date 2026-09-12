@@ -17,13 +17,13 @@ import NorbyMemory
 public struct MemoryEffect: ScopedEffect, Sendable {
 
     public let name = "memory"
-    public let input: MemoryTool.Input
+    public let input: MemoryToolInput
     public let userID: NorbyDomain.UserID
     public let observation: MemoryObservation
     public let expectedGeneration: MemoryGeneration?
 
     public init(
-        input: MemoryTool.Input,
+        input: MemoryToolInput,
         userID: NorbyDomain.UserID,
         observation: MemoryObservation,
         expectedGeneration: MemoryGeneration?
@@ -62,7 +62,7 @@ public struct MemoryEffect: ScopedEffect, Sendable {
         }
     }
 
-    fileprivate static func validate(_ input: MemoryTool.Input) throws {
+    fileprivate static func validate(_ input: MemoryToolInput) throws {
         guard !input.predicate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ToolError.missingArgument("predicate")
         }
@@ -94,7 +94,7 @@ public struct MemoryEffect: ScopedEffect, Sendable {
     }
 
     fileprivate static func proposal(
-        from input: MemoryTool.Input,
+        from input: MemoryToolInput,
         observation: MemoryObservation
     ) throws -> MemoryProposal {
         let predicate = input.predicate.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -165,52 +165,6 @@ public struct MemoryEffect: ScopedEffect, Sendable {
         "Add or revise a durable, user-specific fact established by the user's message. supporting_text must be copied from that message, never from an assistant reply or tool result. Use add for a new fact and revise with the exact fact_id shown in memory context when correcting an existing fact. Do not store one-off task parameters, secrets, credentials, or sensitive information."
 )
 public struct MemoryTool {
-    @Generable
-    public enum Operation: String, Codable, Sendable, Equatable, CaseIterable {
-        case add
-        case revise
-    }
-
-    @Generable
-    public enum Namespace: String, Codable, Sendable, Equatable, CaseIterable {
-        case profile
-        case preference
-        case relationship
-        case project
-        case environment
-    }
-
-    @Generable
-    public enum ValueKind: String, Codable, Sendable, Equatable, CaseIterable {
-        case text
-        case person
-        case place
-        case date
-        case preference
-    }
-
-    @Generable
-    public enum Stability: String, Codable, Sendable, Equatable, CaseIterable {
-        case transient
-        case situational
-        case mutable
-        case stable
-    }
-
-    @Generable
-    public struct Input: Codable, Sendable {
-        public let operation: Operation
-        public let factID: String?
-        public let namespace: Namespace
-        public let predicate: String
-        public let value: String
-        public let valueKind: ValueKind
-        public let supportingText: String
-        public let confidence: Double
-        public let importance: Double
-        public let stability: Stability
-
-    }
 
     private let userID: NorbyDomain.UserID
     private let observation: MemoryObservation
@@ -226,7 +180,7 @@ public struct MemoryTool {
         self.expectedGeneration = expectedGeneration
     }
 
-    public func effect(for input: Input) throws -> MemoryEffect {
+    public func effect(for input: MemoryToolInput) throws -> MemoryEffect {
         try MemoryEffect.validate(input)
         return MemoryEffect(
             input: input,
@@ -237,11 +191,59 @@ public struct MemoryTool {
     }
 
     public func runOutput(
-        input: Input,
+        input: MemoryToolInput,
         token: borrowing EffectToken<MemoryEffect>
     ) async throws -> ToolOutput {
         _ = input
         return .text(try await MemoryEffect.run(in: token))
     }
+
+}
+
+@Generable
+public enum MemoryToolOperation: String, Codable, Sendable, Equatable, CaseIterable {
+    case add
+    case revise
+}
+
+@Generable
+public enum MemoryToolNamespace: String, Codable, Sendable, Equatable, CaseIterable {
+    case profile
+    case preference
+    case relationship
+    case project
+    case environment
+}
+
+@Generable
+public enum MemoryToolValueKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case text
+    case person
+    case place
+    case date
+    case preference
+}
+
+@Generable
+public enum MemoryToolStability: String, Codable, Sendable, Equatable, CaseIterable {
+    case transient
+    case situational
+    case mutable
+    case stable
+}
+
+// Formerly MemoryTool.Input; renamed during the no-nested-Generable sweep.
+@Generable
+public struct MemoryToolInput: Codable, Sendable {
+    public let operation: MemoryToolOperation
+    public let factID: String?
+    public let namespace: MemoryToolNamespace
+    public let predicate: String
+    public let value: String
+    public let valueKind: MemoryToolValueKind
+    public let supportingText: String
+    public let confidence: Double
+    public let importance: Double
+    public let stability: MemoryToolStability
 
 }

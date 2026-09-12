@@ -467,65 +467,6 @@ public struct ListTimersEffect: ScopedEffect, Sendable {
 
 @Tool("timer")
 public struct TimerTools: Sendable {
-    @Generable
-    public enum Action: Sendable {
-        case deliverPreparedMessage
-        case performTask
-    }
-
-    @Generable
-    public enum TriggerKind: Sendable {
-        case after
-        case at
-    }
-
-    @Generable
-    public enum DurationUnit: Sendable {
-        case seconds
-        case minutes
-        case hours
-        case days
-        case weeks
-    }
-
-    @Generable
-    public struct CalendarComponentsInput: Sendable {
-        public let year: Int?
-        public let month: Int?
-        public let day: Int?
-        public let hour: Int?
-        public let minute: Int?
-        public let second: Int?
-        public let weekday: Int?
-
-        func dateComponents() -> DateComponents {
-            var components = DateComponents()
-            components.calendar = Calendar(identifier: .gregorian)
-            components.year = year
-            components.month = month
-            components.day = day
-            components.hour = hour
-            components.minute = minute
-            components.second = second
-            components.weekday = weekday
-            return components
-        }
-    }
-
-    @Generable
-    public struct OccurrenceInput: Sendable {
-        public let components: CalendarComponentsInput
-        public let timeZone: String
-    }
-
-    @Generable
-    public struct TriggerInput: Sendable {
-        public let kind: TriggerKind
-        public let amount: Int?
-        public let unit: DurationUnit?
-        public let at: OccurrenceInput?
-    }
-
     public enum Error: Swift.Error, Equatable, Sendable, CustomStringConvertible {
         case emptyMessage, emptyInstruction, emptyTimerID, invalidTrigger
         case invalidConversationID(String)
@@ -549,7 +490,7 @@ public struct TimerTools: Sendable {
         self.snapshotPolicy = snapshotPolicy
     }
 
-    private func deferredAction(kind: Action, message: String?, instruction: String?) throws -> DeferredAction {
+    private func deferredAction(kind: TimerToolsAction, message: String?, instruction: String?) throws -> DeferredAction {
         let domainKind: DeferredAction.Kind =
             switch kind {
             case .deliverPreparedMessage: .deliverPreparedMessage
@@ -558,7 +499,7 @@ public struct TimerTools: Sendable {
         return try DeferredActionToolSupport.make(kind: domainKind, message: message, instruction: instruction)
     }
 
-    private func trigger(_ input: TriggerInput) throws -> Timer.Trigger {
+    private func trigger(_ input: TimerToolsTriggerInput) throws -> Timer.Trigger {
         switch input.kind {
         case .after:
             guard let amount = input.amount, let unit = input.unit else {
@@ -584,7 +525,7 @@ public struct TimerTools: Sendable {
     }
 
     @Command("create", description: "Create a one-shot timer that delivers a message or performs a task later.")
-    public func create(_ input: CreateInput) throws -> CreateTimerEffect {
+    public func create(_ input: TimerToolsCreateInput) throws -> CreateTimerEffect {
         let target = try TimerTarget(context: context)
         return CreateTimerEffect(
             trigger: try trigger(input.trigger),
@@ -594,7 +535,7 @@ public struct TimerTools: Sendable {
     }
 
     @Command("replace", description: "Replace an existing one-shot timer with a new action and trigger.")
-    public func replace(_ input: ReplaceInput) throws -> ReplaceTimerEffect {
+    public func replace(_ input: TimerToolsReplaceInput) throws -> ReplaceTimerEffect {
         guard let id = WorkflowID.timerID(from: input.timerID) else { throw Error.emptyTimerID }
         let target = try TimerTarget(context: context)
         return ReplaceTimerEffect(
@@ -605,13 +546,13 @@ public struct TimerTools: Sendable {
     }
 
     @Command("cancel", description: "Cancel an existing one-shot timer.")
-    public func cancel(_ input: CancelInput) throws -> CancelTimerEffect {
+    public func cancel(_ input: TimerToolsCancelInput) throws -> CancelTimerEffect {
         guard let id = WorkflowID.timerID(from: input.timerID) else { throw Error.emptyTimerID }
         return CancelTimerEffect(timerID: id)
     }
 
     @Command("list", description: "List the active one-shot timers for this conversation.")
-    public func list(_ input: ListInput) throws -> ListTimersEffect {
+    public func list(_ input: TimerToolsListInput) throws -> ListTimersEffect {
         ListTimersEffect(conversationID: try TimerTarget(context: context).conversationID)
     }
 
@@ -649,32 +590,96 @@ public struct TimerTools: Sendable {
             ].joined(separator: " | ")
         }.joined(separator: "\n")
     }
-
-    @Generable
-    public struct CreateInput: Sendable {
-        public let action: Action
-        public let message: String?
-        public let instruction: String?
-        public let trigger: TriggerInput
-    }
-
-    @Generable
-    public struct ReplaceInput: Sendable {
-        public let timerID: String
-        public let action: Action
-        public let message: String?
-        public let instruction: String?
-        public let trigger: TriggerInput
-    }
-
-    @Generable
-    public struct CancelInput: Sendable {
-        public let timerID: String
-    }
-
-    @Generable
-    public struct ListInput: Sendable {}
 }
+
+@Generable
+public enum TimerToolsAction: Sendable {
+    case deliverPreparedMessage
+    case performTask
+}
+
+@Generable
+public enum TimerToolsTriggerKind: Sendable {
+    case after
+    case at
+}
+
+@Generable
+public enum TimerToolsDurationUnit: Sendable {
+    case seconds
+    case minutes
+    case hours
+    case days
+    case weeks
+}
+
+@Generable
+public struct TimerToolsCalendarComponentsInput: Sendable {
+    public let year: Int?
+    public let month: Int?
+    public let day: Int?
+    public let hour: Int?
+    public let minute: Int?
+    public let second: Int?
+    public let weekday: Int?
+
+    func dateComponents() -> DateComponents {
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        components.second = second
+        components.weekday = weekday
+        return components
+    }
+}
+
+// Formerly TimerTools.OccurrenceInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct TimerToolsOccurrenceInput: Sendable {
+    public let components: TimerToolsCalendarComponentsInput
+    public let timeZone: String
+}
+
+@Generable
+public struct TimerToolsTriggerInput: Sendable {
+    public let kind: TimerToolsTriggerKind
+    public let amount: Int?
+    public let unit: TimerToolsDurationUnit?
+    public let at: TimerToolsOccurrenceInput?
+}
+
+// Formerly TimerTools.CreateInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct TimerToolsCreateInput: Sendable {
+    public let action: TimerToolsAction
+    public let message: String?
+    public let instruction: String?
+    public let trigger: TimerToolsTriggerInput
+}
+
+// Formerly TimerTools.ReplaceInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct TimerToolsReplaceInput: Sendable {
+    public let timerID: String
+    public let action: TimerToolsAction
+    public let message: String?
+    public let instruction: String?
+    public let trigger: TimerToolsTriggerInput
+}
+
+// Formerly TimerTools.CancelInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct TimerToolsCancelInput: Sendable {
+    public let timerID: String
+}
+
+// Formerly TimerTools.ListInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct TimerToolsListInput: Sendable {}
 
 extension WorkflowID {
     static let norbyTimerPrefix = "norby-timer-"

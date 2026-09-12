@@ -264,7 +264,7 @@ public enum WeatherSupport {
         country: String?
     ) throws -> LocationEffect {
         try LocationTool().effect(
-            for: LocationTool.Input(place: place, region: region, country: country)
+            for: LocationToolInput(place: place, region: region, country: country)
         )
     }
 
@@ -603,7 +603,7 @@ public struct WeatherTools: Sendable {
         "current",
         description: "Get the current weather conditions for a place."
     )
-    public func current(_ input: CurrentInput) throws -> WeatherEffect {
+    public func current(_ input: WeatherToolsCurrentInput) throws -> WeatherEffect {
         try WeatherEffect(
             geocoding: WeatherSupport.geocodingEffect(
                 place: WeatherSupport.validatedPlace(input.place),
@@ -620,7 +620,7 @@ public struct WeatherTools: Sendable {
         description:
             "Get the remaining hours of today's weather for a place as an hourly table. The table starts at the current hour and never includes past hours."
     )
-    public func hourly(_ input: HourlyInput) throws -> WeatherEffect {
+    public func hourly(_ input: WeatherToolsHourlyInput) throws -> WeatherEffect {
         try WeatherEffect(
             geocoding: WeatherSupport.geocodingEffect(
                 place: WeatherSupport.validatedPlace(input.place),
@@ -637,7 +637,7 @@ public struct WeatherTools: Sendable {
         description:
             "Get a multi-day weather outlook for a place: per-day high and low temperatures, conditions, and precipitation chance."
     )
-    public func daily(_ input: DailyInput) throws -> WeatherEffect {
+    public func daily(_ input: WeatherToolsDailyInput) throws -> WeatherEffect {
         guard (1...7).contains(input.days) else {
             throw ToolError.invalidArgument("days", value: String(input.days))
         }
@@ -661,51 +661,53 @@ public struct WeatherTools: Sendable {
         }
         return .text(String(decoding: data, as: UTF8.self))
     }
+}
 
-    @Generable
-    public struct CurrentInput: Sendable {
-        @Guide(
-            description:
-                "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
-        )
-        public let place: String
-        @Guide(
-            description:
-                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
-        public let region: String?
-        @Guide(description: "An optional country name used to disambiguate the place.")
-        public let country: String?
-    }
+@Generable
+public struct WeatherToolsCurrentInput: Sendable {
+    @Guide(
+        description:
+            "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
+    )
+    public let place: String
+    @Guide(
+        description:
+            "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+    public let region: String?
+    @Guide(description: "An optional country name used to disambiguate the place.")
+    public let country: String?
+}
 
-    @Generable
-    public struct HourlyInput: Sendable {
-        @Guide(
-            description:
-                "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
-        )
-        public let place: String
-        @Guide(
-            description:
-                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
-        public let region: String?
-        @Guide(description: "An optional country name used to disambiguate the place.")
-        public let country: String?
-    }
+// Formerly WeatherTools.HourlyInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct WeatherToolsHourlyInput: Sendable {
+    @Guide(
+        description:
+            "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
+    )
+    public let place: String
+    @Guide(
+        description:
+            "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+    public let region: String?
+    @Guide(description: "An optional country name used to disambiguate the place.")
+    public let country: String?
+}
 
-    @Generable
-    public struct DailyInput: Sendable {
-        @Guide(
-            description:
-                "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
-        )
-        public let place: String
-        @Guide(
-            description:
-                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
-        public let region: String?
-        @Guide(description: "An optional country name used to disambiguate the place.")
-        public let country: String?
-        @Guide(description: "Number of days in the outlook, from 1 through 7.")
-        public let days: Int
-    }
+// Formerly WeatherTools.DailyInput; renamed during the no-nested-Generable sweep.
+@Generable
+public struct WeatherToolsDailyInput: Sendable {
+    @Guide(
+        description:
+            "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
+    )
+    public let place: String
+    @Guide(
+        description:
+            "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+    public let region: String?
+    @Guide(description: "An optional country name used to disambiguate the place.")
+    public let country: String?
+    @Guide(description: "Number of days in the outlook, from 1 through 7.")
+    public let days: Int
 }

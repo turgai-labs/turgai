@@ -167,21 +167,21 @@ struct HailAdapterTests {
 
     @Test
     func weatherCommandInputsRoundTripThroughGeneratedContent() throws {
-        let hourlyJSON = WeatherTools.HourlyInput(
+        let hourlyJSON = WeatherToolsHourlyInput(
             place: "London", region: nil, country: nil
         ).generatedContent.jsonString
         #expect(hourlyJSON.contains("\"place\":\"London\""))
-        let decodedHourly = try WeatherTools.HourlyInput(
+        let decodedHourly = try WeatherToolsHourlyInput(
             GeneratedContent(json: #"{"place":"London","country":null}"#)
         )
         #expect(decodedHourly.place == "London")
         #expect(decodedHourly.country == nil)
 
-        let dailyJSON = WeatherTools.DailyInput(
+        let dailyJSON = WeatherToolsDailyInput(
             place: "London", region: nil, country: nil, days: 7
         ).generatedContent.jsonString
         #expect(dailyJSON.contains("\"days\":7"))
-        let decodedDaily = try WeatherTools.DailyInput(
+        let decodedDaily = try WeatherToolsDailyInput(
             GeneratedContent(json: #"{"place":"London","days":7}"#)
         )
         #expect(decodedDaily.place == "London")
@@ -232,20 +232,20 @@ struct HailAdapterTests {
         let tool = WebSearchTool()
 
         let searchEffect = try tool.effect(
-            for: WebSearchTool.Input(action: .search, query: "weather in Munich", url: nil)
+            for: WebSearchToolInput(action: .search, query: "weather in Munich", url: nil)
         )
         #expect(searchEffect.host == "html.duckduckgo.com")
         #expect(searchEffect.operation == "search")
 
         let openEffect = try tool.effect(
-            for: WebSearchTool.Input(action: .open, query: nil, url: "https://example.com")
+            for: WebSearchToolInput(action: .open, query: nil, url: "https://example.com")
         )
         #expect(openEffect.host == "example.com")
         #expect(openEffect.operation == "open")
 
         #expect(throws: WebSearchTool.Error.unsupportedURLScheme) {
             try tool.effect(
-                for: WebSearchTool.Input(action: .open, query: nil, url: "file:///tmp/secrets")
+                for: WebSearchToolInput(action: .open, query: nil, url: "file:///tmp/secrets")
             )
         }
     }

@@ -12,6 +12,19 @@ import Hail
 /// The tool deliberately has no profile or conversation storage. The agent
 /// supplies the place it already knows from the conversation or memory, and
 /// receives a typed geographic result that can be used by a following tool.
+// Formerly LocationTool.Input; renamed during the no-nested-Generable sweep.
+@Generable
+public struct LocationToolInput: Sendable {
+    @Guide(description: "The actual city, town, or place name, such as Haar or Munich.")
+    public let place: String
+    @Guide(
+        description:
+            "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+    public let region: String?
+    @Guide(description: "An optional country name used to disambiguate the place.")
+    public let country: String?
+}
+
 @Tool(
     "location",
     description:
@@ -19,18 +32,6 @@ import Hail
 )
 public struct LocationTool {
     public typealias Effect = LocationEffect
-
-    @Generable
-    public struct Input: Sendable {
-        @Guide(description: "The actual city, town, or place name, such as Haar or Munich.")
-        public let place: String
-        @Guide(
-            description:
-                "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
-        public let region: String?
-        @Guide(description: "An optional country name used to disambiguate the place.")
-        public let country: String?
-    }
 
     public enum Error: Swift.Error, Equatable, Sendable {
         case emptyQuery
@@ -43,7 +44,7 @@ public struct LocationTool {
 
     public init() {}
 
-    public func effect(for input: Input) throws -> Effect {
+    public func effect(for input: LocationToolInput) throws -> Effect {
         let place = try validatedPlace(input.place)
         let region = try validatedRegion(input.region)
         let country = try validatedCountry(input.country)
@@ -79,7 +80,7 @@ public struct LocationTool {
     }
 
     public func runOutput(
-        input: Input,
+        input: LocationToolInput,
         token: borrowing EffectToken<Effect>
     ) async throws -> ToolOutput {
         let results = try await LocationEffect.run(in: token)
