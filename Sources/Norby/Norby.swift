@@ -87,6 +87,7 @@ struct Norby: AsyncParsableCommand {
             contextWindow: configuredContextWindow
         )
         let attachmentResolver = AttachmentResolver()
+        let searchBackend = try Self.makeSearchBackend(environment: environment)
         let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
             workspaceRoot: workspaceRoot,
             definitionProvider: { spawnConfig in
@@ -105,68 +106,12 @@ struct Norby: AsyncParsableCommand {
                     persona: NorbyAgentProfile.persona
                 )
             },
-            turnToolsProvider: { context, actorSystem in
-                let userID: NorbyDomain.UserID?
-                let sourceMessage: (text: String, timestamp: Date)?
-                if case .text(let sender, let text, let timestamp) = context.message {
-                    userID = NorbyDomain.UserID(rawValue: sender)
-                    sourceMessage = (text, timestamp)
-                } else {
-                    userID = nil
-                    sourceMessage = nil
-                }
-
-                var tools: [any Tool] = [
-                    WebSearchTool(),
-                    FetchURLTool(),
-                    LocationTool(),
-                    NowTool(),
-                    FetchAttachmentTool(resolver: attachmentResolver),
-                ]
-                tools +=
-                    ScheduleTools(
-                        context: context,
-                        snapshotPolicy: runtimeConfiguration.snapshotPolicy
-                    ).tools
-                tools += WeatherTools().tools
-                tools +=
-                    TimerTools(
-                        context: context,
-                        snapshotPolicy: runtimeConfiguration.snapshotPolicy
-                    ).tools
-                if let userID, let sourceMessage {
-                    let user: NorbyApplication.User
-                    let expectedGeneration: MemoryGeneration
-                    do {
-                        user = try await User.resolve(
-                            on: actorSystem,
-                            userID: userID
-                        )
-                        expectedGeneration = try await user.memoryGeneration()
-                    } catch {
-                        throw AgentRuntimeError.infrastructureFailure(
-                            "Could not prepare memory tool: \(error)"
-                        )
-                    }
-                    let observationUUID =
-                        UUID(uuidString: context.inputID ?? "")
-                        ?? UUID(uuidString: context.turnID.rawValue)
-                        ?? UUID()
-                    let observation = MemoryObservation(
-                        id: ObservationID(rawValue: observationUUID),
-                        sourceID: MemorySourceID(rawValue: observationUUID),
-                        text: sourceMessage.text,
-                        observedAt: sourceMessage.timestamp
-                    )
-                    tools.append(
-                        MemoryTool(
-                            userID: userID,
-                            observation: observation,
-                            expectedGeneration: expectedGeneration
-                        )
-                    )
-                }
-                return tools
+            turnToolsProvider: { context, _ in
+                ConversationTools.make(
+                    context: context,
+                    attachmentResolver: attachmentResolver,
+                    searchBackend: searchBackend
+                )
             },
             authorityProvider: { _, workspace in
                 CompositeAuthority
@@ -204,7 +149,10 @@ struct Norby: AsyncParsableCommand {
         }
 
         try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
-        ActorSystemDependency<MemoryEffect>.prepare(.live(on: system))
+        // The shared production dependency facade for tool effects. The
+        // generic parameter is only a carrier; the stored workflows and
+        // virtual-actor actions serve every effect type.
+        ActorSystemDependency<CreateTimerEffect>.prepare(.live(on: system))
         let virtualNode = await VirtualNode(actorSystem: system)
         let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
             actorSystem: system
@@ -219,7 +167,6 @@ struct Norby: AsyncParsableCommand {
         let extractionModel = try? AgentModel(runtimeConfiguration.modelIdentifier).id.rawValue
         let connections = NorbyConnections(
             actorSystem: system,
-            snapshotPolicy: runtimeConfiguration.snapshotPolicy,
             ollamaBaseURL: runtimeConfiguration.ollamaBaseURL,
             memoryModel: extractionModel
         )
@@ -288,6 +235,38 @@ struct Norby: AsyncParsableCommand {
             throw ValidationError("Context window must be a positive integer, got \(value).")
         }
         return value
+    }
+
+    /// Picks the web search backend from the environment. The model never
+    /// sees this choice; it is infrastructure configuration, made once at
+    /// startup and failing loudly on misconfiguration.
+    private static func makeSearchBackend(environment: [String: String]) throws -> WebSearchBackend {
+        let raw = environment["NORBY_SEARCH"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch raw {
+        case nil, "", "duckduckgo":
+            return .duckDuckGo
+        case "searxng":
+            guard let urlString = environment["NORBY_SEARXNG_URL"],
+                let url = URL(string: urlString),
+                url.scheme == "http" || url.scheme == "https"
+            else {
+                throw ValidationError(
+                    "NORBY_SEARCH=searxng requires NORBY_SEARXNG_URL to be an http(s) URL."
+                )
+            }
+            return .searxng(baseURL: url)
+        case "ollama":
+            guard let key = environment["OLLAMA_API_KEY"], !key.isEmpty else {
+                throw ValidationError("NORBY_SEARCH=ollama requires OLLAMA_API_KEY.")
+            }
+            return .ollama(baseURL: URL(string: "https://ollama.com")!, apiKey: key)
+        case let other?:
+            throw ValidationError(
+                "Unknown NORBY_SEARCH backend \(other); expected duckduckgo, searxng, or ollama."
+            )
+        }
     }
 
 }

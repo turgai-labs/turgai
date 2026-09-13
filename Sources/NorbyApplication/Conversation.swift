@@ -380,7 +380,6 @@ public distributed actor Conversation {
         public let conversationID: ConversationID
         public let agentDirectoryID: AgentDirectoryID
         public let agentRole: String
-        public let snapshotPolicy: AgentSnapshotPolicy
         /// Ollama base URL for the background memory-extraction endpoint.
         /// Nil disables background extraction.
         public let ollamaBaseURL: URL?
@@ -391,7 +390,6 @@ public distributed actor Conversation {
             conversationID: ConversationID,
             agentDirectoryID: AgentDirectoryID = "agent-directory",
             agentRole: String = "conversation",
-            snapshotPolicy: AgentSnapshotPolicy = .default,
             ollamaBaseURL: URL? = nil,
             memoryModel: String? = nil
         ) {
@@ -400,7 +398,6 @@ public distributed actor Conversation {
             self.ollamaBaseURL = ollamaBaseURL
             self.memoryModel = memoryModel
             self.agentRole = agentRole
-            self.snapshotPolicy = snapshotPolicy
         }
     }
 
@@ -430,8 +427,7 @@ public distributed actor Conversation {
         let adapter = HailAgentAdapter(
             actorSystem: actorSystem,
             agentDirectoryID: dependency.agentDirectoryID,
-            agentRole: dependency.agentRole,
-            snapshotPolicy: dependency.snapshotPolicy
+            agentRole: dependency.agentRole
         )
         self.peer = try await adapter.peer(for: dependency.conversationID)
         if let baseURL = dependency.ollamaBaseURL, let model = dependency.memoryModel {
@@ -465,7 +461,6 @@ public distributed actor Conversation {
         conversationID: ConversationID,
         agentDirectoryID: AgentDirectoryID = "agent-directory",
         agentRole: String = "conversation",
-        snapshotPolicy: AgentSnapshotPolicy = .default,
         ollamaBaseURL: URL? = nil,
         memoryModel: String? = nil
     ) async throws -> Conversation {
@@ -475,7 +470,6 @@ public distributed actor Conversation {
                 conversationID: conversationID,
                 agentDirectoryID: agentDirectoryID,
                 agentRole: agentRole,
-                snapshotPolicy: snapshotPolicy,
                 ollamaBaseURL: ollamaBaseURL,
                 memoryModel: memoryModel
             )
@@ -588,6 +582,44 @@ public distributed actor Conversation {
                 turnID: nil,
                 text: ContextPresentation.text(for: snapshot)
             )
+        )
+    }
+
+    
+    /// The diagnostics task given to the agent. Deliberately generic: it
+    /// names no tools, so coverage follows the live tool set instead of a
+    /// hardcoded list that could drift. With no memory tool registered,
+    /// "each of your tools" is exactly the callable set.
+    private static let diagnosticsRequest = """
+        Diagnostics: call each of your tools once with harmless arguments, \
+        undoing anything you create as you go. Then reply with a short \
+        summary of what passed and what failed.
+        """
+
+    /// Asks the agent to exercise its tools and report what passed or failed.
+    /// The request runs as a normal turn: the model reads the live tool
+    /// schemas and produces each call itself — the part that actually breaks
+    /// (a wrong shape, a bad field name) — hail executes through the real
+    /// path, the run streams to the user, and the agent's reply is the
+    /// report. The text states the task; it carries no format contract —
+    /// schemas, grammar, and validation errors enforce the contract.
+    public distributed func showDiagnostics(for userID: NorbyDomain.UserID) async throws {
+        await publish(
+            .notice(
+                conversationID: conversationID,
+                turnID: nil,
+                text: "Running tool diagnostics — the agent will exercise its tools now. This takes a few minutes."
+            )
+        )
+        try await send(
+            InboundMessage(
+                conversationID: conversationID,
+                participantID: conversationID.participantID,
+                userID: userID,
+                text: Self.diagnosticsRequest,
+                receivedAt: Date()
+            ),
+            turnID: TurnID(rawValue: UUID())
         )
     }
 

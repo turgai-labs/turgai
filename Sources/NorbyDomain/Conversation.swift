@@ -407,6 +407,11 @@ public enum ConversationInput: Sendable, Equatable {
         participantID: ParticipantID,
         userID: UserID
     )
+    case diagnose(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
     case command(ConversationCommand)
 }
 

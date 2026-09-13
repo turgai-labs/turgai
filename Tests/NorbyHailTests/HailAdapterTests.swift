@@ -128,14 +128,6 @@ struct HailAdapterTests {
     }
 
     @Test
-    func runtimeDefaultsToFrequentSnapshotsAndSnapshotsAfterCompaction() {
-        #expect(
-            HailRuntimeConfiguration().snapshotPolicy
-                == .periodicOrWhenCompacted(every: 50, retention: .keepLast(2))
-        )
-    }
-
-    @Test
     func weatherCommandsCarryGeocodingAndHorizon() throws {
         let effect = try WeatherTools().hourly(
             .init(place: "London", region: nil, country: nil)
@@ -255,13 +247,13 @@ struct HailAdapterTests {
         let overflowing = String(repeating: "word ", count: 1_000)
         #expect(overflowing.count > 3_000)
 
-        let searchOutput = WebSearchTool.searchResult(
-            query: "terms",
-            html: """
-                <a class="result__a" href="https://example.com/article">Title</a>
-                <a class="result__snippet">\(overflowing)</a>
-                """
+        let results = try! WebSearchBackend.duckDuckGo.parseSearchResults(
+            """
+            <a class="result__a" href="https://example.com/article">Title</a>
+            <a class="result__snippet">\(overflowing)</a>
+            """
         )
+        let searchOutput = WebSearchTool.searchResult(query: "terms", results: results)
         #expect(searchOutput.count <= 3_000)
 
         let pageOutput = WebSearchTool.openResult(

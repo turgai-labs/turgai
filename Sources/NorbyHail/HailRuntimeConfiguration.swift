@@ -13,7 +13,6 @@ public struct HailRuntimeConfiguration: Sendable {
     public let contextWindow: Int?
     public let compactionMaxOutputTokens: Int
     public let maxToolRounds: Int
-    public let snapshotPolicy: AgentSnapshotPolicy
 
     public init(
         modelIdentifier: String = "ollama/qwen3.5:9b",
@@ -21,11 +20,7 @@ public struct HailRuntimeConfiguration: Sendable {
         temperature: Double = 0.2,
         contextWindow: Int? = nil,
         compactionMaxOutputTokens: Int = 8_192,
-        maxToolRounds: Int = 16,
-        snapshotPolicy: AgentSnapshotPolicy = .periodicOrWhenCompacted(
-            every: 50,
-            retention: .keepLast(2)
-        )
+        maxToolRounds: Int = 16
     ) {
         self.modelIdentifier = modelIdentifier
         self.ollamaBaseURL = ollamaBaseURL
@@ -33,7 +28,6 @@ public struct HailRuntimeConfiguration: Sendable {
         self.contextWindow = contextWindow
         self.compactionMaxOutputTokens = compactionMaxOutputTokens
         self.maxToolRounds = maxToolRounds
-        self.snapshotPolicy = snapshotPolicy
     }
 
     public func makeAgentRuntimePlugin(

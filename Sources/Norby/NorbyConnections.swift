@@ -177,7 +177,6 @@ public actor NorbyConnections: Service {
     }
 
     private let actorSystem: ClusterSystem
-    private let snapshotPolicy: AgentSnapshotPolicy
     private let ollamaBaseURL: URL?
     private let memoryModel: String?
     private let connectionStream: AsyncStream<Connection>
@@ -186,12 +185,10 @@ public actor NorbyConnections: Service {
 
     public init(
         actorSystem: ClusterSystem,
-        snapshotPolicy: AgentSnapshotPolicy = .default,
         ollamaBaseURL: URL? = nil,
         memoryModel: String? = nil
     ) {
         self.actorSystem = actorSystem
-        self.snapshotPolicy = snapshotPolicy
         self.ollamaBaseURL = ollamaBaseURL
         self.memoryModel = memoryModel
         (self.connectionStream, self.connectionContinuation) =
@@ -210,7 +207,6 @@ public actor NorbyConnections: Service {
             id: id,
             actorSystem: actorSystem,
             inbound: inbound,
-            snapshotPolicy: snapshotPolicy,
             ollamaBaseURL: ollamaBaseURL,
             memoryModel: memoryModel
         )
@@ -262,6 +258,7 @@ private enum UserCommand {
     case memory
     case forget
     case context
+    case diagnose
     case reminders
     case tasks
     case pauseTask(String)
@@ -279,7 +276,6 @@ actor LiveSession {
 
     private let actorSystem: ClusterSystem
     private let inbound: AsyncChannel<ConversationInputDelivery>
-    private let snapshotPolicy: AgentSnapshotPolicy
     private let ollamaBaseURL: URL?
     private let memoryModel: String?
     private let conversationConnection: ConversationConnection
@@ -291,14 +287,12 @@ actor LiveSession {
         id: String,
         actorSystem: ClusterSystem,
         inbound: AsyncChannel<ConversationInputDelivery>,
-        snapshotPolicy: AgentSnapshotPolicy,
         ollamaBaseURL: URL? = nil,
         memoryModel: String? = nil
     ) {
         self.id = id
         self.actorSystem = actorSystem
         self.inbound = inbound
-        self.snapshotPolicy = snapshotPolicy
         self.ollamaBaseURL = ollamaBaseURL
         self.memoryModel = memoryModel
         self.output = OutputStream()
@@ -356,7 +350,6 @@ actor LiveSession {
                 let conversation = try await Conversation.resolve(
                     on: actorSystem,
                     conversationID: conversationID,
-                    snapshotPolicy: snapshotPolicy,
                     ollamaBaseURL: ollamaBaseURL,
                     memoryModel: memoryModel
                 )
@@ -387,7 +380,6 @@ actor LiveSession {
                 let conversation = try await Conversation.resolve(
                     on: actorSystem,
                     conversationID: message.conversationID,
-                    snapshotPolicy: snapshotPolicy,
                     ollamaBaseURL: ollamaBaseURL,
                     memoryModel: memoryModel
                 )
@@ -418,7 +410,6 @@ actor LiveSession {
                 let conversation = try await Conversation.resolve(
                     on: actorSystem,
                     conversationID: conversationID,
-                    snapshotPolicy: snapshotPolicy,
                     ollamaBaseURL: ollamaBaseURL,
                     memoryModel: memoryModel
                 )
@@ -460,6 +451,14 @@ actor LiveSession {
         case .context(let conversationID, let participantID, let userID):
             return await handleUserCommand(
                 .context,
+                conversationID: conversationID,
+                participantID: participantID,
+                userID: userID
+            )
+
+        case .diagnose(let conversationID, let participantID, let userID):
+            return await handleUserCommand(
+                .diagnose,
                 conversationID: conversationID,
                 participantID: participantID,
                 userID: userID
@@ -526,7 +525,6 @@ actor LiveSession {
             let conversation = try await Conversation.resolve(
                 on: actorSystem,
                 conversationID: conversationID,
-                snapshotPolicy: snapshotPolicy,
                 ollamaBaseURL: ollamaBaseURL,
                 memoryModel: memoryModel
             )
@@ -542,6 +540,8 @@ actor LiveSession {
                 try await conversation.forgetMemory(for: userID)
             case .context:
                 try await conversation.showContext()
+            case .diagnose:
+                try await conversation.showDiagnostics(for: userID)
             case .reminders:
                 try await conversation.showReminders()
             case .tasks:

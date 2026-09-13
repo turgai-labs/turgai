@@ -99,6 +99,15 @@ public actor TelegramConnection {
                 )
             )
 
+        case .diagnose(let conversationID, let participantID, let userID):
+            return await sendToApplication(
+                .diagnose(
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+
         case .command(let command):
             return await sendToApplication(.command(command))
 
@@ -109,7 +118,8 @@ public actor TelegramConnection {
                     text: """
                         Hi — I'm Norby, an assistant running locally on this machine. \
                         Send me a message to get started. Use /reset to clear this conversation, \
-                        /memory to inspect saved memory, /context for runtime diagnostics, /reminders to list one-shot reminders, \
+                        /memory to inspect saved memory, /context for runtime diagnostics, /diagnose to \
+                        exercise every tool and report their health, /reminders to list one-shot reminders, \
                         /tasks to list recurring tasks, or /forget to clear saved memory.
                         """
                 )
@@ -358,6 +368,12 @@ public actor TelegramBot {
                 participantID: participantID,
                 userID: userID
             )
+        case .diagnose:
+            return .diagnose(
+                conversationID: conversationID,
+                participantID: participantID,
+                userID: userID
+            )
         case .reminders:
             return .command(
                 .reminders(
@@ -584,6 +600,7 @@ extension TelegramInboundEvent {
         case .memory(let conversationID, _, _): conversationID
         case .forget(let conversationID, _, _): conversationID
         case .context(let conversationID, _, _): conversationID
+        case .diagnose(let conversationID, _, _): conversationID
         case .command(let command):
             switch command {
             case .reminders(let conversationID, _, _),

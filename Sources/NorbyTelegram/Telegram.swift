@@ -204,6 +204,7 @@ public enum TelegramCommand: String, Sendable, Equatable {
     case memory
     case forget
     case context
+    case diagnose
     case reminders
     case tasks
     case pauseTask = "pause-task"
@@ -240,6 +241,11 @@ public enum TelegramInboundEvent: Equatable, Sendable {
         userID: UserID
     )
     case context(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    case diagnose(
         conversationID: ConversationID,
         participantID: ParticipantID,
         userID: UserID

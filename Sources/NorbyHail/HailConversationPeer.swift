@@ -338,18 +338,15 @@ public struct HailAgentAdapter: Sendable {
     public let actorSystem: ClusterSystem
     public let agentDirectoryID: AgentDirectoryID
     public let agentRole: String
-    public let snapshotPolicy: AgentSnapshotPolicy
 
     public init(
         actorSystem: ClusterSystem,
         agentDirectoryID: AgentDirectoryID = "agent-directory",
-        agentRole: String = "conversation",
-        snapshotPolicy: AgentSnapshotPolicy = .default
+        agentRole: String = "conversation"
     ) {
         self.actorSystem = actorSystem
         self.agentDirectoryID = agentDirectoryID
         self.agentRole = agentRole
-        self.snapshotPolicy = snapshotPolicy
     }
 
     public func peer(
@@ -473,8 +470,7 @@ public struct HailAgentAdapter: Sendable {
             // Conversation owns recovery and starts exactly one model run
             // after its own journal has replayed. Letting Hail resume here
             // would create a second independent recovery driver.
-            resumesInterruptedTurns: false,
-            snapshotPolicy: snapshotPolicy
+            resumesInterruptedTurns: false
         )
         return try await actorSystem.virtualActors.getActor(
             identifiedBy: VirtualActorID(rawValue: agentID.rawValue),

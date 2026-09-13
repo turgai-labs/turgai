@@ -22,7 +22,6 @@ public struct Schedule: Sendable {
         public let action: DeferredAction
         public let agentDirectoryID: AgentDirectoryID
         public let agentRole: String
-        public let snapshotPolicy: AgentSnapshotPolicy
 
         public init(
             ownerID: NorbyDomain.UserID,
@@ -31,8 +30,7 @@ public struct Schedule: Sendable {
             author: MessageAuthor? = nil,
             action: DeferredAction,
             agentDirectoryID: AgentDirectoryID = "agent-directory",
-            agentRole: String = "conversation",
-            snapshotPolicy: AgentSnapshotPolicy = .default
+            agentRole: String = "conversation"
         ) {
             self.ownerID = ownerID
             self.conversationID = conversationID
@@ -41,7 +39,6 @@ public struct Schedule: Sendable {
             self.action = action
             self.agentDirectoryID = agentDirectoryID
             self.agentRole = agentRole
-            self.snapshotPolicy = snapshotPolicy
         }
     }
 
@@ -330,10 +327,8 @@ public struct ScheduleTools: Sendable {
         case invalidTimeZone(String)
     }
     public let context: AgentTurnContext
-    public let snapshotPolicy: AgentSnapshotPolicy
-    public init(context: AgentTurnContext, snapshotPolicy: AgentSnapshotPolicy = .default) {
+    public init(context: AgentTurnContext) {
         self.context = context
-        self.snapshotPolicy = snapshotPolicy
     }
 
     private func deferredAction(kind: ScheduleToolsAction, message: String?, instruction: String?) throws -> DeferredAction {
@@ -378,7 +373,7 @@ public struct ScheduleTools: Sendable {
         return CreateScheduleEffect(
             id: ScheduleID(
                 ownerID: target.ownerID, conversationID: target.conversationID, action: action, recurrence: recurrence),
-            recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
+            recurrence: recurrence, request: target.request(action: action))
     }
     @Command("replace", description: "Replace an existing recurring schedule with a new recurrence and action.")
     public func replace(_ input: ScheduleToolsReplaceInput) throws -> ReplaceScheduleEffect {
@@ -387,7 +382,7 @@ public struct ScheduleTools: Sendable {
         let action = try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)
         let recurrence = try recurrence(input.recurrence).foundationRule()
         return ReplaceScheduleEffect(
-            id: id, recurrence: recurrence, request: target.request(action: action, snapshotPolicy: snapshotPolicy))
+            id: id, recurrence: recurrence, request: target.request(action: action))
     }
     @Command("cancel", description: "Cancel an existing recurring schedule.")
     public func cancel(_ input: ScheduleToolsCancelInput) throws -> CancelScheduleEffect {
@@ -580,8 +575,7 @@ public struct ScheduleActivities {
             on: context.system,
             conversationID: input.conversationID,
             agentDirectoryID: input.agentDirectoryID,
-            agentRole: input.agentRole,
-            snapshotPolicy: input.snapshotPolicy
+            agentRole: input.agentRole
         )
 
         switch input.action {

@@ -21,7 +21,6 @@ public struct Timer: Sendable {
         public let action: DeferredAction
         public let agentDirectoryID: AgentDirectoryID
         public let agentRole: String
-        public let snapshotPolicy: AgentSnapshotPolicy
 
         public init(
             ownerID: NorbyDomain.UserID,
@@ -30,8 +29,7 @@ public struct Timer: Sendable {
             author: MessageAuthor? = nil,
             action: DeferredAction,
             agentDirectoryID: AgentDirectoryID = "agent-directory",
-            agentRole: String = "conversation",
-            snapshotPolicy: AgentSnapshotPolicy = .default
+            agentRole: String = "conversation"
         ) {
             self.ownerID = ownerID
             self.conversationID = conversationID
@@ -40,7 +38,6 @@ public struct Timer: Sendable {
             self.action = action
             self.agentDirectoryID = agentDirectoryID
             self.agentRole = agentRole
-            self.snapshotPolicy = snapshotPolicy
         }
     }
 
@@ -216,12 +213,25 @@ public struct Timer: Sendable {
         }
     }
 
-    public enum Error: Swift.Error, Equatable, Sendable {
+    public enum Error: Swift.Error, Equatable, Sendable, CustomStringConvertible {
         case emptyText
         case invalidRelativeDuration(Int)
         case emptyOccurrence
         case invalidOccurrenceComponent(name: String, value: Int)
         case occurrenceNotFound
+
+        public var description: String {
+            switch self {
+            case .emptyText: "timer message or instruction must not be empty"
+            case .invalidRelativeDuration(let seconds):
+                "relative duration must be positive, got \(seconds) seconds"
+            case .emptyOccurrence:
+                "a calendar trigger needs at least one calendar field (year, month, day, hour, minute, second, weekday)"
+            case .invalidOccurrenceComponent(let name, let value):
+                "invalid calendar value: \(name)=\(value) is out of range"
+            case .occurrenceNotFound: "no future date matches the given calendar fields"
+            }
+        }
     }
 
     public struct Info: Sendable {
@@ -468,7 +478,9 @@ public struct ListTimersEffect: ScopedEffect, Sendable {
 @Tool("timer")
 public struct TimerTools: Sendable {
     public enum Error: Swift.Error, Equatable, Sendable, CustomStringConvertible {
-        case emptyMessage, emptyInstruction, emptyTimerID, invalidTrigger
+        case emptyMessage, emptyInstruction, emptyTimerID
+        case negativeAmount(Int)
+        case unknownTimeZone(String)
         case invalidConversationID(String)
         case invalidParticipantID(String)
         public var description: String {
@@ -476,7 +488,9 @@ public struct TimerTools: Sendable {
             case .emptyMessage: "deliver_prepared_message requires a non-empty message"
             case .emptyInstruction: "perform_task requires a non-empty instruction"
             case .emptyTimerID: "timer_id must not be empty"
-            case .invalidTrigger: "invalid timer trigger"
+            case .negativeAmount(let value): "timer amount must be zero or positive, got \(value)"
+            case .unknownTimeZone(let value):
+                "unknown time_zone \"\(value)\"; use an IANA timezone name such as Europe/Berlin"
             case .invalidConversationID(let value): "invalid conversation_id: \(value)"
             case .invalidParticipantID(let value): "invalid participant_id: \(value)"
             }
@@ -484,10 +498,8 @@ public struct TimerTools: Sendable {
     }
 
     public let context: AgentTurnContext
-    public let snapshotPolicy: AgentSnapshotPolicy
-    public init(context: AgentTurnContext, snapshotPolicy: AgentSnapshotPolicy = .default) {
+    public init(context: AgentTurnContext) {
         self.context = context
-        self.snapshotPolicy = snapshotPolicy
     }
 
     private func deferredAction(kind: TimerToolsAction, message: String?, instruction: String?) throws -> DeferredAction {
@@ -499,50 +511,97 @@ public struct TimerTools: Sendable {
         return try DeferredActionToolSupport.make(kind: domainKind, message: message, instruction: instruction)
     }
 
-    private func trigger(_ input: TimerToolsTriggerInput) throws -> Timer.Trigger {
-        switch input.kind {
-        case .after:
-            guard let amount = input.amount, let unit = input.unit else {
-                throw Error.invalidTrigger
+    private func after(amount: Int, unit: TimerToolsDurationUnit) throws -> Timer.Trigger {
+        let secondsPerUnit: Int64 =
+            switch unit {
+            case .seconds: 1
+            case .minutes: 60
+            case .hours: 3_600
+            case .days: 86_400
+            case .weeks: 604_800
             }
-            let secondsPerUnit: Int64 =
-                switch unit {
-                case .seconds: 1
-                case .minutes: 60
-                case .hours: 3_600
-                case .days: 86_400
-                case .weeks: 604_800
-                }
-            let seconds = Int64(amount).multipliedReportingOverflow(by: secondsPerUnit)
-            guard amount >= 0, !seconds.overflow else { throw Error.invalidTrigger }
-            return .after(.seconds(seconds.partialValue))
-        case .at:
-            guard let occurrence = input.at,
-                let timeZone = TimeZone(identifier: occurrence.timeZone)
-            else { throw Error.invalidTrigger }
-            return .at(Timer.Occurrence(components: occurrence.components.dateComponents(), timeZone: timeZone))
-        }
+        let seconds = Int64(amount).multipliedReportingOverflow(by: secondsPerUnit)
+        guard amount >= 0, !seconds.overflow else { throw Error.negativeAmount(amount) }
+        return .after(.seconds(seconds.partialValue))
     }
 
-    @Command("create", description: "Create a one-shot timer that delivers a message or performs a task later.")
-    public func create(_ input: TimerToolsCreateInput) throws -> CreateTimerEffect {
+    private func at(
+        hour: Int,
+        minute: Int,
+        year: Int?,
+        month: Int?,
+        day: Int?,
+        timeZone identifier: String
+    ) throws -> Timer.Trigger {
+        guard let timeZone = TimeZone(identifier: identifier) else {
+            throw Error.unknownTimeZone(identifier)
+        }
+        var components = DateComponents()
+        components.calendar = Calendar(identifier: .gregorian)
+        components.year = year
+        components.month = month
+        components.day = day
+        components.hour = hour
+        components.minute = minute
+        return .at(Timer.Occurrence(components: components, timeZone: timeZone))
+    }
+
+    @Command(
+        "create_after",
+        description:
+            "Create a one-shot timer that delivers a message or performs a task after a relative delay, e.g. in 90 minutes."
+    )
+    public func createAfter(_ input: TimerToolsCreateAfterInput) throws -> CreateTimerEffect {
         let target = try TimerTarget(context: context)
         return CreateTimerEffect(
-            trigger: try trigger(input.trigger),
+            trigger: try after(amount: input.amount, unit: input.unit),
             request: target.request(
-                action: try deferredAction(kind: input.action, message: input.message, instruction: input.instruction),
-                snapshotPolicy: snapshotPolicy))
+                action: try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)))
     }
 
-    @Command("replace", description: "Replace an existing one-shot timer with a new action and trigger.")
-    public func replace(_ input: TimerToolsReplaceInput) throws -> ReplaceTimerEffect {
+    @Command(
+        "create_at",
+        description:
+            "Create a one-shot timer that delivers a message or performs a task at the next occurrence of an exact clock time — today if that time is still ahead, otherwise tomorrow. Use this for exact times like 21:32."
+    )
+    public func createAt(_ input: TimerToolsCreateAtInput) throws -> CreateTimerEffect {
+        let target = try TimerTarget(context: context)
+        return CreateTimerEffect(
+            trigger: try at(
+                hour: input.hour, minute: input.minute, year: input.year, month: input.month,
+                day: input.day, timeZone: input.timeZone),
+            request: target.request(
+                action: try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)))
+    }
+
+    @Command(
+        "replace_after",
+        description: "Replace an existing one-shot timer with a new action and relative delay."
+    )
+    public func replaceAfter(_ input: TimerToolsReplaceAfterInput) throws -> ReplaceTimerEffect {
         guard let id = WorkflowID.timerID(from: input.timerID) else { throw Error.emptyTimerID }
         let target = try TimerTarget(context: context)
         return ReplaceTimerEffect(
-            timerID: id, trigger: try trigger(input.trigger),
+            timerID: id, trigger: try after(amount: input.amount, unit: input.unit),
             request: target.request(
-                action: try deferredAction(kind: input.action, message: input.message, instruction: input.instruction),
-                snapshotPolicy: snapshotPolicy))
+                action: try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)))
+    }
+
+    @Command(
+        "replace_at",
+        description:
+            "Replace an existing one-shot timer with a new action and an exact clock time (the next occurrence, as with create_at)."
+    )
+    public func replaceAt(_ input: TimerToolsReplaceAtInput) throws -> ReplaceTimerEffect {
+        guard let id = WorkflowID.timerID(from: input.timerID) else { throw Error.emptyTimerID }
+        let target = try TimerTarget(context: context)
+        return ReplaceTimerEffect(
+            timerID: id,
+            trigger: try at(
+                hour: input.hour, minute: input.minute, year: input.year, month: input.month,
+                day: input.day, timeZone: input.timeZone),
+            request: target.request(
+                action: try deferredAction(kind: input.action, message: input.message, instruction: input.instruction)))
     }
 
     @Command("cancel", description: "Cancel an existing one-shot timer.")
@@ -599,13 +658,7 @@ public enum TimerToolsAction: Sendable {
 }
 
 @Generable
-public enum TimerToolsTriggerKind: Sendable {
-    case after
-    case at
-}
-
-@Generable
-public enum TimerToolsDurationUnit: Sendable {
+public enum TimerToolsDurationUnit: Sendable, Codable {
     case seconds
     case minutes
     case hours
@@ -614,61 +667,54 @@ public enum TimerToolsDurationUnit: Sendable {
 }
 
 @Generable
-public struct TimerToolsCalendarComponentsInput: Sendable {
+public struct TimerToolsCreateAfterInput: Sendable {
+    public let action: TimerToolsAction
+    public let message: String?
+    public let instruction: String?
+    /// Non-negative whole delay, in `unit`.
+    public let amount: Int
+    public let unit: TimerToolsDurationUnit
+}
+
+@Generable
+public struct TimerToolsCreateAtInput: Sendable {
+    public let action: TimerToolsAction
+    public let message: String?
+    public let instruction: String?
+    /// The timer fires at the next occurrence of this clock time, in
+    /// `timeZone`: today if it is still ahead, otherwise tomorrow. Date
+    /// fields pin a specific day; leave them unset for "today or tomorrow".
+    public let hour: Int
+    public let minute: Int
     public let year: Int?
     public let month: Int?
     public let day: Int?
-    public let hour: Int?
-    public let minute: Int?
-    public let second: Int?
-    public let weekday: Int?
-
-    func dateComponents() -> DateComponents {
-        var components = DateComponents()
-        components.calendar = Calendar(identifier: .gregorian)
-        components.year = year
-        components.month = month
-        components.day = day
-        components.hour = hour
-        components.minute = minute
-        components.second = second
-        components.weekday = weekday
-        return components
-    }
-}
-
-// Formerly TimerTools.OccurrenceInput; renamed during the no-nested-Generable sweep.
-@Generable
-public struct TimerToolsOccurrenceInput: Sendable {
-    public let components: TimerToolsCalendarComponentsInput
+    /// IANA timezone name such as Europe/Berlin.
     public let timeZone: String
 }
 
 @Generable
-public struct TimerToolsTriggerInput: Sendable {
-    public let kind: TimerToolsTriggerKind
-    public let amount: Int?
-    public let unit: TimerToolsDurationUnit?
-    public let at: TimerToolsOccurrenceInput?
-}
-
-// Formerly TimerTools.CreateInput; renamed during the no-nested-Generable sweep.
-@Generable
-public struct TimerToolsCreateInput: Sendable {
-    public let action: TimerToolsAction
-    public let message: String?
-    public let instruction: String?
-    public let trigger: TimerToolsTriggerInput
-}
-
-// Formerly TimerTools.ReplaceInput; renamed during the no-nested-Generable sweep.
-@Generable
-public struct TimerToolsReplaceInput: Sendable {
+public struct TimerToolsReplaceAfterInput: Sendable {
     public let timerID: String
     public let action: TimerToolsAction
     public let message: String?
     public let instruction: String?
-    public let trigger: TimerToolsTriggerInput
+    public let amount: Int
+    public let unit: TimerToolsDurationUnit
+}
+
+@Generable
+public struct TimerToolsReplaceAtInput: Sendable {
+    public let timerID: String
+    public let action: TimerToolsAction
+    public let message: String?
+    public let instruction: String?
+    public let hour: Int
+    public let minute: Int
+    public let year: Int?
+    public let month: Int?
+    public let day: Int?
+    public let timeZone: String
 }
 
 // Formerly TimerTools.CancelInput; renamed during the no-nested-Generable sweep.
@@ -754,8 +800,7 @@ public struct TimerActivities {
             on: context.system,
             conversationID: input.conversationID,
             agentDirectoryID: input.agentDirectoryID,
-            agentRole: input.agentRole,
-            snapshotPolicy: input.snapshotPolicy
+            agentRole: input.agentRole
         )
 
         switch input.action {

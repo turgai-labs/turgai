@@ -57,16 +57,14 @@ private struct DeferredToolTarget: Sendable {
         participantID = ParticipantID(channel: conversationID.channel, rawValue: participant)
     }
 
-    func timerRequest(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Timer.Request {
+    func timerRequest(action: DeferredAction) -> Timer.Request {
         Timer.Request(
-            ownerID: ownerID, conversationID: conversationID, participantID: participantID, action: action,
-            snapshotPolicy: snapshotPolicy)
+            ownerID: ownerID, conversationID: conversationID, participantID: participantID, action: action)
     }
 
-    func scheduleRequest(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Schedule.Request {
+    func scheduleRequest(action: DeferredAction) -> Schedule.Request {
         Schedule.Request(
-            ownerID: ownerID, conversationID: conversationID, participantID: participantID, action: action,
-            snapshotPolicy: snapshotPolicy)
+            ownerID: ownerID, conversationID: conversationID, participantID: participantID, action: action)
     }
 }
 
@@ -90,8 +88,8 @@ enum DeferredActionToolSupport {
 struct TimerTarget {
     private let value: DeferredToolTarget
     init(context: AgentTurnContext) throws { value = try DeferredToolTarget(context: context) }
-    func request(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Timer.Request {
-        value.timerRequest(action: action, snapshotPolicy: snapshotPolicy)
+    func request(action: DeferredAction) -> Timer.Request {
+        value.timerRequest(action: action)
     }
     var conversationID: ConversationID { value.conversationID }
 }
@@ -99,8 +97,8 @@ struct TimerTarget {
 struct ScheduleTarget {
     private let value: DeferredToolTarget
     init(context: AgentTurnContext) throws { value = try DeferredToolTarget(context: context) }
-    func request(action: DeferredAction, snapshotPolicy: AgentSnapshotPolicy) -> Schedule.Request {
-        value.scheduleRequest(action: action, snapshotPolicy: snapshotPolicy)
+    func request(action: DeferredAction) -> Schedule.Request {
+        value.scheduleRequest(action: action)
     }
     var ownerID: NorbyDomain.UserID { value.ownerID }
     var conversationID: ConversationID { value.conversationID }

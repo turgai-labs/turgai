@@ -13,8 +13,10 @@ struct DeferredSchemaTests {
     @Test
     func deferredEnumConstraintsMatchTheirDecoders() throws {
         for schema in [
-            TimerToolsCreateInput.generationSchema,
-            TimerToolsReplaceInput.generationSchema,
+            TimerToolsCreateAfterInput.generationSchema,
+            TimerToolsCreateAtInput.generationSchema,
+            TimerToolsReplaceAfterInput.generationSchema,
+            TimerToolsReplaceAtInput.generationSchema,
             ScheduleToolsCreateInput.generationSchema,
             ScheduleToolsReplaceInput.generationSchema,
         ] {
@@ -32,11 +34,6 @@ struct DeferredSchemaTests {
             let properties = try #require(root["properties"] as? [String: Any])
             let action = try resolve(properties["action"])
             #expect(action["enum"] != nil || action["anyOf"] != nil)
-            if let trigger = properties["trigger"] {
-                let fields = try #require(try resolve(trigger)["properties"] as? [String: Any])
-                #expect(fields["kind"] != nil)
-                #expect(fields["unit"] != nil)
-            }
             if let recurrence = properties["recurrence"] {
                 let fields = try #require(try resolve(recurrence)["properties"] as? [String: Any])
                 #expect(fields["frequency"] != nil)
@@ -49,8 +46,10 @@ struct DeferredSchemaTests {
     @Test
     func deferredToolsHaveSeparateNonUnionSchemas() throws {
         let definitions: [(String, GenerationSchema)] = [
-            ("timer_create", TimerToolsCreateInput.generationSchema),
-            ("timer_replace", TimerToolsReplaceInput.generationSchema),
+            ("timer_create_after", TimerToolsCreateAfterInput.generationSchema),
+            ("timer_create_at", TimerToolsCreateAtInput.generationSchema),
+            ("timer_replace_after", TimerToolsReplaceAfterInput.generationSchema),
+            ("timer_replace_at", TimerToolsReplaceAtInput.generationSchema),
             ("timer_cancel", TimerToolsCancelInput.generationSchema),
             ("timer_list", TimerToolsListInput.generationSchema),
             ("schedule_create", ScheduleToolsCreateInput.generationSchema),

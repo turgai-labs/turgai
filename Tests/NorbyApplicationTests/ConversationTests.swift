@@ -120,29 +120,6 @@ struct ConversationTests {
     }
 
     @Test
-    func memoryToolDecodesGeneratedInputKeys() throws {
-        let input = try MemoryToolInput(
-            GeneratedContent(properties: [
-                "operation": "revise",
-                "factID": "00000000-0000-0000-0000-000000000003",
-                "namespace": "profile",
-                "predicate": "name",
-                "value": "Ada",
-                "valueKind": "person",
-                "supportingText": "My name is Ada",
-                "confidence": 0.98,
-                "importance": 0.9,
-                "stability": "stable",
-            ])
-        )
-
-        #expect(input.operation == .revise)
-        #expect(input.factID == "00000000-0000-0000-0000-000000000003")
-        #expect(input.valueKind == .person)
-        #expect(input.stability == .stable)
-    }
-
-    @Test
     func timeAnchorRendersLocalDateTimeAndOffset() {
         // 2026-09-11T12:11:00Z, a Friday.
         let instant = Date(timeIntervalSince1970: 1_789_128_660)
