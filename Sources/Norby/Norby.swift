@@ -9,6 +9,7 @@ import NorbyDomain
 import NorbyHail
 import NorbyMemory
 import NorbyPersistence
+import NorbyTelegram
 import ServiceLifecycle
 import VirtualActors
 
@@ -59,9 +60,19 @@ struct Norby: AsyncParsableCommand {
             )
         }
 
+        // Share one Bot API client between transport and dynamic tool
+        // approvals so callback handling and approval messages use the same
+        // dependency boundary.
+        let telegramClient = try TelegramAPIClient.live(token: telegramBotToken)
+        let telegramApproval = TelegramToolApproval(client: telegramClient)
+
         let workspaceRoot = workspace ?? FileManager.default.currentDirectoryPath
         let norbyDirectory = URL(fileURLWithPath: workspaceRoot)
             .appendingPathComponent(".norby", isDirectory: true)
+        let userToolsDirectory =
+            norbyDirectory
+            .appendingPathComponent("tools", isDirectory: true)
+        let wasmRunnerURL = WasmRunnerLocator.executableURL(environment: environment)
         let persistenceClient = try FilePersistenceClient(directory: norbyDirectory)
         let conversationJournals = try await ConversationJournalReader(
             client: persistenceClient
@@ -88,34 +99,82 @@ struct Norby: AsyncParsableCommand {
         )
         let attachmentResolver = AttachmentResolver()
         let searchBackend = try Self.makeSearchBackend(environment: environment)
+        let userToolLogger = Logger(label: "norby.usertools")
+        let userToolRegistry = UserToolRegistry(
+            directory: userToolsDirectory
+        ) { issue in
+            userToolLogger.warning(
+                "User tool issue",
+                metadata: [
+                    "source": .string(issue.source.lastPathComponent),
+                    "reason": .string(String(describing: issue.reason)),
+                ]
+            )
+        }
         let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
             workspaceRoot: workspaceRoot,
             definitionProvider: { spawnConfig in
-                guard spawnConfig.agentID.role.rawValue == "conversation" else {
+                let role = spawnConfig.agentID.role.rawValue
+                guard role == "conversation" || role == "user-tool" else {
                     return nil
                 }
 
+                let isUserTool = role == "user-tool"
                 return try AgentDefinition(
                     role: spawnConfig.agentID.role,
                     behavior: .init(
-                        systemPrompt:
-                            "You are a local conversational assistant. Be helpful, concise, honest, and natural."
-                            + "\n\n" + MemoryRetrieval.capabilityInstruction,
-                        model: modelIdentifier
+                        systemPrompt: isUserTool
+                            ? "You are an isolated helper agent. Follow the supplied task, return only the useful result, and do not perform side effects."
+                            : "You are a local conversational assistant. Be helpful, concise, honest, and natural."
+                                + "\n\n" + MemoryRetrieval.capabilityInstruction,
+                        model: modelIdentifier,
+                        execution: isUserTool
+                            ? AgentExecutionPolicy(
+                                sandbox: .readOnly,
+                                approvalPolicy: .onRequest
+                            )
+                            : .autonomousWorkspace
                     ),
-                    persona: NorbyAgentProfile.persona
+                    persona: isUserTool ? nil : NorbyAgentProfile.persona
                 )
             },
-            turnToolsProvider: { context, _ in
+            turnToolsProvider: { context, actorSystem in
                 ConversationTools.make(
                     context: context,
                     attachmentResolver: attachmentResolver,
-                    searchBackend: searchBackend
+                    searchBackend: searchBackend,
+                    workspaceRoot: workspaceRoot,
+                    wasmRunnerURL: wasmRunnerURL,
+                    userTools: userToolRegistry,
+                    approval: telegramApproval,
+                    actorSystem: actorSystem,
+                    includeConversationTools: context.agentID.role.rawValue == "conversation"
                 )
             },
-            authorityProvider: { _, workspace in
-                CompositeAuthority
+            authorityProvider: { spawnConfig, workspace in
+                if spawnConfig.agentID.role.rawValue == "user-tool" {
+                    return CompositeAuthority()
+                        .granting(for: FileEffect.self) { _ in
+                            .denied("prompt helpers cannot access files")
+                        }
+                        .granting(for: TerminalEffect.self) { _ in
+                            .denied("prompt helpers cannot run terminal commands")
+                        }
+                        .granting(for: ProcessEffect.self) { _ in
+                            .denied("prompt helpers cannot spawn processes")
+                        }
+                        .granting(for: NetworkEffect.self) { _ in
+                            .denied("prompt helpers cannot access the network")
+                        }
+                        .granting(for: CoordinationEffect.self) { _ in
+                            .denied("prompt helpers cannot coordinate with other agents")
+                        }
+                        .grantingAll(for: ClockEffect.self)
+                }
+                return
+                    CompositeAuthority
                     .workspaceDefault(root: workspace.rootPath)
+                    .grantingAll(for: UserWorkflowEffect.self)
                     .grantingAll(for: CreateScheduleEffect.self)
                     .grantingAll(for: ReplaceScheduleEffect.self)
                     .grantingAll(for: CancelScheduleEffect.self)
@@ -170,14 +229,17 @@ struct Norby: AsyncParsableCommand {
             ollamaBaseURL: runtimeConfiguration.ollamaBaseURL,
             memoryModel: extractionModel
         )
-        let telegramService = try TelegramService(
-            token: telegramBotToken,
+        let telegramService = TelegramService(
+            client: telegramClient,
             allowedChatIDs: allowedChatIDs,
             offsetFileURL: norbyDirectory.appendingPathComponent("telegram-offset.txt"),
             connections: connections,
             attachmentResolver: attachmentResolver,
             logger: system.log,
-            persistedConversationIDs: persistedConversationIDs
+            persistedConversationIDs: persistedConversationIDs,
+            callbackHandler: { callback in
+                await telegramApproval.handle(callback)
+            }
         )
         let clusterService = NorbyClusterService(
             system: system,

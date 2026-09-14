@@ -198,6 +198,7 @@ public enum TelegramBotError: Error, Equatable, Sendable {
 public actor TelegramBot {
     public typealias IDFactory = @Sendable () -> (MessageID, TurnID)
     public typealias ConnectionStream = AsyncStream<TelegramConnection>
+    public typealias CallbackHandler = @Sendable (TelegramCallbackQuery) async -> Bool
 
     private let client: TelegramAPIClient
     private let allowedChatIDs: Set<Int64>
@@ -206,6 +207,7 @@ public actor TelegramBot {
     private let idFactory: IDFactory
     private let publisher: TelegramEventPublisher
     private let logger: Logger
+    private let callbackHandler: CallbackHandler
     private let connectionStream: ConnectionStream
     private let connectionContinuation: ConnectionStream.Continuation
     private var activeConnections: [ConversationID: TelegramConnection] = [:]
@@ -218,7 +220,8 @@ public actor TelegramBot {
         offsetStore: any TelegramOffsetStore,
         configuration: TelegramBotConfiguration = TelegramBotConfiguration(),
         idFactory: @escaping IDFactory = { (MessageID(), TurnID()) },
-        logger: Logger = Logger(label: "norby.telegram")
+        logger: Logger = Logger(label: "norby.telegram"),
+        callbackHandler: @escaping CallbackHandler = { _ in false }
     ) {
         self.client = client
         self.allowedChatIDs = allowedChatIDs
@@ -230,6 +233,7 @@ public actor TelegramBot {
             delivery: configuration.delivery
         )
         self.logger = logger
+        self.callbackHandler = callbackHandler
         (self.connectionStream, self.connectionContinuation) =
             ConnectionStream.makeStream()
     }
@@ -462,25 +466,33 @@ public actor TelegramBot {
             if let chatID = update.message?.chat.id ?? update.callbackQuery?.message?.chat.id,
                 allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID)
             {
+                let handledCallback: Bool
+                if let callbackQuery = update.callbackQuery {
+                    handledCallback = await callbackHandler(callbackQuery)
+                } else {
+                    handledCallback = false
+                }
                 if let callbackQuery = update.callbackQuery {
                     try? await client.answerCallbackQuery(callbackQuery.id)
                 }
-                let attachments = attachments(for: update.message)
-                if let event = Self.event(
-                    for: update,
-                    messageID: ids.0,
-                    turnID: ids.1,
-                    attachments: attachments
-                ) {
-                    let connection = connection(for: event.conversationID)
-                    let accepted = await connection.receive(event)
-                    if !accepted {
-                        iterator.retryPendingUpdate()
-                        logger.warning(
-                            "Telegram input was rejected; retrying the uncheckpointed update"
-                        )
-                        try await Task.sleep(for: configuration.retryDelay)
-                        continue
+                if !handledCallback {
+                    let attachments = attachments(for: update.message)
+                    if let event = Self.event(
+                        for: update,
+                        messageID: ids.0,
+                        turnID: ids.1,
+                        attachments: attachments
+                    ) {
+                        let connection = connection(for: event.conversationID)
+                        let accepted = await connection.receive(event)
+                        if !accepted {
+                            iterator.retryPendingUpdate()
+                            logger.warning(
+                                "Telegram input was rejected; retrying the uncheckpointed update"
+                            )
+                            try await Task.sleep(for: configuration.retryDelay)
+                            continue
+                        }
                     }
                 }
             }

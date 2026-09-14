@@ -1,5 +1,5 @@
 {
-  "originHash" : "c71f3218d72c4e72f1179d5082203fa4e01c4ac97e694e1444bf0d6a03bfaa3d",
+  "originHash" : "189fe135a679900eb83ca19afa351a4e6b8390529b5b740e75320fc9bb63dc15",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -377,6 +377,15 @@
       "state" : {
         "revision" : "c21fdcde390313a6d98d8e33a346f2c3486c3ab0",
         "version" : "1.3.4"
+      }
+    },
+    {
+      "identity" : "wasmkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftwasm/WasmKit.git",
+      "state" : {
+        "revision" : "ee36070acc31878ef727b90d5bdc4c9cc1fff22e",
+        "version" : "0.3.1"
       }
     },
     {

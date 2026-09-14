@@ -290,12 +290,40 @@ actor TelegramService: Service {
         delivery: TelegramDeliveryConfiguration = TelegramDeliveryConfiguration(),
         persistedConversationIDs: [ConversationID] = []
     ) throws {
-        self.telegramIntegration = try TelegramIntegration.live(
-            token: token,
+        let client = try TelegramAPIClient.live(token: token)
+        self.init(
+            client: client,
             allowedChatIDs: allowedChatIDs,
             offsetFileURL: offsetFileURL,
+            connections: connections,
+            attachmentResolver: attachmentResolver,
             logger: logger,
-            delivery: delivery
+            delivery: delivery,
+            persistedConversationIDs: persistedConversationIDs
+        )
+    }
+
+    init(
+        client: TelegramAPIClient,
+        allowedChatIDs: Set<Int64>,
+        offsetFileURL: URL,
+        connections: NorbyConnections,
+        attachmentResolver: AttachmentResolver,
+        logger: Logger,
+        delivery: TelegramDeliveryConfiguration = TelegramDeliveryConfiguration(),
+        persistedConversationIDs: [ConversationID] = [],
+        callbackHandler: @escaping TelegramBot.CallbackHandler = { _ in false }
+    ) {
+        self.telegramIntegration = TelegramIntegration(
+            bot: TelegramBot(
+                client: client,
+                allowedChatIDs: allowedChatIDs,
+                offsetStore: FileTelegramOffsetStore(fileURL: offsetFileURL),
+                configuration: TelegramBotConfiguration(delivery: delivery),
+                logger: logger,
+                callbackHandler: callbackHandler
+            ),
+            client: client
         )
         self.connections = connections
         self.attachmentResolver = attachmentResolver
@@ -693,13 +721,34 @@ struct TelegramIntegration: Sendable {
         delivery: TelegramDeliveryConfiguration
     ) throws -> TelegramIntegration {
         let client = try TelegramAPIClient.live(token: token)
+        return TelegramIntegration(
+            bot: TelegramBot(
+                client: client,
+                allowedChatIDs: allowedChatIDs,
+                offsetStore: FileTelegramOffsetStore(fileURL: offsetFileURL),
+                configuration: TelegramBotConfiguration(delivery: delivery),
+                logger: logger
+            ),
+            client: client
+        )
+    }
+
+    static func live(
+        client: TelegramAPIClient,
+        allowedChatIDs: Set<Int64>,
+        offsetFileURL: URL,
+        logger: Logger,
+        delivery: TelegramDeliveryConfiguration,
+        callbackHandler: @escaping TelegramBot.CallbackHandler = { _ in false }
+    ) -> TelegramIntegration {
         let offsetStore = FileTelegramOffsetStore(fileURL: offsetFileURL)
         let bot = TelegramBot(
             client: client,
             allowedChatIDs: allowedChatIDs,
             offsetStore: offsetStore,
             configuration: TelegramBotConfiguration(delivery: delivery),
-            logger: logger
+            logger: logger,
+            callbackHandler: callbackHandler
         )
         return TelegramIntegration(
             bot: bot,

@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "NorbyApplication", targets: ["NorbyApplication"]),
         .library(name: "NorbyTelegram", targets: ["NorbyTelegram"]),
         .executable(name: "Norby", targets: ["Norby"]),
+        .executable(name: "NorbyWasmRunner", targets: ["NorbyWasmRunner"]),
     ],
     dependencies: [
         .package(path: "../hail"),
@@ -52,6 +53,10 @@ let package = Package(
         .package(
             url: "https://github.com/apple/swift-log.git",
             from: "1.6.0"
+        ),
+        .package(
+            url: "https://github.com/swiftwasm/WasmKit.git",
+            from: "0.3.1"
         ),
     ],
     targets: [
@@ -111,6 +116,13 @@ let package = Package(
                 .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Logging", package: "swift-log"),
+            ]
+        ),
+        .executableTarget(
+            name: "NorbyWasmRunner",
+            dependencies: [
+                .product(name: "WasmKit", package: "WasmKit"),
+                .product(name: "WasmKitWASI", package: "WasmKit"),
             ]
         ),
         .testTarget(
