@@ -49,6 +49,17 @@ struct Norby: AsyncParsableCommand {
 
     func run() async throws {
         let environment = ProcessInfo.processInfo.environment
+        let workspaceRoot = workspace ?? FileManager.default.currentDirectoryPath
+        let norbyDirectory = URL(fileURLWithPath: workspaceRoot)
+            .appendingPathComponent(".norby", isDirectory: true)
+        let auth = try NorbyAuth(
+            directory: norbyDirectory.appendingPathComponent("auth", isDirectory: true)
+        )
+        if !(await auth.hasAdmin()) {
+            print("Norby first-run setup token: \(await auth.setupToken)")
+            print("Use it to create the first administrator in the dashboard.")
+        }
+
         guard
             let telegramBotToken = firstNonEmpty(
                 telegramBotToken,
@@ -66,9 +77,6 @@ struct Norby: AsyncParsableCommand {
         let telegramClient = try TelegramAPIClient.live(token: telegramBotToken)
         let telegramApproval = TelegramToolApproval(client: telegramClient)
 
-        let workspaceRoot = workspace ?? FileManager.default.currentDirectoryPath
-        let norbyDirectory = URL(fileURLWithPath: workspaceRoot)
-            .appendingPathComponent(".norby", isDirectory: true)
         let userToolsDirectory =
             norbyDirectory
             .appendingPathComponent("tools", isDirectory: true)

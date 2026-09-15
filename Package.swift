@@ -51,6 +51,10 @@ let package = Package(
             from: "2.12.0"
         ),
         .package(
+            url: "https://github.com/hummingbird-project/hummingbird-auth.git",
+            from: "2.0.0"
+        ),
+        .package(
             url: "https://github.com/apple/swift-log.git",
             from: "1.6.0"
         ),
@@ -88,6 +92,7 @@ let package = Package(
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
+                .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
             ]
         ),
         .target(
