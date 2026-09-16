@@ -594,7 +594,7 @@ extension WeatherEffect.Horizon {
 @Tool(
     "weather",
     description:
-        "Get live weather for a place from Open-Meteo. Commands: weather_current (conditions now), weather_hourly (rest of today as an hourly table), weather_daily (multi-day outlook). Every report's localNow field is the authoritative current date and time at the location — trust it as a time anchor over your own sense of time. Pass a city, place name, or postal code, and use region or country when the name is ambiguous. If the user has not provided a location, ask for it before calling this tool."
+        "Get live weather for a place from Open-Meteo. Commands: weather_current (conditions now), weather_hourly (rest of today as an hourly table), weather_daily (multi-day outlook). Every report's localNow field is the authoritative current date and time at the location — trust it as a time anchor over your own sense of time. Pass a city, place name, or postal code, and use region or country when the name is ambiguous. Never infer a place from Norby's fixed operating timezone, server locale, IP address, language, or current date/time. If the user has not provided or explicitly saved a location, ask for it before calling this tool."
 )
 public struct WeatherTools: Sendable {
     public init() {}

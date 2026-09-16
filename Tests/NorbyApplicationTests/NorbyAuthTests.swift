@@ -4,23 +4,29 @@ import Testing
 
 @Suite("Norby authentication")
 struct NorbyAuthTests {
-    @Test("first administrator uses the printed token and survives restart")
+    @Test("first administrator uses a browser challenge and survives restart")
     func bootstrapAndPersistence() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let auth = try NorbyAuth(directory: directory)
-        let token = await auth.setupToken
+        let challenge = await auth.issueBootstrapChallenge()
         let account = try await auth.bootstrap(
             username: "admin",
             password: "correct horse battery staple",
-            token: token
+            challenge: challenge,
+            confirmation: challenge
         )
 
         #expect(account.isAdmin)
         #expect(await auth.hasAdmin())
         await #expect(throws: NorbyAuthError.setupAlreadyCompleted) {
-            try await auth.bootstrap(username: "second", password: "correct horse battery staple", token: token)
+            try await auth.bootstrap(
+                username: "second",
+                password: "correct horse battery staple",
+                challenge: challenge,
+                confirmation: challenge
+            )
         }
 
         let restarted = try NorbyAuth(directory: directory)
@@ -30,6 +36,43 @@ struct NorbyAuthTests {
         )
         let authenticatedAdmin = try await restarted.authenticate(session.token)
         #expect(authenticatedAdmin == "admin")
+    }
+
+    @Test("bootstrap challenges expire and are consumed")
+    func bootstrapChallengeLifetime() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let auth = try NorbyAuth(directory: directory)
+        let issuedAt = Date(timeIntervalSince1970: 1_000)
+        let expiredChallenge = await auth.issueBootstrapChallenge(now: issuedAt)
+        await #expect(throws: NorbyAuthError.invalidSetupChallenge) {
+            try await auth.bootstrap(
+                username: "admin",
+                password: "correct horse battery staple",
+                challenge: expiredChallenge,
+                confirmation: expiredChallenge,
+                now: issuedAt.addingTimeInterval(NorbyAuth.bootstrapChallengeLifetime + 1)
+            )
+        }
+
+        let challenge = await auth.issueBootstrapChallenge()
+        await #expect(throws: NorbyAuthError.invalidUsername) {
+            try await auth.bootstrap(
+                username: "x",
+                password: "correct horse battery staple",
+                challenge: challenge,
+                confirmation: challenge
+            )
+        }
+        await #expect(throws: NorbyAuthError.invalidSetupChallenge) {
+            try await auth.bootstrap(
+                username: "admin",
+                password: "correct horse battery staple",
+                challenge: challenge,
+                confirmation: challenge
+            )
+        }
     }
 
     @Test("member registration is pending until approval")
@@ -56,23 +99,27 @@ struct NorbyAuthTests {
         #expect(authenticatedMember == "member")
     }
 
-    @Test("bad credentials and invalid setup tokens are rejected")
+    @Test("bad credentials and invalid setup challenges are rejected")
     func rejectsInvalidCredentials() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let auth = try NorbyAuth(directory: directory)
-        await #expect(throws: NorbyAuthError.invalidSetupToken) {
+        let invalidChallenge = await auth.issueBootstrapChallenge()
+        await #expect(throws: NorbyAuthError.invalidSetupChallenge) {
             try await auth.bootstrap(
                 username: "admin",
                 password: "correct horse battery staple",
-                token: "wrong-token"
+                challenge: invalidChallenge,
+                confirmation: "wrong-challenge"
             )
         }
+        let challenge = await auth.issueBootstrapChallenge()
         _ = try await auth.bootstrap(
             username: "admin",
             password: "correct horse battery staple",
-            token: await auth.setupToken
+            challenge: challenge,
+            confirmation: challenge
         )
         await #expect(throws: NorbyAuthError.invalidCredentials) {
             try await auth.signIn(username: "admin", password: "not the password")

@@ -16,7 +16,8 @@ import NorbyMemory
 /// candidate whose supportingText does not match a user message verbatim is
 /// rejected there, not here.
 @Generable(
-    description: "Durable memory extraction for a personal-assistant conversation.\n\nExtract durable memories about the user into memories: facts worth remembering across conversations, such as preferences, personal details, and ongoing plans. Only extract what the conversation actually supports; do not invent facts. supportingText must be a short verbatim quote from the user's own message; facts without a matching verbatim quote are rejected, so never paraphrase. Small talk and one-off questions need no memory; leave memories empty rather than filling it."
+    description:
+        "Durable memory extraction for a personal-assistant conversation.\n\nExtract durable memories about the user into memories: facts worth remembering across conversations, such as preferences, personal details, and ongoing plans. Only extract what the conversation actually supports; do not invent facts. supportingText must be a short verbatim quote from the user's own message; facts without a matching verbatim quote are rejected, so never paraphrase. Small talk and one-off questions need no memory; leave memories empty rather than filling it."
 )
 public struct MemoryExtractionReport: Codable, Sendable {
     @Generable
@@ -36,7 +37,8 @@ public struct MemoryExtractionReport: Codable, Sendable {
         @Guide(description: "How likely the fact is to change: transient, situational, mutable, or stable")
         public let stability: String
         @Guide(
-            description: "A short verbatim quote copied from the user's own message. Facts without a verbatim quote that matches the conversation are rejected, so never paraphrase."
+            description:
+                "A short verbatim quote copied from the user's own message. Facts without a verbatim quote that matches the conversation are rejected, so never paraphrase."
         )
         public let supportingText: String
     }

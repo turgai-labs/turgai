@@ -177,20 +177,20 @@ public actor NorbyConnections: Service {
     }
 
     private let actorSystem: ClusterSystem
-    private let ollamaBaseURL: URL?
-    private let memoryModel: String?
+    private let memoryExtraction: OllamaMemoryConfiguration?
+    private let agentProfiles: NorbyAgentProfileStore?
     private let connectionStream: AsyncStream<Connection>
     private let connectionContinuation: AsyncStream<Connection>.Continuation
     private let outboundConnections = OutboundConnections()
 
     public init(
         actorSystem: ClusterSystem,
-        ollamaBaseURL: URL? = nil,
-        memoryModel: String? = nil
+        memoryExtraction: OllamaMemoryConfiguration? = nil,
+        agentProfiles: NorbyAgentProfileStore? = nil
     ) {
         self.actorSystem = actorSystem
-        self.ollamaBaseURL = ollamaBaseURL
-        self.memoryModel = memoryModel
+        self.memoryExtraction = memoryExtraction
+        self.agentProfiles = agentProfiles
         (self.connectionStream, self.connectionContinuation) =
             AsyncStream<Connection>.makeStream()
     }
@@ -207,8 +207,8 @@ public actor NorbyConnections: Service {
             id: id,
             actorSystem: actorSystem,
             inbound: inbound,
-            ollamaBaseURL: ollamaBaseURL,
-            memoryModel: memoryModel
+            memoryExtraction: memoryExtraction,
+            agentProfiles: agentProfiles
         )
         connectionContinuation.yield(.live(session))
         return session.output
@@ -276,8 +276,8 @@ actor LiveSession {
 
     private let actorSystem: ClusterSystem
     private let inbound: AsyncChannel<ConversationInputDelivery>
-    private let ollamaBaseURL: URL?
-    private let memoryModel: String?
+    private let memoryExtraction: OllamaMemoryConfiguration?
+    private let agentProfiles: NorbyAgentProfileStore?
     private let conversationConnection: ConversationConnection
     private let deliveryRegistry: OutboundDeliveryRegistry
     private var conversations: [ConversationID: Conversation] = [:]
@@ -287,14 +287,14 @@ actor LiveSession {
         id: String,
         actorSystem: ClusterSystem,
         inbound: AsyncChannel<ConversationInputDelivery>,
-        ollamaBaseURL: URL? = nil,
-        memoryModel: String? = nil
+        memoryExtraction: OllamaMemoryConfiguration? = nil,
+        agentProfiles: NorbyAgentProfileStore? = nil
     ) {
         self.id = id
         self.actorSystem = actorSystem
         self.inbound = inbound
-        self.ollamaBaseURL = ollamaBaseURL
-        self.memoryModel = memoryModel
+        self.memoryExtraction = memoryExtraction
+        self.agentProfiles = agentProfiles
         self.output = OutputStream()
         self.deliveryRegistry = OutboundDeliveryRegistry()
         let output = self.output
@@ -347,12 +347,7 @@ actor LiveSession {
         switch input {
         case .connect(let conversationID):
             do {
-                let conversation = try await Conversation.resolve(
-                    on: actorSystem,
-                    conversationID: conversationID,
-                    ollamaBaseURL: ollamaBaseURL,
-                    memoryModel: memoryModel
-                )
+                let conversation = try await resolveConversation(conversationID)
                 try await attach(
                     to: conversation,
                     conversationID: conversationID
@@ -377,12 +372,7 @@ actor LiveSession {
                 )
                 try await user.link(participantID: message.participantID)
 
-                let conversation = try await Conversation.resolve(
-                    on: actorSystem,
-                    conversationID: message.conversationID,
-                    ollamaBaseURL: ollamaBaseURL,
-                    memoryModel: memoryModel
-                )
+                let conversation = try await resolveConversation(message.conversationID)
                 try await attach(
                     to: conversation,
                     conversationID: message.conversationID
@@ -407,12 +397,7 @@ actor LiveSession {
 
         case .reset(let conversationID):
             do {
-                let conversation = try await Conversation.resolve(
-                    on: actorSystem,
-                    conversationID: conversationID,
-                    ollamaBaseURL: ollamaBaseURL,
-                    memoryModel: memoryModel
-                )
+                let conversation = try await resolveConversation(conversationID)
                 try await attach(
                     to: conversation,
                     conversationID: conversationID
@@ -522,12 +507,7 @@ actor LiveSession {
             let user = try await User.resolve(on: actorSystem, userID: userID)
             try await user.link(participantID: participantID)
 
-            let conversation = try await Conversation.resolve(
-                on: actorSystem,
-                conversationID: conversationID,
-                ollamaBaseURL: ollamaBaseURL,
-                memoryModel: memoryModel
-            )
+            let conversation = try await resolveConversation(conversationID)
             try await attach(
                 to: conversation,
                 conversationID: conversationID
@@ -572,6 +552,16 @@ actor LiveSession {
 
     private func publish(_ event: OutboundEvent) async {
         try? await conversationConnection.broadcast(event)
+    }
+
+    private func resolveConversation(_ conversationID: ConversationID) async throws -> Conversation {
+        let agentRole = await agentProfiles?.profileID(for: conversationID) ?? "conversation"
+        return try await Conversation.resolve(
+            on: actorSystem,
+            conversationID: conversationID,
+            agentRole: agentRole,
+            memoryExtraction: memoryExtraction
+        )
     }
 
     private func attach(

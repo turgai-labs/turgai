@@ -366,6 +366,28 @@ struct UserToolRegistryTests {
         try FileManager.default.removeItem(at: file)
         #expect(registry.load().isEmpty)
     }
+
+    @Test("the dashboard document API validates, saves, reads, and deletes")
+    func documentLifecycle() throws {
+        let directory = try makeTemporaryDirectory()
+        let registry = UserToolRegistry(directory: directory)
+        let contents = """
+            {
+              "name": "echo",
+              "description": "Echoes a value.",
+              "body": {"kind": "process", "argv": ["/bin/echo", "hello"]}
+            }
+            """
+
+        try registry.save(named: "echo.json", contents: contents)
+        let document = try #require(registry.document(named: "echo.json"))
+        #expect(document.isValid)
+        #expect(document.contents == contents)
+        #expect(document.tool?.name == "echo")
+
+        try registry.delete(named: "echo.json")
+        #expect(registry.documents().isEmpty)
+    }
 }
 
 private func makeTemporaryDirectory() throws -> URL {

@@ -38,7 +38,7 @@ public struct NorbySession: Codable, Equatable, Sendable {
 }
 
 public enum NorbyAuthError: Error, Equatable, Sendable {
-    case invalidSetupToken
+    case invalidSetupChallenge
     case setupAlreadyCompleted
     case invalidUsername
     case weakPassword
@@ -51,10 +51,11 @@ public enum NorbyAuthError: Error, Equatable, Sendable {
 }
 
 /// Local authentication state. Account data and the JWT signing secret live
-/// under `.norby/auth`; the bootstrap token intentionally lives only for the
-/// current process, matching Stagehand's first-admin flow.
+/// under `.norby/auth`. The first administrator is claimed through a short-lived
+/// browser challenge rather than a terminal-visible secret.
 public actor NorbyAuth {
     public static let sessionLifetime: TimeInterval = 86_400
+    public static let bootstrapChallengeLifetime: TimeInterval = 600
 
     private struct State: Codable, Sendable {
         var accounts: [String: StoredAccount] = [:]
@@ -78,11 +79,11 @@ public actor NorbyAuth {
         let expiresAt: Int
     }
 
-    public let setupToken: String
-
     private let stateURL: URL
     private let secret: SymmetricKey
     private var state: State
+    private var bootstrapChallenges: [String: Date] = [:]
+    private var bootstrapInProgress = false
 
     public init(directory: URL) throws {
         try FileManager.default.createDirectory(
@@ -111,22 +112,57 @@ public actor NorbyAuth {
             )
         }
         self.secret = SymmetricKey(data: secretData)
-        self.setupToken = Self.makeToken()
     }
 
     public func hasAdmin() -> Bool {
         state.accounts.values.contains { $0.isAdmin && $0.status == .approved }
     }
 
+    public func isAdmin(_ username: String) -> Bool {
+        guard let account = state.accounts[username] else { return false }
+        return account.isAdmin && account.status == .approved
+    }
+
     public func accounts() -> [NorbyAccount] {
         state.accounts.values.map(\.publicValue).sorted { $0.username < $1.username }
     }
 
-    /// Creates the first administrator. The setup token is never persisted.
+    /// Issues a short-lived, in-memory challenge for the browser that opened
+    /// the first-administrator form. The form must submit this value together
+    /// with the matching HttpOnly cookie.
+    public func issueBootstrapChallenge(now: Date = Date()) -> String {
+        bootstrapChallenges = bootstrapChallenges.filter { $0.value > now }
+        if bootstrapChallenges.count >= 32,
+            let oldest = bootstrapChallenges.min(by: { $0.value < $1.value })?.key
+        {
+            bootstrapChallenges.removeValue(forKey: oldest)
+        }
+        let challenge = Self.makeChallenge()
+        bootstrapChallenges[challenge] = now.addingTimeInterval(Self.bootstrapChallengeLifetime)
+        return challenge
+    }
+
+    /// Creates the first administrator. The challenge is consumed before the
+    /// password hash awaits, so two concurrent browser submissions cannot both
+    /// claim the installation.
     @discardableResult
-    public func bootstrap(username: String, password: String, token: String) async throws -> NorbyAccount {
+    public func bootstrap(
+        username: String,
+        password: String,
+        challenge: String,
+        confirmation: String,
+        now: Date = Date()
+    ) async throws -> NorbyAccount {
         guard !hasAdmin() else { throw NorbyAuthError.setupAlreadyCompleted }
-        guard constantTimeEquals(setupToken, token) else { throw NorbyAuthError.invalidSetupToken }
+        guard !bootstrapInProgress else { throw NorbyAuthError.invalidSetupChallenge }
+        guard constantTimeEquals(challenge, confirmation),
+            let expiration = bootstrapChallenges.removeValue(forKey: challenge),
+            expiration > now
+        else {
+            throw NorbyAuthError.invalidSetupChallenge
+        }
+        bootstrapInProgress = true
+        defer { bootstrapInProgress = false }
         return try await createAccount(username: username, password: password, isAdmin: true)
     }
 
@@ -235,7 +271,7 @@ public actor NorbyAuth {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
     }
 
-    private static func makeToken() -> String {
+    private static func makeChallenge() -> String {
         base64URL(Data((0..<24).map { _ in UInt8.random(in: .min ... .max) }))
     }
 

@@ -380,23 +380,18 @@ public distributed actor Conversation {
         public let conversationID: ConversationID
         public let agentDirectoryID: AgentDirectoryID
         public let agentRole: String
-        /// Ollama base URL for the background memory-extraction endpoint.
-        /// Nil disables background extraction.
-        public let ollamaBaseURL: URL?
-        /// The model used for background memory extraction.
-        public let memoryModel: String?
+        /// Optional background memory extractor configuration.
+        public let memoryExtraction: OllamaMemoryConfiguration?
 
         public init(
             conversationID: ConversationID,
             agentDirectoryID: AgentDirectoryID = "agent-directory",
             agentRole: String = "conversation",
-            ollamaBaseURL: URL? = nil,
-            memoryModel: String? = nil
+            memoryExtraction: OllamaMemoryConfiguration? = nil
         ) {
             self.conversationID = conversationID
             self.agentDirectoryID = agentDirectoryID
-            self.ollamaBaseURL = ollamaBaseURL
-            self.memoryModel = memoryModel
+            self.memoryExtraction = memoryExtraction
             self.agentRole = agentRole
         }
     }
@@ -430,10 +425,10 @@ public distributed actor Conversation {
             agentRole: dependency.agentRole
         )
         self.peer = try await adapter.peer(for: dependency.conversationID)
-        if let baseURL = dependency.ollamaBaseURL, let model = dependency.memoryModel {
+        if let memoryExtraction = dependency.memoryExtraction {
             self.memoryExtractionEndpoint = OllamaEndpoint(
-                model: model,
-                baseURL: baseURL,
+                model: memoryExtraction.model.rawValue,
+                baseURL: memoryExtraction.baseURL,
                 temperature: 0.2,
                 numContext: 4096,
                 think: false
@@ -461,8 +456,7 @@ public distributed actor Conversation {
         conversationID: ConversationID,
         agentDirectoryID: AgentDirectoryID = "agent-directory",
         agentRole: String = "conversation",
-        ollamaBaseURL: URL? = nil,
-        memoryModel: String? = nil
+        memoryExtraction: OllamaMemoryConfiguration? = nil
     ) async throws -> Conversation {
         try await actorSystem.virtualActors.getActor(
             identifiedBy: actorID(for: conversationID),
@@ -470,8 +464,7 @@ public distributed actor Conversation {
                 conversationID: conversationID,
                 agentDirectoryID: agentDirectoryID,
                 agentRole: agentRole,
-                ollamaBaseURL: ollamaBaseURL,
-                memoryModel: memoryModel
+                memoryExtraction: memoryExtraction
             )
         )
     }
@@ -585,7 +578,6 @@ public distributed actor Conversation {
         )
     }
 
-    
     /// The diagnostics task given to the agent. Deliberately generic: it
     /// names no tools, so coverage follows the live tool set instead of a
     /// hardcoded list that could drift. With no memory tool registered,
@@ -1132,9 +1124,12 @@ public distributed actor Conversation {
     /// One stable time anchor per turn. The prompt carries no message
     /// timestamps, so without this anchor a long-idle conversation drifts to
     /// whatever time the most recent tool output happened to mention.
+    ///
+    /// The default is deliberately fixed so the host's timezone cannot alter
+    /// the assistant's operating timezone.
     static func timeAnchor(
         at date: Date = Date(),
-        timeZone: TimeZone = .current
+        timeZone: TimeZone = TimeZone(identifier: "Europe/Berlin")!
     ) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone

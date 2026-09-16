@@ -331,7 +331,9 @@ public struct ScheduleTools: Sendable {
         self.context = context
     }
 
-    private func deferredAction(kind: ScheduleToolsAction, message: String?, instruction: String?) throws -> DeferredAction {
+    private func deferredAction(kind: ScheduleToolsAction, message: String?, instruction: String?) throws
+        -> DeferredAction
+    {
         let domainKind: DeferredAction.Kind =
             switch kind {
             case .deliverPreparedMessage: .deliverPreparedMessage

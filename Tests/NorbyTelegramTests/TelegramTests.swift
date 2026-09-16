@@ -240,6 +240,43 @@ struct TelegramTests {
     }
 
     @Test
+    func updateIteratorDoesNotRetryAuthenticationFailures() async throws {
+        let recorder = TelegramCallRecorder(responses: [])
+        await recorder.failGetUpdates(with: .httpStatus(401))
+        let client = makeClient(recorder: recorder)
+        var iterator = client.updates(
+            startingAt: nil,
+            timeout: 1,
+            retryDelay: .milliseconds(1),
+            logger: Logger(label: "test")
+        ).makeAsyncIterator()
+
+        await #expect(throws: TelegramAPIError.httpStatus(401)) {
+            _ = try await iterator.next()
+        }
+
+        #expect(await recorder.requestedOffsets == [nil])
+    }
+
+    @Test
+    func botStopsWhenTelegramRejectsItsToken() async throws {
+        let recorder = TelegramCallRecorder(responses: [])
+        await recorder.failGetUpdates(with: .httpStatus(401))
+        let bot = TelegramBot(
+            client: makeClient(recorder: recorder),
+            offsetStore: InMemoryTelegramOffsetStore(),
+            configuration: TelegramBotConfiguration(
+                timeout: 1,
+                retryDelay: .milliseconds(1)
+            )
+        )
+
+        try await bot.run()
+
+        #expect(await recorder.requestedOffsets == [nil])
+    }
+
+    @Test
     func mapperSkipsMessagesWithoutTextOrSender() {
         let update = TelegramUpdate(
             updateID: 1,
@@ -601,6 +638,7 @@ private func eventually(
 
 private actor TelegramCallRecorder {
     private var responses: [[TelegramUpdate]]
+    private var getUpdatesError: TelegramAPIError?
     private var draftsSupported = true
     private var rateLimitedDrafts = 0
     private(set) var draftAttempts = 0
@@ -622,6 +660,10 @@ private actor TelegramCallRecorder {
         self.responses = responses
     }
 
+    func failGetUpdates(with error: TelegramAPIError) {
+        getUpdatesError = error
+    }
+
     func setDraftsSupported(_ supported: Bool) {
         draftsSupported = supported
     }
@@ -632,6 +674,9 @@ private actor TelegramCallRecorder {
 
     func getUpdates(offset: Int64?, timeout: Int) async throws -> [TelegramUpdate] {
         requestedOffsets.append(offset)
+        if let getUpdatesError {
+            throw getUpdatesError
+        }
         if !responses.isEmpty {
             return responses.removeFirst()
         }

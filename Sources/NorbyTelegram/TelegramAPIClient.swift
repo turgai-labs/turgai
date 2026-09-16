@@ -22,6 +22,19 @@ public enum TelegramAPIError: Error, Equatable, Sendable {
     case missingFilePath
 }
 
+extension TelegramAPIError {
+    var isAuthenticationFailure: Bool {
+        switch self {
+        case .httpStatus(401):
+            true
+        case .api(let code, _):
+            code == 401
+        default:
+            false
+        }
+    }
+}
+
 public enum TelegramReaction: String, Equatable, Sendable {
     case seen = "👀"
     case thinking = "🤔"
@@ -86,6 +99,7 @@ public struct TelegramFileData: Sendable {
 }
 
 private enum TelegramAPIMethod: String, Sendable {
+    case getMe
     case getUpdates
     case getFile
     case sendChatAction
@@ -125,6 +139,9 @@ public struct TelegramAPIClient: Sendable {
 
     public init(
         getUpdates: @escaping @Sendable (_ offset: Int64?, _ timeout: Int) async throws -> [TelegramUpdate],
+        getMe: @escaping @Sendable () async throws -> TelegramUser = {
+            throw TelegramAPIError.invalidResponse
+        },
         downloadFile: @escaping @Sendable (_ fileID: String) async throws -> TelegramFileData,
         sendChatAction: @escaping @Sendable (_ chatID: Int64, _ action: String) async throws -> Void,
         setMessageReaction:
@@ -152,6 +169,7 @@ public struct TelegramAPIClient: Sendable {
             async throws -> Void
     ) {
         self.getUpdates = getUpdates
+        self.getMe = getMe
         self.downloadFile = downloadFile
         self.sendChatAction = sendChatAction
         self.setMessageReaction = setMessageReaction
@@ -163,6 +181,13 @@ public struct TelegramAPIClient: Sendable {
                 try await sendMessage(chatID, text, parseMode, replyParameters)
             }
         self.editMessageText = editMessageText
+    }
+
+    private var getMe: @Sendable () async throws -> TelegramUser
+
+    /// Verifies that the configured token is accepted by Telegram.
+    public func validateToken() async throws {
+        _ = try await getMe()
     }
 }
 
@@ -249,6 +274,8 @@ public struct TelegramUpdateStream: AsyncSequence, Sendable {
                 return try await getUpdates(offset, timeout)
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let error as TelegramAPIError where error.isAuthenticationFailure {
+                throw error
             } catch {
                 logger.warning("Telegram polling failed: \(error)")
                 do {
@@ -393,6 +420,14 @@ extension TelegramAPIClient {
                     body: GetUpdatesRequest(offset: offset, timeout: timeout),
                     result: [TelegramUpdate].self,
                     timeout: pollRequestTimeout(forPollSeconds: timeout)
+                )
+            },
+            getMe: {
+                try await call(
+                    method: .getMe,
+                    body: EmptyTelegramRequest(),
+                    result: TelegramUser.self,
+                    timeout: .seconds(Int64(requestTimeout.rounded(.up)))
                 )
             },
             downloadFile: { fileID in
@@ -549,6 +584,8 @@ private struct TelegramAPIErrorParameters: Decodable, Sendable {
         case retryAfter = "retry_after"
     }
 }
+
+private struct EmptyTelegramRequest: Encodable, Sendable {}
 
 private struct GetUpdatesRequest: Encodable, Sendable {
     let offset: Int64?

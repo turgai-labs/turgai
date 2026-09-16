@@ -1,8 +1,8 @@
 # Norby
 
 Norby is a personal AI companion built in Swift. It currently uses Telegram as
-its primary interface and combines a durable Hail agent runtime, local Ollama
-models, personal memory, and a small set of host-owned tools.
+its primary interface and combines a durable Hail agent runtime, provider-aware
+model routing, personal memory, and a small set of host-owned tools.
 
 The project is intentionally being built as an application rather than as a
 general-purpose agent framework. Its design follows functional core,
@@ -16,7 +16,8 @@ typeclass-like contract.
 - Durable, recoverable conversations backed by file journals and snapshots.
 - Telegram polling, replies, reactions, attachments, HTML formatting, and
   folded partial responses.
-- Local Ollama model routing through [Hail](../hail).
+- Provider-aware model routing through [Hail](../hail): Apple Foundation
+  Models on supported macOS, local Ollama, and OpenAI-compatible API models.
 - Automatic semantic memory with provenance, retrieval, revisions, and
   background extraction.
 - Web search, URL fetching, attachment fetching, and Open-Meteo weather.
@@ -33,43 +34,32 @@ evolving.
 - Swift 6.4.
 - A checkout of [Hail](../hail) next to this repository; `Package.swift` uses
   that local package dependency.
-- An Ollama installation with a model available locally.
-- A Telegram bot token from BotFather.
+- A model provider: Ollama, Apple Foundation Models, or an OpenAI API account.
+- A Telegram bot token from BotFather when Telegram is enabled.
 
-The default model is `ollama/qwen3.5:9b` and the default Ollama endpoint is
-`http://127.0.0.1:11434`.
+The onboarding dashboard chooses the first bot's model. For Ollama, leaving
+the server URL unchanged uses `http://127.0.0.1:11434`; the concrete URL is
+stored with each bot.
 
 ## Run
 
-Start Ollama, then run Norby from the repository root:
+Start Ollama, then run Norby from the repository root. On first launch the
+process serves the local Turgai dashboard and waits for onboarding to finish:
 
 ```sh
 ollama serve
-swift run Norby --telegram-bot-token "$NORBY_TELEGRAM_BOT_TOKEN"
-```
-
-The token can also be supplied through `NORBY_TELEGRAM_BOT_TOKEN`:
-
-```sh
-export NORBY_TELEGRAM_BOT_TOKEN="..."
 swift run Norby
 ```
 
-Useful configuration options are available both as command-line options and,
-where noted, environment variables:
+The dashboard stores the Telegram token and persistence settings locally. It
+offers the default file store (with an editable `file://` directory) or
+PostgreSQL for both journals and snapshots. PostgreSQL credentials are kept in
+separate local secret files.
 
-| Option | Environment variable | Default |
-| --- | --- | --- |
-| `--telegram-bot-token` | `NORBY_TELEGRAM_BOT_TOKEN` | required |
-| `--telegram-chat-ids` | `NORBY_TELEGRAM_CHAT_IDS` | all chats |
-| `--model` | `NORBY_MODEL` | `ollama/qwen3.5:9b` |
-| `--ollama-base-url` | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` |
-| `--context-window` | `NORBY_CONTEXT_WINDOW` | `16384` |
-| `--workspace` | — | current directory |
-
-`NORBY_TELEGRAM_CHAT_IDS` is a comma-separated allow-list. If it is empty or
-unset, the bot accepts messages from every chat. Runtime journals, snapshots,
-and the Telegram polling checkpoint are stored below `<workspace>/.norby/`.
+The Telegram chat allow-list, model, persona, and context window are configured
+in the dashboard. If the allow-list is empty, the bot accepts messages from
+every chat. The dashboard's default file store and the Telegram polling
+checkpoint live below `.norby/` unless you choose another file-store URL.
 That directory is local runtime data and is intentionally ignored by Git.
 
 ## Test
@@ -91,7 +81,7 @@ The tests do not require a live Telegram bot or Ollama server.
 | `NorbyHail` | Hail adapters, runtime configuration, and host tools |
 | `NorbyApplication` | Durable conversations, reply scopes, and memory orchestration |
 | `NorbyTelegram` | Telegram transport, mapping, formatting, and publishing |
-| `NorbyPersistence` | File-backed journals and snapshots |
+| `NorbyPersistence` | File- or PostgreSQL-backed journals and snapshots |
 | `Norby` | Composition, live connections, and delivery coordination |
 
 Hail owns durable agent communication, model turns, tool execution, and

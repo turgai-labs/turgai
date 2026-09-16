@@ -55,6 +55,21 @@ let package = Package(
             from: "2.0.0"
         ),
         .package(
+            url: "https://github.com/akbashev/postgres-event-store.git",
+            branch: "main"
+        ),
+        .package(
+            url: "https://github.com/vapor/postgres-nio.git",
+            from: "1.27.0"
+        ),
+        .package(
+            url: "https://github.com/apple/swift-nio-ssl.git",
+            from: "2.25.0"
+        ),
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.16.0"),
+        .package(url: "https://github.com/elementary-swift/elementary.git", from: "0.7.0"),
+        .package(url: "https://github.com/hummingbird-community/hummingbird-elementary.git", from: "0.4.2"),
+        .package(
             url: "https://github.com/apple/swift-log.git",
             from: "1.6.0"
         ),
@@ -65,6 +80,22 @@ let package = Package(
     ],
     targets: [
         .target(name: "NorbyDomain"),
+        .target(
+            name: "TurgaiWeb",
+            dependencies: [
+                "NorbyApplication",
+                "NorbyHail",
+                "NorbyPersistence",
+                "NorbyTelegram",
+                .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "Elementary", package: "elementary"),
+                .product(name: "HummingbirdElementary", package: "hummingbird-elementary"),
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+            ],
+            resources: [
+                .copy("Resources/Public")
+            ]
+        ),
         .target(
             name: "NorbyMemory",
             dependencies: []
@@ -111,6 +142,7 @@ let package = Package(
                 "NorbyApplication",
                 "NorbyHail",
                 "NorbyTelegram",
+                "TurgaiWeb",
                 "NorbyPersistence",
                 .product(name: "Hail", package: "hail"),
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
@@ -144,7 +176,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NorbyApplicationTests",
-            dependencies: ["NorbyDomain", "NorbyHail", "NorbyApplication"]
+            dependencies: ["NorbyDomain", "NorbyHail", "NorbyApplication", "TurgaiWeb"]
         ),
         .testTarget(
             name: "NorbyTelegramTests",
@@ -159,6 +191,9 @@ let package = Package(
             dependencies: [
                 "NorbyDomain",
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "PostgresEventStore", package: "postgres-event-store"),
+                .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ]
         ),
         .testTarget(

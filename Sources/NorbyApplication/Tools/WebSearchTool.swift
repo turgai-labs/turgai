@@ -125,8 +125,8 @@ public enum WebSearchBackend: Sendable, Hashable {
         components.path =
             "/"
             + ([basePath] + path.split(separator: "/").map(String.init))
-                .filter { !$0.isEmpty }
-                .joined(separator: "/")
+            .filter { !$0.isEmpty }
+            .joined(separator: "/")
         return components
     }
 

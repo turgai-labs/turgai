@@ -114,8 +114,11 @@ struct HailAdapterTests {
 
     @Test
     func runtimeInstallsContextCompactor() async throws {
-        let configuration = HailRuntimeConfiguration(contextWindow: 131_072)
+        let configuration = HailRuntimeConfiguration(
+            contextWindow: 131_072
+        )
         let plugin = try configuration.makeAgentRuntimePlugin(
+            defaultModel: try AgentModel("ollama/test"),
             workspaceRoot: "/tmp/norby-test-workspace"
         )
 

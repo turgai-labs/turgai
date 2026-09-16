@@ -9,15 +9,72 @@ import AnyLanguageModel
 /// Why a spec file did not become a tool. Issues are values reported to the
 /// host; a broken spec never crashes the load and never silently passes.
 public struct UserToolLoadIssue: Sendable {
-    public enum Reason: Sendable {
+    public enum Reason: Sendable, CustomStringConvertible {
         case unreadable(String)
         case invalidSpec(String)
         case duplicateName(String)
         case builtinNameCollision(String)
+
+        public var description: String {
+            switch self {
+            case .unreadable(let message):
+                return message
+            case .invalidSpec(let message):
+                return message
+            case .duplicateName(let name):
+                return "Another tool already uses the name '\(name)'."
+            case .builtinNameCollision(let name):
+                return "The tool name '\(name)' conflicts with a built-in tool."
+            }
+        }
     }
 
     public let source: URL
     public let reason: Reason
+}
+
+public enum UserToolRegistryError: Error, Sendable, Equatable, CustomStringConvertible {
+    case invalidFileName
+    case invalidJSON(String)
+    case invalidSpec(String)
+    case duplicateName(String)
+    case fileNotFound
+    case unableToWrite(String)
+    case unableToDelete(String)
+
+    public var description: String {
+        switch self {
+        case .invalidFileName:
+            return "Use a simple .json file name without path separators."
+        case .invalidJSON(let message):
+            return "The tool definition is not valid JSON: \(message)"
+        case .invalidSpec(let message):
+            return message
+        case .duplicateName(let name):
+            return "Another tool already uses the name '\(name)'."
+        case .fileNotFound:
+            return "The tool file no longer exists."
+        case .unableToWrite(let message):
+            return "Could not save the tool: \(message)"
+        case .unableToDelete(let message):
+            return "Could not delete the tool: \(message)"
+        }
+    }
+}
+
+/// The dashboard-facing view of one file in `.norby/tools`.
+///
+/// Invalid files are included instead of being hidden. That lets the owner
+/// repair a broken definition from the dashboard while the runtime continues
+/// to ignore it.
+public struct UserToolDocument: Sendable {
+    public let fileName: String
+    public let source: URL
+    public let contents: String
+    public let tool: UserTool?
+    public let issue: UserToolLoadIssue?
+
+    public var isValid: Bool { tool != nil && issue == nil }
 }
 
 /// Loads user tool specs from a directory of JSON files. `load()` re-reads
@@ -41,7 +98,10 @@ public struct UserToolRegistry: Sendable {
         report(issue)
     }
 
-    public func load() -> [UserTool] {
+    /// Returns every JSON document, including invalid documents. The runtime
+    /// uses `load()` below; the dashboard uses this richer view to make repair
+    /// possible without inventing another storage format.
+    public func documents() -> [UserToolDocument] {
         let files =
             ((try? FileManager.default.contentsOfDirectory(
                 at: directory, includingPropertiesForKeys: nil
@@ -49,29 +109,179 @@ public struct UserToolRegistry: Sendable {
 
         // Sorted filenames make resolution deterministic; on a name
         // collision the first file wins and the rest are reported.
-        var loaded: [UserTool] = []
+        var documents: [UserToolDocument] = []
         var seenNames: Set<String> = []
         for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard let data = try? Data(contentsOf: file) else {
-                report(.init(source: file, reason: .unreadable("Could not read file.")))
+                let issue = UserToolLoadIssue(
+                    source: file,
+                    reason: .unreadable("Could not read file.")
+                )
+                report(issue)
+                documents.append(
+                    UserToolDocument(
+                        fileName: file.lastPathComponent,
+                        source: file,
+                        contents: "",
+                        tool: nil,
+                        issue: issue
+                    )
+                )
                 continue
             }
+            let contents = String(decoding: data, as: UTF8.self)
             do {
                 let spec = try JSONDecoder().decode(UserToolSpec.self, from: data)
                 let tool = try spec.makeUserTool(source: file)
                 guard !seenNames.contains(tool.name) else {
-                    report(.init(source: file, reason: .duplicateName(tool.name)))
+                    let issue = UserToolLoadIssue(
+                        source: file,
+                        reason: .duplicateName(tool.name)
+                    )
+                    report(issue)
+                    documents.append(
+                        UserToolDocument(
+                            fileName: file.lastPathComponent,
+                            source: file,
+                            contents: contents,
+                            tool: nil,
+                            issue: issue
+                        )
+                    )
                     continue
                 }
                 seenNames.insert(tool.name)
-                loaded.append(tool)
+                documents.append(
+                    UserToolDocument(
+                        fileName: file.lastPathComponent,
+                        source: file,
+                        contents: contents,
+                        tool: tool,
+                        issue: nil
+                    )
+                )
             } catch let error as SpecValidationError {
-                report(.init(source: file, reason: .invalidSpec(error.message)))
+                let issue = UserToolLoadIssue(
+                    source: file,
+                    reason: .invalidSpec(error.message)
+                )
+                report(issue)
+                documents.append(
+                    UserToolDocument(
+                        fileName: file.lastPathComponent,
+                        source: file,
+                        contents: contents,
+                        tool: nil,
+                        issue: issue
+                    )
+                )
             } catch {
-                report(.init(source: file, reason: .invalidSpec(String(describing: error))))
+                let issue = UserToolLoadIssue(
+                    source: file,
+                    reason: .invalidSpec(String(describing: error))
+                )
+                report(issue)
+                documents.append(
+                    UserToolDocument(
+                        fileName: file.lastPathComponent,
+                        source: file,
+                        contents: contents,
+                        tool: nil,
+                        issue: issue
+                    )
+                )
             }
         }
-        return loaded
+        return documents
+    }
+
+    public func load() -> [UserTool] {
+        documents().compactMap(\.tool)
+    }
+
+    /// Finds a document by its safe, dashboard-facing file name.
+    public func document(named fileName: String) -> UserToolDocument? {
+        guard let source = try? fileURL(named: fileName) else { return nil }
+        return documents().first { $0.source.standardizedFileURL.path == source.path }
+    }
+
+    /// Validates a complete document before replacing or creating its file.
+    /// The runtime sees it on its next registry load/turn.
+    public func save(named fileName: String, contents: String) throws {
+        let source = try fileURL(named: fileName)
+        let data = Data(contents.utf8)
+        let spec: UserToolSpec
+        do {
+            spec = try JSONDecoder().decode(UserToolSpec.self, from: data)
+        } catch {
+            throw UserToolRegistryError.invalidJSON(String(describing: error))
+        }
+
+        let tool: UserTool
+        do {
+            tool = try spec.makeUserTool(source: source)
+        } catch let error as SpecValidationError {
+            throw UserToolRegistryError.invalidSpec(error.message)
+        } catch {
+            throw UserToolRegistryError.invalidSpec(String(describing: error))
+        }
+
+        for document in documents() {
+            guard document.source.standardizedFileURL.path != source.path,
+                let existingTool = document.tool
+            else { continue }
+            guard existingTool.name != tool.name else {
+                throw UserToolRegistryError.duplicateName(tool.name)
+            }
+        }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try data.write(to: source, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: source.path
+            )
+        } catch {
+            throw UserToolRegistryError.unableToWrite(String(describing: error))
+        }
+    }
+
+    /// Deletes exactly one validated child file from the tools directory.
+    public func delete(named fileName: String) throws {
+        let source = try fileURL(named: fileName)
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory) else {
+            throw UserToolRegistryError.fileNotFound
+        }
+        guard !isDirectory.boolValue else {
+            throw UserToolRegistryError.unableToDelete("The target is a directory.")
+        }
+        do {
+            try FileManager.default.removeItem(at: source)
+        } catch {
+            throw UserToolRegistryError.unableToDelete(String(describing: error))
+        }
+    }
+
+    private func fileURL(named fileName: String) throws -> URL {
+        let trimmed = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed == fileName,
+            !trimmed.isEmpty,
+            trimmed.count <= 128,
+            URL(fileURLWithPath: trimmed).pathExtension.lowercased() == "json",
+            trimmed.allSatisfy({ character in
+                character.isLetter || character.isNumber || character == "." || character == "-"
+                    || character == "_"
+            })
+        else {
+            throw UserToolRegistryError.invalidFileName
+        }
+        return directory.appendingPathComponent(trimmed).standardizedFileURL
     }
 }
 

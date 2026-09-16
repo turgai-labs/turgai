@@ -264,6 +264,13 @@ public actor TelegramBot {
             await finishConnections()
             runTask = nil
             return
+        } catch let error as TelegramAPIError where error.isAuthenticationFailure {
+            logger.error(
+                "Telegram polling stopped: Telegram rejected the bot token (HTTP 401). Update the token and restart Norby."
+            )
+            await finishConnections()
+            runTask = nil
+            return
         } catch {
             await finishConnections()
             runTask = nil

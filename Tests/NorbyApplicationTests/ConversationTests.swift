@@ -120,9 +120,14 @@ struct ConversationTests {
     }
 
     @Test
-    func timeAnchorRendersLocalDateTimeAndOffset() {
+    func timeAnchorUsesForcedTimezoneByDefault() {
         // 2026-09-11T12:11:00Z, a Friday.
         let instant = Date(timeIntervalSince1970: 1_789_128_660)
+
+        #expect(
+            Conversation.timeAnchor(at: instant)
+                == "2026-09-11 14:11 Friday (Europe/Berlin, UTC+02:00)"
+        )
 
         let berlin = TimeZone(identifier: "Europe/Berlin")!
         #expect(
