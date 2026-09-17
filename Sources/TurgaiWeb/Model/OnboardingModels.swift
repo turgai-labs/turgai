@@ -1,5 +1,3 @@
-import TurgaiPersistence
-
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
@@ -17,24 +15,16 @@ struct StorageFormValues: Sendable, Equatable {
     let postgresURL: String
     let postgresUsername: String
 
-    init(storage: TurgaiStorageConfiguration?, defaultFileDirectory: URL) {
-        switch storage {
-        case .file(let directory):
-            self.backend = .file
-            self.fileURL = directory.absoluteString
-            self.postgresURL = "postgres://localhost:5432/turgai"
-            self.postgresUsername = ""
-        case .postgres(let url, let username):
-            self.backend = .postgres
-            self.fileURL = defaultFileDirectory.absoluteString
-            self.postgresURL = url.absoluteString
-            self.postgresUsername = username
-        case nil:
-            self.backend = .file
-            self.fileURL = defaultFileDirectory.absoluteString
-            self.postgresURL = "postgres://localhost:5432/turgai"
-            self.postgresUsername = ""
-        }
+    init(
+        backend: StorageBackend,
+        fileURL: String,
+        postgresURL: String,
+        postgresUsername: String
+    ) {
+        self.backend = backend
+        self.fileURL = fileURL
+        self.postgresURL = postgresURL
+        self.postgresUsername = postgresUsername
     }
 
     init(form: [String: [String]], defaultFileDirectory: URL) {
@@ -80,5 +70,15 @@ struct ModelFormValues: Sendable, Equatable {
         provider = form["provider"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         modelID = form["modelID"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         ollamaBaseURL = form["ollamaBaseURL"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+struct CredentialsFormValues: Sendable, Equatable {
+    let username: String
+    let password: String
+
+    init(form: [String: [String]]) {
+        username = form["username"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        password = form["password"]?.first ?? ""
     }
 }

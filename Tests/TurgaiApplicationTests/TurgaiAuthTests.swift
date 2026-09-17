@@ -35,7 +35,7 @@ struct TurgaiAuthTests {
             password: "correct horse battery staple"
         )
         let authenticatedAdmin = try await restarted.authenticate(session.token)
-        #expect(authenticatedAdmin == "admin")
+        #expect(authenticatedAdmin.username == "admin")
     }
 
     @Test("bootstrap challenges expire and are consumed")
@@ -96,7 +96,7 @@ struct TurgaiAuthTests {
             password: "correct horse battery staple"
         )
         let authenticatedMember = try await auth.authenticate(session.token)
-        #expect(authenticatedMember == "member")
+        #expect(authenticatedMember.username == "member")
     }
 
     @Test("bad credentials and invalid setup challenges are rejected")

@@ -21,12 +21,12 @@ struct TurgaiModelCatalogTests {
 
         #expect(catalog.providers.contains { $0.provider == .ollama })
         #expect(catalog.providers.contains { $0.provider == .openAI })
-        #expect(catalog.choices(for: .openAI).map(\.model.identifier) == ["openai/gpt-4.1"])
+        #expect(catalog.choices(for: .openAI).map(\.identifier) == ["openai/gpt-4.1"])
         #expect(catalog.choices(for: .ollama).isEmpty)
         #expect(catalog.notice(for: .openAI)?.contains("account") == true)
 
         #if canImport(FoundationModels)
-            #expect(catalog.choices(for: .system).map(\.model.identifier) == ["system/default"])
+            #expect(catalog.choices(for: .system).map(\.identifier) == ["system/default"])
         #endif
     }
 
@@ -43,10 +43,11 @@ struct TurgaiModelCatalogTests {
         )
 
         let provider = AgentModelProvider(rawValue: "custom-provider")
-        let configuredModel = try AgentModel("custom-provider/quiet-model")
-        #expect(catalog.provider(for: configuredModel)?.provider == provider)
-        #expect(catalog.choices(for: provider).map(\.model.identifier) == ["custom-provider/quiet-model"])
-        #expect(catalog.notice(for: provider) == "Enter a model ID for this provider.")
+        #expect(
+            catalog.provider(for: ModelProviderID(rawValue: provider.rawValue))?.provider.rawValue == provider.rawValue)
+        let providerID = ModelProviderID(rawValue: provider.rawValue)
+        #expect(catalog.choices(for: providerID).map(\.identifier) == ["custom-provider/quiet-model"])
+        #expect(catalog.notice(for: providerID) == "Enter a model ID for this provider.")
     }
 
     @Test("discovers models from every configured Ollama server")
@@ -74,7 +75,7 @@ struct TurgaiModelCatalogTests {
         )
 
         #expect(
-            catalog.choices(for: .ollama).map(\.model.identifier) == [
+            catalog.choices(for: .ollama).map(\.identifier) == [
                 "ollama/llama3.2",
                 "ollama/mistral",
             ]

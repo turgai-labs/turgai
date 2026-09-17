@@ -43,6 +43,14 @@ public struct BotSummary: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+struct BotCard: Identifiable, Sendable, Equatable {
+    let id: String
+    let name: String
+    let model: String
+    let enabled: Bool
+    let telegramChatCount: Int
+}
+
 public struct TurgaiDashboardSnapshot: Codable, Sendable, Equatable {
     public let profiles: [BotSummary]
     public let runtime: [TurgaiAgentRuntimeSnapshot]

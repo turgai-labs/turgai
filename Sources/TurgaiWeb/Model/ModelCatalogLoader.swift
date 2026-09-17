@@ -8,95 +8,6 @@ import TurgaiHail
     import Foundation
 #endif
 
-/// How a provider supplies model names to the dashboard.
-public struct TurgaiProviderDescriptor: Sendable, Equatable {
-    public enum Discovery: String, Codable, Sendable, Equatable {
-        case fixed
-        case local
-        case account
-        case manual
-    }
-
-    public let provider: AgentModelProvider
-    public let name: String
-    public let summary: String
-    public let discovery: Discovery
-
-    public var id: String { provider.rawValue }
-
-    public init(
-        provider: AgentModelProvider,
-        name: String,
-        summary: String,
-        discovery: Discovery
-    ) {
-        self.provider = provider
-        self.name = name
-        self.summary = summary
-        self.discovery = discovery
-    }
-}
-
-/// One model the dashboard may suggest. Suggestions are never authoritative:
-/// the profile stores the provider/model identifier and users may enter a
-/// model that a provider did not return from discovery.
-public struct TurgaiModelChoice: Sendable, Equatable, Identifiable {
-    public enum Source: String, Codable, Sendable, Equatable {
-        case fixed
-        case discovered
-        case configured
-    }
-
-    public let model: AgentModel
-    public let displayName: String
-    public let source: Source
-
-    public var id: String { model.identifier }
-
-    public init(
-        model: AgentModel,
-        displayName: String,
-        source: Source
-    ) {
-        self.model = model
-        self.displayName = displayName
-        self.source = source
-    }
-}
-
-/// Provider-aware model suggestions used by Turgai's HTML forms.
-public struct TurgaiModelCatalog: Sendable, Equatable {
-    public let providers: [TurgaiProviderDescriptor]
-    public let choicesByProvider: [AgentModelProvider: [TurgaiModelChoice]]
-    public let noticesByProvider: [AgentModelProvider: String]
-
-    public init(
-        providers: [TurgaiProviderDescriptor],
-        choicesByProvider: [AgentModelProvider: [TurgaiModelChoice]],
-        noticesByProvider: [AgentModelProvider: String] = [:]
-    ) {
-        self.providers = providers
-        self.choicesByProvider = choicesByProvider
-        self.noticesByProvider = noticesByProvider
-    }
-
-    public func choices(for provider: AgentModelProvider) -> [TurgaiModelChoice] {
-        choicesByProvider[provider] ?? []
-    }
-
-    public func provider(for model: AgentModel?) -> TurgaiProviderDescriptor? {
-        guard let model else { return nil }
-        return providers.first { $0.provider == model.provider }
-    }
-
-    public func notice(for provider: AgentModelProvider) -> String? {
-        noticesByProvider[provider]
-    }
-}
-
-/// Loads model suggestions at the dashboard boundary. The model runtime does
-/// not depend on this type: discovery is UI/configuration infrastructure, and
-/// every provider is free to have different availability and credentials.
 public enum TurgaiModelCatalogLoader {
 
     /// Provider discovery is injected so the dashboard can use live adapters
@@ -123,8 +34,8 @@ public enum TurgaiModelCatalogLoader {
         discovery: Discovery = .live
     ) async -> TurgaiModelCatalog {
         var providerDescriptors = Self.baseProviders
-        var choices: [AgentModelProvider: [TurgaiModelChoice]] = [:]
-        var notices: [AgentModelProvider: String] = [:]
+        var choices: [ModelProviderID: [TurgaiModelChoice]] = [:]
+        var notices: [ModelProviderID: String] = [:]
 
         #if canImport(FoundationModels)
             if let model = try? AgentModel(
@@ -133,7 +44,8 @@ public enum TurgaiModelCatalogLoader {
             ) {
                 choices[.system] = [
                     TurgaiModelChoice(
-                        model: model,
+                        provider: .system,
+                        identifier: model.identifier,
                         displayName: "On-device Apple model",
                         source: .fixed
                     )
@@ -160,7 +72,12 @@ public enum TurgaiModelCatalogLoader {
                     )
                 else { continue }
                 Self.add(
-                    TurgaiModelChoice(model: model, displayName: name, source: .discovered),
+                    TurgaiModelChoice(
+                        provider: .ollama,
+                        identifier: model.identifier,
+                        displayName: name,
+                        source: .discovered
+                    ),
                     to: .ollama,
                     choices: &choices
                 )
@@ -177,24 +94,26 @@ public enum TurgaiModelCatalogLoader {
 
         for profile in profiles {
             let model = profile.model
-            if !providerDescriptors.contains(where: { $0.provider == model.provider }) {
+            let providerID = ModelProviderID(rawValue: model.provider.rawValue)
+            if !providerDescriptors.contains(where: { $0.provider == providerID }) {
                 providerDescriptors.append(
                     TurgaiProviderDescriptor(
-                        provider: model.provider,
+                        provider: providerID,
                         name: model.provider.rawValue,
                         summary: "Configured provider; enter model IDs manually.",
                         discovery: .manual
                     )
                 )
-                notices[model.provider] = "Enter a model ID for this provider."
+                notices[providerID] = "Enter a model ID for this provider."
             }
             Self.add(
                 TurgaiModelChoice(
-                    model: model,
+                    provider: providerID,
+                    identifier: model.identifier,
                     displayName: model.id.rawValue,
                     source: .configured
                 ),
-                to: model.provider,
+                to: providerID,
                 choices: &choices
             )
         }
@@ -256,11 +175,11 @@ public enum TurgaiModelCatalogLoader {
 
     private static func add(
         _ choice: TurgaiModelChoice,
-        to provider: AgentModelProvider,
-        choices: inout [AgentModelProvider: [TurgaiModelChoice]]
+        to provider: ModelProviderID,
+        choices: inout [ModelProviderID: [TurgaiModelChoice]]
     ) {
         var providerChoices = choices[provider] ?? []
-        guard !providerChoices.contains(where: { $0.model.identifier == choice.model.identifier }) else {
+        guard !providerChoices.contains(where: { $0.identifier == choice.identifier }) else {
             return
         }
         providerChoices.append(choice)

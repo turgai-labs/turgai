@@ -1,0 +1,246 @@
+import Elementary
+import Hail
+import Hummingbird
+import HummingbirdElementary
+import NIOCore
+import ServiceLifecycle
+import TurgaiApplication
+import TurgaiHail
+import TurgaiPersistence
+import TurgaiTelegram
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
+
+enum TurgaiWebSupport {
+    static let sessionCookieName = "turgai_auth"
+    static let bootstrapChallengeCookieName = "turgai_bootstrap"
+
+    static func modelCatalog(
+        for profiles: [TurgaiAgentProfile]
+    ) async -> TurgaiModelCatalog {
+        await TurgaiModelCatalogLoader.load(profiles: profiles)
+    }
+
+    static func storageErrorMessage(_ error: Error) -> String {
+        switch error {
+        case FormValidationError.invalidValue(let field):
+            "Enter a valid \(field)."
+        case TurgaiStorageConfigurationError.invalidFileURL:
+            "File storage needs a file:// URL."
+        case TurgaiStorageConfigurationError.invalidPostgresURL:
+            "PostgreSQL URL must look like postgres://host:5432/database."
+        case TurgaiStorageConfigurationError.invalidPostgresUsername:
+            "A PostgreSQL username is required."
+        case TurgaiStorageConfigurationError.invalidPostgresPassword:
+            "A PostgreSQL password is required."
+        default:
+            "Could not save storage configuration."
+        }
+    }
+
+    static func telegramErrorMessage(_ error: Error) -> String {
+        switch error {
+        case FormValidationError.invalidValue(let field):
+            "Enter a valid \(field)."
+        case TelegramAPIError.httpStatus(401), TelegramAPIError.api(code: 401, message: _):
+            "Telegram rejected this bot token. Check it with BotFather and try again."
+        case TelegramAPIError.rateLimited:
+            "Telegram is temporarily rate-limiting validation. Wait a moment and try again."
+        default:
+            "Could not validate the Telegram token. Check your connection and try again."
+        }
+    }
+
+    static func registrationErrorMessage(_ error: Error) -> String {
+        switch error {
+        case TurgaiAuthError.invalidUsername:
+            "Choose a username using letters, numbers, dashes, or underscores."
+        case TurgaiAuthError.weakPassword:
+            "Choose a password with at least 12 characters."
+        case TurgaiAuthError.usernameTaken:
+            "That username is already taken."
+        default:
+            "Could not create the account. Try again."
+        }
+    }
+
+    static func accountErrorMessage(_ error: Error) -> String {
+        switch error {
+        case TurgaiAuthError.unknownUser:
+            "That account no longer exists."
+        case TurgaiAuthError.accountNotApproved:
+            "Keep at least one approved administrator."
+        default:
+            "Could not update the account."
+        }
+    }
+
+    static func profileErrorMessage(_ error: Error) -> String {
+        switch error {
+        case FormValidationError.invalidValue(let field):
+            "Enter a valid \(field)."
+        case TurgaiAgentProfileError.invalidOllamaBaseURL:
+            "Ollama server URL must be an http(s) URL with a host."
+        case TurgaiAgentProfileError.invalidContextWindow:
+            "Context window must be a positive number."
+        case TurgaiAgentProfileError.duplicateTelegramChatID(let id):
+            "Telegram chat ID \(id) is already assigned to another agent."
+        case TurgaiAgentProfileError.invalidName:
+            "Give the agent a name and keep it under 120 characters."
+        case TurgaiAgentProfileError.invalidID(let id):
+            "Invalid agent identifier: \(id)."
+        case TurgaiAgentProfileError.unknownProfile(let id):
+            "Agent \(id) no longer exists."
+        case TurgaiAgentProfileError.cannotDeleteDefaultProfile:
+            "The default agent cannot be deleted."
+        default:
+            "Could not save the agent configuration."
+        }
+    }
+
+    static func userToolErrorMessage(_ error: Error) -> String {
+        if let error = error as? UserToolRegistryError {
+            return error.description
+        }
+        if let error = error as? ToolDraftError {
+            return error.description
+        }
+        return "Could not save the tool."
+    }
+
+    static func newToolFileName() -> String {
+        "tool-\(UUID().uuidString.lowercased()).json"
+    }
+
+    static func jsonResponse<T: Encodable>(_ value: T) throws -> Response {
+        Response(
+            status: .ok,
+            headers: [.contentType: "application/json"],
+            body: .init(byteBuffer: ByteBuffer(data: try JSONEncoder().encode(value)))
+        )
+    }
+
+    static func authenticatedAdminUser(from request: Request, auth: TurgaiAuth) async -> AuthenticatedUser? {
+        guard let account = await authenticatedAccount(from: request, auth: auth),
+            account.role == .administrator
+        else { return nil }
+        return Self.userInfo(from: account)
+    }
+
+    static func authenticatedUser(from request: Request, auth: TurgaiAuth) async -> AuthenticatedUser? {
+        guard let account = await authenticatedAccount(from: request, auth: auth) else { return nil }
+        return Self.userInfo(from: account)
+    }
+
+    static func authenticatedAccount(from request: Request, auth: TurgaiAuth) async -> Account? {
+        guard let cookie = request.cookies[sessionCookieName],
+            let account = try? await auth.authenticate(cookie.value)
+        else { return nil }
+        return account
+    }
+
+    static func userInfo(from account: Account) -> AuthenticatedUser {
+        let info = AccountInfo(id: account.id, username: account.username)
+        switch account.role {
+        case .member: return .member(info)
+        case .administrator: return .administrator(info)
+        }
+    }
+
+    static func accountSummary(from account: Account) -> AccountSummary {
+        let role: AccountRole =
+            switch account.role {
+            case .member: .member
+            case .administrator: .administrator
+            }
+        let status: AccountStatus =
+            switch account.status {
+            case .pending: .pending
+            case .approved: .approved
+            case .disabled: .disabled
+            }
+        return AccountSummary(
+            info: AccountInfo(id: account.id, username: account.username),
+            role: role,
+            status: status
+        )
+    }
+
+    static func botCard(from profile: TurgaiAgentProfile) -> BotCard {
+        BotCard(
+            id: profile.id,
+            name: profile.name,
+            model: profile.model.identifier,
+            enabled: profile.enabled,
+            telegramChatCount: profile.telegramChatIDs.count
+        )
+    }
+
+    static func sessionCookie(_ token: String) -> Cookie {
+        Cookie(
+            name: sessionCookieName,
+            value: token,
+            maxAge: Int(TurgaiAuth.sessionLifetime),
+            path: "/",
+            httpOnly: true,
+            sameSite: .lax
+        )
+    }
+
+    static func expiredSessionCookie() -> Cookie {
+        Cookie(
+            name: sessionCookieName,
+            value: "",
+            expires: Date(timeIntervalSince1970: 0),
+            maxAge: 0,
+            path: "/",
+            httpOnly: true,
+            sameSite: .lax
+        )
+    }
+
+    static func bootstrapChallengeCookie(_ challenge: String) -> Cookie {
+        Cookie(
+            name: bootstrapChallengeCookieName,
+            value: challenge,
+            maxAge: Int(TurgaiAuth.bootstrapChallengeLifetime),
+            path: "/onboarding/register",
+            httpOnly: true,
+            sameSite: .strict
+        )
+    }
+
+    static func expiredBootstrapChallengeCookie() -> Cookie {
+        Cookie(
+            name: bootstrapChallengeCookieName,
+            value: "",
+            expires: Date(timeIntervalSince1970: 0),
+            maxAge: 0,
+            path: "/onboarding/register",
+            httpOnly: true,
+            sameSite: .strict
+        )
+    }
+
+    static func redirect(to location: String, settingCookie cookie: Cookie? = nil) -> Response {
+        var response = Response(status: .seeOther, headers: [.location: location])
+        if let cookie { response.setCookie(cookie) }
+        return response
+    }
+
+    static func decodeForm(from request: Request, context: BasicRequestContext) async throws -> [String:
+        [String]]
+    {
+        let buffer = try await request.body.collect(upTo: context.maxUploadSize)
+        let data = buffer.getData(at: buffer.readerIndex, length: buffer.readableBytes) ?? Data()
+        let body = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "+", with: "%20")
+        guard let components = URLComponents(string: "?\(body)") else { return [:] }
+        return components.queryItems?.reduce(into: [String: [String]]()) { result, item in
+            result[item.name, default: []].append(item.value ?? "")
+        } ?? [:]
+    }
+}

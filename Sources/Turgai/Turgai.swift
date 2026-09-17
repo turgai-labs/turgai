@@ -1,4 +1,5 @@
 import ArgumentParser
+import Hummingbird
 import TurgaiApplication
 import TurgaiWeb
 
@@ -29,13 +30,27 @@ struct Turgai: AsyncParsableCommand {
             directory: turgaiDirectory.appendingPathComponent("agents", isDirectory: true)
         )
         let runtimeSnapshotSource = TurgaiRuntimeSnapshotSource()
-        let webApp = try TurgaiWebApp(
+        let onboardingWebApp = try TurgaiOnboardingWebApp(
+            auth: auth,
+            directory: turgaiDirectory,
+            agentProfiles: agentProfiles
+        )
+        let mainWebApp = try TurgaiMainWebApp(
             auth: auth,
             directory: turgaiDirectory,
             agentProfiles: agentProfiles,
             runtimeSnapshots: { await runtimeSnapshotSource.snapshots() }
         )
-        let onboardingService = TurgaiOnboardingService(webApp: webApp)
+        let router = Router<BasicRequestContext>()
+        router.addMiddleware {
+            FileMiddleware(TurgaiWebAssets.publicRoot, searchForIndexHtml: false)
+        }
+        onboardingWebApp.registerRoutes(on: router)
+        mainWebApp.registerRoutes(on: router)
+        let application = Application(
+            router: router,
+            configuration: .init(address: .hostname("127.0.0.1", port: 3333))
+        )
         let appService = TurgaiAppService(
             environment: environment,
             workspaceRoot: workspaceRoot,
@@ -46,11 +61,11 @@ struct Turgai: AsyncParsableCommand {
 
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
-                try await webApp.run()
+                try await application.run()
             }
             group.addTask {
                 if !configuration.isReady {
-                    try await onboardingService.run()
+                    try await onboardingWebApp.run()
                 }
                 try await appService.run()
             }
