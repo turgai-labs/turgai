@@ -6,9 +6,15 @@
     --ink: #20313d;
     --muted: #536671;
     --muted-dot: #aab8be;
-    --accent: #8d683e;
-    --accent-strong: #6f4e2f;
-    --accent-soft: #f6efe7;
+    --accent: #b83b30;
+    --accent-strong: #8f241c;
+    --accent-soft: #fff0ec;
+    --on-accent: #ffffff;
+    --link: #2864e8;
+    --link-strong: #1747ad;
+    --signal-coral: #ef5b4d;
+    --signal-yellow: #f4c542;
+    --signal-blue: #2864e8;
     --line: #e1ddd6;
     --line-strong: #c7c0b6;
     --control-border: #b8b1a6;
@@ -45,9 +51,15 @@ html[data-theme="dark"] {
     --ink: #eef4f3;
     --muted: #a0b7bf;
     --muted-dot: #66828d;
-    --accent: #9c91b5;
-    --accent-strong: #c3b9d5;
-    --accent-soft: #2d293e;
+    --accent: #c4473c;
+    --accent-strong: #e4574c;
+    --accent-soft: #4b2423;
+    --on-accent: #ffffff;
+    --link: #79a7ff;
+    --link-strong: #a9c6ff;
+    --signal-blue: #79a7ff;
+    --signal-coral: #ff8175;
+    --signal-yellow: #f7d66b;
     --line: #263e49;
     --line-strong: #49636e;
     --control-border: #5b7580;
@@ -192,19 +204,71 @@ form { margin: 0; }
     color: var(--danger);
     background: var(--danger-soft);
 }
+.success {
+    margin: 0 0 var(--space-5);
+    padding: .75rem 1rem;
+    border-left: 2px solid var(--link);
+    color: var(--ink);
+    background: var(--accent-soft);
+}
 .page-error { margin-bottom: var(--space-5); }
 
 /* The same shell and header align every application page. */
 .app-page, .setup-page {
+    position: relative;
+    overflow: hidden;
     min-height: 100vh;
     padding: 0 var(--page-gutter) var(--space-9);
     background: var(--canvas);
 }
+.app-page::before, .setup-page::before, .app-page::after, .setup-page::after {
+    position: absolute;
+    z-index: 0;
+    display: block;
+    pointer-events: none;
+    content: "";
+}
+.app-page::before, .setup-page::before {
+    top: 7rem;
+    right: -14rem;
+    width: min(42rem, 64vw);
+    height: 18rem;
+    background: var(--accent-soft);
+    opacity: .62;
+    transform: rotate(-9deg);
+}
+.app-page::after, .setup-page::after {
+    bottom: 7rem;
+    left: -10rem;
+    width: 24rem;
+    height: 5rem;
+    background: var(--signal-coral);
+    opacity: .12;
+    transform: rotate(7deg);
+}
 .app-shell, .setup-shell {
+    position: relative;
+    z-index: 1;
+    isolation: isolate;
     width: min(var(--shell-width), 100%);
     margin: 0 auto;
 }
+.app-page .app-shell::before, .setup-page .setup-shell::before {
+    position: absolute;
+    z-index: -1;
+    top: 12rem;
+    left: -5rem;
+    width: 7rem;
+    height: 7rem;
+    background: var(--signal-yellow);
+    opacity: .16;
+    transform: rotate(14deg);
+    content: "";
+    pointer-events: none;
+}
 .app-header, .setup-header {
+    position: relative;
+    z-index: 2;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -241,16 +305,35 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     display: inline-flex;
     align-items: center;
     min-height: var(--control-height);
-    color: var(--accent);
+    color: var(--link);
     font-size: .875rem;
     font-weight: var(--weight-medium);
     line-height: 1.3;
     text-decoration: none;
 }
 .nav-link:hover, .text-link:hover {
-    color: var(--accent-strong);
+    color: var(--link-strong);
     text-decoration: underline;
     text-underline-offset: .25rem;
+}
+.nav-link-active {
+    position: relative;
+    color: var(--ink);
+    font-weight: var(--weight-semibold);
+    text-decoration: none;
+}
+.nav-link-active::after {
+    position: absolute;
+    right: 0;
+    bottom: .1875rem;
+    left: 0;
+    height: 3px;
+    background: var(--link);
+    content: "";
+}
+.nav-link-active:hover {
+    color: var(--ink);
+    text-decoration: none;
 }
 .theme-switch {
     position: relative;
@@ -308,6 +391,10 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     border-color: var(--accent);
 }
 .theme-switch-icon { position: relative; z-index: 1; }
+.theme-switch-input:not(:checked) + .theme-switch-track .theme-switch-icon:first-child,
+.theme-switch-input:checked + .theme-switch-track .theme-switch-icon:last-child {
+    color: var(--on-accent);
+}
 .breadcrumb {
     display: flex;
     align-items: center;
@@ -318,12 +405,12 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     line-height: 1.3;
 }
 .breadcrumb-parent {
-    color: var(--accent);
+    color: var(--link);
     font-weight: var(--weight-medium);
     text-decoration: none;
 }
 .breadcrumb-parent:hover {
-    color: var(--accent-strong);
+    color: var(--link-strong);
     text-decoration: underline;
     text-underline-offset: .25rem;
 }
@@ -393,9 +480,9 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     align-items: center;
     justify-content: center;
     min-height: var(--control-height);
-    padding: .5rem 0;
+    padding: .5rem 1rem;
     border: 0;
-    color: var(--accent);
+    color: var(--link);
     background: transparent;
     font-size: .875rem;
     font-weight: var(--weight-medium);
@@ -405,12 +492,42 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     appearance: none;
 }
 .button:hover, .text-button:hover {
-    color: var(--accent-strong);
+    color: var(--link-strong);
     text-decoration: underline;
     text-underline-offset: .25rem;
 }
-.button-secondary { color: var(--muted); }
+.button-accent {
+    padding: .5rem 1rem;
+    color: var(--on-accent);
+    background: var(--accent);
+}
+.button-accent:hover {
+    color: var(--on-accent);
+    background: var(--accent-strong);
+    text-decoration: none;
+}
+.button-secondary {
+    padding-right: 0;
+    padding-left: 0;
+    color: var(--muted);
+    background: transparent;
+}
+.button-secondary:hover {
+    color: var(--ink);
+    background: transparent;
+    text-decoration: underline;
+    text-underline-offset: .25rem;
+}
+html[data-theme="dark"] .button-accent {
+    color: var(--on-accent);
+    background: var(--accent);
+}
+html[data-theme="dark"] .button-accent:hover {
+    color: var(--on-accent);
+    background: var(--accent-strong);
+}
 .text-button-danger { color: var(--danger); }
+.account-register-prompt { margin-top: var(--space-5); }
 
 /* Dashboard and list pages use the same horizontal alignment as the editor. */
 .page-intro {
@@ -424,9 +541,10 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
 }
 .page-intro h1 { margin-bottom: var(--space-2); }
 .page-intro .lede { max-width: 40rem; }
+.geometry { position: absolute; display: block; }
 .eyebrow {
     margin-bottom: var(--space-3);
-    color: var(--accent);
+    color: var(--link);
     font-size: .875rem;
     font-weight: var(--weight-medium);
     line-height: 1.25;
@@ -500,7 +618,7 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     font-size: .875rem;
     line-height: 1.4;
 }
-.tile-arrow { color: var(--accent); font-size: 1.25rem; line-height: 1; }
+.tile-arrow { color: var(--link); font-size: 1.25rem; line-height: 1; }
 
 /* Detail pages use the same title block as landing pages; the breadcrumb is
    the only additional line inside that block. */
@@ -568,16 +686,40 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
 .detail-facts-bottom { margin-top: var(--space-5); }
 .delete-form { margin-top: var(--space-7); padding-top: var(--space-4); border-top: 1px solid var(--line); }
 .new-bot-main { max-width: 42rem; padding-top: var(--space-6); }
+.accounts-list { max-width: 52rem; padding-top: var(--space-6); }
+.account-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 7rem auto;
+    gap: var(--space-5);
+    align-items: center;
+    padding: var(--space-5) 0;
+    border-bottom: 1px solid var(--line);
+}
+.account-row-identity { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.account-role, .account-status { color: var(--muted); font-size: .8125rem; }
+.account-status { text-transform: capitalize; }
+.account-status-approved { color: var(--link-strong); }
+.account-status-disabled { color: var(--danger); }
+.account-row-actions { display: flex; justify-content: flex-end; gap: var(--space-4); }
+.account-row-actions form { margin: 0; }
 
 /* Setup pages use the same shell, controls, type, and horizontal rules. */
-.setup-page { padding-bottom: var(--space-7); }
-.setup-shell { display: flex; min-height: calc(100vh - 4.5rem); flex-direction: column; }
+.setup-page {
+    --setup-bottom-space: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+    padding-bottom: var(--setup-bottom-space);
+}
+.setup-shell {
+    display: grid;
+    min-height: calc(100vh - var(--setup-bottom-space));
+    min-height: calc(100dvh - var(--setup-bottom-space));
+    grid-template-rows: auto 1fr auto;
+}
 .setup-content {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(22rem, 32rem);
     gap: clamp(var(--space-8), 9vw, 8rem);
+    align-content: start;
     align-items: start;
-    flex: 1;
     padding: clamp(4rem, 12vh, 8rem) 0 var(--space-8);
 }
 .setup-content-compact { grid-template-columns: minmax(0, 1fr) minmax(22rem, 28rem); }
@@ -586,6 +728,28 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
 .setup-form-area { width: 100%; max-width: 32rem; padding-top: var(--space-2); }
 .setup-form-area form { max-width: none; }
 .setup-welcome-area { min-height: 8rem; }
+.setup-content-hero { position: relative; }
+.setup-content-hero .setup-copy { position: relative; z-index: 2; }
+.setup-content-hero .setup-copy h1 { max-width: 34rem; font-size: clamp(2.5rem, 6vw, 4.75rem); letter-spacing: -.055em; }
+.setup-hero-art {
+    position: relative;
+    display: grid;
+    min-height: 19rem;
+    place-items: center;
+    overflow: hidden;
+}
+.setup-hero-art + .setup-note { margin-top: var(--space-6); }
+.setup-hero-art img {
+    position: relative;
+    z-index: 2;
+    width: min(15rem, 58%);
+    height: min(15rem, 58%);
+}
+html[data-theme="dark"] .setup-hero-art img { filter: invert(1); }
+.setup-hero-art .geometry-blue { width: 42%; height: 1.75rem; top: 2rem; left: -5%; background: var(--signal-blue); transform: rotate(-7deg); }
+.setup-hero-art .geometry-coral { width: 36%; height: 4.5rem; right: -5%; top: 18%; background: var(--signal-coral); transform: rotate(8deg); }
+.setup-hero-art .geometry-yellow { width: 5rem; height: 5rem; left: 10%; bottom: 8%; background: var(--signal-yellow); transform: rotate(14deg); }
+.hero-art-caption { position: absolute; right: .75rem; bottom: .625rem; z-index: 3; color: var(--ink); font-family: var(--font-code); font-size: .6875rem; letter-spacing: .04em; text-transform: uppercase; }
 .setup-note {
     max-width: 32rem;
     padding-left: var(--space-5);
@@ -596,7 +760,6 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
 .storage-panel[hidden] { display: none; }
 .storage-restart-note { margin-top: var(--space-5); }
 .setup-footer {
-    flex: 0 0 auto;
     padding-top: var(--space-5);
     border-top: 1px solid var(--line);
 }
@@ -612,14 +775,14 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     align-items: center;
     gap: var(--space-3);
     min-height: var(--control-height);
-    color: var(--accent);
+    color: var(--link);
     font-size: .875rem;
     font-weight: var(--weight-medium);
     line-height: 1.3;
     text-decoration: none;
     white-space: nowrap;
 }
-.setup-arrow:hover, .setup-submit:hover { color: var(--accent-strong); }
+.setup-arrow:hover, .setup-submit:hover { color: var(--link-strong); }
 .setup-arrow-back { color: var(--muted); }
 .arrow-glyph {
     display: inline-block;
@@ -628,10 +791,38 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     line-height: 1;
     transition: transform .15s ease;
 }
+.arrow-glyph-long, .arrow-glyph-short {
+    position: relative;
+    width: 4.25rem;
+    height: .875rem;
+    font-size: 0;
+}
+.arrow-glyph-long::before, .arrow-glyph-short::before {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    left: 0;
+    height: 2px;
+    background: currentColor;
+    content: "";
+    transform: translateY(-50%);
+}
+.arrow-glyph-long::after, .arrow-glyph-short::after {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    width: .625rem;
+    height: .625rem;
+    border-top: 2px solid currentColor;
+    border-right: 2px solid currentColor;
+    content: "";
+    transform: translateY(-50%) rotate(45deg);
+}
 .setup-arrow-forward:hover .arrow-glyph { transform: translateX(.25rem); }
 .setup-arrow-back:hover .arrow-glyph { transform: translateX(-.25rem); }
 .arrow-glyph-short { display: none; }
-.setup-submit { border: 0; background: transparent; cursor: pointer; appearance: none; }
+.setup-submit { border: 0; color: var(--accent); background: transparent; cursor: pointer; appearance: none; }
+.setup-submit:hover { color: var(--accent-strong); }
 .setup-progress {
     display: flex;
     width: min(18rem, 34vw);
@@ -641,7 +832,7 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     gap: .4375rem;
 }
 .setup-progress-line { display: block; height: .1875rem; flex: 1; background: var(--line); }
-.setup-progress-line.is-filled { background: var(--accent); }
+.setup-progress-line.is-filled { background: var(--link); }
 
 /* Tools list. */
 .tool-row {
@@ -675,7 +866,7 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
 }
 .tool-row-meta { display: flex; flex-direction: column; gap: var(--space-1); color: var(--muted); font-size: .875rem; line-height: 1.4; }
 .tool-meta-label { color: var(--ink); font-size: .8125rem; font-weight: var(--weight-medium); line-height: 1.3; }
-.tool-row-action { color: var(--accent); font-size: .875rem; font-weight: var(--weight-medium); line-height: 1.4; text-decoration: none; white-space: nowrap; }
+.tool-row-action { color: var(--link); font-size: .875rem; font-weight: var(--weight-medium); line-height: 1.4; text-decoration: none; white-space: nowrap; }
 .tool-row-invalid .tool-name, .tool-issue { color: var(--danger); }
 
 /* Build tool: each section is one editorial unit with a label column and a content column. */
@@ -756,7 +947,7 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     cursor: pointer;
     appearance: none;
 }
-.builder-add { display: inline-flex; align-items: center; color: var(--accent); }
+.builder-add { display: inline-flex; align-items: center; color: var(--link); }
 .builder-remove {
     display: inline-flex;
     width: 2rem;
@@ -773,7 +964,7 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     text-decoration: underline;
     text-underline-offset: .25rem;
 }
-.builder-add:hover { color: var(--accent-strong); }
+.builder-add:hover { color: var(--link-strong); }
 .builder-remove:hover { color: var(--danger); }
 .builder-hint { max-width: 42rem; margin-bottom: var(--space-5); }
 .builder-body-section { display: none; }
@@ -876,9 +1067,21 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
 .tool-editor-aside p { margin-bottom: var(--space-5); color: var(--muted); font-size: var(--type-subhead); line-height: var(--leading-subhead); }
 .tool-editor-shell .delete-form { margin-top: var(--space-7); padding-top: var(--space-4); border-top: 1px solid var(--line); }
 
+@media (max-width: 1200px) {
+    .setup-content, .setup-content-compact { grid-template-columns: 1fr; }
+    .setup-form-area { max-width: 42rem; }
+    .setup-footer { padding-top: var(--space-3); }
+    .setup-footer-actions { flex-wrap: wrap; gap: var(--space-3); }
+    .setup-footer-actions .setup-arrow-forward,
+    .setup-footer-actions .setup-submit { margin-left: auto; }
+    .setup-progress { margin-top: var(--space-3); }
+    .arrow-glyph-long { display: none; }
+    .arrow-glyph-short { display: inline-block; width: 2.25rem; }
+}
+
 @media (max-width: 780px) {
     :root { --page-gutter: 1.25rem; }
-    .app-page, .setup-page { padding-bottom: var(--space-8); }
+    .app-page { padding-bottom: var(--space-8); }
     .app-header, .setup-header { height: 4.25rem; }
     .app-nav { gap: var(--space-4); }
     .app-nav-links { gap: var(--space-4); }
@@ -890,11 +1093,14 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     .detail-status { display: inline-flex; margin-top: var(--space-4); }
     .detail-layout, .tool-editor-shell .tool-editor-layout { grid-template-columns: 1fr; gap: var(--space-7); padding-top: var(--space-6); }
     .detail-aside, .tool-editor-aside { max-width: 42rem; padding: var(--space-5) 0 0; border-top: 1px solid var(--line); border-left: 0; }
-    .setup-shell { min-height: auto; }
     .setup-content, .setup-content-compact { grid-template-columns: 1fr; gap: var(--space-7); padding: var(--space-8) 0 var(--space-7); }
+    .setup-content-hero .setup-copy h1 { font-size: clamp(2.5rem, 12vw, 4rem); }
+    .setup-hero-art { min-height: 15rem; }
     .setup-form-area { max-width: 42rem; padding-top: 0; }
-    .setup-footer { padding-top: var(--space-4); }
+    .setup-footer { padding-top: var(--space-3); }
     .tool-row { grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-4) var(--space-5); }
+    .account-row { grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3); }
+    .account-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
     .tool-row-main { grid-column: 1 / -1; }
     .tool-row-meta { grid-column: span 1; }
     .tool-row-action { grid-column: 2; justify-self: end; }
@@ -912,7 +1118,6 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     .argument-row .builder-wide-field { grid-column: auto; }
     .argument-row > .builder-remove { display: inline-flex; margin-top: var(--space-3); }
     .stage-heading { grid-template-columns: 2rem minmax(0, 1fr) auto; }
-    .setup-footer-actions { flex-wrap: wrap; }
 }
 
 @media (max-width: 520px) {
@@ -925,8 +1130,6 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     .setup-content, .setup-content-compact { padding-top: var(--space-7); }
     .setup-footer-actions { gap: var(--space-3); }
     .setup-arrow, .setup-submit { font-size: .8125rem; }
-    .arrow-glyph-long { display: none; }
-    .arrow-glyph-short { display: inline-block; }
     .tool-row { display: block; }
     .tool-row-meta { display: inline-flex; margin: var(--space-4) var(--space-5) 0 0; }
     .tool-row-action { display: inline-flex; margin-top: var(--space-4); }

@@ -1,9 +1,9 @@
-Norby
+Turgai
 =====
 
-Copyright 2026 Norby contributors
+Copyright 2026 Turgai contributors
 
-Norby is licensed under the Apache License, Version 2.0.
+Turgai is licensed under the Apache License, Version 2.0.
 The complete license text follows.
 
                                  Apache License

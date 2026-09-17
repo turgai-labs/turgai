@@ -1,6 +1,6 @@
 import Hail
-import NorbyApplication
-import NorbyHail
+import TurgaiApplication
+import TurgaiHail
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -119,7 +119,7 @@ public enum TurgaiModelCatalogLoader {
     }
 
     public static func load(
-        profiles: [NorbyAgentProfile],
+        profiles: [TurgaiAgentProfile],
         discovery: Discovery = .live
     ) async -> TurgaiModelCatalog {
         var providerDescriptors = Self.baseProviders

@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:norby}",
+            "name": "Debug Turgai",
+            "target": "Turgai",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug Turgai"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:norby}",
+            "name": "Release Turgai",
+            "target": "Turgai",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release Turgai"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:norby}",
+            "name": "Debug TurgaiWasmRunner",
+            "target": "TurgaiWasmRunner",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug TurgaiWasmRunner"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:norby}",
+            "name": "Release TurgaiWasmRunner",
+            "target": "TurgaiWasmRunner",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release TurgaiWasmRunner"
+        }
+    ]
+}

@@ -1,6 +1,6 @@
-# Norby
+# Turgai
 
-Norby is a personal AI companion built in Swift. It currently uses Telegram as
+Turgai is a personal AI companion built in Swift. It currently uses Telegram as
 its primary interface and combines a durable Hail agent runtime, provider-aware
 model routing, personal memory, and a small set of host-owned tools.
 
@@ -43,12 +43,19 @@ stored with each bot.
 
 ## Run
 
-Start Ollama, then run Norby from the repository root. On first launch the
+Start Ollama, then run Turgai from the repository root. On first launch the
 process serves the local Turgai dashboard and waits for onboarding to finish:
 
 ```sh
 ollama serve
-swift run Norby
+swift run Turgai
+```
+
+For an A/B test that disables Qwen's extended reasoning while preserving the
+normal provider behavior by default:
+
+```sh
+TURGAI_QWEN_FAST_MODE=1 swift run Turgai
 ```
 
 The dashboard stores the Telegram token and persistence settings locally. It
@@ -59,7 +66,7 @@ separate local secret files.
 The Telegram chat allow-list, model, persona, and context window are configured
 in the dashboard. If the allow-list is empty, the bot accepts messages from
 every chat. The dashboard's default file store and the Telegram polling
-checkpoint live below `.norby/` unless you choose another file-store URL.
+checkpoint live below `.turgai/` unless you choose another file-store URL.
 That directory is local runtime data and is intentionally ignored by Git.
 
 ## Test
@@ -76,30 +83,30 @@ The tests do not require a live Telegram bot or Ollama server.
 
 | Module | Responsibility |
 | --- | --- |
-| `NorbyDomain` | Identities, messages, coordination values, and reducers |
-| `NorbyMemory` | Facts, observations, memory events, policy, and retrieval |
-| `NorbyHail` | Hail adapters, runtime configuration, and host tools |
-| `NorbyApplication` | Durable conversations, reply scopes, and memory orchestration |
-| `NorbyTelegram` | Telegram transport, mapping, formatting, and publishing |
-| `NorbyPersistence` | File- or PostgreSQL-backed journals and snapshots |
-| `Norby` | Composition, live connections, and delivery coordination |
+| `TurgaiDomain` | Identities, messages, coordination values, and reducers |
+| `TurgaiMemory` | Facts, observations, memory events, policy, and retrieval |
+| `TurgaiHail` | Hail adapters, runtime configuration, and host tools |
+| `TurgaiApplication` | Durable conversations, reply scopes, and memory orchestration |
+| `TurgaiTelegram` | Telegram transport, mapping, formatting, and publishing |
+| `TurgaiPersistence` | File- or PostgreSQL-backed journals and snapshots |
+| `Turgai` | Composition, live connections, and delivery coordination |
 
 Hail owns durable agent communication, model turns, tool execution, and
-generic runtime extension points. Norby owns user identity, persona, memory,
+generic runtime extension points. Turgai owns user identity, persona, memory,
 channel policy, and application composition.
 
 ## Persistence and recovery
 
-Norby treats the journal as the source of truth for conversation recovery.
+Turgai treats the journal as the source of truth for conversation recovery.
 Snapshots accelerate replay but do not replace the journal. On startup, the
 application discovers unfinished conversation state, recreates Telegram
 connections, and retries recoverable turns. Personal memory is stored in its
 own durable projection and is not part of the Telegram transport state.
 
-Do not commit `.norby/`; it can contain private conversation history and local
+Do not commit `.turgai/`; it can contain private conversation history and local
 credentials/checkpoints.
 
 ## License
 
-Norby is licensed under the Apache License, Version 2.0. See
+Turgai is licensed under the Apache License, Version 2.0. See
 [LICENSE.txt](LICENSE.txt).

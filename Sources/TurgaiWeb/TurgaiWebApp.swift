@@ -3,11 +3,11 @@ import Hail
 import Hummingbird
 import HummingbirdElementary
 import NIOCore
-import NorbyApplication
-import NorbyHail
-import NorbyPersistence
-import NorbyTelegram
 import ServiceLifecycle
+import TurgaiApplication
+import TurgaiHail
+import TurgaiPersistence
+import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -16,7 +16,7 @@ import ServiceLifecycle
 #endif
 
 public struct TurgaiWebConfiguration: Sendable {
-    public let storage: NorbyStorageConfiguration?
+    public let storage: TurgaiStorageConfiguration?
     public let postgresPassword: String?
     public let telegramToken: String?
     public let telegramChatIDs: [Int64]
@@ -55,7 +55,7 @@ public struct TurgaiWebConfiguration: Sendable {
     }
 
     private init(
-        storage: NorbyStorageConfiguration?,
+        storage: TurgaiStorageConfiguration?,
         postgresPassword: String?,
         telegramToken: String?,
         telegramChatIDs: [Int64],
@@ -69,52 +69,6 @@ public struct TurgaiWebConfiguration: Sendable {
     }
 }
 
-/// Read-only runtime data supplied by the executable's Hail integration.
-/// TurgaiWeb deliberately does not depend on the cluster runtime directly.
-public struct TurgaiAgentRuntimeSnapshot: Codable, Sendable, Equatable {
-    public let profileID: String
-    public let contextID: String
-    public let phase: String
-    public let currentTool: String?
-    public let contextUsedTokens: Int?
-    public let contextLimitTokens: Int?
-    public let conversationMessageCount: Int
-    public let totalTokens: Int?
-
-    public init(
-        profileID: String,
-        contextID: String,
-        phase: String,
-        currentTool: String? = nil,
-        contextUsedTokens: Int? = nil,
-        contextLimitTokens: Int? = nil,
-        conversationMessageCount: Int = 0,
-        totalTokens: Int? = nil
-    ) {
-        self.profileID = profileID
-        self.contextID = contextID
-        self.phase = phase
-        self.currentTool = currentTool
-        self.contextUsedTokens = contextUsedTokens
-        self.contextLimitTokens = contextLimitTokens
-        self.conversationMessageCount = conversationMessageCount
-        self.totalTokens = totalTokens
-    }
-}
-
-public struct TurgaiDashboardSnapshot: Codable, Sendable, Equatable {
-    public let profiles: [NorbyAgentProfile]
-    public let runtime: [TurgaiAgentRuntimeSnapshot]
-
-    public init(
-        profiles: [NorbyAgentProfile],
-        runtime: [TurgaiAgentRuntimeSnapshot]
-    ) {
-        self.profiles = profiles
-        self.runtime = runtime
-    }
-}
-
 /// Minimal localhost dashboard. Onboarding is intentionally ordinary HTML
 /// forms first; live HTMX screens can be added once configuration is complete.
 public actor TurgaiWebApp: Service {
@@ -123,16 +77,16 @@ public actor TurgaiWebApp: Service {
 
     private let port: Int
     private let directory: URL
-    private let auth: NorbyAuth
+    private let auth: TurgaiAuth
     private let setup: TurgaiSetupStore
-    private let agentProfiles: NorbyAgentProfileStore
+    private let agentProfiles: TurgaiAgentProfileStore
     private let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
 
     public init(
         port: Int = 3333,
-        auth: NorbyAuth,
+        auth: TurgaiAuth,
         directory: URL,
-        agentProfiles: NorbyAgentProfileStore,
+        agentProfiles: TurgaiAgentProfileStore,
         runtimeSnapshots: @escaping @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = { [] }
     ) throws {
         self.port = port
@@ -170,7 +124,7 @@ public actor TurgaiWebApp: Service {
             guard await auth.hasAdmin() else {
                 return Self.redirect(to: "/onboarding")
             }
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: "/login")
             }
             let isComplete = await setup.isComplete
@@ -182,7 +136,7 @@ public actor TurgaiWebApp: Service {
                 return HTMLResponse {
                     TurgaiPage(
                         title: "Turgai",
-                        username: username,
+                        user: user,
                         profiles: profiles,
                         runtime: runtime
                     )
@@ -191,39 +145,49 @@ public actor TurgaiWebApp: Service {
             return Self.redirect(to: "/onboarding/model")
         }
         router.get("/api/agents") { request, _ in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedUser(from: request, auth: auth) != nil else {
                 return Response(status: .unauthorized)
             }
             let profiles = await agentProfiles.profiles()
             let runtime = await runtimeSnapshots()
             return try Self.jsonResponse(
-                TurgaiDashboardSnapshot(profiles: profiles, runtime: runtime)
+                TurgaiDashboardSnapshot(
+                    profiles: profiles.map {
+                        BotSummary(
+                            id: $0.id,
+                            name: $0.name,
+                            model: $0.model.identifier,
+                            enabled: $0.enabled
+                        )
+                    },
+                    runtime: runtime
+                )
             )
         }
         router.get("/tools") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             return HTMLResponse {
                 TurgaiToolsPage(
-                    username: username,
+                    user: user,
                     documents: userToolRegistry.documents()
                 )
             }.response(from: request, context: context)
         }
         router.get("/tools/new") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             return HTMLResponse {
                 TurgaiToolEditorPage(
-                    username: username,
+                    user: user,
                     draft: TurgaiToolDraft.new(fileName: Self.newToolFileName())
                 )
             }.response(from: request, context: context)
         }
         router.get("/tools/:file") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard let fileName = context.parameters.get("file"),
@@ -233,14 +197,14 @@ public actor TurgaiWebApp: Service {
             }
             return HTMLResponse {
                 TurgaiToolEditorPage(
-                    username: username,
+                    user: user,
                     draft: TurgaiToolDraft(document: document),
                     issue: document.issue
                 )
             }.response(from: request, context: context)
         }
         router.post("/tools/save") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await Self.decodeForm(from: request, context: context)
@@ -260,7 +224,7 @@ public actor TurgaiWebApp: Service {
             } catch {
                 return HTMLResponse {
                     TurgaiToolEditorPage(
-                        username: username,
+                        user: user,
                         draft: draft,
                         error: Self.userToolErrorMessage(error)
                     )
@@ -268,7 +232,7 @@ public actor TurgaiWebApp: Service {
             }
         }
         router.post("/tools/delete") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await Self.decodeForm(from: request, context: context)
@@ -279,7 +243,7 @@ public actor TurgaiWebApp: Service {
             } catch {
                 return HTMLResponse {
                     TurgaiToolsPage(
-                        username: username,
+                        user: user,
                         documents: userToolRegistry.documents(),
                         error: Self.userToolErrorMessage(error)
                     )
@@ -287,17 +251,20 @@ public actor TurgaiWebApp: Service {
             }
         }
         router.get("/agents/new") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let profiles = await agentProfiles.profiles()
             let modelCatalog = await Self.modelCatalog(for: profiles)
             return HTMLResponse {
-                NewAgentPage(username: username, modelCatalog: modelCatalog)
+                NewAgentPage(
+                    user: user,
+                    modelCatalog: modelCatalog
+                )
             }.response(from: request, context: context)
         }
         router.get("/agents/:id") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard let id = context.parameters.get("id"),
@@ -311,7 +278,7 @@ public actor TurgaiWebApp: Service {
             let isDefaultProfile = await agentProfiles.isDefaultProfile(id: profile.id)
             return HTMLResponse {
                 AgentDetailPage(
-                    username: username,
+                    user: user,
                     profile: profile,
                     modelCatalog: modelCatalog,
                     runtime: runtime,
@@ -320,7 +287,7 @@ public actor TurgaiWebApp: Service {
             }.response(from: request, context: context)
         }
         router.post("/agents/update") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await Self.decodeForm(from: request, context: context)
@@ -329,18 +296,20 @@ public actor TurgaiWebApp: Service {
                 return Self.redirect(to: "/")
             }
             do {
+                let values = BotFormValues(form: form)
                 var profile = existingProfile
-                profile.name = form["name"]?.first ?? profile.name
-                let model = try Self.model(from: form)
+                profile.name = values.name
+                let modelValues = ModelFormValues(form: form)
+                let model = try Self.model(from: modelValues)
                 profile.model = model
-                profile.ollamaBaseURL = try Self.ollamaBaseURL(from: form, for: model)
+                profile.ollamaBaseURL = try Self.ollamaBaseURL(from: modelValues, for: model)
                 profile.contextWindow = try Self.parsePositiveInteger(
-                    form["contextWindow"]?.first,
+                    values.contextWindow,
                     field: "context window"
                 )
-                profile.persona = form["persona"]?.first
-                profile.instructions = form["instructions"]?.first ?? profile.instructions
-                profile.telegramChatIDs = try Self.parseChatIDs(form["telegramChatIDs"]?.first)
+                profile.persona = values.persona
+                profile.instructions = values.instructions
+                profile.telegramChatIDs = try Self.parseChatIDs(values.telegramChatIDs)
                 try await agentProfiles.update(profile)
                 return Self.redirect(to: "/agents/\(profile.id)")
             } catch {
@@ -350,7 +319,7 @@ public actor TurgaiWebApp: Service {
                 let isDefaultProfile = await agentProfiles.isDefaultProfile(id: existingProfile.id)
                 return HTMLResponse {
                     AgentDetailPage(
-                        username: username,
+                        user: user,
                         profile: existingProfile,
                         modelCatalog: modelCatalog,
                         runtime: runtime,
@@ -361,26 +330,27 @@ public actor TurgaiWebApp: Service {
             }
         }
         router.post("/agents/create") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await Self.decodeForm(from: request, context: context)
             do {
-                let name = form["name"]?.first ?? ""
-                let model = try Self.model(from: form)
-                let ollamaBaseURL = try Self.ollamaBaseURL(from: form, for: model)
+                let values = BotFormValues(form: form)
+                let modelValues = ModelFormValues(form: form)
+                let model = try Self.model(from: modelValues)
+                let ollamaBaseURL = try Self.ollamaBaseURL(from: modelValues, for: model)
                 let contextWindow = try Self.parsePositiveInteger(
-                    form["contextWindow"]?.first,
+                    values.contextWindow,
                     field: "context window"
                 )
                 let profile = try await agentProfiles.create(
-                    name: name,
+                    name: values.name,
                     model: model,
                     ollamaBaseURL: ollamaBaseURL,
                     contextWindow: contextWindow,
-                    persona: form["persona"]?.first,
-                    instructions: form["instructions"]?.first ?? "",
-                    telegramChatIDs: try Self.parseChatIDs(form["telegramChatIDs"]?.first)
+                    persona: values.persona,
+                    instructions: values.instructions,
+                    telegramChatIDs: try Self.parseChatIDs(values.telegramChatIDs)
                 )
                 return Self.redirect(to: "/agents/\(profile.id)")
             } catch {
@@ -388,7 +358,7 @@ public actor TurgaiWebApp: Service {
                 let modelCatalog = await Self.modelCatalog(for: profiles)
                 return HTMLResponse {
                     NewAgentPage(
-                        username: username,
+                        user: user,
                         modelCatalog: modelCatalog,
                         error: Self.profileErrorMessage(error)
                     )
@@ -396,7 +366,7 @@ public actor TurgaiWebApp: Service {
             }
         }
         router.post("/agents/delete") { request, context in
-            guard let username = await Self.authenticatedAdmin(from: request, auth: auth) else {
+            guard let user = await Self.authenticatedUser(from: request, auth: auth) else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await Self.decodeForm(from: request, context: context)
@@ -414,7 +384,7 @@ public actor TurgaiWebApp: Service {
                 let isDefaultProfile = await agentProfiles.isDefaultProfile(id: profile.id)
                 return HTMLResponse {
                     AgentDetailPage(
-                        username: username,
+                        user: user,
                         profile: profile,
                         modelCatalog: modelCatalog,
                         runtime: runtime,
@@ -428,7 +398,7 @@ public actor TurgaiWebApp: Service {
             guard await auth.hasAdmin() else {
                 return Self.redirect(to: "/onboarding")
             }
-            if await Self.authenticatedAdmin(from: request, auth: auth) != nil {
+            if await Self.authenticatedUser(from: request, auth: auth) != nil {
                 let isComplete = await setup.isComplete
                 let isReady = await setup.isReady
                 let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
@@ -438,16 +408,86 @@ public actor TurgaiWebApp: Service {
             }
             return HTMLResponse { LoginPage() }.response(from: request, context: context)
         }
+        router.get("/accounts") { request, context in
+            guard let user = await Self.authenticatedAdminUser(from: request, auth: auth) else {
+                return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+            }
+            let accounts = await auth.accounts().map(Self.accountSummary)
+            return HTMLResponse {
+                AccountsPage(
+                    user: user,
+                    accounts: accounts
+                )
+            }.response(from: request, context: context)
+        }
+        router.post("/accounts/action") { request, context in
+            guard let user = await Self.authenticatedAdminUser(from: request, auth: auth) else {
+                return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+            }
+            let form = try await Self.decodeForm(from: request, context: context)
+            guard let accountIDValue = form["id"]?.first,
+                let accountID = Foundation.UUID(uuidString: accountIDValue)
+            else {
+                return Self.redirect(to: "/accounts")
+            }
+            let action = AccountAction(rawValue: form["action"]?.first ?? "")
+            do {
+                switch action {
+                case .approve:
+                    try await auth.approve(id: accountID)
+                case .disable:
+                    try await auth.disable(id: accountID)
+                case .administrator:
+                    try await auth.setRole(accountID, role: .administrator)
+                case .member:
+                    try await auth.setRole(accountID, role: .member)
+                default:
+                    throw TurgaiAuthError.invalidUsername
+                }
+                return Self.redirect(to: "/accounts")
+            } catch {
+                let accounts = await auth.accounts().map(Self.accountSummary)
+                return HTMLResponse {
+                    AccountsPage(
+                        user: user,
+                        accounts: accounts,
+                        error: Self.accountErrorMessage(error)
+                    )
+                }.response(from: request, context: context)
+            }
+        }
+        router.get("/register") { request, context in
+            guard await auth.hasAdmin() else {
+                return Self.redirect(to: "/onboarding")
+            }
+            return HTMLResponse { RegisterAccountPage() }.response(from: request, context: context)
+        }
+        router.post("/register") { request, context in
+            guard await auth.hasAdmin() else {
+                return Self.redirect(to: "/onboarding")
+            }
+            let form = try await Self.decodeForm(from: request, context: context)
+            let username = form["username"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let password = form["password"]?.first ?? ""
+            do {
+                _ = try await auth.register(username: username, password: password)
+                return HTMLResponse {
+                    RegisterAccountPage(
+                        success: "Your account is ready for administrator approval."
+                    )
+                }.response(from: request, context: context)
+            } catch {
+                return HTMLResponse {
+                    RegisterAccountPage(error: Self.registrationErrorMessage(error))
+                }.response(from: request, context: context)
+            }
+        }
         router.post("/login") { request, context in
             let form = try await Self.decodeForm(from: request, context: context)
             let username = form["username"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let password = form["password"]?.first ?? ""
             do {
                 let session = try await auth.signIn(username: username, password: password)
-                guard await auth.isAdmin(username) else {
-                    return HTMLResponse { LoginPage(error: "Only an administrator can use this dashboard.") }
-                        .response(from: request, context: context)
-                }
                 let isComplete = await setup.isComplete
                 let isReady = await setup.isReady
                 let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
@@ -466,7 +506,7 @@ public actor TurgaiWebApp: Service {
         }
         router.get("/onboarding") { request, context in
             if await auth.hasAdmin() {
-                guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+                guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                     return Self.redirect(to: "/login")
                 }
                 return Self.redirect(to: "/onboarding/model")
@@ -520,7 +560,7 @@ public actor TurgaiWebApp: Service {
             }
         }
         router.get("/onboarding/model") { request, context in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let profiles = await agentProfiles.profiles()
@@ -531,36 +571,35 @@ public actor TurgaiWebApp: Service {
             }.response(from: request, context: context)
         }
         router.post("/onboarding/model") { request, context in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await Self.decodeForm(from: request, context: context)
             do {
-                let model = try Self.model(from: form)
-                let ollamaBaseURL = try Self.ollamaBaseURL(from: form, for: model)
-                let name = form["agentName"]?.first ?? ""
+                let values = BotFormValues(form: form, nameKey: "agentName")
+                let modelValues = ModelFormValues(form: form)
+                let model = try Self.model(from: modelValues)
+                let ollamaBaseURL = try Self.ollamaBaseURL(from: modelValues, for: model)
                 let contextWindow = try Self.parsePositiveInteger(
-                    form["contextWindow"]?.first,
+                    values.contextWindow,
                     field: "context window"
                 )
-                let persona = form["persona"]?.first
-                let instructions = form["instructions"]?.first ?? ""
                 if var profile = await agentProfiles.defaultProfile() {
                     profile.model = model
                     profile.ollamaBaseURL = ollamaBaseURL
-                    profile.name = name
-                    profile.persona = persona
-                    profile.instructions = instructions
+                    profile.name = values.name
+                    profile.persona = values.persona
+                    profile.instructions = values.instructions
                     profile.contextWindow = contextWindow
                     try await agentProfiles.update(profile)
                 } else {
                     _ = try await agentProfiles.create(
-                        name: name,
+                        name: values.name,
                         model: model,
                         ollamaBaseURL: ollamaBaseURL,
                         contextWindow: contextWindow,
-                        persona: persona,
-                        instructions: instructions
+                        persona: values.persona,
+                        instructions: values.instructions
                     )
                 }
                 return Response(status: .seeOther, headers: [.location: "/onboarding/storage"])
@@ -578,7 +617,7 @@ public actor TurgaiWebApp: Service {
             }
         }
         router.get("/onboarding/storage") { request, context in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let storage = await setup.storageConfiguration
@@ -590,7 +629,7 @@ public actor TurgaiWebApp: Service {
             }.response(from: request, context: context)
         }
         router.post("/onboarding/storage") { request, context in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await Self.decodeForm(from: request, context: context)
@@ -616,7 +655,7 @@ public actor TurgaiWebApp: Service {
             }
         }
         router.get("/onboarding/telegram") { request, context in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let chatIDs = await setup.telegramChatIDs
@@ -625,18 +664,19 @@ public actor TurgaiWebApp: Service {
             }.response(from: request, context: context)
         }
         router.post("/onboarding/telegram") { request, context in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await Self.decodeForm(from: request, context: context)
-            guard let token = form["token"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty
+            let values = TelegramFormValues(form: form)
+            guard let token = values.token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty
             else {
                 return HTMLResponse { TelegramPage(error: "A Telegram bot token is required.") }
                     .response(from: request, context: context)
             }
             let chatIDs: [Int64]
             do {
-                chatIDs = try Self.parseChatIDs(form["chatIDs"]?.first)
+                chatIDs = try Self.parseChatIDs(values.chatIDs)
             } catch {
                 return HTMLResponse {
                     TelegramPage(error: Self.telegramErrorMessage(error))
@@ -654,7 +694,7 @@ public actor TurgaiWebApp: Service {
             return Response(status: .seeOther, headers: [.location: "/onboarding/finish"])
         }
         router.get("/onboarding/finish") { request, context in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard await setup.isReady, await agentProfiles.defaultProfile() != nil else {
@@ -667,7 +707,7 @@ public actor TurgaiWebApp: Service {
                 .response(from: request, context: context)
         }
         router.post("/onboarding/finish") { request, context in
-            guard await Self.authenticatedAdmin(from: request, auth: auth) != nil else {
+            guard await Self.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return Self.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard await setup.isReady, await agentProfiles.defaultProfile() != nil else {
@@ -685,18 +725,14 @@ public actor TurgaiWebApp: Service {
     }
 
     private static func modelCatalog(
-        for profiles: [NorbyAgentProfile]
+        for profiles: [TurgaiAgentProfile]
     ) async -> TurgaiModelCatalog {
         await TurgaiModelCatalogLoader.load(profiles: profiles)
     }
 
-    private static func model(from form: [String: [String]]) throws -> AgentModel {
-        let providerValue =
-            form["provider"]?.first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let modelValue =
-            form["modelID"]?.first?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private static func model(from values: ModelFormValues) throws -> AgentModel {
+        let providerValue = values.provider
+        let modelValue = values.modelID
         guard !providerValue.isEmpty, !modelValue.isEmpty else {
             throw TurgaiFormError.invalidValue("model")
         }
@@ -720,12 +756,11 @@ public actor TurgaiWebApp: Service {
     }
 
     private static func ollamaBaseURL(
-        from form: [String: [String]],
+        from values: ModelFormValues,
         for model: AgentModel
     ) throws -> URL? {
         guard model.provider == .ollama else { return nil }
-        let rawValue = form["ollamaBaseURL"]?.first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawValue = values.ollamaBaseURL
         guard let rawValue, !rawValue.isEmpty else {
             return OllamaConfiguration.defaultBaseURL
         }
@@ -742,38 +777,29 @@ public actor TurgaiWebApp: Service {
     private static func storageConfiguration(
         from form: [String: [String]],
         defaultFileDirectory: URL
-    ) throws -> NorbyStorageConfiguration {
-        let backend =
-            form["backend"]?.first?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? "file"
+    ) throws -> TurgaiStorageConfiguration {
+        let values = StorageFormValues(form: form, defaultFileDirectory: defaultFileDirectory)
 
-        switch backend {
-        case "file":
-            let value = form["fileURL"]?.first?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let url = value.flatMap(URL.init(string:)) ?? defaultFileDirectory
+        switch values.backend {
+        case .file:
+            let value = values.fileURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = URL(string: value) ?? defaultFileDirectory
             guard url.isFileURL else {
                 throw TurgaiFormError.invalidValue("file store URL")
             }
-            return try NorbyStorageConfiguration.fileStore(directory: url)
+            return try TurgaiStorageConfiguration.fileStore(directory: url)
 
-        case "postgres":
+        case .postgres:
             guard
-                let rawURL = form["postgresURL"]?.first?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                let url = URL(string: rawURL)
+                let rawURL = URL(string: values.postgresURL.trimmingCharacters(in: .whitespacesAndNewlines))
             else {
                 throw TurgaiFormError.invalidValue("PostgreSQL URL")
             }
-            let username = form["postgresUsername"]?.first ?? ""
-            return try NorbyStorageConfiguration.postgresStore(
-                url: url,
-                username: username
+            return try TurgaiStorageConfiguration.postgresStore(
+                url: rawURL,
+                username: values.postgresUsername
             )
 
-        default:
-            throw TurgaiFormError.invalidValue("storage backend")
         }
     }
 
@@ -806,13 +832,13 @@ public actor TurgaiWebApp: Service {
         switch error {
         case TurgaiFormError.invalidValue(let field):
             "Enter a valid \(field)."
-        case NorbyStorageConfigurationError.invalidFileURL:
+        case TurgaiStorageConfigurationError.invalidFileURL:
             "File storage needs a file:// URL."
-        case NorbyStorageConfigurationError.invalidPostgresURL:
+        case TurgaiStorageConfigurationError.invalidPostgresURL:
             "PostgreSQL URL must look like postgres://host:5432/database."
-        case NorbyStorageConfigurationError.invalidPostgresUsername:
+        case TurgaiStorageConfigurationError.invalidPostgresUsername:
             "A PostgreSQL username is required."
-        case NorbyStorageConfigurationError.invalidPostgresPassword:
+        case TurgaiStorageConfigurationError.invalidPostgresPassword:
             "A PostgreSQL password is required."
         default:
             "Could not save storage configuration."
@@ -832,23 +858,47 @@ public actor TurgaiWebApp: Service {
         }
     }
 
+    private static func registrationErrorMessage(_ error: Error) -> String {
+        switch error {
+        case TurgaiAuthError.invalidUsername:
+            "Choose a username using letters, numbers, dashes, or underscores."
+        case TurgaiAuthError.weakPassword:
+            "Choose a password with at least 12 characters."
+        case TurgaiAuthError.usernameTaken:
+            "That username is already taken."
+        default:
+            "Could not create the account. Try again."
+        }
+    }
+
+    private static func accountErrorMessage(_ error: Error) -> String {
+        switch error {
+        case TurgaiAuthError.unknownUser:
+            "That account no longer exists."
+        case TurgaiAuthError.accountNotApproved:
+            "Keep at least one approved administrator."
+        default:
+            "Could not update the account."
+        }
+    }
+
     private static func profileErrorMessage(_ error: Error) -> String {
         switch error {
         case TurgaiFormError.invalidValue(let field):
             "Enter a valid \(field)."
-        case NorbyAgentProfileError.invalidOllamaBaseURL:
+        case TurgaiAgentProfileError.invalidOllamaBaseURL:
             "Ollama server URL must be an http(s) URL with a host."
-        case NorbyAgentProfileError.invalidContextWindow:
+        case TurgaiAgentProfileError.invalidContextWindow:
             "Context window must be a positive number."
-        case NorbyAgentProfileError.duplicateTelegramChatID(let id):
+        case TurgaiAgentProfileError.duplicateTelegramChatID(let id):
             "Telegram chat ID \(id) is already assigned to another agent."
-        case NorbyAgentProfileError.invalidName:
+        case TurgaiAgentProfileError.invalidName:
             "Give the agent a name and keep it under 120 characters."
-        case NorbyAgentProfileError.invalidID(let id):
+        case TurgaiAgentProfileError.invalidID(let id):
             "Invalid agent identifier: \(id)."
-        case NorbyAgentProfileError.unknownProfile(let id):
+        case TurgaiAgentProfileError.unknownProfile(let id):
             "Agent \(id) no longer exists."
-        case NorbyAgentProfileError.cannotDeleteDefaultProfile:
+        case TurgaiAgentProfileError.cannotDeleteDefaultProfile:
             "The default agent cannot be deleted."
         default:
             "Could not save the agent configuration."
@@ -877,19 +927,57 @@ public actor TurgaiWebApp: Service {
         )
     }
 
-    private static func authenticatedAdmin(from request: Request, auth: NorbyAuth) async -> String? {
-        guard let cookie = request.cookies[sessionCookieName],
-            let username = try? await auth.authenticate(cookie.value),
-            await auth.isAdmin(username)
+    private static func authenticatedAdminUser(from request: Request, auth: TurgaiAuth) async -> AuthenticatedUser? {
+        guard let account = await authenticatedAccount(from: request, auth: auth),
+            account.role == .administrator
         else { return nil }
-        return username
+        return Self.userInfo(from: account)
+    }
+
+    private static func authenticatedUser(from request: Request, auth: TurgaiAuth) async -> AuthenticatedUser? {
+        guard let account = await authenticatedAccount(from: request, auth: auth) else { return nil }
+        return Self.userInfo(from: account)
+    }
+
+    private static func authenticatedAccount(from request: Request, auth: TurgaiAuth) async -> Account? {
+        guard let cookie = request.cookies[sessionCookieName],
+            let account = try? await auth.authenticate(cookie.value)
+        else { return nil }
+        return account
+    }
+
+    private static func userInfo(from account: Account) -> AuthenticatedUser {
+        let info = AccountInfo(id: account.id, username: account.username)
+        switch account.role {
+        case .member: return .member(info)
+        case .administrator: return .administrator(info)
+        }
+    }
+
+    private static func accountSummary(from account: Account) -> AccountSummary {
+        let role: AccountRole =
+            switch account.role {
+            case .member: .member
+            case .administrator: .administrator
+            }
+        let status: AccountStatus =
+            switch account.status {
+            case .pending: .pending
+            case .approved: .approved
+            case .disabled: .disabled
+            }
+        return AccountSummary(
+            info: AccountInfo(id: account.id, username: account.username),
+            role: role,
+            status: status
+        )
     }
 
     private static func sessionCookie(_ token: String) -> Cookie {
         Cookie(
             name: sessionCookieName,
             value: token,
-            maxAge: Int(NorbyAuth.sessionLifetime),
+            maxAge: Int(TurgaiAuth.sessionLifetime),
             path: "/",
             httpOnly: true,
             sameSite: .lax
@@ -912,7 +1000,7 @@ public actor TurgaiWebApp: Service {
         Cookie(
             name: bootstrapChallengeCookieName,
             value: challenge,
-            maxAge: Int(NorbyAuth.bootstrapChallengeLifetime),
+            maxAge: Int(TurgaiAuth.bootstrapChallengeLifetime),
             path: "/onboarding/register",
             httpOnly: true,
             sameSite: .strict
@@ -956,7 +1044,7 @@ private enum TurgaiFormError: Error {
 
 private actor TurgaiSetupStore {
     fileprivate struct State: Codable {
-        var storage: NorbyStorageConfiguration?
+        var storage: TurgaiStorageConfiguration?
         var telegramChatIDs: [Int64] = []
         var telegramConfigured = false
         var complete = false
@@ -985,7 +1073,7 @@ private actor TurgaiSetupStore {
     }
 
     var isComplete: Bool { state.complete }
-    var storageConfiguration: NorbyStorageConfiguration? { state.storage }
+    var storageConfiguration: TurgaiStorageConfiguration? { state.storage }
     var telegramChatIDs: [Int64] { state.telegramChatIDs }
 
     func waitUntilComplete() async {
@@ -1003,14 +1091,14 @@ private actor TurgaiSetupStore {
     }
 
     func setStorage(
-        _ storage: NorbyStorageConfiguration,
+        _ storage: TurgaiStorageConfiguration,
         postgresPassword: String?
     ) throws {
         if case .postgres = storage {
             guard let postgresPassword,
                 !postgresPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
-                throw NorbyStorageConfigurationError.invalidPostgresPassword
+                throw TurgaiStorageConfigurationError.invalidPostgresPassword
             }
             try Data(postgresPassword.utf8).write(to: postgresPasswordURL, options: .atomic)
             try FileManager.default.setAttributes(
@@ -1062,20 +1150,20 @@ public struct TurgaiOnboardingService: Service, Sendable {
 
 private struct TurgaiPage: HTMLDocument, Sendable {
     let title: String
-    let username: String
-    let profiles: [NorbyAgentProfile]
+    let user: AuthenticatedUser
+    let profiles: [TurgaiAgentProfile]
     let runtime: [TurgaiAgentRuntimeSnapshot]
     let error: String?
 
     init(
         title: String,
-        username: String,
-        profiles: [NorbyAgentProfile],
+        user: AuthenticatedUser,
+        profiles: [TurgaiAgentProfile],
         runtime: [TurgaiAgentRuntimeSnapshot] = [],
         error: String? = nil
     ) {
         self.title = title
-        self.username = username
+        self.user = user
         self.profiles = profiles
         self.runtime = runtime
         self.error = error
@@ -1085,21 +1173,21 @@ private struct TurgaiPage: HTMLDocument, Sendable {
     var body: some HTML {
         main(.class("app-page")) {
             div(.class("app-shell")) {
-                AppHeader(username: username)
+                AppHeader(user: user, section: .bots)
                 section(.class("page-intro")) {
                     div {
-                        p(.class("eyebrow")) { "Your sky" }
+                        p(.class("eyebrow")) { "Your Turgai" }
                         h1 { "Bots" }
-                        p(.class("lede")) { "Choose a bot to see its conversations and settings." }
+                        p(.class("lede")) { "Choose a bot to open its conversations and shape how it works." }
                     }
                     a(.href("/agents/new"), .class("button button-accent")) { "+ New bot" }
                 }
                 if let error { p(.class("error page-error")) { error } }
                 if profiles.isEmpty {
                     div(.class("empty-state")) {
-                        p(.class("eyebrow")) { "Nothing here yet" }
-                        h2 { "Create your first bot." }
-                        a(.href("/agents/new"), .class("text-link")) { "+ New bot" }
+                        p(.class("eyebrow")) { "A clear sky" }
+                        h2 { "Give Turgai its first companion." }
+                        a(.href("/agents/new"), .class("button button-accent")) { "+ New bot" }
                     }
                 } else {
                     section(.class("bot-grid")) {
@@ -1145,7 +1233,13 @@ private struct TurgaiPage: HTMLDocument, Sendable {
 }
 
 struct AppHeader: HTML, Sendable {
-    let username: String
+    let user: AuthenticatedUser
+    let section: TurgaiAppSection
+
+    init(user: AuthenticatedUser, section: TurgaiAppSection) {
+        self.user = user
+        self.section = section
+    }
 
     var body: some HTML {
         header(.class("app-header")) {
@@ -1155,8 +1249,30 @@ struct AppHeader: HTML, Sendable {
             }
             nav(.class("app-nav")) {
                 div(.class("app-nav-links")) {
-                    a(.href("/"), .class("nav-link")) { "Bots" }
-                    a(.href("/tools"), .class("nav-link")) { "Tools" }
+                    if section == .bots {
+                        a(
+                            .href("/"), .class("nav-link nav-link-active"),
+                            .init(name: "aria-current", value: "page")
+                        ) { "Bots" }
+                    } else {
+                        a(.href("/"), .class("nav-link")) { "Bots" }
+                    }
+                    if section == .tools {
+                        a(
+                            .href("/tools"), .class("nav-link nav-link-active"),
+                            .init(name: "aria-current", value: "page")
+                        ) { "Tools" }
+                    } else {
+                        a(.href("/tools"), .class("nav-link")) { "Tools" }
+                    }
+                    if case .administrator = user, section == .accounts {
+                        a(
+                            .href("/accounts"), .class("nav-link nav-link-active"),
+                            .init(name: "aria-current", value: "page")
+                        ) { "Accounts" }
+                    } else if case .administrator = user {
+                        a(.href("/accounts"), .class("nav-link")) { "Accounts" }
+                    }
                 }
                 label(.class("theme-switch")) {
                     input(
@@ -1181,7 +1297,7 @@ struct AppHeader: HTML, Sendable {
                         .class("account-summary"),
                         .init(name: "aria-label", value: "Account menu")
                     ) {
-                        span(.class("account-name")) { username }
+                        span(.class("account-name")) { user.username }
                         span(.class("account-chevron")) { "▾" }
                     }
                     div(.class("account-dropdown")) {
@@ -1230,7 +1346,7 @@ struct TurgaiBreadcrumb: HTML, Sendable {
 }
 
 private struct AgentTile: HTML, Sendable {
-    let profile: NorbyAgentProfile
+    let profile: TurgaiAgentProfile
     let runtime: [TurgaiAgentRuntimeSnapshot]
 
     private var initial: String {
@@ -1260,22 +1376,22 @@ private struct AgentTile: HTML, Sendable {
 }
 
 private struct AgentDetailPage: HTMLDocument, Sendable {
-    let username: String
-    let profile: NorbyAgentProfile
+    let user: AuthenticatedUser
+    let profile: TurgaiAgentProfile
     let modelCatalog: TurgaiModelCatalog
     let runtime: [TurgaiAgentRuntimeSnapshot]
     let isDefaultProfile: Bool
     let error: String?
 
     init(
-        username: String,
-        profile: NorbyAgentProfile,
+        user: AuthenticatedUser,
+        profile: TurgaiAgentProfile,
         modelCatalog: TurgaiModelCatalog,
         runtime: [TurgaiAgentRuntimeSnapshot] = [],
         isDefaultProfile: Bool,
         error: String? = nil
     ) {
-        self.username = username
+        self.user = user
         self.profile = profile
         self.modelCatalog = modelCatalog
         self.runtime = runtime
@@ -1288,7 +1404,7 @@ private struct AgentDetailPage: HTMLDocument, Sendable {
     var body: some HTML {
         main(.class("app-page")) {
             div(.class("app-shell")) {
-                AppHeader(username: username)
+                AppHeader(user: user, section: .bots)
                 section(.class("page-intro detail-page-intro")) {
                     div {
                         TurgaiBreadcrumb(
@@ -1306,10 +1422,10 @@ private struct AgentDetailPage: HTMLDocument, Sendable {
                 if let error { p(.class("error page-error")) { error } }
                 div(.class("detail-layout")) {
                     section(.class("detail-main")) {
-                        h2 { "Configuration" }
-                        p(.class("section-intro")) { "This bot's voice, model, and Telegram routing." }
+                        h2 { "Shape this bot" }
+                        p(.class("section-intro")) { "Choose its voice, its mind, and how it finds you." }
                         p(.class("detail-note")) {
-                            "Changes take effect the next time this bot is activated. Conversations already running keep their current agent."
+                            "Changes take effect the next time this bot starts. Conversations already underway keep their current voice."
                         }
                         AgentConfigurationForm(
                             action: "/agents/update",
@@ -1332,7 +1448,7 @@ private struct AgentDetailPage: HTMLDocument, Sendable {
 }
 
 private struct AgentRuntimeSummary: HTML, Sendable {
-    let profile: NorbyAgentProfile
+    let profile: TurgaiAgentProfile
     let runtime: [TurgaiAgentRuntimeSnapshot]
 
     var body: some HTML {
@@ -1480,7 +1596,7 @@ private struct ModelPicker: HTML, Sendable {
 
 private struct AgentConfigurationForm: HTML, Sendable {
     let action: String
-    let profile: NorbyAgentProfile?
+    let profile: TurgaiAgentProfile?
     let modelCatalog: TurgaiModelCatalog
     let submitLabel: String
 
@@ -1506,7 +1622,7 @@ private struct AgentConfigurationForm: HTML, Sendable {
                 h3 { "Model" }
                 ModelPicker(catalog: modelCatalog, selectedModel: selectedModel)
                 label(.class("form-field")) {
-                    span(.class("field-label")) { "Ollama server URL" }
+                    span(.class("field-label")) { "Ollama address" }
                     input(
                         .type(.url), .name("ollamaBaseURL"),
                         .value(profile?.ollamaBaseURL?.absoluteString ?? ""),
@@ -1518,7 +1634,7 @@ private struct AgentConfigurationForm: HTML, Sendable {
                     span(.class("field-label")) { "Context window" }
                     input(
                         .type(.number), .name("contextWindow"),
-                        .value(String(profile?.contextWindow ?? NorbyAgentProfileStore.defaultContextWindow)),
+                        .value(String(profile?.contextWindow ?? TurgaiAgentProfileStore.defaultContextWindow)),
                         .required
                     )
                     p(.class("hint")) { "Maximum context passed to the model." }
@@ -1567,12 +1683,16 @@ private struct AgentConfigurationForm: HTML, Sendable {
 }
 
 private struct NewAgentPage: HTMLDocument, Sendable {
-    let username: String
+    let user: AuthenticatedUser
     let modelCatalog: TurgaiModelCatalog
     let error: String?
 
-    init(username: String, modelCatalog: TurgaiModelCatalog, error: String? = nil) {
-        self.username = username
+    init(
+        user: AuthenticatedUser,
+        modelCatalog: TurgaiModelCatalog,
+        error: String? = nil
+    ) {
+        self.user = user
         self.modelCatalog = modelCatalog
         self.error = error
     }
@@ -1582,7 +1702,7 @@ private struct NewAgentPage: HTMLDocument, Sendable {
     var body: some HTML {
         main(.class("app-page")) {
             div(.class("app-shell")) {
-                AppHeader(username: username)
+                AppHeader(user: user, section: .bots)
                 section(.class("page-intro detail-page-intro")) {
                     div {
                         TurgaiBreadcrumb(
@@ -1590,8 +1710,8 @@ private struct NewAgentPage: HTMLDocument, Sendable {
                             parentHref: "/",
                             currentTitle: "New bot"
                         )
-                        h1 { "Add a bot" }
-                        p(.class("lede")) { "Give it a voice, a model, and a route." }
+                        h1 { "Make a new companion" }
+                        p(.class("lede")) { "Give it a voice, a mind, and a way to reach you." }
                     }
                 }
                 if let error { p(.class("error page-error")) { error } }
@@ -1726,9 +1846,9 @@ private struct LoginPage: HTMLDocument, Sendable {
                 SetupHeader()
                 section(.class("setup-content setup-content-compact")) {
                     div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Turgai" }
+                        p(.class("eyebrow")) { "Your sky, waiting" }
                         h1 { "Welcome back." }
-                        p(.class("lede")) { "Sign in to continue shaping your sky." }
+                        p(.class("lede")) { "Pick up where you left off." }
                     }
                     div(.class("setup-form-area")) {
                         if let error { p(.class("error")) { error } }
@@ -1745,9 +1865,142 @@ private struct LoginPage: HTMLDocument, Sendable {
                                 input(.type(.password), .name("password"), .autocomplete("current-password"), .required)
                             }
                         }
+                        p(.class("hint account-register-prompt")) {
+                            "New here? "
+                            a(.href("/register"), .class("text-link")) { "Create an account" }
+                        }
                     }
                 }
                 SetupFooter(step: nil, submitFormID: "login-form", submitLabel: "Sign in")
+            }
+        }
+    }
+}
+
+private struct AccountsPage: HTMLDocument, Sendable {
+    let user: AuthenticatedUser
+    let accounts: [AccountSummary]
+    let error: String?
+
+    init(user: AuthenticatedUser, accounts: [AccountSummary], error: String? = nil) {
+        self.user = user
+        self.accounts = accounts
+        self.error = error
+    }
+
+    var title: String { "Turgai — Accounts" }
+    var head: some HTML { TurgaiHead() }
+    var body: some HTML {
+        main(.class("app-page")) {
+            div(.class("app-shell")) {
+                AppHeader(user: user, section: .accounts)
+                section(.class("page-intro detail-page-intro")) {
+                    div {
+                        TurgaiBreadcrumb(parentTitle: "Bots", parentHref: "/", currentTitle: "Accounts")
+                        h1 { "Accounts" }
+                        p(.class("lede")) { "Decide who can use this Turgai and what they can change." }
+                    }
+                }
+                if let error { p(.class("error page-error")) { error } }
+                section(.class("accounts-list")) {
+                    for account in accounts {
+                        div(.class("account-row")) {
+                            div(.class("account-row-identity")) {
+                                strong { account.username }
+                                span(.class("account-role")) { account.role.rawValue }
+                            }
+                            span(.class("account-status account-status-(account.status.rawValue)")) {
+                                account.status.rawValue
+                            }
+                            div(.class("account-row-actions")) {
+                                if account.status == .pending {
+                                    form(.method(.post), .action("/accounts/action")) {
+                                        input(.type(.hidden), .name("id"), .value(account.id.uuidString))
+                                        input(.type(.hidden), .name("action"), .value("approve"))
+                                        button(.type(.submit), .class("text-button")) { "Approve" }
+                                    }
+                                } else if account.id != user.id {
+                                    form(.method(.post), .action("/accounts/action")) {
+                                        input(.type(.hidden), .name("id"), .value(account.id.uuidString))
+                                        input(.type(.hidden), .name("action"), .value("disable"))
+                                        button(.type(.submit), .class("text-button text-button-danger")) { "Disable" }
+                                    }
+                                }
+                                if account.status != .disabled, account.id != user.id {
+                                    form(.method(.post), .action("/accounts/action")) {
+                                        input(.type(.hidden), .name("id"), .value(account.id.uuidString))
+                                        input(
+                                            .type(.hidden), .name("action"),
+                                            .value(account.role == .administrator ? "member" : "administrator")
+                                        )
+                                        button(.type(.submit), .class("text-button")) {
+                                            account.role == .administrator ? "Make member" : "Make administrator"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct RegisterAccountPage: HTMLDocument, Sendable {
+    let error: String?
+    let success: String?
+
+    init(error: String? = nil, success: String? = nil) {
+        self.error = error
+        self.success = success
+    }
+
+    var title: String { "Turgai — Create account" }
+    var head: some HTML { TurgaiHead() }
+    var body: some HTML {
+        main(.class("setup-page")) {
+            div(.class("setup-shell")) {
+                SetupHeader()
+                section(.class("setup-content setup-content-compact")) {
+                    div(.class("setup-copy")) {
+                        p(.class("eyebrow")) { "Join this Turgai" }
+                        h1 { "Make room for another voice." }
+                        p(.class("lede")) {
+                            "Create an account to use this Turgai installation. An administrator will approve it before you can sign in."
+                        }
+                    }
+                    div(.class("setup-form-area")) {
+                        if let error { p(.class("error")) { error } }
+                        if let success {
+                            p(.class("success")) { success }
+                            a(.href("/login"), .class("text-link")) { "Back to sign in →" }
+                        } else {
+                            form(
+                                .method(.post), .action("/register"),
+                                .init(name: "id", value: "account-register-form")
+                            ) {
+                                label(.class("form-field")) {
+                                    span(.class("field-label")) { "Username" }
+                                    input(.type(.text), .name("username"), .autocomplete("username"), .required)
+                                }
+                                label(.class("form-field")) {
+                                    span(.class("field-label")) { "Password" }
+                                    input(.type(.password), .name("password"), .autocomplete("new-password"), .required)
+                                    p(.class("hint")) { "Use at least 12 characters." }
+                                }
+                            }
+                        }
+                    }
+                }
+                if success == nil {
+                    SetupFooter(
+                        step: nil,
+                        backHref: "/login",
+                        submitFormID: "account-register-form",
+                        submitLabel: "Create account"
+                    )
+                }
             }
         }
     }
@@ -1760,25 +2013,32 @@ private struct OnboardingPage: HTMLDocument, Sendable {
         main(.class("setup-page")) {
             div(.class("setup-shell")) {
                 SetupHeader()
-                section(.class("setup-content")) {
+                section(.class("setup-content setup-content-hero")) {
                     div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Welcome" }
-                        h1 { "Welcome to your sky." }
+                        p(.class("eyebrow")) { "Start here" }
+                        h1 { "Make capable help your own." }
                         p(.class("lede")) {
-                            "Let’s prepare Norby in a few quiet steps. Nothing is sent anywhere until you choose a provider."
+                            "A few choices shape how Turgai works with you. You can change them later."
                         }
                     }
                     div(.class("setup-form-area setup-welcome-area")) {
+                        div(.class("setup-hero-art"), .init(name: "aria-hidden", value: "true")) {
+                            span(.class("geometry geometry-blue")) {}
+                            span(.class("geometry geometry-coral")) {}
+                            span(.class("geometry geometry-yellow")) {}
+                            img(.src("/skylark.svg"), .alt(""))
+                            span(.class("hero-art-caption")) { "small bird / wide horizon" }
+                        }
                         div(.class("setup-note")) {
-                            p(.class("field-label")) { "Local setup" }
+                            p(.class("field-label")) { "Yours from the start" }
                             p {
-                                "Your browser will claim this local installation before the first administrator is created."
+                                "This is your private starting point."
                             }
-                            p(.class("hint")) { "Nothing leaves this device during registration." }
+                            p(.class("hint")) { "Shape the rest as you go." }
                         }
                     }
                 }
-                SetupFooter(step: 1, forwardHref: "/onboarding/register", forwardLabel: "Begin setup")
+                SetupFooter(step: 1, forwardHref: "/onboarding/register", forwardLabel: "Let’s begin")
             }
         }
     }
@@ -1800,9 +2060,9 @@ private struct RegisterPage: HTMLDocument, Sendable {
                 SetupHeader()
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Register" }
-                        h1 { "Make this sky yours." }
-                        p(.class("lede")) { "Create the local administrator account for your dashboard." }
+                        p(.class("eyebrow")) { "Make it yours" }
+                        h1 { "Keep the keys." }
+                        p(.class("lede")) { "Create the account that keeps this Turgai installation in your hands." }
                     }
                     div(.class("setup-form-area")) {
                         if let error { p(.class("error")) { error } }
@@ -1826,7 +2086,7 @@ private struct RegisterPage: HTMLDocument, Sendable {
                     step: 2,
                     backHref: "/onboarding",
                     submitFormID: "register-form",
-                    submitLabel: "Create administrator"
+                    submitLabel: "Create my account"
                 )
             }
         }
@@ -1835,12 +2095,12 @@ private struct RegisterPage: HTMLDocument, Sendable {
 
 private struct ModelPage: HTMLDocument, Sendable {
     let modelCatalog: TurgaiModelCatalog
-    let profile: NorbyAgentProfile?
+    let profile: TurgaiAgentProfile?
     let error: String?
 
     init(
         modelCatalog: TurgaiModelCatalog,
-        profile: NorbyAgentProfile? = nil,
+        profile: TurgaiAgentProfile? = nil,
         error: String? = nil
     ) {
         self.modelCatalog = modelCatalog
@@ -1855,10 +2115,10 @@ private struct ModelPage: HTMLDocument, Sendable {
                 SetupHeader()
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Model" }
-                        h1 { "Choose the mind." }
+                        p(.class("eyebrow")) { "The mind" }
+                        h1 { "Give Turgai a mind." }
                         p(.class("lede")) {
-                            "Choose a provider and model. Suggestions come from the selected provider when available."
+                            "Choose the model behind your companion. You can change its voice and direction later."
                         }
                     }
                     div(.class("setup-form-area")) {
@@ -1872,7 +2132,7 @@ private struct ModelPage: HTMLDocument, Sendable {
                                 selectedModel: Self.selectedModel(from: profile)
                             )
                             label(.class("form-field")) {
-                                span(.class("field-label")) { "Ollama server URL" }
+                                span(.class("field-label")) { "Ollama address" }
                                 input(
                                     .type(.url), .name("ollamaBaseURL"),
                                     .value(
@@ -1881,36 +2141,34 @@ private struct ModelPage: HTMLDocument, Sendable {
                                     ),
                                     .placeholder(OllamaConfiguration.defaultBaseURL.absoluteString)
                                 )
-                                p(.class("hint")) { "Used when the selected bot uses an Ollama model." }
+                                p(.class("hint")) { "Only needed when you choose an Ollama model." }
                             }
                             label(.class("form-field")) {
-                                span(.class("field-label")) { "Default bot name" }
+                                span(.class("field-label")) { "Bot name" }
                                 input(
                                     .type(.text), .name("agentName"), .value(profile?.name ?? "Conversation"),
                                     .required
                                 )
                             }
                             label(.class("form-field")) {
-                                span(.class("field-label")) { "Persona" }
+                                span(.class("field-label")) { "Voice" }
                                 textarea(.name("persona"), .init(name: "rows", value: "6")) {
                                     profile?.persona ?? ""
                                 }
-                                p(.class("hint")) {
-                                    "Describe how Norby should speak. Leave it empty for the built-in voice."
-                                }
+                                p(.class("hint")) { "Describe how you want Turgai to speak." }
                             }
                             label(.class("form-field")) {
-                                span(.class("field-label")) { "Context window" }
+                                span(.class("field-label")) { "Working memory" }
                                 input(
                                     .type(.number), .name("contextWindow"),
                                     .value(
                                         String(
-                                            profile?.contextWindow ?? NorbyAgentProfileStore.defaultContextWindow)),
+                                            profile?.contextWindow ?? TurgaiAgentProfileStore.defaultContextWindow)),
                                     .required
                                 )
                             }
                             label(.class("form-field")) {
-                                span(.class("field-label")) { "Instructions" }
+                                span(.class("field-label")) { "Guidance" }
                                 textarea(.name("instructions"), .init(name: "rows", value: "4")) {
                                     profile?.instructions ?? ""
                                 }
@@ -1928,50 +2186,8 @@ private struct ModelPage: HTMLDocument, Sendable {
         }
     }
 
-    private static func selectedModel(from profile: NorbyAgentProfile?) -> AgentModel? {
+    private static func selectedModel(from profile: TurgaiAgentProfile?) -> AgentModel? {
         profile?.model
-    }
-}
-
-private struct StorageFormValues: Sendable {
-    let backend: String
-    let fileURL: String
-    let postgresURL: String
-    let postgresUsername: String
-
-    init(storage: NorbyStorageConfiguration?, defaultFileDirectory: URL) {
-        let backend: String
-        let fileURL: String
-        let postgresURL: String
-        let postgresUsername: String
-        switch storage {
-        case .file(let directory):
-            backend = "file"
-            fileURL = directory.absoluteString
-            postgresURL = "postgres://localhost:5432/norby"
-            postgresUsername = ""
-        case .postgres(let url, let username):
-            backend = "postgres"
-            postgresURL = url.absoluteString
-            postgresUsername = username
-            fileURL = defaultFileDirectory.absoluteString
-        case nil:
-            backend = "file"
-            fileURL = defaultFileDirectory.absoluteString
-            postgresURL = "postgres://localhost:5432/norby"
-            postgresUsername = ""
-        }
-        self.backend = backend
-        self.fileURL = fileURL
-        self.postgresURL = postgresURL
-        self.postgresUsername = postgresUsername
-    }
-
-    init(form: [String: [String]], defaultFileDirectory: URL) {
-        self.backend = form["backend"]?.first ?? "file"
-        self.fileURL = form["fileURL"]?.first ?? defaultFileDirectory.absoluteString
-        self.postgresURL = form["postgresURL"]?.first ?? ""
-        self.postgresUsername = form["postgresUsername"]?.first ?? ""
     }
 }
 
@@ -1981,7 +2197,7 @@ private struct StoragePage: HTMLDocument, Sendable {
     let error: String?
 
     init(
-        storage: NorbyStorageConfiguration?,
+        storage: TurgaiStorageConfiguration?,
         defaultFileDirectory: URL,
         error: String? = nil
     ) {
@@ -2011,10 +2227,10 @@ private struct StoragePage: HTMLDocument, Sendable {
                 SetupHeader()
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Storage" }
-                        h1 { "Choose where memory lives." }
+                        p(.class("eyebrow")) { "A home for memory" }
+                        h1 { "Give memory a home." }
                         p(.class("lede")) {
-                            "Events and snapshots use the same backend. The local file store is the quiet default."
+                            "Choose where Turgai keeps its memory and history. The local option is the simplest place to begin."
                         }
                     }
                     div(.class("setup-form-area")) {
@@ -2024,7 +2240,7 @@ private struct StoragePage: HTMLDocument, Sendable {
                             .init(name: "id", value: "storage-form")
                         ) {
                             label(.class("form-field")) {
-                                span(.class("field-label")) { "Backend" }
+                                span(.class("field-label")) { "Memory home" }
                                 select(
                                     .name("backend"),
                                     .id("turgai-storage-backend"),
@@ -2034,12 +2250,12 @@ private struct StoragePage: HTMLDocument, Sendable {
                                             "document.querySelectorAll('[data-storage-panel]').forEach((panel) => panel.hidden = panel.dataset.storagePanel !== this.value)"
                                     )
                                 ) {
-                                    if values.backend == "file" {
+                                    if values.backend == .file {
                                         option(.value("file"), .selected) { "File store" }
                                     } else {
                                         option(.value("file")) { "File store" }
                                     }
-                                    if values.backend == "postgres" {
+                                    if values.backend == .postgres {
                                         option(.value("postgres"), .selected) { "PostgreSQL" }
                                     } else {
                                         option(.value("postgres")) { "PostgreSQL" }
@@ -2049,10 +2265,10 @@ private struct StoragePage: HTMLDocument, Sendable {
                             div(
                                 .class("storage-panel"),
                                 .init(name: "data-storage-panel", value: "file"),
-                                values.backend == "file" ? .init(name: "data-active", value: "true") : .hidden
+                                values.backend == .file ? .init(name: "data-active", value: "true") : .hidden
                             ) {
                                 label(.class("form-field")) {
-                                    span(.class("field-label")) { "File store URL" }
+                                    span(.class("field-label")) { "Local folder" }
                                     input(
                                         .type(.url), .name("fileURL"), .value(values.fileURL),
                                         .placeholder("file:///path/to/turgai")
@@ -2065,13 +2281,13 @@ private struct StoragePage: HTMLDocument, Sendable {
                             div(
                                 .class("storage-panel"),
                                 .init(name: "data-storage-panel", value: "postgres"),
-                                values.backend == "postgres" ? .init(name: "data-active", value: "true") : .hidden
+                                values.backend == .postgres ? .init(name: "data-active", value: "true") : .hidden
                             ) {
                                 label(.class("form-field")) {
-                                    span(.class("field-label")) { "PostgreSQL URL" }
+                                    span(.class("field-label")) { "PostgreSQL address" }
                                     input(
                                         .type(.url), .name("postgresURL"), .value(values.postgresURL),
-                                        .placeholder("postgres://localhost:5432/norby")
+                                        .placeholder("postgres://localhost:5432/turgai")
                                     )
                                 }
                                 label(.class("form-field")) {
@@ -2088,13 +2304,13 @@ private struct StoragePage: HTMLDocument, Sendable {
                                         .autocomplete("new-password")
                                     )
                                     p(.class("hint")) {
-                                        "Stored separately from the connection settings."
+                                        "Kept separately from the connection details."
                                     }
                                 }
                             }
                         }
                         p(.class("hint storage-restart-note")) {
-                            "The selected backend is initialized when setup finishes."
+                            "Turgai will start using this home when setup is complete."
                         }
                     }
                 }
@@ -2102,7 +2318,7 @@ private struct StoragePage: HTMLDocument, Sendable {
                     step: 4,
                     backHref: "/onboarding/model",
                     submitFormID: "storage-form",
-                    submitLabel: "Save storage"
+                    submitLabel: "Save this choice"
                 )
             }
         }
@@ -2125,10 +2341,10 @@ private struct TelegramPage: HTMLDocument, Sendable {
                 SetupHeader()
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Telegram" }
-                        h1 { "Choose a voice." }
+                        p(.class("eyebrow")) { "A way to reach you" }
+                        h1 { "Meet Turgai somewhere familiar." }
                         p(.class("lede")) {
-                            "Connect Telegram with a bot token from BotFather. A chat allow-list is optional."
+                            "Connect Telegram if you want Turgai to meet you there. You can choose who it listens to."
                         }
                     }
                     div(.class("setup-form-area")) {
@@ -2138,18 +2354,22 @@ private struct TelegramPage: HTMLDocument, Sendable {
                             .init(name: "id", value: "telegram-form")
                         ) {
                             label(.class("form-field")) {
-                                span(.class("field-label")) { "Telegram bot token" }
-                                input(.type(.password), .name("token"), .autocomplete("off"), .required)
+                                span(.class("field-label")) { "Bot token" }
+                                input(
+                                    .type(.text), .name("token"), .autocomplete("off"),
+                                    .init(name: "autocapitalize", value: "none"),
+                                    .init(name: "spellcheck", value: "false"), .required
+                                )
                             }
                             label(.class("form-field")) {
-                                span(.class("field-label")) { "Allowed chat IDs" }
+                                span(.class("field-label")) { "Who can reach it" }
                                 input(
                                     .type(.text), .name("chatIDs"),
                                     .value(chatIDs.map(String.init).joined(separator: ",")),
                                     .placeholder("Optional, comma-separated")
                                 )
                                 p(.class("hint")) {
-                                    "Leave empty to accept messages from every chat."
+                                    "Leave empty to let Turgai listen to every chat."
                                 }
                             }
                         }
@@ -2159,7 +2379,7 @@ private struct TelegramPage: HTMLDocument, Sendable {
                     step: 5,
                     backHref: "/onboarding/storage",
                     submitFormID: "telegram-form",
-                    submitLabel: "Save Telegram"
+                    submitLabel: "Connect Telegram"
                 )
             }
         }
@@ -2175,10 +2395,10 @@ private struct FinishPage: HTMLDocument, Sendable {
                 SetupHeader()
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Ready" }
-                        h1 { "The skylark is ready." }
+                        p(.class("eyebrow")) { "Ready when you are" }
+                        h1 { "Your Turgai is ready." }
                         p(.class("lede")) {
-                            "Everything is saved. Finish setup when you are ready."
+                            "Everything is in place. Start a conversation, then shape it as you go."
                         }
                     }
                     div(.class("setup-form-area setup-welcome-area")) {
@@ -2192,7 +2412,7 @@ private struct FinishPage: HTMLDocument, Sendable {
                     step: 6,
                     backHref: "/onboarding/telegram",
                     submitFormID: "finish-form",
-                    submitLabel: "Finish setup"
+                    submitLabel: "Start Turgai"
                 )
             }
         }

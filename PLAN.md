@@ -1,10 +1,10 @@
-# Norby plan
+# Turgai plan
 
 Updated 2026-09-06 against the current implementation.
 
 ## Direction and boundaries
 
-Build a local Norby companion with Telegram, personal memory, tools, and
+Build a local Turgai companion with Telegram, personal memory, tools, and
 scheduled agent work. Add other clients when needed.
 
 Follow Scott Wlaschin's functional-core/imperative-shell approach in Swift:
@@ -14,7 +14,7 @@ and standard async sequences; introduce abstractions when actual consumers
 need them.
 
 Hail owns durable agent communication, history, model turns, tool execution,
-and generic integration points. Norby owns persona, user identity, memory,
+and generic integration points. Turgai owns persona, user identity, memory,
 channel policy, and future scheduled work. Tool schemas describe capabilities;
 avoid duplicating a tool manual in the persona prompt.
 
@@ -26,8 +26,8 @@ avoid duplicating a tool manual in the persona prompt.
   HTML formatting, reactions, and replies to source messages.
 - Scoped reply lifecycle and partial output; Telegram preview folding,
   throttling and rate-limit handling; durable pending terminal replies.
-- File journals and snapshots under .norby/journal and .norby/snapshots;
-  transport checkpoint at .norby/telegram-offset.txt.
+- File journals and snapshots under .turgai/journal and .turgai/snapshots;
+  transport checkpoint at .turgai/telegram-offset.txt.
 - Hail is the transcript authority. ConversationState holds coordination
   state; ModelRequest carries the accepted InboundMessage.
 - Model context capacity and compaction integration through Hail.
@@ -56,13 +56,13 @@ Remaining behavior checks are listed below.
 
 | Target | Responsibility |
 | --- | --- |
-| NorbyDomain | Identity, messages, coordination values and reducer |
-| NorbyMemory | Observations, facts, events, projection, policy and retrieval |
-| NorbyHail | Hail adapters, runtime configuration and host tools |
-| NorbyApplication | Durable aggregates, reply scope and memory orchestration |
-| NorbyTelegram | Transport, mapping, formatting and publisher |
-| NorbyPersistence | File journals and snapshots |
-| Norby | Composition, live connections and Telegram delivery coordination |
+| TurgaiDomain | Identity, messages, coordination values and reducer |
+| TurgaiMemory | Observations, facts, events, projection, policy and retrieval |
+| TurgaiHail | Hail adapters, runtime configuration and host tools |
+| TurgaiApplication | Durable aggregates, reply scope and memory orchestration |
+| TurgaiTelegram | Transport, mapping, formatting and publisher |
+| TurgaiPersistence | File journals and snapshots |
+| Turgai | Composition, live connections and Telegram delivery coordination |
 
 ## Validation: explicit calendar information
 
@@ -97,12 +97,12 @@ there is no candidate approval workflow.
   retained. Physical journal erasure remains a separate privacy operation.
 - [x] Ensure extraction already in flight cannot restore forgotten memory.
   Generation and observation-time boundaries reject stale writes.
-- [x] Keep `/reset` as a Norby coordination/channel reset. It cancels active
+- [x] Keep `/reset` as a Turgai coordination/channel reset. It cancels active
   model work, drops queued messages and pending replies, and clears channel
   delivery state; it does not clear Hail's durable transcript or context
   summary.
 - [ ] Only add a fresh-context command when the product needs it. That would
-  be a separate Hail-owned durable context boundary, while Norby would still
+  be a separate Hail-owned durable context boundary, while Turgai would still
   own the user-facing command and policy. Hail's `contextSet` marker is not a
   reset operation.
 - [ ] Manually check multilingual facts, contextual short answers,
@@ -114,12 +114,12 @@ additional ordering machinery are deferred. Saved facts remain durable.
 
 ## Following: local data protection
 
-Norby currently stores conversation coordination, Hail transcripts, memory,
+Turgai currently stores conversation coordination, Hail transcripts, memory,
 and snapshots as readable local persistence files. Telegram and any remote
 model endpoint remain separate external trust boundaries.
 
 - [ ] Make Telegram access explicit and default-deny. An empty allow-list
-  currently permits every chat to reach Norby.
+  currently permits every chat to reach Turgai.
 - [ ] Keep Ollama local unless explicitly configured otherwise. Make a remote
   model endpoint an obvious, deliberate configuration choice.
 - [ ] Define the local at-rest protection contract and key-loss behavior.
@@ -142,7 +142,7 @@ with input and selected tools, then sends its result to the owner conversation.
 Example: "Every morning at 8, send me today's weather."
 
 - [x] Integrate cluster-durable-workflows with the existing cluster/journal
-  bootstrap and one event-store configuration. Norby installs the workflow
+  bootstrap and one event-store configuration. Turgai installs the workflow
   plugin beside Hail and uses the existing file event/snapshot stores.
 - [x] Add a registered scheduled-agent workflow and activity. The durable
   input carries owner and destination identity, prompt, participant and
@@ -182,14 +182,14 @@ policy into the plugins.
 
 ### DurableWorkflows schedule replacement
 
-- [x] Keep the current cancel-then-create path as the Norby MVP behavior.
+- [x] Keep the current cancel-then-create path as the Turgai MVP behavior.
 - [ ] Add a durable scheduler update operation for an existing `ScheduleID`.
   The operation must persist the new recurrence, input, retry policy and
   overlap policy as one scheduler event and rearm from the resulting state.
 - [ ] Define update behavior for an occurrence that is pending, running or
   already finished. Preserve the existing occurrence and apply the new
   definition to future occurrences.
-- [ ] Keep schedule identity separate from schedule definition. Norby should
+- [ ] Keep schedule identity separate from schedule definition. Turgai should
   own the stable logical schedule identity; changing a prompt or recurrence
   must not silently create a second schedule.
 - [ ] Keep registry bookkeeping idempotent when a schedule is updated, and
@@ -208,14 +208,14 @@ policy into the plugins.
   append the original user input again or replay completed tool effects.
 - [ ] Decide how a continuation is journaled and exposed through the existing
   agent connection, including partial output, failure and cancellation.
-- [ ] Add a bounded empty-output recovery policy in Norby’s scope. One
+- [ ] Add a bounded empty-output recovery policy in Turgai’s scope. One
   continuation attempt is enough; repeated empty output becomes a recorded
   terminal outcome.
 - [ ] Test a tool round followed by an empty model response, continuation
   without duplicate side effects, an intentional background void, reconnect,
   recovery and cancellation.
 
-The current Norby persona may carry a small visible-completion instruction as
+The current Turgai persona may carry a small visible-completion instruction as
 an interim guardrail. It is a behavioral aid, not the correctness mechanism;
 the scoped session and output contract remain plugin work.
 
@@ -248,7 +248,7 @@ the scoped session and output contract remain plugin work.
 
 ## Local operation and validation
 
-- [ ] Write a short operator guide for configuration, .norby storage,
+- [ ] Write a short operator guide for configuration, .turgai storage,
   backup/restore, reset and forgetting semantics.
 - [ ] Add launchd support when unattended operation is needed.
 - [ ] Pin development dependencies for a reproducible release.
@@ -256,8 +256,8 @@ the scoped session and output contract remain plugin work.
   long conversations with attachments/compaction. Address reproducible
   failures as they appear.
 
-Current configuration: NORBY_TELEGRAM_BOT_TOKEN, NORBY_TELEGRAM_CHAT_IDS,
-NORBY_MODEL, OLLAMA_BASE_URL, and the workspace CLI option. An empty chat
+Current configuration: TURGAI_TELEGRAM_BOT_TOKEN, TURGAI_TELEGRAM_CHAT_IDS,
+TURGAI_MODEL, OLLAMA_BASE_URL, and the workspace CLI option. An empty chat
 allow-list currently permits all chats.
 
 Keep unit tests independent of live Telegram/Ollama. Add integration coverage

@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "Norby",
+    name: "Turgai",
     platforms: [
         .macOS("26.4")
     ],
     products: [
-        .library(name: "NorbyDomain", targets: ["NorbyDomain"]),
-        .library(name: "NorbyHail", targets: ["NorbyHail"]),
-        .library(name: "NorbyApplication", targets: ["NorbyApplication"]),
-        .library(name: "NorbyTelegram", targets: ["NorbyTelegram"]),
-        .executable(name: "Norby", targets: ["Norby"]),
-        .executable(name: "NorbyWasmRunner", targets: ["NorbyWasmRunner"]),
+        .library(name: "TurgaiDomain", targets: ["TurgaiDomain"]),
+        .library(name: "TurgaiHail", targets: ["TurgaiHail"]),
+        .library(name: "TurgaiApplication", targets: ["TurgaiApplication"]),
+        .library(name: "TurgaiTelegram", targets: ["TurgaiTelegram"]),
+        .executable(name: "Turgai", targets: ["Turgai"]),
+        .executable(name: "TurgaiWasmRunner", targets: ["TurgaiWasmRunner"]),
     ],
     dependencies: [
         .package(path: "../hail"),
@@ -79,14 +79,14 @@ let package = Package(
         ),
     ],
     targets: [
-        .target(name: "NorbyDomain"),
+        .target(name: "TurgaiDomain"),
         .target(
             name: "TurgaiWeb",
             dependencies: [
-                "NorbyApplication",
-                "NorbyHail",
-                "NorbyPersistence",
-                "NorbyTelegram",
+                "TurgaiApplication",
+                "TurgaiHail",
+                "TurgaiPersistence",
+                "TurgaiTelegram",
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "Elementary", package: "elementary"),
                 .product(name: "HummingbirdElementary", package: "hummingbird-elementary"),
@@ -97,24 +97,24 @@ let package = Package(
             ]
         ),
         .target(
-            name: "NorbyMemory",
+            name: "TurgaiMemory",
             dependencies: []
         ),
         .target(
-            name: "NorbyHail",
+            name: "TurgaiHail",
             dependencies: [
-                "NorbyDomain",
+                "TurgaiDomain",
                 .product(name: "Hail", package: "hail"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
             ]
         ),
         .target(
-            name: "NorbyApplication",
+            name: "TurgaiApplication",
             dependencies: [
-                "NorbyDomain",
-                "NorbyMemory",
-                "NorbyHail",
+                "TurgaiDomain",
+                "TurgaiMemory",
+                "TurgaiHail",
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
@@ -127,23 +127,23 @@ let package = Package(
             ]
         ),
         .target(
-            name: "NorbyTelegram",
+            name: "TurgaiTelegram",
             dependencies: [
-                "NorbyDomain",
-                "NorbyApplication",
+                "TurgaiDomain",
+                "TurgaiApplication",
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Logging", package: "swift-log"),
             ]
         ),
         .executableTarget(
-            name: "Norby",
+            name: "Turgai",
             dependencies: [
-                "NorbyApplication",
-                "NorbyHail",
-                "NorbyTelegram",
+                "TurgaiApplication",
+                "TurgaiHail",
+                "TurgaiTelegram",
                 "TurgaiWeb",
-                "NorbyPersistence",
+                "TurgaiPersistence",
                 .product(name: "Hail", package: "hail"),
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
@@ -156,40 +156,40 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "NorbyWasmRunner",
+            name: "TurgaiWasmRunner",
             dependencies: [
                 .product(name: "WasmKit", package: "WasmKit"),
                 .product(name: "WasmKitWASI", package: "WasmKit"),
             ]
         ),
         .testTarget(
-            name: "NorbyDomainTests",
-            dependencies: ["NorbyDomain"]
+            name: "TurgaiDomainTests",
+            dependencies: ["TurgaiDomain"]
         ),
         .testTarget(
-            name: "NorbyMemoryTests",
-            dependencies: ["NorbyMemory"]
+            name: "TurgaiMemoryTests",
+            dependencies: ["TurgaiMemory"]
         ),
         .testTarget(
-            name: "NorbyHailTests",
-            dependencies: ["NorbyDomain", "NorbyHail", "NorbyApplication"]
+            name: "TurgaiHailTests",
+            dependencies: ["TurgaiDomain", "TurgaiHail", "TurgaiApplication"]
         ),
         .testTarget(
-            name: "NorbyApplicationTests",
-            dependencies: ["NorbyDomain", "NorbyHail", "NorbyApplication", "TurgaiWeb"]
+            name: "TurgaiApplicationTests",
+            dependencies: ["TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiWeb"]
         ),
         .testTarget(
-            name: "NorbyTelegramTests",
-            dependencies: ["NorbyDomain", "NorbyTelegram"]
+            name: "TurgaiTelegramTests",
+            dependencies: ["TurgaiDomain", "TurgaiTelegram"]
         ),
         .testTarget(
-            name: "NorbyDeliveryTests",
-            dependencies: ["Norby"]
+            name: "TurgaiDeliveryTests",
+            dependencies: ["Turgai"]
         ),
         .target(
-            name: "NorbyPersistence",
+            name: "TurgaiPersistence",
             dependencies: [
-                "NorbyDomain",
+                "TurgaiDomain",
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "PostgresEventStore", package: "postgres-event-store"),
                 .product(name: "PostgresNIO", package: "postgres-nio"),
@@ -197,10 +197,10 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "NorbyPersistenceTests",
+            name: "TurgaiPersistenceTests",
             dependencies: [
-                "NorbyDomain",
-                "NorbyPersistence",
+                "TurgaiDomain",
+                "TurgaiPersistence",
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
             ]
         ),

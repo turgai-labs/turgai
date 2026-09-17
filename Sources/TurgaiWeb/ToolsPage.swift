@@ -1,6 +1,6 @@
 import AnyLanguageModel
 import Elementary
-import NorbyApplication
+import TurgaiApplication
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -9,16 +9,16 @@ import NorbyApplication
 #endif
 
 struct TurgaiToolsPage: HTMLDocument, Sendable {
-    let username: String
+    let user: AuthenticatedUser
     let documents: [UserToolDocument]
     let error: String?
 
     init(
-        username: String,
+        user: AuthenticatedUser,
         documents: [UserToolDocument],
         error: String? = nil
     ) {
-        self.username = username
+        self.user = user
         self.documents = documents
         self.error = error
     }
@@ -29,28 +29,28 @@ struct TurgaiToolsPage: HTMLDocument, Sendable {
     var body: some HTML {
         main(.class("app-page")) {
             div(.class("app-shell tools-shell")) {
-                AppHeader(username: username)
+                AppHeader(user: user, section: .tools)
                 section(.class("page-intro")) {
                     div {
-                        p(.class("eyebrow")) { "Your tools" }
+                        p(.class("eyebrow")) { "Your capabilities" }
                         h1 { "Tools" }
                         p(.class("lede")) {
-                            "Build one useful ability at a time."
+                            "Give your bots useful abilities, one clear step at a time."
                         }
                     }
-                    a(.href("/tools/new"), .class("text-link add-tool-link")) { "+ New tool" }
+                    a(.href("/tools/new"), .class("button button-accent add-tool-link")) { "+ New tool" }
                 }
                 if let error {
                     p(.class("error page-error")) { error }
                 }
                 if documents.isEmpty {
                     div(.class("empty-state")) {
-                        p(.class("eyebrow")) { "Nothing here yet" }
-                        h2 { "Start with one small ability." }
+                        p(.class("eyebrow")) { "A blank canvas" }
+                        h2 { "Start with one useful ability." }
                         p(.class("section-intro")) {
-                            "A tool can fetch information, run your script, or ask another bot to think about a result."
+                            "Fetch information, run a script, or ask another bot to take on one focused piece of thinking."
                         }
-                        a(.href("/tools/new"), .class("text-link")) { "+ New tool" }
+                        a(.href("/tools/new"), .class("text-link")) { "New tool →" }
                     }
                 } else {
                     section(.class("tools-list")) {
@@ -90,9 +90,9 @@ private struct TurgaiToolRow: HTML, Sendable {
                     a(.href(href), .class("tool-name")) { tool.name }
                     p(.class("tool-description")) { tool.description }
                 } else {
-                    a(.href(href), .class("tool-name")) { "Unavailable tool" }
+                    a(.href(href), .class("tool-name")) { "Tool needs attention" }
                     p(.class("tool-description tool-issue")) {
-                        "This tool could not be loaded. Open it to replace or remove it."
+                        "This tool could not be loaded. Open it to repair or remove it."
                     }
                 }
             }
@@ -135,23 +135,23 @@ enum TurgaiToolBodyKind: String, Sendable {
 
 struct TurgaiToolArgumentDraft: Sendable {
     var name = ""
-    var type = "string"
+    var type: ToolArgumentType = .string
     var description = ""
     var required = false
 }
 
 struct TurgaiWorkflowStepDraft: Sendable {
     var id = ""
-    var kind = "fetch"
+    var kind: WorkflowStepKind = .fetch
     var saveAs = ""
-    var permission = "inherit"
+    var permission: WorkflowPermission = .inherit
     var allowedHosts = ""
     var writeDirectory = ""
     var url = ""
     var method = "GET"
     var headers = ""
     var body = ""
-    var scriptMode = "source"
+    var scriptMode: ScriptSource = .source
     var scriptSource = ""
     var scriptFile = ""
     var interpreter = "bash"
@@ -164,16 +164,16 @@ struct TurgaiWorkflowStepDraft: Sendable {
 
     init(
         id: String = "",
-        kind: String = "fetch",
+        kind: WorkflowStepKind = .fetch,
         saveAs: String = "",
-        permission: String = "inherit",
+        permission: WorkflowPermission = .inherit,
         allowedHosts: String = "",
         writeDirectory: String = "",
         url: String = "",
         method: String = "GET",
         headers: String = "",
         body: String = "",
-        scriptMode: String = "source",
+        scriptMode: ScriptSource = .source,
         scriptSource: String = "",
         scriptFile: String = "",
         interpreter: String = "bash",
@@ -204,16 +204,16 @@ struct TurgaiWorkflowStepDraft: Sendable {
 
     init(step: UserTool.WorkflowStep) {
         self.id = step.id
-        self.kind = step.kind.rawValue
+        self.kind = WorkflowStepKind(rawValue: step.kind.rawValue) ?? .fetch
         self.saveAs = step.saveAs ?? ""
-        self.permission = step.permission?.rawValue ?? "inherit"
+        self.permission = WorkflowPermission(rawValue: step.permission?.rawValue ?? "") ?? .inherit
         self.allowedHosts = Self.lines(step.allowedHosts ?? [])
         self.writeDirectory = step.writeDirectory ?? ""
         self.url = step.url ?? ""
         self.method = step.method ?? "GET"
         self.headers = Self.headerLines(step.headers ?? [:])
         self.body = step.body ?? ""
-        self.scriptMode = step.scriptSource == nil ? "file" : "source"
+        self.scriptMode = step.scriptSource == nil ? .file : .source
         self.scriptSource = step.scriptSource ?? ""
         self.scriptFile = step.script ?? ""
         self.interpreter = step.interpreter ?? ""
@@ -296,7 +296,7 @@ struct TurgaiToolDraft: Sendable {
             wasmModule: "",
             promptInstruction: ""
         )
-        draft.workflowSteps[0].kind = "fetch"
+        draft.workflowSteps[0].kind = .fetch
         return draft
     }
 
@@ -353,7 +353,7 @@ struct TurgaiToolDraft: Sendable {
         self.arguments = (0..<argumentCount).map { index in
             TurgaiToolArgumentDraft(
                 name: form["argumentName"]?[safe: index] ?? "",
-                type: form["argumentType"]?[safe: index] ?? "string",
+                type: ToolArgumentType(rawValue: form["argumentType"]?[safe: index] ?? "") ?? .string,
                 description: form["argumentDescription"]?[safe: index] ?? "",
                 required: form["argumentRequired"]?[safe: index] == "required"
             )
@@ -363,16 +363,16 @@ struct TurgaiToolDraft: Sendable {
         self.workflowSteps = (0..<stepCount).map { index in
             TurgaiWorkflowStepDraft(
                 id: form["stageID"]?[safe: index] ?? "",
-                kind: form["stageKind"]?[safe: index] ?? "fetch",
+                kind: WorkflowStepKind(rawValue: form["stageKind"]?[safe: index] ?? "") ?? .fetch,
                 saveAs: form["stageSaveAs"]?[safe: index] ?? "",
-                permission: form["stagePermission"]?[safe: index] ?? "inherit",
+                permission: WorkflowPermission(rawValue: form["stagePermission"]?[safe: index] ?? "") ?? .inherit,
                 allowedHosts: form["stageAllowedHosts"]?[safe: index] ?? "",
                 writeDirectory: form["stageWriteDirectory"]?[safe: index] ?? "",
                 url: form["stageURL"]?[safe: index] ?? "",
                 method: form["stageMethod"]?[safe: index] ?? "GET",
                 headers: form["stageHeaders"]?[safe: index] ?? "",
                 body: form["stageBody"]?[safe: index] ?? "",
-                scriptMode: form["stageScriptMode"]?[safe: index] ?? "source",
+                scriptMode: ScriptSource(rawValue: form["stageScriptMode"]?[safe: index] ?? "") ?? .source,
                 scriptSource: form["stageScriptSource"]?[safe: index] ?? "",
                 scriptFile: form["stageScriptFile"]?[safe: index] ?? "",
                 interpreter: form["stageInterpreter"]?[safe: index] ?? "bash",
@@ -460,11 +460,7 @@ struct TurgaiToolDraft: Sendable {
             guard names.insert(name).inserted else {
                 throw TurgaiToolDraftError.invalid("Input '\(name)' is listed more than once.")
             }
-            let type =
-                ["string", "number", "boolean", "array", "object"].contains(argument.type)
-                ? argument.type
-                : "string"
-            var property: [String: Any] = ["type": type]
+            var property: [String: Any] = ["type": argument.type.rawValue]
             let description = argument.description.trimmingCharacters(in: .whitespacesAndNewlines)
             if !description.isEmpty { property["description"] = description }
             properties[name] = property
@@ -497,16 +493,10 @@ struct TurgaiToolDraft: Sendable {
             guard !id.isEmpty else {
                 throw TurgaiToolDraftError.invalid("Step \(index + 1) needs a name.")
             }
-            guard ["fetch", "execute", "think"].contains(step.kind) else {
-                throw TurgaiToolDraftError.invalid("Choose a type for step \(index + 1).")
-            }
-
             var definition: [String: Any] = [
                 "id": id,
-                "kind": step.kind,
-                "permission": ["inherit", "allowed", "denied"].contains(step.permission)
-                    ? step.permission
-                    : "inherit",
+                "kind": step.kind.rawValue,
+                "permission": step.permission.rawValue,
             ]
             let saveAs = step.saveAs.trimmingCharacters(in: .whitespacesAndNewlines)
             if !saveAs.isEmpty { definition["saveAs"] = saveAs }
@@ -514,7 +504,7 @@ struct TurgaiToolDraft: Sendable {
             if !inputs.isEmpty { definition["inputs"] = inputs }
 
             switch step.kind {
-            case "fetch":
+            case .fetch:
                 let url = step.url.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !url.isEmpty else { throw TurgaiToolDraftError.invalid("Fetch step '\(id)' needs a URL.") }
                 definition["url"] = url
@@ -526,10 +516,10 @@ struct TurgaiToolDraft: Sendable {
                 if !headers.isEmpty { definition["headers"] = headers }
                 let body = step.body.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !body.isEmpty { definition["body"] = body }
-            case "execute":
+            case .execute:
                 let source = step.scriptSource.trimmingCharacters(in: .whitespacesAndNewlines)
                 let file = step.scriptFile.trimmingCharacters(in: .whitespacesAndNewlines)
-                if step.scriptMode == "file" {
+                if step.scriptMode == .file {
                     guard !file.isEmpty else {
                         throw TurgaiToolDraftError.invalid("Execute step '\(id)' needs a script file.")
                     }
@@ -541,7 +531,7 @@ struct TurgaiToolDraft: Sendable {
                     definition["scriptSource"] = source
                 }
                 let interpreter = step.interpreter.trimmingCharacters(in: .whitespacesAndNewlines)
-                if step.scriptMode != "file", interpreter.isEmpty {
+                if step.scriptMode != .file, interpreter.isEmpty {
                     throw TurgaiToolDraftError.invalid(
                         "Choose an interpreter for the script in step '\(id)'."
                     )
@@ -553,14 +543,12 @@ struct TurgaiToolDraft: Sendable {
                 if !environment.isEmpty { definition["environment"] = environment }
                 let directory = step.writeDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !directory.isEmpty { definition["writeDirectory"] = directory }
-            case "think":
+            case .think:
                 let instruction = step.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !instruction.isEmpty else {
                     throw TurgaiToolDraftError.invalid("Think step '\(id)' needs an instruction.")
                 }
                 definition["instruction"] = instruction
-            default:
-                break
             }
             result.append(definition)
         }
@@ -622,7 +610,7 @@ struct TurgaiToolDraft: Sendable {
             let property = properties[name] as? [String: Any]
             return TurgaiToolArgumentDraft(
                 name: name,
-                type: property?["type"] as? String ?? "string",
+                type: ToolArgumentType(rawValue: property?["type"] as? String ?? "") ?? .string,
                 description: property?["description"] as? String ?? "",
                 required: required.contains(name)
             )
@@ -654,18 +642,18 @@ extension Array {
 }
 
 struct TurgaiToolEditorPage: HTMLDocument, Sendable {
-    let username: String
+    let user: AuthenticatedUser
     let draft: TurgaiToolDraft
     let issue: UserToolLoadIssue?
     let error: String?
 
     init(
-        username: String,
+        user: AuthenticatedUser,
         draft: TurgaiToolDraft,
         issue: UserToolLoadIssue? = nil,
         error: String? = nil
     ) {
-        self.username = username
+        self.user = user
         self.draft = draft
         self.issue = issue
         self.error = error
@@ -682,7 +670,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
     var body: some HTML {
         main(.class("app-page")) {
             div(.class("app-shell tool-editor-shell")) {
-                AppHeader(username: username)
+                AppHeader(user: user, section: .tools)
                 section(.class("page-intro detail-page-intro")) {
                     div {
                         TurgaiBreadcrumb(
@@ -692,7 +680,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                         )
                         h1 { heading }
                         p(.class("lede")) {
-                            "Name it, choose an action, and add another step only when one result feeds the next."
+                            "Give it a clear purpose, choose how it works, and add steps only when they earn their place."
                         }
                     }
                 }
@@ -700,7 +688,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                     p(.class("error page-error")) { error }
                 } else if issue != nil {
                     p(.class("error page-error")) {
-                        "This tool is unavailable. Replace its setup below or remove it."
+                        "This tool needs attention. Repair its setup below or remove it."
                     }
                 }
                 div(.class("tool-editor-layout")) {
@@ -721,7 +709,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                                 div(.class("builder-section-intro")) {
                                     h2 { "Name and access" }
                                     p(.class("section-intro")) {
-                                        "Give the tool a clear name and explain when your bot should use it."
+                                        "Give it a clear name and tell your bot when it belongs in the conversation."
                                     }
                                 }
                                 div(.class("builder-section-content")) {
@@ -747,7 +735,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                                                 ]
                                             )
                                             p(.class("hint")) {
-                                                "Ask first is safest for tools that write files or call outside services."
+                                                "Ask first when a tool can change files or reach outside this installation."
                                             }
                                         }
                                     }
@@ -769,7 +757,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                                 div(.class("builder-section-intro")) {
                                     h2 { "Inputs (optional)" }
                                     p(.class("section-intro")) {
-                                        "Add values the bot should ask for, such as a city or date. Use them as {{name}} in a step."
+                                        "Add values the bot should ask for, such as a city or date. Use them as {{name}} later."
                                     }
                                 }
                                 div(.class("builder-section-content")) {
@@ -802,7 +790,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                                 div(.class("builder-section-intro")) {
                                     h2 { "Action" }
                                     p(.class("section-intro")) {
-                                        "Choose one action. Use Workflow when a step needs another step's result."
+                                        "Choose how this tool acts. Use Workflow when one step needs another step's result."
                                     }
                                 }
                                 div(.class("builder-section-content")) {
@@ -862,7 +850,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                     aside(.class("tool-editor-aside")) {
                         h2 { "Quick guide" }
                         p(.class("section-intro")) {
-                            "Start with Get information or Run a script. Use Workflow when a later step needs an earlier result."
+                            "Start with Get information or Run a script. Reach for Workflow when one result needs to travel into the next step."
                         }
                         p(.class("section-intro")) {
                             "Steps run from top to bottom. Add another only when it uses an earlier result."
@@ -1112,7 +1100,7 @@ private struct TurgaiToolArgumentRow: HTML, Sendable {
                     span(.class("field-label")) { "Type" }
                     TurgaiSelect(
                         name: "argumentType",
-                        value: argument.type,
+                        value: argument.type.rawValue,
                         options: [
                             ("string", "Text"),
                             ("number", "Number"),
@@ -1165,7 +1153,7 @@ private struct TurgaiWorkflowBuilder: HTML, Sendable {
             .init(name: "data-body-section", value: "workflow")
         ) {
             p(.class("builder-hint")) {
-                "Runs from top to bottom. Start with one step, then add another only when it needs the first step's result."
+                "Runs from top to bottom. Start with one step, then add another when it needs the first step's result."
             }
             div(
                 .class("builder-list"),
@@ -1200,7 +1188,7 @@ private struct TurgaiWorkflowStageRow: HTML, Sendable {
 
     private var hasStepOptions: Bool {
         !step.saveAs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || step.permission != "inherit"
+            || step.permission != .inherit
             || !step.inputs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -1220,7 +1208,7 @@ private struct TurgaiWorkflowStageRow: HTML, Sendable {
                 }
                 TurgaiSelect(
                     name: "stageKind",
-                    value: step.kind,
+                    value: step.kind.rawValue,
                     options: [
                         ("fetch", "Get information"),
                         ("execute", "Run a script"),
@@ -1258,7 +1246,7 @@ private struct TurgaiWorkflowStageRow: HTML, Sendable {
                             .required
                         )
                     }
-                    p(.class("hint")) { "A short name for this step's result." }
+                    p(.class("hint")) { "A short name for what this step returns." }
                 }
             }
             TurgaiFetchStageFields(step: step)
@@ -1277,13 +1265,13 @@ private struct TurgaiWorkflowStageRow: HTML, Sendable {
                             .value(step.saveAs),
                             .placeholder("forecast")
                         )
-                        p(.class("hint")) { "Give this result another name for later steps." }
+                        p(.class("hint")) { "Give this result another name if a later step needs it." }
                     }
                     label(.class("form-field")) {
                         span(.class("field-label")) { "Permission" }
                         TurgaiSelect(
                             name: "stagePermission",
-                            value: step.permission,
+                            value: step.permission.rawValue,
                             options: [
                                 ("inherit", "Use tool access"),
                                 ("allowed", "Allow this step"),
@@ -1301,7 +1289,7 @@ private struct TurgaiWorkflowStageRow: HTML, Sendable {
                     ) {
                         step.inputs
                     }
-                    p(.class("hint")) { "Pass a saved result as name=value, one per line." }
+                    p(.class("hint")) { "Pass saved results as name=value, one per line." }
                 }
             }
             div(.class("stage-row-footer")) {
@@ -1342,7 +1330,7 @@ private struct TurgaiFetchStageFields: HTML, Sendable {
                     .value(step.url),
                     .placeholder("https://api.example.com/weather?city={{city}}")
                 )
-                p(.class("hint")) { "Use {{input}} for a value from the Inputs section." }
+                p(.class("hint")) { "Use {{input}} to bring in a value from the Inputs section." }
             }
             details(.class("stage-details")) {
                 summary(.class("stage-details-summary")) {
@@ -1373,7 +1361,7 @@ private struct TurgaiFetchStageFields: HTML, Sendable {
                             .value(step.allowedHosts),
                             .placeholder("api.example.com, weather.example.com")
                         )
-                        p(.class("hint")) { "Leave empty to use the bot's network access." }
+                        p(.class("hint")) { "Leave empty to use the bot's usual network access." }
                     }
                     label(.class("form-field")) {
                         span(.class("field-label")) { "Headers" }
@@ -1419,7 +1407,7 @@ private struct TurgaiExecuteStageFields: HTML, Sendable {
                 span(.class("field-label")) { "Script" }
                 TurgaiSelect(
                     name: "stageScriptMode",
-                    value: step.scriptMode,
+                    value: step.scriptMode.rawValue,
                     options: [
                         ("source", "Write it here"),
                         ("file", "Use a file next to this tool"),
@@ -1456,7 +1444,7 @@ private struct TurgaiExecuteStageFields: HTML, Sendable {
                         .value(step.scriptFile),
                         .placeholder("scripts/weather.sh")
                     )
-                    p(.class("hint")) { "The file must live alongside the tool." }
+                    p(.class("hint")) { "Keep the file alongside this tool." }
                 }
             }
             label(.class("form-field")) {
@@ -1467,7 +1455,7 @@ private struct TurgaiExecuteStageFields: HTML, Sendable {
                     .value(step.interpreter),
                     .placeholder("bash, python3, or swift")
                 )
-                p(.class("hint")) { "Required when writing the script here." }
+                p(.class("hint")) { "Only needed when you write the script here." }
             }
             details(.class("stage-details")) {
                 summary(.class("stage-details-summary")) {
@@ -1484,7 +1472,7 @@ private struct TurgaiExecuteStageFields: HTML, Sendable {
                             .value(step.writeDirectory),
                             .placeholder("data")
                         )
-                        p(.class("hint")) { "Relative to the workspace. Leave empty for the default." }
+                        p(.class("hint")) { "Relative to the workspace. Leave empty for the usual location." }
                     }
                     label(.class("form-field")) {
                         span(.class("field-label")) { "Arguments" }
@@ -1530,7 +1518,7 @@ private struct TurgaiThinkStageFields: HTML, Sendable {
                     step.instruction
                 }
                 p(.class("hint")) {
-                    "Use this to explain, summarize, or transform the current result."
+                    "Use this to explain, summarize, or reshape the current result."
                 }
             }
         }
@@ -1553,7 +1541,7 @@ private struct TurgaiProgramBuilder: HTML, Sendable {
             .init(name: "data-body-section", value: "process")
         ) {
             p(.class("section-intro")) {
-                "Run one program already installed on the machine. Start with its path, then add options only if it needs them."
+                "Run a program already installed on the machine. Start with its path, then add options only if it needs them."
             }
             label(.class("form-field")) {
                 span(.class("field-label")) { "Program" }
@@ -1608,7 +1596,7 @@ private struct TurgaiPromptBuilder: HTML, Sendable {
             .init(name: "data-body-section", value: "prompt")
         ) {
             p(.class("section-intro")) {
-                "Ask another bot to do a focused piece of thinking and return its answer."
+                "Ask another bot to take on one focused piece of thinking and bring back its answer."
             }
             label(.class("form-field")) {
                 span(.class("field-label")) { "Instruction" }
@@ -1636,7 +1624,7 @@ private struct TurgaiWasmBuilder: HTML, Sendable {
             .init(name: "data-body-section", value: "wasm")
         ) {
             p(.class("section-intro")) {
-                "Run a prebuilt WebAssembly module stored next to this tool."
+                "Run a prebuilt WebAssembly module kept next to this tool."
             }
             label(.class("form-field")) {
                 span(.class("field-label")) { "Module file" }
