@@ -235,7 +235,7 @@ public actor TurgaiConnections: Service {
     public func conversationHistory(
         for conversationID: ConversationID,
         role: TurgaiAgentRole
-    ) async throws -> [ChatMessage] {
+    ) async throws -> [ConversationHistoryEntry] {
         let conversation = try await Conversation.resolve(
             on: actorSystem,
             conversationID: conversationID,

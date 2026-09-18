@@ -33,7 +33,7 @@ public actor TurgaiWebChatBridge {
     public func conversationHistory(
         for conversationID: ConversationID,
         role: TurgaiAgentRole
-    ) async throws -> [ChatMessage] {
+    ) async throws -> [ConversationHistoryEntry] {
         guard let connections else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }

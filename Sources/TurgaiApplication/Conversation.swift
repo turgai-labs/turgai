@@ -483,7 +483,11 @@ public distributed actor Conversation {
         state
     }
 
-    public distributed func history() async throws -> [ChatMessage] {
+    public distributed func history() -> [ConversationHistoryEntry] {
+        state.history
+    }
+
+    public distributed func modelHistory() async throws -> [ChatMessage] {
         try await peer.history()
     }
 

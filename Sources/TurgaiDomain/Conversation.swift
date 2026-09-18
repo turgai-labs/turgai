@@ -553,6 +553,23 @@ public enum ConversationStatus: Hashable, Codable, Sendable {
     case failed(ConversationFailure)
 }
 
+public enum ConversationHistoryRole: String, Codable, Sendable {
+    case user
+    case assistant
+}
+
+public struct ConversationHistoryEntry: Hashable, Codable, Sendable, Identifiable {
+    public let id: String
+    public let role: ConversationHistoryRole
+    public let text: String
+
+    public init(id: String, role: ConversationHistoryRole, text: String) {
+        self.id = id
+        self.role = role
+        self.text = text
+    }
+}
+
 public struct ConversationState: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
     public internal(set) var status: ConversationStatus
@@ -560,13 +577,26 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public internal(set) var pendingMessages: [PendingConversationMessage]
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var activeMessage: PendingConversationMessage?
+    public internal(set) var history: [ConversationHistoryEntry]
+
+    private enum CodingKeys: String, CodingKey {
+        case conversationID
+        case status
+        case acceptedMessageIDs
+        case pendingMessages
+        case pendingReplies
+        case activeMessage
+        case history
+    }
+
     public init(
         conversationID: ConversationID,
         status: ConversationStatus = .idle,
         acceptedMessageIDs: [MessageID] = [],
         pendingMessages: [PendingConversationMessage] = [],
         pendingReplies: [PendingConversationReply] = [],
-        activeMessage: PendingConversationMessage? = nil
+        activeMessage: PendingConversationMessage? = nil,
+        history: [ConversationHistoryEntry] = []
     ) {
         self.conversationID = conversationID
         self.status = status
@@ -574,6 +604,36 @@ public struct ConversationState: Hashable, Codable, Sendable {
         self.pendingMessages = pendingMessages
         self.pendingReplies = pendingReplies
         self.activeMessage = activeMessage
+        self.history = history
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
+        self.status = try container.decode(ConversationStatus.self, forKey: .status)
+        self.acceptedMessageIDs = try container.decode([MessageID].self, forKey: .acceptedMessageIDs)
+        self.pendingMessages = try container.decode([PendingConversationMessage].self, forKey: .pendingMessages)
+        self.pendingReplies = try container.decode([PendingConversationReply].self, forKey: .pendingReplies)
+        self.activeMessage = try container.decodeIfPresent(
+            PendingConversationMessage.self,
+            forKey: .activeMessage
+        )
+        self.history =
+            try container.decodeIfPresent(
+                [ConversationHistoryEntry].self,
+                forKey: .history
+            ) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(conversationID, forKey: .conversationID)
+        try container.encode(status, forKey: .status)
+        try container.encode(acceptedMessageIDs, forKey: .acceptedMessageIDs)
+        try container.encode(pendingMessages, forKey: .pendingMessages)
+        try container.encode(pendingReplies, forKey: .pendingReplies)
+        try container.encodeIfPresent(activeMessage, forKey: .activeMessage)
+        try container.encode(history, forKey: .history)
     }
 
     public var activeTurnID: TurnID? {
@@ -586,6 +646,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
         case .messageQueued(let pending):
             rememberAcceptedMessage(pending.message.id)
             pendingMessages.append(pending)
+            appendUserMessage(pending.message)
 
         case .replyQueued(let pending):
             if !pendingReplies.contains(pending) {
@@ -598,12 +659,20 @@ public struct ConversationState: Hashable, Codable, Sendable {
                 activeMessage = nil
                 status = .idle
             }
+            appendHistory(
+                ConversationHistoryEntry(
+                    id: "reply:\(pending.turnID.rawValue.uuidString)",
+                    role: .assistant,
+                    text: pending.text
+                )
+            )
 
         case .replyDelivered(let turnID):
             pendingReplies.removeAll { $0.turnID == turnID }
 
         case .turnStarted(let pending):
             rememberAcceptedMessage(pending.message.id)
+            appendUserMessage(pending.message)
             if let index = pendingMessages.firstIndex(where: { $0.turnID == pending.turnID }) {
                 pendingMessages.remove(at: index)
             }
@@ -619,6 +688,13 @@ public struct ConversationState: Hashable, Codable, Sendable {
             guard activeTurnID == turnID else { return }
             activeMessage = nil
             status = .failed(failure)
+            appendHistory(
+                ConversationHistoryEntry(
+                    id: "failure:\(turnID.rawValue.uuidString)",
+                    role: .assistant,
+                    text: failure.message
+                )
+            )
 
         case .memoryObservationQueued, .memoryObservationsCompleted:
             break
@@ -627,6 +703,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
             activeMessage = nil
             pendingMessages.removeAll(keepingCapacity: true)
             pendingReplies.removeAll(keepingCapacity: true)
+            history.removeAll(keepingCapacity: true)
             status = .idle
         }
     }
@@ -647,6 +724,21 @@ public struct ConversationState: Hashable, Codable, Sendable {
         if acceptedMessageIDs.count > 256 {
             acceptedMessageIDs.removeFirst(acceptedMessageIDs.count - 256)
         }
+    }
+
+    private mutating func appendUserMessage(_ message: InboundMessage) {
+        appendHistory(
+            ConversationHistoryEntry(
+                id: "message:\(message.id.rawValue.uuidString)",
+                role: .user,
+                text: message.text
+            )
+        )
+    }
+
+    private mutating func appendHistory(_ entry: ConversationHistoryEntry) {
+        guard !history.contains(where: { $0.id == entry.id }) else { return }
+        history.append(entry)
     }
 }
 

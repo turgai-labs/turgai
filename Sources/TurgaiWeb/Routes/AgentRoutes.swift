@@ -3,6 +3,7 @@ import Hail
 import Hummingbird
 import HummingbirdElementary
 import HummingbirdWebSocket
+import Logging
 import NIOCore
 import TurgaiApplication
 import TurgaiDomain
@@ -15,6 +16,8 @@ import TurgaiTelegram
 #else
     import Foundation
 #endif
+
+private let webChatLogger = Logger(label: "turgai.web.chat")
 
 extension TurgaiMainWebApp {
     func registerAgentRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
@@ -31,11 +34,31 @@ extension TurgaiMainWebApp {
             }
             let identity = account.id.uuidString
             let conversationID = webConversationID(profileID: profile.id, identity: identity)
-            let history =
-                (try? await webChatBridge.conversationHistory(
+            let history: [ConversationHistoryEntry]
+            do {
+                history = try await webChatBridge.conversationHistory(
                     for: conversationID,
                     role: .profile(profile.id)
-                )) ?? []
+                )
+                webChatLogger.info(
+                    "Loaded web chat history",
+                    metadata: [
+                        "conversationID": .string(conversationID.stableKey),
+                        "profileID": .string(profile.id),
+                        "messageCount": .string("\(history.count)"),
+                    ]
+                )
+            } catch {
+                webChatLogger.error(
+                    "Could not load web chat history",
+                    metadata: [
+                        "conversationID": .string(conversationID.stableKey),
+                        "profileID": .string(profile.id),
+                        "error": .string(String(describing: error)),
+                    ]
+                )
+                history = []
+            }
             let response = HTMLResponse {
                 ChatPage(
                     user: TurgaiWebSupport.userInfo(from: account),
@@ -86,8 +109,13 @@ extension TurgaiMainWebApp {
             }
 
             do {
+                let socketWriter = WebChatSocketWriter(outbound: outbound)
+                let history = try await webChatBridge.conversationHistory(
+                    for: conversationID,
+                    role: .profile(profile.id)
+                )
+                try await socketWriter.write(.history(history))
                 try await withThrowingTaskGroup(of: Void.self) { group in
-                    let socketWriter = WebChatSocketWriter(outbound: outbound)
                     group.addTask {
                         for try await input in inbound.messages(maxSize: 1_000_000) {
                             guard case .text(let text) = input,
@@ -139,11 +167,23 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/")
             }
             let conversationID = webConversationID(profileID: profile.id, identity: user.id.uuidString)
-            let history =
-                (try? await webChatBridge.conversationHistory(
+            let history: [ConversationHistoryEntry]
+            do {
+                history = try await webChatBridge.conversationHistory(
                     for: conversationID,
                     role: .profile(profile.id)
-                )) ?? []
+                )
+            } catch {
+                webChatLogger.error(
+                    "Could not load web chat history",
+                    metadata: [
+                        "conversationID": .string(conversationID.stableKey),
+                        "profileID": .string(profile.id),
+                        "error": .string(String(describing: error)),
+                    ]
+                )
+                history = []
+            }
             return HTMLResponse {
                 ChatPage(user: user, profile: profile, history: history)
             }.response(from: request, context: context)
@@ -195,8 +235,13 @@ extension TurgaiMainWebApp {
             }
 
             do {
+                let socketWriter = WebChatSocketWriter(outbound: outbound)
+                let history = try await webChatBridge.conversationHistory(
+                    for: conversationID,
+                    role: .profile(profile.id)
+                )
+                try await socketWriter.write(.history(history))
                 try await withThrowingTaskGroup(of: Void.self) { group in
-                    let socketWriter = WebChatSocketWriter(outbound: outbound)
                     group.addTask {
                         for try await input in inbound.messages(maxSize: 1_000_000) {
                             guard case .text(let text) = input,
@@ -436,6 +481,7 @@ private enum WebChatEventError: Error {
 
 private struct WebChatEvent: Encodable {
     enum Kind: String, Encodable {
+        case history
         case user
         case started
         case partial
@@ -447,6 +493,15 @@ private struct WebChatEvent: Encodable {
 
     let type: Kind
     let html: String?
+    let messages: [WebChatHistoryMessage]?
+
+    static func history(_ messages: [ConversationHistoryEntry]) -> Self {
+        Self(
+            type: .history,
+            html: nil,
+            messages: messages.compactMap(WebChatHistoryMessage.init)
+        )
+    }
 
     static func userMessage(_ text: String) -> Self {
         Self(type: .user, text: text)
@@ -472,5 +527,22 @@ private struct WebChatEvent: Encodable {
     private init(type: Kind, text: String?) {
         self.type = type
         self.html = text.map(MarkdownRenderer.html(from:))
+        self.messages = nil
+    }
+
+    private init(type: Kind, html: String?, messages: [WebChatHistoryMessage]?) {
+        self.type = type
+        self.html = html
+        self.messages = messages
+    }
+}
+
+private struct WebChatHistoryMessage: Encodable {
+    let role: ConversationHistoryRole
+    let html: String
+
+    init(entry: ConversationHistoryEntry) {
+        self.role = entry.role
+        self.html = MarkdownRenderer.html(from: entry.text)
     }
 }

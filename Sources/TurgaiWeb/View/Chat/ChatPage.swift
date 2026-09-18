@@ -5,6 +5,7 @@ import Hummingbird
 import HummingbirdElementary
 import NIOCore
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
@@ -23,13 +24,13 @@ struct ChatPage: HTMLDocument, Sendable {
 
     let user: AuthenticatedUser?
     let profile: TurgaiAgentProfile
-    let history: [ChatMessage]
+    let history: [ConversationHistoryEntry]
     let presentation: Presentation
 
     init(
         user: AuthenticatedUser,
         profile: TurgaiAgentProfile,
-        history: [ChatMessage]
+        history: [ConversationHistoryEntry]
     ) {
         self.user = user
         self.profile = profile
@@ -40,7 +41,7 @@ struct ChatPage: HTMLDocument, Sendable {
     init(
         user: AuthenticatedUser,
         profile: TurgaiAgentProfile,
-        history: [ChatMessage],
+        history: [ConversationHistoryEntry],
         presentation: Presentation
     ) {
         self.user = user
@@ -49,7 +50,7 @@ struct ChatPage: HTMLDocument, Sendable {
         self.presentation = presentation
     }
 
-    init(profile: TurgaiAgentProfile, history: [ChatMessage]) {
+    init(profile: TurgaiAgentProfile, history: [ConversationHistoryEntry]) {
         self.user = nil
         self.profile = profile
         self.history = history
@@ -57,35 +58,18 @@ struct ChatPage: HTMLDocument, Sendable {
     }
 
     private struct HistoryItem: Encodable {
-        enum Role: String, Encodable {
-            case user
-            case assistant
-        }
-
-        let role: Role
+        let role: ConversationHistoryRole
         let text: String
         let html: String
     }
 
     private var historyJSON: String {
-        let items = history.compactMap { message -> HistoryItem? in
-            switch message {
-            case .text(_, let content, _):
-                return HistoryItem(role: .user, text: content, html: MarkdownRenderer.html(from: content))
-            case .response(_, let content, _):
-                let text: String
-                if case .string(let value) = content.kind {
-                    text = value
-                } else {
-                    text = content.jsonString
-                }
-                return HistoryItem(role: .assistant, text: text, html: MarkdownRenderer.html(from: text))
-            case .failure(let error, _):
-                let text = error.localizedDescription
-                return HistoryItem(role: .assistant, text: text, html: MarkdownRenderer.html(from: text))
-            default:
-                return nil
-            }
+        let items = history.map {
+            HistoryItem(
+                role: $0.role,
+                text: $0.text,
+                html: MarkdownRenderer.html(from: $0.text)
+            )
         }
         guard let data = try? JSONEncoder().encode(items),
             let json = String(data: data, encoding: .utf8)
@@ -138,8 +122,8 @@ struct ChatPage: HTMLDocument, Sendable {
                         .init(name: "aria-label", value: "Conversation with \(profile.name)")
                     ) {
                         div(.class("chat-messages-content"), .id("chat-messages-content")) {
-                            div(.class("chat-empty")) {
-                                p { "Start a conversation with \(profile.name)." }
+                            div(.class("chat-empty chat-loading")) {
+                                p { "Restoring your conversation…" }
                             }
                         }
                     }
@@ -181,6 +165,7 @@ struct ChatPage: HTMLDocument, Sendable {
                     let assistantMessage;
 
                     const ChatEventType = Object.freeze({
+                        history: "history",
                         user: "user",
                         started: "started",
                         partial: "partial",
@@ -195,7 +180,8 @@ struct ChatPage: HTMLDocument, Sendable {
                         if (!Object.values(ChatEventType).includes(value.type)) return null;
                         return {
                             type: value.type,
-                            html: typeof value.html === "string" ? value.html : null
+                            html: typeof value.html === "string" ? value.html : null,
+                            messages: Array.isArray(value.messages) ? value.messages : []
                         };
                     };
 
@@ -226,6 +212,13 @@ struct ChatPage: HTMLDocument, Sendable {
 
                     const history = \(historyJSON);
                     history.forEach(({ role, text, html }) => addMessage(role, text, html));
+                    const emptyState = messageContent.querySelector(".chat-empty");
+                    const showReadyState = () => {
+                        if (messageContent.querySelector(".chat-message")) return;
+                        if (!emptyState) return;
+                        emptyState.classList.remove("chat-loading");
+                        emptyState.querySelector("p").textContent = "Start a conversation with \(profile.name).";
+                    };
                     scrollToBottom();
 
                     const showThinking = () => {
@@ -254,6 +247,11 @@ struct ChatPage: HTMLDocument, Sendable {
                         if (!update) return;
                         if (update.type === ChatEventType.user) {
                             addMessage("user", "", update.html);
+                        } else if (update.type === ChatEventType.history) {
+                            if (!messageContent.querySelector(".chat-message")) {
+                                update.messages.forEach(({ role, html }) => addMessage(role, "", html));
+                            }
+                            showReadyState();
                         } else if (update.type === ChatEventType.started) {
                             showThinking();
                         } else if (update.type === ChatEventType.partial) {
@@ -272,7 +270,17 @@ struct ChatPage: HTMLDocument, Sendable {
                         scrollToBottom();
                     });
 
+                    socket.addEventListener("error", () => {
+                        if (!emptyState || messageContent.querySelector(".chat-message")) return;
+                        emptyState.classList.remove("chat-loading");
+                        emptyState.querySelector("p").textContent = "Could not restore this conversation.";
+                    }, { once: true });
+
                     socket.addEventListener("close", () => {
+                        if (emptyState && !messageContent.querySelector(".chat-message")) {
+                            emptyState.classList.remove("chat-loading");
+                            emptyState.querySelector("p").textContent = "Could not restore this conversation.";
+                        }
                         input.disabled = true;
                         input.placeholder = "Chat connection closed";
                     });
