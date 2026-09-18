@@ -64,6 +64,29 @@ struct TurgaiHead: HTML, Sendable {
                 };
 
                 applyTheme(readSavedTheme() || (systemTheme.matches ? "dark" : "light"));
+
+                const randomAngle = (minimum, maximum) => {
+                    return `${(minimum + Math.random() * (maximum - minimum)).toFixed(1)}deg`;
+                };
+
+                const randomizeGeometry = () => {
+                    const page = document.querySelector(".app-page, .setup-page");
+                    if (page) {
+                        page.style.setProperty("--geometry-angle-primary", randomAngle(-12, 12));
+                        page.style.setProperty("--geometry-angle-secondary", randomAngle(-12, 12));
+                        page.style.setProperty("--geometry-angle-tertiary", randomAngle(-18, 18));
+                    }
+                    document.querySelectorAll(".setup-hero-art .geometry").forEach((shape) => {
+                        shape.style.setProperty("--geometry-angle", randomAngle(-18, 18));
+                    });
+                };
+
+                if (document.readyState === "loading") {
+                    document.addEventListener("DOMContentLoaded", randomizeGeometry, { once: true });
+                } else {
+                    randomizeGeometry();
+                }
+
                 if (systemTheme.addEventListener) {
                     systemTheme.addEventListener("change", applySystemTheme);
                 } else {

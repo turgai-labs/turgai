@@ -35,7 +35,7 @@ struct RegisterAccountPage: HTMLDocument, Sendable {
                         p(.class("eyebrow")) { "Join this Turgai" }
                         h1 { "Make room for another voice." }
                         p(.class("lede")) {
-                            "Create an account to use this Turgai installation. An administrator will approve it before you can sign in."
+                            "Create an account to chat with this Turgai installation. You can sign in immediately; an administrator can grant dashboard access later."
                         }
                     }
                     div(.class("setup-form-area")) {

@@ -31,12 +31,12 @@ struct TurgaiWorkflowBuilder: HTML, Sendable {
                 .init(name: "data-stage-list", value: "")
             ) {
                 for (index, step) in steps.enumerated() {
-                    TurgaiWorkflowStageRow(step: step, number: index + 1, isTemplate: false)
+                    TurgaiWorkflowStageRow(step: step, number: index + 1, kind: .visible)
                 }
                 TurgaiWorkflowStageRow(
                     step: TurgaiWorkflowStepDraft(),
                     number: 1,
-                    isTemplate: true
+                    kind: .template
                 )
             }
             button(

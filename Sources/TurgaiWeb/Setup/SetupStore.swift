@@ -6,7 +6,7 @@ import TurgaiPersistence
     import Foundation
 #endif
 
-actor TurgaiSetupStore {
+public actor TurgaiSetupStore {
     struct State: Codable {
         var storage: TurgaiStorageConfiguration?
         var telegramChatIDs: [Int64] = []
@@ -20,7 +20,7 @@ actor TurgaiSetupStore {
     private let completionContinuation: AsyncStream<Void>.Continuation
     private var state: State
 
-    init(directory: URL) throws {
+    public init(directory: URL) throws {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         stateURL = directory.appendingPathComponent("setup.json")
@@ -47,11 +47,19 @@ actor TurgaiSetupStore {
         }
     }
 
+    func stopWaiting() {
+        completionContinuation.finish()
+    }
+
     var isReady: Bool {
-        guard state.storage != nil, state.telegramConfigured,
-            let token = try? String(contentsOf: secretURL, encoding: .utf8)
-        else { return false }
-        return !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard let storage = state.storage else { return false }
+        if case .postgres = storage {
+            guard let password = try? String(contentsOf: postgresPasswordURL, encoding: .utf8) else {
+                return false
+            }
+            return !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return true
     }
 
     func setStorage(

@@ -13,6 +13,23 @@ import TurgaiDomain
 /// routed to this profile gets the profile's model and transcript identity.
 /// Keeping the identifier stable is important: changing a display name or a
 /// model must not silently create a new conversation history.
+public enum AgentAvailability: String, Codable, Sendable, Equatable {
+    case enabled
+    case disabled
+
+    public init(from decoder: Decoder) throws {
+        if let value = try? decoder.singleValueContainer().decode(String.self),
+            let availability = Self(rawValue: value)
+        {
+            self = availability
+            return
+        }
+        // Older profile files stored this state as a Boolean.
+        let legacy = try decoder.singleValueContainer().decode(Bool.self)
+        self = legacy ? .enabled : .disabled
+    }
+}
+
 public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
     public let id: String
     public var name: String
@@ -25,7 +42,7 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
     /// persona, while an empty string is treated the same way at runtime.
     public var persona: String?
     public var instructions: String
-    public var enabled: Bool
+    public var availability: AgentAvailability
     public var telegramChatIDs: [Int64]
 
     public init(
@@ -36,7 +53,7 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
         contextWindow: Int = 16_384,
         persona: String? = nil,
         instructions: String = "",
-        enabled: Bool = true,
+        availability: AgentAvailability = .enabled,
         telegramChatIDs: [Int64] = []
     ) {
         self.id = id
@@ -46,7 +63,7 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
         self.contextWindow = contextWindow
         self.persona = persona
         self.instructions = instructions
-        self.enabled = enabled
+        self.availability = availability
         self.telegramChatIDs = telegramChatIDs
     }
 }
@@ -108,6 +125,10 @@ public actor TurgaiAgentProfileStore {
         }
         let canonicalProfiles = initialState.profiles.map { profile in
             var canonical = profile
+            if canonical.id == initialState.defaultProfileID, canonical.name == "Conversation" {
+                canonical.name = "Turgai"
+                shouldPersist = true
+            }
             if canonical.model.provider != .ollama {
                 canonical.ollamaBaseURL = nil
             }
@@ -140,13 +161,27 @@ public actor TurgaiAgentProfileStore {
         state.defaultProfileID == id
     }
 
+    public func setDefaultProfile(id: String) throws {
+        guard let profile = state.profiles.first(where: { $0.id == id }) else {
+            throw TurgaiAgentProfileError.unknownProfile(id)
+        }
+        guard case .enabled = profile.availability else {
+            throw TurgaiAgentProfileError.invalidName
+        }
+        state.defaultProfileID = id
+        try persist()
+    }
+
     /// Resolves a channel conversation to a profile. Telegram chat IDs are
     /// explicit bindings; all other conversations use the catalog default.
     public func profileID(for conversationID: ConversationID) -> String {
         if conversationID.channel.rawValue == "telegram",
             let chatID = Int64(conversationID.externalAddress.rawValue),
             let profile = state.profiles.first(where: {
-                $0.enabled && $0.telegramChatIDs.contains(chatID)
+                if case .enabled = $0.availability {
+                    return $0.telegramChatIDs.contains(chatID)
+                }
+                return false
             })
         {
             return profile.id
@@ -164,7 +199,7 @@ public actor TurgaiAgentProfileStore {
         guard let index = state.profiles.firstIndex(where: { $0.id == profile.id }) else {
             throw TurgaiAgentProfileError.unknownProfile(profile.id)
         }
-        if profile.id == state.defaultProfileID, !profile.enabled {
+        if profile.id == state.defaultProfileID, case .disabled = profile.availability {
             throw TurgaiAgentProfileError.invalidName
         }
         try validateUniqueTelegramChatIDs(profile, replacing: profile.id)
@@ -254,7 +289,8 @@ public actor TurgaiAgentProfileStore {
             try validate(profile)
         }
         var telegramChatIDs = Set<Int64>()
-        for profile in state.profiles where profile.enabled {
+        for profile in state.profiles {
+            guard case .enabled = profile.availability else { continue }
             for chatID in profile.telegramChatIDs {
                 guard telegramChatIDs.insert(chatID).inserted else {
                     throw TurgaiAgentProfileError.duplicateTelegramChatID(chatID)
@@ -268,7 +304,8 @@ public actor TurgaiAgentProfileStore {
         replacing profileID: String?
     ) throws {
         var used = Set<Int64>()
-        for existing in state.profiles where existing.id != profileID && existing.enabled {
+        for existing in state.profiles where existing.id != profileID {
+            guard case .enabled = existing.availability else { continue }
             used.formUnion(existing.telegramChatIDs)
         }
         for chatID in profile.telegramChatIDs {

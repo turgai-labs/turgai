@@ -134,9 +134,14 @@ struct TurgaiWorkflowStepDraft: Sendable {
     }
 }
 
+enum ToolDraftKind: Sendable {
+    case new
+    case existing
+}
+
 struct TurgaiToolDraft: Sendable {
     var fileName: String
-    var isNew: Bool
+    var kind: ToolDraftKind
     var name: String
     var description: String
     var approval: String
@@ -151,7 +156,7 @@ struct TurgaiToolDraft: Sendable {
 
     init(
         fileName: String,
-        isNew: Bool,
+        kind: ToolDraftKind,
         name: String,
         description: String,
         approval: String,
@@ -165,7 +170,7 @@ struct TurgaiToolDraft: Sendable {
         promptInstruction: String
     ) {
         self.fileName = fileName
-        self.isNew = isNew
+        self.kind = kind
         self.name = name
         self.description = description
         self.approval = approval
@@ -182,7 +187,7 @@ struct TurgaiToolDraft: Sendable {
     static func new(fileName: String) -> Self {
         var draft = Self(
             fileName: fileName,
-            isNew: true,
+            kind: .new,
             name: "",
             description: "",
             approval: "always",

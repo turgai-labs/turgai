@@ -2,6 +2,7 @@ import Elementary
 import Hail
 import Hummingbird
 import HummingbirdElementary
+import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
 import TurgaiHail
@@ -15,11 +16,11 @@ import TurgaiTelegram
 #endif
 
 extension TurgaiMainWebApp {
-    func registerToolRoutes(on router: Router<BasicRequestContext>, dependencies: TurgaiRouteDependencies) {
+    func registerToolRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
         let auth = dependencies.auth
         let userToolRegistry = dependencies.userToolRegistry
         router.get("/tools") { request, context in
-            guard let user = await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) else {
+            guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             return HTMLResponse {
@@ -30,7 +31,7 @@ extension TurgaiMainWebApp {
             }.response(from: request, context: context)
         }
         router.get("/tools/new") { request, context in
-            guard let user = await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) else {
+            guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             return HTMLResponse {
@@ -41,7 +42,7 @@ extension TurgaiMainWebApp {
             }.response(from: request, context: context)
         }
         router.get("/tools/:file") { request, context in
-            guard let user = await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) else {
+            guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard let fileName = context.parameters.get("file"),
@@ -58,17 +59,18 @@ extension TurgaiMainWebApp {
             }.response(from: request, context: context)
         }
         router.post("/tools/save") { request, context in
-            guard let user = await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) else {
+            guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let isNew = form["isNew"]?.first == "true"
+            let draftKind: ToolDraftKind = form["isNew"]?.first == "true" ? .new : .existing
             let submittedFileName = form["fileName"]?.first ?? ""
-            let fileName =
-                isNew
-                ? TurgaiWebSupport.newToolFileName()
-                : submittedFileName
-            let draft = TurgaiToolDraft(form: form, fileName: fileName, isNew: isNew)
+            let fileName: String
+            switch draftKind {
+            case .new: fileName = TurgaiWebSupport.newToolFileName()
+            case .existing: fileName = submittedFileName
+            }
+            let draft = TurgaiToolDraft(form: form, fileName: fileName, kind: draftKind)
             do {
                 try userToolRegistry.save(
                     named: fileName,
@@ -86,7 +88,7 @@ extension TurgaiMainWebApp {
             }
         }
         router.post("/tools/delete") { request, context in
-            guard let user = await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) else {
+            guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)

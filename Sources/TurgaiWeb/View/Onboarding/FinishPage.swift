@@ -38,8 +38,8 @@ struct FinishPage: HTMLDocument, Sendable {
                     }
                 }
                 SetupFooter(
-                    step: 6,
-                    backHref: "/onboarding/telegram",
+                    step: 5,
+                    backHref: "/onboarding/storage",
                     submitFormID: "finish-form",
                     submitLabel: "Start Turgai"
                 )

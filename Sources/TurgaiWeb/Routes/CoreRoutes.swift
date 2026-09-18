@@ -2,6 +2,7 @@ import Elementary
 import Hail
 import Hummingbird
 import HummingbirdElementary
+import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
 import TurgaiHail
@@ -15,7 +16,7 @@ import TurgaiTelegram
 #endif
 
 extension TurgaiMainWebApp {
-    func registerCoreRoutes(on router: Router<BasicRequestContext>, dependencies: TurgaiRouteDependencies) {
+    func registerCoreRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
         let auth = dependencies.auth
         let setup = dependencies.setup
         let agentProfiles = dependencies.agentProfiles
@@ -24,7 +25,12 @@ extension TurgaiMainWebApp {
             guard await auth.hasAdmin() else {
                 return TurgaiWebSupport.redirect(to: "/onboarding")
             }
-            guard let user = await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) else {
+            guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
+                if let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth),
+                    account.role == .user
+                {
+                    return TurgaiWebSupport.redirect(to: "/chat")
+                }
                 return TurgaiWebSupport.redirect(to: "/login")
             }
             let isComplete = await setup.isComplete
@@ -45,7 +51,7 @@ extension TurgaiMainWebApp {
             return TurgaiWebSupport.redirect(to: "/onboarding/model")
         }
         router.get("/api/agents") { request, _ in
-            guard await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) != nil else {
+            guard await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) != nil else {
                 return Response(status: .unauthorized)
             }
             let profiles = await agentProfiles.profiles()
@@ -57,7 +63,7 @@ extension TurgaiMainWebApp {
                             id: $0.id,
                             name: $0.name,
                             model: $0.model.identifier,
-                            enabled: $0.enabled
+                            availability: $0.availability
                         )
                     },
                     runtime: runtime

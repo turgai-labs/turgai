@@ -33,12 +33,30 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
         self.error = error
     }
 
-    var title: String { "Turgai — \(draft.isNew ? "New tool" : "Edit tool")" }
+    private var draftLabel: String {
+        switch draft.kind {
+        case .new: "New tool"
+        case .existing: "Edit tool"
+        }
+    }
+
+    private var draftKindValue: String {
+        switch draft.kind {
+        case .new: "true"
+        case .existing: "false"
+        }
+    }
+
+    var title: String { "Turgai — \(draftLabel)" }
     var head: some HTML { TurgaiHead() }
 
     private var heading: String {
         let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? (draft.isNew ? "Build a tool" : "Edit tool") : name
+        guard name.isEmpty else { return name }
+        switch draft.kind {
+        case .new: return "Build a tool"
+        case .existing: return "Edit tool"
+        }
     }
 
     var body: some HTML {
@@ -50,7 +68,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                         TurgaiBreadcrumb(
                             parentTitle: "Tools",
                             parentHref: "/tools",
-                            currentTitle: draft.isNew ? "New tool" : "Edit tool"
+                            currentTitle: draftLabel
                         )
                         h1 { heading }
                         p(.class("lede")) {
@@ -77,7 +95,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                             .init(name: "data-tool-editor", value: "")
                         ) {
                             input(.type(.hidden), .name("fileName"), .value(draft.fileName))
-                            input(.type(.hidden), .name("isNew"), .value(String(draft.isNew)))
+                            input(.type(.hidden), .name("isNew"), .value(draftKindValue))
 
                             section(.class("builder-section")) {
                                 div(.class("builder-section-intro")) {
@@ -143,11 +161,11 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                                         )
                                     ) {
                                         for argument in draft.arguments {
-                                            TurgaiToolArgumentRow(argument: argument, isTemplate: false)
+                                            TurgaiToolArgumentRow(argument: argument, kind: .visible)
                                         }
                                         TurgaiToolArgumentRow(
                                             argument: TurgaiToolArgumentDraft(),
-                                            isTemplate: true
+                                            kind: .template
                                         )
                                     }
                                     button(
@@ -204,7 +222,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                                 }
                             }
                         }
-                        if !draft.isNew {
+                        if case .existing = draft.kind {
                             form(
                                 .method(.post),
                                 .action("/tools/delete"),

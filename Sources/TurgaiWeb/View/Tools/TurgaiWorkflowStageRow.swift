@@ -16,9 +16,14 @@ import TurgaiTelegram
 #endif
 
 struct TurgaiWorkflowStageRow: HTML, Sendable {
+    enum RowKind: Sendable, Equatable {
+        case template
+        case visible
+    }
+
     let step: TurgaiWorkflowStepDraft
     let number: Int
-    let isTemplate: Bool
+    let kind: RowKind
 
     private var hasStepOptions: Bool {
         !step.saveAs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -31,10 +36,10 @@ struct TurgaiWorkflowStageRow: HTML, Sendable {
             .class("builder-row workflow-stage-row"),
             .init(name: "data-builder-row", value: "stage"),
             .init(name: "data-stage-row", value: ""),
-            isTemplate
+            kind == .template
                 ? .init(name: "data-builder-template", value: "stages")
                 : .init(name: "data-builder-visible", value: "true"),
-            isTemplate ? .hidden : .init(name: "data-visible", value: "true")
+            kind == .template ? .hidden : .init(name: "data-visible", value: "true")
         ) {
             div(.class("stage-heading")) {
                 span(.class("stage-number"), .init(name: "data-stage-number", value: "")) {
@@ -63,7 +68,7 @@ struct TurgaiWorkflowStageRow: HTML, Sendable {
             div(.class("stage-primary-fields")) {
                 label(.class("form-field")) {
                     span(.class("field-label")) { "Step name" }
-                    if isTemplate {
+                    if case .template = kind {
                         input(
                             .type(.text),
                             .name("stageID"),

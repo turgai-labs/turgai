@@ -23,10 +23,7 @@ public struct TurgaiWebConfiguration: Sendable {
     public let complete: Bool
 
     public var isReady: Bool {
-        guard complete,
-            let storage,
-            telegramToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-        else {
+        guard complete, let storage else {
             return false
         }
         if case .postgres = storage {
@@ -79,17 +76,21 @@ public struct TurgaiMainWebApp: Sendable {
     let setup: TurgaiSetupStore
     let agentProfiles: TurgaiAgentProfileStore
     let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
+    let webChatBridge: TurgaiWebChatBridge
 
     public init(
         auth: TurgaiAuth,
         directory: URL,
         agentProfiles: TurgaiAgentProfileStore,
-        runtimeSnapshots: @escaping @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = { [] }
+        runtimeSnapshots: @escaping @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = { [] },
+        setup: TurgaiSetupStore,
+        webChatBridge: TurgaiWebChatBridge
     ) throws {
         self.directory = directory
         self.auth = auth
-        self.setup = try TurgaiSetupStore(directory: directory)
+        self.setup = setup
         self.agentProfiles = agentProfiles
         self.runtimeSnapshots = runtimeSnapshots
+        self.webChatBridge = webChatBridge
     }
 }

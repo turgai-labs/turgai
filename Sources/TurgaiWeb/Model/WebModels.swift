@@ -1,3 +1,5 @@
+import TurgaiApplication
+
 public struct TurgaiAgentRuntimeSnapshot: Codable, Sendable, Equatable {
     public let profileID: String
     public let contextID: String
@@ -33,13 +35,13 @@ public struct BotSummary: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let name: String
     public let model: String
-    public let enabled: Bool
+    public let availability: AgentAvailability
 
-    public init(id: String, name: String, model: String, enabled: Bool) {
+    public init(id: String, name: String, model: String, availability: AgentAvailability) {
         self.id = id
         self.name = name
         self.model = model
-        self.enabled = enabled
+        self.availability = availability
     }
 }
 
@@ -47,7 +49,7 @@ struct BotCard: Identifiable, Sendable, Equatable {
     let id: String
     let name: String
     let model: String
-    let enabled: Bool
+    let availability: AgentAvailability
     let telegramChatCount: Int
 }
 

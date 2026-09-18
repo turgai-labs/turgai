@@ -16,7 +16,13 @@ import TurgaiTelegram
 #endif
 
 struct TurgaiToolRow: HTML, Sendable {
+    enum Access: Sendable {
+        case view
+        case edit
+    }
+
     let document: UserToolDocument
+    let access: Access
 
     private var href: String { "/tools/\(document.fileName)" }
 
@@ -62,7 +68,10 @@ struct TurgaiToolRow: HTML, Sendable {
                 }
             }
             a(.href(href), .class("tool-row-action")) {
-                document.isValid ? "Edit →" : "Review →"
+                switch access {
+                case .view: "View →"
+                case .edit: document.isValid ? "Edit →" : "Review →"
+                }
             }
         }
     }

@@ -2,6 +2,7 @@ import Elementary
 import Hail
 import Hummingbird
 import HummingbirdElementary
+import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
 import TurgaiHail
@@ -21,10 +22,11 @@ struct TurgaiRouteDependencies: Sendable {
     let defaultFileDirectory: URL
     let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
     let userToolRegistry: UserToolRegistry
+    let webChatBridge: TurgaiWebChatBridge
 }
 
 extension TurgaiMainWebApp {
-    public func registerRoutes(on router: Router<BasicRequestContext>) {
+    public func registerRoutes(on router: Router<BasicWebSocketRequestContext>) {
         let dependencies = TurgaiRouteDependencies(
             auth: auth,
             setup: setup,
@@ -33,7 +35,8 @@ extension TurgaiMainWebApp {
             runtimeSnapshots: runtimeSnapshots,
             userToolRegistry: UserToolRegistry(
                 directory: directory.appendingPathComponent("tools", isDirectory: true)
-            )
+            ),
+            webChatBridge: webChatBridge
         )
         registerCoreRoutes(on: router, dependencies: dependencies)
         registerToolRoutes(on: router, dependencies: dependencies)

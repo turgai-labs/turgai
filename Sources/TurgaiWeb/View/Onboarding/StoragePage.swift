@@ -93,14 +93,16 @@ struct StoragePage: HTMLDocument, Sendable {
                                             "document.querySelectorAll('[data-storage-panel]').forEach((panel) => panel.hidden = panel.dataset.storagePanel !== this.value)"
                                     )
                                 ) {
-                                    if values.backend == .file {
+                                    switch values.backend {
+                                    case .file:
                                         option(.value("file"), .selected) { "File store" }
-                                    } else {
+                                    case .postgres:
                                         option(.value("file")) { "File store" }
                                     }
-                                    if values.backend == .postgres {
+                                    switch values.backend {
+                                    case .postgres:
                                         option(.value("postgres"), .selected) { "PostgreSQL" }
-                                    } else {
+                                    case .file:
                                         option(.value("postgres")) { "PostgreSQL" }
                                     }
                                 }

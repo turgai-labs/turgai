@@ -1,4 +1,5 @@
 import Hummingbird
+import HummingbirdWebSocket
 import ServiceLifecycle
 import TurgaiApplication
 
@@ -17,15 +18,16 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
     public init(
         auth: TurgaiAuth,
         directory: URL,
-        agentProfiles: TurgaiAgentProfileStore
+        agentProfiles: TurgaiAgentProfileStore,
+        setup: TurgaiSetupStore
     ) throws {
         self.directory = directory
         self.auth = auth
-        self.setup = try TurgaiSetupStore(directory: directory)
+        self.setup = setup
         self.agentProfiles = agentProfiles
     }
 
-    public func registerRoutes(on router: Router<BasicRequestContext>) {
+    public func registerRoutes(on router: Router<BasicWebSocketRequestContext>) {
         let dependencies = TurgaiRouteDependencies(
             auth: auth,
             setup: setup,
@@ -34,12 +36,19 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
             runtimeSnapshots: { [] },
             userToolRegistry: UserToolRegistry(
                 directory: directory.appendingPathComponent("tools", isDirectory: true)
-            )
+            ),
+            webChatBridge: TurgaiWebChatBridge()
         )
         registerOnboardingRoutes(on: router, dependencies: dependencies)
     }
 
     public func run() async throws {
-        await setup.waitUntilComplete()
+        await withTaskCancellationOrGracefulShutdownHandler {
+            await setup.waitUntilComplete()
+        } onCancelOrGracefulShutdown: {
+            Task {
+                await setup.stopWaiting()
+            }
+        }
     }
 }

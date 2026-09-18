@@ -11,6 +11,7 @@ import NIOPosix
 /// A durable local account used by Turgai's future dashboard and API clients.
 public struct Account: Codable, Equatable, Sendable {
     public enum Role: String, Codable, Equatable, Sendable {
+        case user
         case administrator
         case member
     }
@@ -33,16 +34,17 @@ public struct Account: Codable, Equatable, Sendable {
     public let role: Role
 
     public var user: any Account.User {
-        role == .administrator
-            ? Administrator(id: id, username: username, status: status)
-            : Member(id: id, username: username, status: status)
+        switch role {
+        case .user: AccountUser(id: id, username: username, status: status)
+        case .member: Member(id: id, username: username, status: status)
+        case .administrator: Administrator(id: id, username: username, status: status)
+        }
     }
     public var administrator: Administrator? {
         role == .administrator
             ? Administrator(id: id, username: username, status: status)
             : nil
     }
-    public var isAdmin: Bool { administrator != nil }
 
     public init(
         id: UUID = UUID(),
@@ -58,6 +60,12 @@ public struct Account: Codable, Equatable, Sendable {
 }
 
 public struct Member: Account.User, Codable, Equatable {
+    public let id: UUID
+    public let username: String
+    public let status: Account.Status
+}
+
+public struct AccountUser: Account.User, Codable, Equatable {
     public let id: UUID
     public let username: String
     public let status: Account.Status
@@ -219,11 +227,11 @@ public actor TurgaiAuth {
         return try await createAccount(username: username, password: password, role: .administrator)
     }
 
-    /// Creates a pending member account. An administrator must approve it
-    /// before sign-in succeeds.
+    /// Creates a chat-only account. It can sign in immediately; an
+    /// administrator may promote it to member access later.
     @discardableResult
     public func register(username: String, password: String) async throws -> Account {
-        try await createAccount(username: username, password: password, role: .member)
+        try await createAccount(username: username, password: password, role: .user)
     }
 
     public func approve(username: String) throws {
@@ -239,6 +247,18 @@ public actor TurgaiAuth {
     }
 
     public func approve(id: UUID) throws {
+        let (key, account) = try accountEntry(id: id)
+        state.accounts[key] = StoredAccount(
+            id: account.id,
+            username: account.username,
+            passwordHash: account.passwordHash,
+            status: .approved,
+            role: account.role
+        )
+        try persist()
+    }
+
+    public func enable(id: UUID) throws {
         let (key, account) = try accountEntry(id: id)
         state.accounts[key] = StoredAccount(
             id: account.id,
@@ -307,9 +327,7 @@ public actor TurgaiAuth {
 
     public func signIn(username: String, password: String, now: Date = Date()) async throws -> TurgaiSession {
         guard let account = state.accounts[username] else { throw TurgaiAuthError.invalidCredentials }
-        guard account.status == .approved else {
-            throw account.status == .disabled ? TurgaiAuthError.accountDisabled : TurgaiAuthError.accountNotApproved
-        }
+        guard account.status != .disabled else { throw TurgaiAuthError.accountDisabled }
         guard try await verify(password, hash: account.passwordHash) else {
             throw TurgaiAuthError.invalidCredentials
         }
@@ -344,7 +362,7 @@ public actor TurgaiAuth {
         guard constantTimeEquals(Data(expected), signatureData) else { throw TurgaiAuthError.invalidSession }
         guard let accountID = UUID(uuidString: claims.sub),
             let account = state.accounts.values.first(where: { $0.id == accountID }),
-            account.status == .approved
+            account.status != .disabled
         else {
             throw TurgaiAuthError.invalidSession
         }
@@ -360,7 +378,7 @@ public actor TurgaiAuth {
             id: UUID(),
             username: username,
             passwordHash: hash,
-            status: role == .administrator ? .approved : .pending,
+            status: .approved,
             role: role
         )
         state.accounts[username] = account

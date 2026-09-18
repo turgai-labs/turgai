@@ -2,7 +2,6 @@ import AsyncAlgorithms
 import DistributedCluster
 import Hail
 import ServiceLifecycle
-import TurgaiApplication
 import TurgaiDomain
 
 #if canImport(FoundationEssentials)
@@ -26,7 +25,7 @@ private actor OutboundDeliveryReceipt {
     private var waiters: [UUID: CheckedContinuation<OutboundDeliveryResult, Never>] = [:]
     private var cancelledWaiters: Set<UUID> = []
 
-    func wait() async throws {
+    public func wait() async throws {
         let waiterID = UUID()
         let result = await withTaskCancellationHandler {
             await register(waiterID)
@@ -89,24 +88,24 @@ private actor OutboundDeliveryReceipt {
     }
 }
 
-struct OutboundDelivery: Sendable {
-    let id = UUID()
-    let event: OutboundEvent
+public struct OutboundDelivery: Sendable {
+    public let id = UUID()
+    public let event: OutboundEvent
     private let receipt = OutboundDeliveryReceipt()
 
-    init(event: OutboundEvent) {
+    public init(event: OutboundEvent) {
         self.event = event
     }
 
-    func wait() async throws {
+    public func wait() async throws {
         try await receipt.wait()
     }
 
-    func delivered() async {
+    public func delivered() async {
         await receipt.delivered()
     }
 
-    func failed(_ message: String) async {
+    public func failed(_ message: String) async {
         await receipt.failed(message)
     }
 }
@@ -137,6 +136,19 @@ private actor OutboundDeliveryRegistry {
 /// stream to `addLiveSession`, the factory creates a live session, and the
 /// returned outbound stream is consumed by that channel service.
 public actor TurgaiConnections: Service {
+    public struct WebSession: Sendable {
+        public let input: AsyncChannel<ConversationInputDelivery>
+        public let output: AsyncChannel<OutboundDelivery>
+
+        init(
+            input: AsyncChannel<ConversationInputDelivery>,
+            output: AsyncChannel<OutboundDelivery>
+        ) {
+            self.input = input
+            self.output = output
+        }
+    }
+
     enum Connection: Identifiable, Sendable {
         case live(LiveSession)
 
@@ -199,10 +211,10 @@ public actor TurgaiConnections: Service {
     ///
     /// The caller owns the input stream and receives the output stream. This
     /// is the same factory boundary as StagehandConnections.addLiveSession.
-    func addLiveSession(
+    public func addLiveSession(
         id: String,
         inbound: AsyncChannel<ConversationInputDelivery>
-    ) async -> LiveSession.OutputStream {
+    ) async -> AsyncChannel<OutboundDelivery> {
         let session = LiveSession(
             id: id,
             actorSystem: actorSystem,
@@ -214,9 +226,28 @@ public actor TurgaiConnections: Service {
         return session.output
     }
 
+    public func addWebSession(id: WebSessionID) async -> WebSession {
+        let inbound = AsyncChannel<ConversationInputDelivery>()
+        let output = await addLiveSession(id: id.rawValue.uuidString, inbound: inbound)
+        return WebSession(input: inbound, output: output)
+    }
+
+    public func conversationHistory(
+        for conversationID: ConversationID,
+        role: TurgaiAgentRole
+    ) async throws -> [ChatMessage] {
+        let conversation = try await Conversation.resolve(
+            on: actorSystem,
+            conversationID: conversationID,
+            agentRole: role.rawValue,
+            memoryExtraction: memoryExtraction
+        )
+        return try await conversation.history()
+    }
+
     /// Stops accepting sessions. Existing session workers are cancelled by
     /// the task group and finish their sessions after their input stream ends.
-    func stop() {
+    public func stop() {
         connectionContinuation.finish()
     }
 

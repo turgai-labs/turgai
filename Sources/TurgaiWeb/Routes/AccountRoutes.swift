@@ -2,6 +2,7 @@ import Elementary
 import Hail
 import Hummingbird
 import HummingbirdElementary
+import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
 import TurgaiHail
@@ -15,7 +16,7 @@ import TurgaiTelegram
 #endif
 
 extension TurgaiMainWebApp {
-    func registerAccountRoutes(on router: Router<BasicRequestContext>, dependencies: TurgaiRouteDependencies) {
+    func registerAccountRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
         let auth = dependencies.auth
         let setup = dependencies.setup
         let agentProfiles = dependencies.agentProfiles
@@ -24,6 +25,11 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/onboarding")
             }
             if await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) != nil {
+                if let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth),
+                    account.role == .user
+                {
+                    return TurgaiWebSupport.redirect(to: "/chat")
+                }
                 let isComplete = await setup.isComplete
                 let isReady = await setup.isReady
                 let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
@@ -60,12 +66,16 @@ extension TurgaiMainWebApp {
                 switch action {
                 case .approve:
                     try await auth.approve(id: accountID)
+                case .enable:
+                    try await auth.enable(id: accountID)
                 case .disable:
                     try await auth.disable(id: accountID)
                 case .administrator:
                     try await auth.setRole(accountID, role: .administrator)
                 case .member:
                     try await auth.setRole(accountID, role: .member)
+                case .user:
+                    try await auth.setRole(accountID, role: .user)
                 default:
                     throw TurgaiAuthError.invalidUsername
                 }
@@ -95,11 +105,14 @@ extension TurgaiMainWebApp {
             let credentials = CredentialsFormValues(form: form)
             do {
                 _ = try await auth.register(username: credentials.username, password: credentials.password)
-                return HTMLResponse {
-                    RegisterAccountPage(
-                        success: "Your account is ready for administrator approval."
-                    )
-                }.response(from: request, context: context)
+                let session = try await auth.signIn(
+                    username: credentials.username,
+                    password: credentials.password
+                )
+                return TurgaiWebSupport.redirect(
+                    to: "/chat",
+                    settingCookie: TurgaiWebSupport.sessionCookie(session.token)
+                )
             } catch {
                 return HTMLResponse {
                     RegisterAccountPage(error: TurgaiWebSupport.registrationErrorMessage(error))
@@ -114,6 +127,12 @@ extension TurgaiMainWebApp {
                     username: credentials.username,
                     password: credentials.password
                 )
+                let account = await auth.accounts().first { $0.username == credentials.username }
+                if account?.role == .user {
+                    return TurgaiWebSupport.redirect(
+                        to: "/chat", settingCookie: TurgaiWebSupport.sessionCookie(session.token)
+                    )
+                }
                 let isComplete = await setup.isComplete
                 let isReady = await setup.isReady
                 let hasDefaultProfile = await agentProfiles.defaultProfile() != nil

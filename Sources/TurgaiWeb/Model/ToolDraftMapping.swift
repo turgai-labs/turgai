@@ -10,7 +10,7 @@ import TurgaiApplication
 extension TurgaiToolDraft {
     init(document: UserToolDocument) {
         self.fileName = document.fileName
-        self.isNew = false
+        self.kind = .existing
         self.name = document.tool?.name ?? ""
         self.description = document.tool?.description ?? ""
         self.approval = document.tool?.approval.rawValue ?? "always"
@@ -48,9 +48,9 @@ extension TurgaiToolDraft {
         }
     }
 
-    init(form: [String: [String]], fileName: String, isNew: Bool) {
+    init(form: [String: [String]], fileName: String, kind: ToolDraftKind) {
         self.fileName = fileName
-        self.isNew = isNew
+        self.kind = kind
         self.name = form["toolName"]?.first ?? ""
         self.description = form["toolDescription"]?.first ?? ""
         self.approval = form["approval"]?.first ?? "always"

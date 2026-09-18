@@ -24,7 +24,7 @@ struct TurgaiSelectOptions: HTML, Sendable {
             TurgaiSelectOption(
                 value: optionValue.0,
                 label: optionValue.1,
-                selected: optionValue.0 == value
+                selection: optionValue.0 == value ? .selected : .unselected
             )
         }
     }

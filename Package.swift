@@ -67,12 +67,14 @@ let package = Package(
             from: "2.25.0"
         ),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.16.0"),
+        .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.2.0"),
         .package(url: "https://github.com/elementary-swift/elementary.git", from: "0.7.0"),
         .package(url: "https://github.com/hummingbird-community/hummingbird-elementary.git", from: "0.4.2"),
         .package(
             url: "https://github.com/apple/swift-log.git",
             from: "1.6.0"
         ),
+        .package(url: "https://github.com/apple/swift-markdown.git", branch: "main"),
         .package(
             url: "https://github.com/swiftwasm/WasmKit.git",
             from: "0.3.1"
@@ -88,9 +90,11 @@ let package = Package(
                 "TurgaiPersistence",
                 "TurgaiTelegram",
                 .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "Elementary", package: "elementary"),
                 .product(name: "HummingbirdElementary", package: "hummingbird-elementary"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+                .product(name: "Markdown", package: "swift-markdown"),
             ],
             resources: [
                 .copy("Resources/Public")

@@ -357,9 +357,6 @@ actor TelegramService: Service {
                 operation: {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
-                            try await self.connections.run()
-                        }
-                        group.addTask {
                             try await self.telegramIntegration.bot.run()
                         }
                         group.addTask {
@@ -681,7 +678,6 @@ actor TelegramService: Service {
 
     private func stop() async {
         await telegramIntegration.bot.stop()
-        await connections.stop()
     }
 
     private func connectPersistedConversations() async {

@@ -46,7 +46,7 @@ public enum TurgaiModelCatalogLoader {
                     TurgaiModelChoice(
                         provider: .system,
                         identifier: model.identifier,
-                        displayName: "On-device Apple model",
+                        displayName: TurgaiModelPresentation.appleSystemModelName,
                         source: .fixed
                     )
                 ]

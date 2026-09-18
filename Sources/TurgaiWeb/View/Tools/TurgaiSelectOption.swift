@@ -16,14 +16,20 @@ import TurgaiTelegram
 #endif
 
 struct TurgaiSelectOption: HTML, Sendable {
+    enum Selection: Sendable {
+        case selected
+        case unselected
+    }
+
     let value: String
     let label: String
-    let selected: Bool
+    let selection: Selection
 
     var body: some HTML {
-        if selected {
+        switch selection {
+        case .selected:
             option(.value(value), .selected) { label }
-        } else {
+        case .unselected:
             option(.value(value)) { label }
         }
     }

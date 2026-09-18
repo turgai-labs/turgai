@@ -35,25 +35,33 @@ actor TurgaiRuntimeSnapshotSource {
     }
 }
 
+private enum RuntimeAgentKind {
+    case userTool
+    case profile
+}
+
 struct TurgaiAppService: Service, Sendable {
     private let environment: [String: String]
     private let workspaceRoot: String
     private let turgaiDirectory: URL
     private let agentProfiles: TurgaiAgentProfileStore
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
+    private let webChatBridge: TurgaiWebChatBridge
 
     init(
         environment: [String: String],
         workspaceRoot: String,
         turgaiDirectory: URL,
         agentProfiles: TurgaiAgentProfileStore,
-        runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
+        runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
+        webChatBridge: TurgaiWebChatBridge
     ) {
         self.environment = environment
         self.workspaceRoot = workspaceRoot
         self.turgaiDirectory = turgaiDirectory
         self.agentProfiles = agentProfiles
         self.runtimeSnapshotSource = runtimeSnapshotSource
+        self.webChatBridge = webChatBridge
     }
 
     func run() async throws {
@@ -119,20 +127,22 @@ struct TurgaiAppService: Service, Sendable {
             try await persistenceRuntime.setupDatabase()
             let conversationJournals = try await persistenceRuntime.conversationJournals()
             let persistedConversationIDs = conversationJournals.map(\.conversationID)
-            guard
-                let configuredTelegramToken = configuration.telegramToken?.trimmingCharacters(
-                    in: .whitespacesAndNewlines
-                ), !configuredTelegramToken.isEmpty
-            else {
-                throw ValidationError("Telegram configuration is missing.")
-            }
-
             // Share one Bot API client between transport and dynamic tool
             // approvals so callback handling and approval messages use the same
             // dependency boundary.
-            let telegramClient = try TelegramAPIClient.live(token: configuredTelegramToken)
-            let telegramApproval = TelegramToolApproval(client: telegramClient)
-            let toolApproval: any ToolApproval = telegramApproval
+            let telegramClient: TelegramAPIClient?
+            let telegramApproval: TelegramToolApproval?
+            if let configuredTelegramToken = configuration.telegramToken?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ), !configuredTelegramToken.isEmpty {
+                let client = try TelegramAPIClient.live(token: configuredTelegramToken)
+                telegramClient = client
+                telegramApproval = TelegramToolApproval(client: client)
+            } else {
+                telegramClient = nil
+                telegramApproval = nil
+            }
+            let toolApproval: any ToolApproval = telegramApproval ?? DenyAllApproval()
 
             let userToolsDirectory =
                 turgaiDirectory
@@ -158,12 +168,17 @@ struct TurgaiAppService: Service, Sendable {
                 modelEndpointProvider: modelEndpointProvider,
                 definitionProvider: { spawnConfig in
                     let role = spawnConfig.agentID.role.rawValue
-                    let isUserTool = role == "user-tool"
-                    let profile =
-                        isUserTool
-                        ? defaultAgentProfile
-                        : await agentProfiles.profile(id: role)
-                    guard let profile, isUserTool || profile.enabled else { return nil }
+                    let agentKind: RuntimeAgentKind = role == "user-tool" ? .userTool : .profile
+                    let profile: TurgaiAgentProfile?
+                    switch agentKind {
+                    case .userTool: profile = defaultAgentProfile
+                    case .profile: profile = await agentProfiles.profile(id: role)
+                    }
+                    guard let profile else { return nil }
+                    switch (agentKind, profile.availability) {
+                    case (.profile, .disabled): return nil
+                    case (.profile, .enabled), (.userTool, _): break
+                    }
                     let selectedModel = profile.model
                     let customInstructions =
                         profile.instructions.trimmingCharacters(
@@ -177,10 +192,13 @@ struct TurgaiAppService: Service, Sendable {
                     } else {
                         personaInstructions = TurgaiAgentPersona.instructions
                     }
-                    let systemPrompt =
-                        isUserTool
-                        ? "You are an isolated helper agent. Follow the supplied task, return only the useful result, and do not perform side effects."
-                        : [
+                    let systemPrompt: String
+                    switch agentKind {
+                    case .userTool:
+                        systemPrompt =
+                            "You are an isolated helper agent. Follow the supplied task, return only the useful result, and do not perform side effects."
+                    case .profile:
+                        systemPrompt = [
                             "You are a local conversational assistant. Be helpful, concise, honest, and natural.",
                             "Do not assume the user's physical location. The supplied date/time uses Turgai's fixed operating timezone and is not evidence of where the user is. Do not derive a place from the server's timezone, locale, IP address, language, or current date/time. For location-dependent requests such as weather, ask for a city or place unless the user provided one or it is explicitly present in saved personal memory.",
                             customInstructions,
@@ -188,24 +206,34 @@ struct TurgaiAppService: Service, Sendable {
                         ]
                         .filter { !$0.isEmpty }
                         .joined(separator: "\n\n")
+                    }
+                    let execution: AgentExecutionPolicy
+                    switch agentKind {
+                    case .userTool:
+                        execution = AgentExecutionPolicy(
+                            sandbox: .readOnly,
+                            approvalPolicy: .onRequest
+                        )
+                    case .profile:
+                        execution = .autonomousWorkspace
+                    }
                     return AgentDefinition(
                         role: spawnConfig.agentID.role,
                         behavior: .init(
                             systemPrompt: systemPrompt,
                             model: selectedModel,
-                            execution: isUserTool
-                                ? AgentExecutionPolicy(
-                                    sandbox: .readOnly,
-                                    approvalPolicy: .onRequest
-                                )
-                                : .autonomousWorkspace
+                            execution: execution
                         ),
-                        persona: isUserTool
-                            ? nil
-                            : AgentPersona(
-                                displayName: profile.name,
-                                instructions: personaInstructions
-                            )
+                        persona: {
+                            switch agentKind {
+                            case .userTool: return nil
+                            case .profile:
+                                return AgentPersona(
+                                    displayName: profile.name,
+                                    instructions: personaInstructions
+                                )
+                            }
+                        }()
                     )
                 },
                 turnToolsProvider: { context, actorSystem in
@@ -309,18 +337,24 @@ struct TurgaiAppService: Service, Sendable {
                 memoryExtraction: memoryExtraction,
                 agentProfiles: agentProfiles
             )
-            let telegramService = TelegramService(
-                client: telegramClient,
-                allowedChatIDs: allowedChatIDs,
-                offsetFileURL: turgaiDirectory.appendingPathComponent("telegram-offset.txt"),
-                connections: connections,
-                attachmentResolver: attachmentResolver,
-                logger: system.log,
-                persistedConversationIDs: persistedConversationIDs,
-                callbackHandler: { callback in
-                    await telegramApproval.handle(callback)
-                }
-            )
+            await webChatBridge.install(connections)
+            let telegramService: TelegramService?
+            if let telegramClient, let telegramApproval {
+                telegramService = TelegramService(
+                    client: telegramClient,
+                    allowedChatIDs: allowedChatIDs,
+                    offsetFileURL: turgaiDirectory.appendingPathComponent("telegram-offset.txt"),
+                    connections: connections,
+                    attachmentResolver: attachmentResolver,
+                    logger: system.log,
+                    persistedConversationIDs: persistedConversationIDs,
+                    callbackHandler: { callback in
+                        await telegramApproval.handle(callback)
+                    }
+                )
+            } else {
+                telegramService = nil
+            }
             let runtimeSnapshotProvider: @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = {
                 let entries = (try? await system.agentRuntime.allAgents()) ?? []
                 return await withTaskGroup(
@@ -368,19 +402,22 @@ struct TurgaiAppService: Service, Sendable {
             )
 
             let logger = system.log
-            logger.info("Telegram enabled")
-            if !allowedChatIDs.isEmpty {
-                logger.info("Telegram chat allow-list enabled")
+            if telegramService != nil {
+                logger.info("Telegram enabled")
+                if !allowedChatIDs.isEmpty {
+                    logger.info("Telegram chat allow-list enabled")
+                }
+            } else {
+                logger.info("Telegram not configured")
             }
             logger.info("Turgai is ready")
             logger.info("Workspace: \(workspaceRoot)")
             logger.info("Model: \(defaultModel.identifier)")
-            logger.info("Waiting for Telegram messages")
-
-            let services: [any Service] = [clusterService, telegramService]
+            let services: [any Service] =
+                [clusterService, connections]
+                + (telegramService.map { [$0] } ?? [])
             let serviceGroup = ServiceGroup(
                 services: services,
-                gracefulShutdownSignals: [.sigterm, .sigint],
                 logger: logger
             )
             try await serviceGroup.run()

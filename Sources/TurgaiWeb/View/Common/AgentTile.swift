@@ -28,7 +28,10 @@ struct AgentTile: HTML, Sendable {
             div(.class("bot-tile-top")) {
                 span(.class("bot-mark")) { initial }
                 span(.class("bot-status"), .init(name: "data-runtime-status", value: "")) {
-                    profile.enabled ? (runtime.isEmpty ? "idle" : "active") : "paused"
+                    switch profile.availability {
+                    case .enabled: runtime.isEmpty ? "idle" : "active"
+                    case .disabled: "paused"
+                    }
                 }
             }
             h2 { profile.name }

@@ -1,8 +1,31 @@
+import Hail
+import TurgaiApplication
+
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
     import Foundation
 #endif
+
+#if canImport(FoundationModels)
+    import FoundationModels
+#endif
+
+public enum TurgaiModelPresentation {
+    public static func displayName(for model: AgentModel) -> String {
+        guard model.provider == .system else { return model.identifier }
+        return "Apple Intelligence · \(appleSystemModelName)"
+    }
+
+    public static var appleSystemModelName: String {
+        #if canImport(FoundationModels)
+            if #available(macOS 27.0, *) {
+                return SystemLanguageModel.default.variant.displayName
+            }
+        #endif
+        return "Apple Foundation Model"
+    }
+}
 
 /// How a provider supplies model names to the dashboard.
 public struct ModelProviderID: RawRepresentable, Hashable, Codable, Sendable, Equatable {

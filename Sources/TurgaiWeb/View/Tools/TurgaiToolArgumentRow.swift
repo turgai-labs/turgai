@@ -16,17 +16,22 @@ import TurgaiTelegram
 #endif
 
 struct TurgaiToolArgumentRow: HTML, Sendable {
+    enum RowKind: Sendable, Equatable {
+        case template
+        case visible
+    }
+
     let argument: TurgaiToolArgumentDraft
-    let isTemplate: Bool
+    let kind: RowKind
 
     var body: some HTML {
         div(
             .class("builder-row argument-row"),
             .init(name: "data-builder-row", value: "argument"),
-            isTemplate
+            kind == .template
                 ? .init(name: "data-builder-template", value: "arguments")
                 : .init(name: "data-builder-visible", value: "true"),
-            isTemplate ? .hidden : .init(name: "data-visible", value: "true")
+            kind == .template ? .hidden : .init(name: "data-visible", value: "true")
         ) {
             div(.class("builder-row-fields")) {
                 label(.class("form-field")) {

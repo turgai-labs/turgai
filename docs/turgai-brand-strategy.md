@@ -10,9 +10,9 @@ Turgai is a little bird with a presence far beyond his size. His crest gives him
 
 He stands for a simple belief: powerful tools should be within anyone’s reach, and people should have a say in how those tools work. Being independent should never mean settling for less.
 
-Turgai brings that belief to life as a capable personal companion. Warm, inventive, and a little irreverent, he has the confidence to take on serious work and the honesty to admit his limits.
+Turgai gives that belief a character: warm, inventive, and a little irreverent, with the confidence to take on serious work and the honesty to admit his limits.
 
-His smallness means closeness: something you can know, shape, and make your own. His ambition is large. The contrast gives Turgai his character—a small bird who belongs in the same sky as the giants.
+His smallness makes the idea approachable, not limited. It gives a large ambition a clear shape—capable technology that people can understand, change, and make their own. The contrast gives Turgai his character: a small bird who belongs in the same sky as the giants.
 
 ## What Turgai stands for
 
@@ -24,9 +24,9 @@ Turgai questions the assumption that access to useful technology must come with 
 
 This is where his punk streak comes from: the unruly little bird who questions who gets to hold the keys, and gets on with making something useful. “Punk” is shorthand for that independence and resourcefulness. The story should make the attitude apparent before we give it a name.
 
-## The companion
+## The character
 
-Turgai is a personal AI companion for people who want useful help and room to make it their own. Models, memory, and tools are how the product helps; the brand is about the relationship people have with it.
+Turgai is the character that gives the product a point of view: useful technology that leaves people room to choose and shape how it works. Models, memory, and tools are how the product works; Turgai makes those capabilities recognizable without pretending to be human.
 
 He is:
 
@@ -37,7 +37,7 @@ He is:
 
 His defiance is directed at restrictions that serve the platform at the user’s expense. It never becomes contempt for people who choose convenience or use a large company’s products. Turgai can work with powerful models and outside services while keeping those choices visible.
 
-“Small” describes the character and the personal relationship. It is not a claim about model size, hardware requirements, or limits on what the product can become. Capability should be demonstrated through useful work; comparisons with other products need evidence.
+“Small” describes the character’s scale and point of view, not the product’s capability. It is not a claim about model size, hardware requirements, or limits on what the product can become. Capability should be demonstrated through useful work; comparisons with other products need evidence.
 
 ## Voice
 
@@ -76,7 +76,7 @@ The current local-first direction supports these commitments. It does not by its
 
 ### One-line description
 
-Turgai is a capable personal AI companion you can make your own.
+Turgai helps you get useful work done with the models and tools you choose.
 
 ### Short description
 
@@ -85,7 +85,7 @@ Turgai helps you get things done with tools you can choose and shape. Curious, r
 ### Lines to explore
 
 - **Small bird. Big possibilities.** — introduces the character and his ambition.
-- **Make it your own.** — invites people to participate.
+- **Make it your own.** — invites people to shape the product around their needs.
 - **Being independent should never mean settling for less.** — states the belief behind the product.
 
 These serve different purposes and remain candidates. Choose a line for the context rather than trying to fit the whole strategy into a tagline.
@@ -99,6 +99,7 @@ The poster influence gives his independence a visible form: a striking color fie
 ## Questions to test
 
 - Does the small bird suggest resourcefulness and possibility, or make the product seem limited?
+- Does Turgai feel like a recognizable character with a point of view, rather than a simulated person?
 - Can someone understand the independent attitude without seeing the word “punk”?
 - Which tasks best demonstrate the capability behind the character?
 - Which lines sound natural in the product as well as on a poster?

@@ -37,6 +37,24 @@ struct TurgaiWebConfigurationTests {
         #expect(configuration.isReady)
     }
 
+    @Test("completed file storage does not require Telegram")
+    func persistedStateWithoutTelegram() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let state = Data(
+            #"{"storage":{"kind":"file","directory":"file:///tmp/turgai-data"},"telegramChatIDs":[],"telegramConfigured":false,"complete":true}"#
+                .utf8
+        )
+        try state.write(to: directory.appendingPathComponent("setup.json"))
+
+        let configuration = try TurgaiWebConfiguration.load(directory: directory)
+
+        #expect(configuration.telegramToken == nil)
+        #expect(configuration.complete)
+        #expect(configuration.isReady)
+    }
+
     private func makeDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("turgai-web-\(UUID().uuidString)", isDirectory: true)

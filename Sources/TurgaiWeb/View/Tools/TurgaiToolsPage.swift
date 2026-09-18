@@ -33,6 +33,13 @@ struct TurgaiToolsPage: HTMLDocument, Sendable {
     var title: String { "Turgai — Tools" }
     var head: some HTML { TurgaiHead() }
 
+    private var toolAccess: TurgaiToolRow.Access {
+        switch user {
+        case .user, .member: .view
+        case .administrator: .edit
+        }
+    }
+
     var body: some HTML {
         main(.class("app-page")) {
             div(.class("app-shell tools-shell")) {
@@ -45,7 +52,9 @@ struct TurgaiToolsPage: HTMLDocument, Sendable {
                             "Give your bots useful abilities, one clear step at a time."
                         }
                     }
-                    a(.href("/tools/new"), .class("button button-accent add-tool-link")) { "+ New tool" }
+                    if case .administrator = user {
+                        a(.href("/tools/new"), .class("button button-accent add-tool-link")) { "+ New tool" }
+                    }
                 }
                 if let error {
                     p(.class("error page-error")) { error }
@@ -57,12 +66,17 @@ struct TurgaiToolsPage: HTMLDocument, Sendable {
                         p(.class("section-intro")) {
                             "Fetch information, run a script, or ask another bot to take on one focused piece of thinking."
                         }
-                        a(.href("/tools/new"), .class("text-link")) { "New tool →" }
+                        if case .administrator = user {
+                            a(.href("/tools/new"), .class("text-link")) { "New tool →" }
+                        }
                     }
                 } else {
                     section(.class("tools-list")) {
                         for document in documents {
-                            TurgaiToolRow(document: document)
+                            TurgaiToolRow(
+                                document: document,
+                                access: toolAccess
+                            )
                         }
                     }
                 }

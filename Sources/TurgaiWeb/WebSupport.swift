@@ -16,8 +16,19 @@ import TurgaiTelegram
 #endif
 
 enum TurgaiWebSupport {
+    enum PublicChatVisitor: Sendable {
+        case existing(id: String)
+        case new(id: String)
+
+        var id: String {
+            switch self {
+            case .existing(let id), .new(let id): id
+            }
+        }
+    }
     static let sessionCookieName = "turgai_auth"
     static let bootstrapChallengeCookieName = "turgai_bootstrap"
+    static let publicChatCookieName = "turgai_public_chat"
 
     static func modelCatalog(
         for profiles: [TurgaiAgentProfile]
@@ -136,6 +147,14 @@ enum TurgaiWebSupport {
         return Self.userInfo(from: account)
     }
 
+    static func authenticatedDashboardUser(from request: Request, auth: TurgaiAuth) async -> AuthenticatedUser? {
+        guard let user = await authenticatedUser(from: request, auth: auth) else { return nil }
+        switch user {
+        case .user: return nil
+        case .member, .administrator: return user
+        }
+    }
+
     static func authenticatedAccount(from request: Request, auth: TurgaiAuth) async -> Account? {
         guard let cookie = request.cookies[sessionCookieName],
             let account = try? await auth.authenticate(cookie.value)
@@ -146,6 +165,7 @@ enum TurgaiWebSupport {
     static func userInfo(from account: Account) -> AuthenticatedUser {
         let info = AccountInfo(id: account.id, username: account.username)
         switch account.role {
+        case .user: return .user(info)
         case .member: return .member(info)
         case .administrator: return .administrator(info)
         }
@@ -154,6 +174,7 @@ enum TurgaiWebSupport {
     static func accountSummary(from account: Account) -> AccountSummary {
         let role: AccountRole =
             switch account.role {
+            case .user: .user
             case .member: .member
             case .administrator: .administrator
             }
@@ -175,7 +196,7 @@ enum TurgaiWebSupport {
             id: profile.id,
             name: profile.name,
             model: profile.model.identifier,
-            enabled: profile.enabled,
+            availability: profile.availability,
             telegramChatCount: profile.telegramChatIDs.count
         )
     }
@@ -226,13 +247,33 @@ enum TurgaiWebSupport {
         )
     }
 
+    static func publicChatCookie(_ visitorID: String) -> Cookie {
+        Cookie(
+            name: publicChatCookieName,
+            value: visitorID,
+            maxAge: 31_536_000,
+            path: "/chat",
+            httpOnly: true,
+            sameSite: .lax
+        )
+    }
+
+    static func publicChatVisitorID(from request: Request) -> PublicChatVisitor {
+        if let value = request.cookies[publicChatCookieName]?.value,
+            UUID(uuidString: value) != nil
+        {
+            return .existing(id: value)
+        }
+        return .new(id: UUID().uuidString)
+    }
+
     static func redirect(to location: String, settingCookie cookie: Cookie? = nil) -> Response {
         var response = Response(status: .seeOther, headers: [.location: location])
         if let cookie { response.setCookie(cookie) }
         return response
     }
 
-    static func decodeForm(from request: Request, context: BasicRequestContext) async throws -> [String:
+    static func decodeForm<Context: RequestContext>(from request: Request, context: Context) async throws -> [String:
         [String]]
     {
         let buffer = try await request.body.collect(upTo: context.maxUploadSize)

@@ -483,6 +483,10 @@ public distributed actor Conversation {
         state
     }
 
+    public distributed func history() async throws -> [ChatMessage] {
+        try await peer.history()
+    }
+
     public distributed func addConnection(_ connection: ConversationConnection) async {
         await connectionRegistry.insert(connection)
         if let turnID = state.activeTurnID {

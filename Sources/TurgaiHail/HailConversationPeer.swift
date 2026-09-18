@@ -250,6 +250,7 @@ where Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Codable
 public struct HailConversationPeer: Sendable {
     public typealias ActivityHandler = @Sendable (HailModelEvent) async throws -> Void
     public typealias ContextHandler = @Sendable () async throws -> AgentContextSnapshot
+    public typealias HistoryHandler = @Sendable () async throws -> [ChatMessage]
 
     private let runHandler:
         @Sendable (
@@ -258,6 +259,7 @@ public struct HailConversationPeer: Sendable {
             @escaping ActivityHandler
         ) async throws -> HailResponse
     private let contextHandler: ContextHandler
+    private let historyHandler: HistoryHandler
 
     public init(
         run:
@@ -272,6 +274,7 @@ public struct HailConversationPeer: Sendable {
         self.contextHandler = {
             throw HailAdapterError.contextUnavailable
         }
+        self.historyHandler = { [] }
     }
 
     public init(
@@ -283,10 +286,12 @@ public struct HailConversationPeer: Sendable {
             ) async throws -> HailResponse,
         context: @escaping ContextHandler = {
             throw HailAdapterError.contextUnavailable
-        }
+        },
+        history: @escaping HistoryHandler = { [] }
     ) {
         self.runHandler = runWithContext
         self.contextHandler = context
+        self.historyHandler = history
     }
 
     public func run(
@@ -314,6 +319,10 @@ public struct HailConversationPeer: Sendable {
 
     public func contextSnapshot() async throws -> AgentContextSnapshot {
         try await contextHandler()
+    }
+
+    public func history() async throws -> [ChatMessage] {
+        try await historyHandler()
     }
 }
 
@@ -408,6 +417,9 @@ public struct HailAgentAdapter: Sendable {
             },
             context: {
                 try await agent.contextSnapshot
+            },
+            history: {
+                try await agent.getConversationHistory()
             }
         )
     }

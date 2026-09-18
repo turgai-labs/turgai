@@ -68,7 +68,7 @@ struct ModelPage: HTMLDocument, Sendable {
                             label(.class("form-field")) {
                                 span(.class("field-label")) { "Bot name" }
                                 input(
-                                    .type(.text), .name("agentName"), .value(profile?.name ?? "Conversation"),
+                                    .type(.text), .name("agentName"), .value(profile?.name ?? "Turgai"),
                                     .required
                                 )
                             }

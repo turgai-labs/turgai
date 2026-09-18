@@ -2,6 +2,7 @@ import Elementary
 import Hail
 import Hummingbird
 import HummingbirdElementary
+import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
 import TurgaiHail
@@ -15,7 +16,9 @@ import TurgaiTelegram
 #endif
 
 extension TurgaiOnboardingWebApp {
-    func registerOnboardingRoutes(on router: Router<BasicRequestContext>, dependencies: TurgaiRouteDependencies) {
+    func registerOnboardingRoutes(
+        on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
         let auth = dependencies.auth
         let setup = dependencies.setup
         let agentProfiles = dependencies.agentProfiles
@@ -161,7 +164,7 @@ extension TurgaiOnboardingWebApp {
                     storage,
                     postgresPassword: form["postgresPassword"]?.first
                 )
-                return Response(status: .seeOther, headers: [.location: "/onboarding/telegram"])
+                return Response(status: .seeOther, headers: [.location: "/onboarding/finish"])
             } catch {
                 return HTMLResponse {
                     StoragePage(

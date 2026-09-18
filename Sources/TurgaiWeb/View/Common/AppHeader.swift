@@ -31,31 +31,11 @@ struct AppHeader: HTML, Sendable {
                 span(.class("wordmark-text")) { "turgai" }
             }
             nav(.class("app-nav")) {
-                div(.class("app-nav-links")) {
-                    if section == .bots {
-                        a(
-                            .href("/"), .class("nav-link nav-link-active"),
-                            .init(name: "aria-current", value: "page")
-                        ) { "Bots" }
-                    } else {
-                        a(.href("/"), .class("nav-link")) { "Bots" }
-                    }
-                    if section == .tools {
-                        a(
-                            .href("/tools"), .class("nav-link nav-link-active"),
-                            .init(name: "aria-current", value: "page")
-                        ) { "Tools" }
-                    } else {
-                        a(.href("/tools"), .class("nav-link")) { "Tools" }
-                    }
-                    if case .administrator = user, section == .accounts {
-                        a(
-                            .href("/accounts"), .class("nav-link nav-link-active"),
-                            .init(name: "aria-current", value: "page")
-                        ) { "Accounts" }
-                    } else if case .administrator = user {
-                        a(.href("/accounts"), .class("nav-link")) { "Accounts" }
-                    }
+                if case .member = user {
+                    AppHeaderLinks(section: section, scope: .dashboard)
+                }
+                if case .administrator = user {
+                    AppHeaderLinks(section: section, scope: .administration)
                 }
                 label(.class("theme-switch")) {
                     input(
@@ -94,6 +74,53 @@ struct AppHeader: HTML, Sendable {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+private struct AppHeaderLinks: HTML, Sendable {
+    enum Scope: Sendable {
+        case dashboard
+        case administration
+    }
+
+    let section: TurgaiAppSection
+    let scope: Scope
+
+    private var accountsLink: some HTML {
+        switch section {
+        case .accounts:
+            a(
+                .href("/accounts"), .class("nav-link nav-link-active"),
+                .init(name: "aria-current", value: "page")
+            ) { "Accounts" }
+        case .bots, .tools:
+            a(.href("/accounts"), .class("nav-link")) { "Accounts" }
+        }
+    }
+
+    var body: some HTML {
+        div(.class("app-nav-links")) {
+            switch section {
+            case .bots:
+                a(
+                    .href("/"), .class("nav-link nav-link-active"),
+                    .init(name: "aria-current", value: "page")
+                ) { "Bots" }
+                a(.href("/tools"), .class("nav-link")) { "Tools" }
+            case .tools:
+                a(.href("/"), .class("nav-link")) { "Bots" }
+                a(
+                    .href("/tools"), .class("nav-link nav-link-active"),
+                    .init(name: "aria-current", value: "page")
+                ) { "Tools" }
+            case .accounts:
+                a(.href("/"), .class("nav-link")) { "Bots" }
+                a(.href("/tools"), .class("nav-link")) { "Tools" }
+            }
+            if case .administration = scope {
+                accountsLink
             }
         }
     }

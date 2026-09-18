@@ -40,15 +40,15 @@ struct SetupFooter: HTML, Sendable {
     }
 
     var body: some HTML {
-        nav(.class("setup-footer")) {
+        nav(.class("liquid-footer setup-footer")) {
             div(.class("setup-footer-actions")) {
                 if let backHref {
-                    SetupArrow(href: backHref, label: "Back", isBack: true)
+                    SetupArrow(href: backHref, label: "Back", direction: .back)
                 } else {
                     span(.class("setup-footer-spacer")) {}
                 }
                 if let forwardHref, let forwardLabel {
-                    SetupArrow(href: forwardHref, label: forwardLabel, isBack: false)
+                    SetupArrow(href: forwardHref, label: forwardLabel, direction: .forward)
                 } else if let submitFormID, let submitLabel {
                     SetupSubmit(formID: submitFormID, label: submitLabel)
                 }
