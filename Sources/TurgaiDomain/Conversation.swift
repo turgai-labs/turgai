@@ -14,6 +14,22 @@ public struct ChannelID: RawRepresentable, Hashable, Codable, Sendable {
     public init(_ rawValue: String) {
         self.init(rawValue: rawValue)
     }
+
+    /// Identifies one configured connection of a provider. This keeps two
+    /// Telegram bots serving the same external chat in separate conversations.
+    public init(provider: String, instanceID: String) {
+        self.rawValue = "\(provider)/\(instanceID)"
+    }
+
+    public var providerName: String {
+        String(rawValue.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)[0])
+    }
+
+    public var instanceID: String {
+        let parts = rawValue.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return "" }
+        return String(parts[1])
+    }
 }
 
 public struct ExternalConversationAddress: RawRepresentable, Hashable, Codable, Sendable {
@@ -138,7 +154,10 @@ public struct ConversationID: Hashable, Codable, Sendable {
     /// address direct conversations by the participant's own identity, so the
     /// external address is that participant.
     public var participantID: ParticipantID {
-        ParticipantID(channel: channel, rawValue: externalAddress.rawValue)
+        ParticipantID(
+            channel: ChannelID(channel.providerName),
+            rawValue: externalAddress.rawValue
+        )
     }
 }
 
@@ -418,10 +437,12 @@ public enum ConversationInput: Sendable, Equatable {
 public struct PendingConversationMessage: Hashable, Codable, Sendable {
     public let message: InboundMessage
     public let turnID: TurnID
+    public let agentRole: String
 
-    public init(message: InboundMessage, turnID: TurnID) {
+    public init(message: InboundMessage, turnID: TurnID, agentRole: String) {
         self.message = message
         self.turnID = turnID
+        self.agentRole = agentRole
     }
 }
 
@@ -746,15 +767,18 @@ public struct ConversationTurnRequest: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
     public let turnID: TurnID
     public let message: InboundMessage
+    public let agentRole: String
 
     public init(
         conversationID: ConversationID,
         turnID: TurnID,
-        message: InboundMessage
+        message: InboundMessage,
+        agentRole: String
     ) {
         self.conversationID = conversationID
         self.turnID = turnID
         self.message = message
+        self.agentRole = agentRole
     }
 }
 
@@ -764,8 +788,15 @@ public enum ReplyPhase: String, Hashable, Codable, Sendable {
 }
 
 public enum ReplyEvent: Hashable, Codable, Sendable {
+    case userMessage(
+        conversationID: ConversationID,
+        turnID: TurnID,
+        messageID: MessageID,
+        text: String
+    )
     case started(conversationID: ConversationID, turnID: TurnID)
     case phase(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)
+    case status(conversationID: ConversationID, turnID: TurnID, message: String)
     case partial(conversationID: ConversationID, turnID: TurnID, text: String)
     case keepAlive(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)
     case finished(conversationID: ConversationID, turnID: TurnID, text: String)
@@ -804,7 +835,8 @@ public enum ConversationEffect: Hashable, Codable, Sendable {
 public enum ConversationAction: Sendable {
     case receive(
         message: InboundMessage,
-        turnID: TurnID
+        turnID: TurnID,
+        agentRole: String
     )
     case modelCompleted(turnID: TurnID, completion: ConversationCompletion)
     case replyDelivered(turnID: TurnID)
@@ -822,7 +854,7 @@ public func reduce(
     var effects: [ConversationEffect] = []
 
     switch action {
-    case .receive(let message, let turnID):
+    case .receive(let message, let turnID, let agentRole):
         guard message.conversationID == state.conversationID else {
             return (state, [])
         }
@@ -874,7 +906,8 @@ public func reduce(
             next.pendingMessages.append(
                 PendingConversationMessage(
                     message: normalizedMessage,
-                    turnID: turnID
+                    turnID: turnID,
+                    agentRole: agentRole
                 )
             )
 
@@ -883,7 +916,8 @@ public func reduce(
             next.pendingMessages.append(
                 PendingConversationMessage(
                     message: normalizedMessage,
-                    turnID: turnID
+                    turnID: turnID,
+                    agentRole: agentRole
                 )
             )
             effects += startNextTurn(&next)
@@ -1005,7 +1039,8 @@ private func modelRequest(
     return ConversationTurnRequest(
         conversationID: conversationID,
         turnID: pending.turnID,
-        message: pending.message
+        message: pending.message,
+        agentRole: pending.agentRole
     )
 }
 

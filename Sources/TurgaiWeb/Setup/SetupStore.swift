@@ -9,12 +9,9 @@ import TurgaiPersistence
 public actor TurgaiSetupStore {
     struct State: Codable {
         var storage: TurgaiStorageConfiguration?
-        var telegramChatIDs: [Int64] = []
-        var telegramConfigured = false
         var complete = false
     }
     private let stateURL: URL
-    private let secretURL: URL
     private let postgresPasswordURL: URL
     private let completionStream: AsyncStream<Void>
     private let completionContinuation: AsyncStream<Void>.Continuation
@@ -24,7 +21,6 @@ public actor TurgaiSetupStore {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         stateURL = directory.appendingPathComponent("setup.json")
-        secretURL = directory.appendingPathComponent("telegram-token")
         postgresPasswordURL = directory.appendingPathComponent("postgres-password")
         let completion = AsyncStream<Void>.makeStream()
         completionStream = completion.stream
@@ -38,7 +34,6 @@ public actor TurgaiSetupStore {
 
     var isComplete: Bool { state.complete }
     var storageConfiguration: TurgaiStorageConfiguration? { state.storage }
-    var telegramChatIDs: [Int64] { state.telegramChatIDs }
 
     func waitUntilComplete() async {
         guard !state.complete else { return }
@@ -53,20 +48,23 @@ public actor TurgaiSetupStore {
 
     var isReady: Bool {
         guard let storage = state.storage else { return false }
-        if case .postgres = storage {
+        switch storage {
+        case .postgres:
             guard let password = try? String(contentsOf: postgresPasswordURL, encoding: .utf8) else {
                 return false
             }
             return !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default:
+            return true
         }
-        return true
     }
 
     func setStorage(
         _ storage: TurgaiStorageConfiguration,
         postgresPassword: String?
     ) throws {
-        if case .postgres = storage {
+        switch storage {
+        case .postgres:
             guard let postgresPassword,
                 !postgresPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
@@ -77,18 +75,12 @@ public actor TurgaiSetupStore {
                 [.posixPermissions: 0o600],
                 ofItemAtPath: postgresPasswordURL.path
             )
-        } else if FileManager.default.fileExists(atPath: postgresPasswordURL.path) {
-            try FileManager.default.removeItem(at: postgresPasswordURL)
+        default:
+            if FileManager.default.fileExists(atPath: postgresPasswordURL.path) {
+                try FileManager.default.removeItem(at: postgresPasswordURL)
+            }
         }
         state.storage = storage
-        try persist()
-    }
-
-    func setTelegramToken(_ token: String, chatIDs: [Int64]) throws {
-        try Data(token.utf8).write(to: secretURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: secretURL.path)
-        state.telegramChatIDs = chatIDs
-        state.telegramConfigured = true
         try persist()
     }
 

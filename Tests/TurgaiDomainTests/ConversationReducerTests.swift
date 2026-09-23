@@ -91,7 +91,7 @@ struct ConversationReducerTests {
 
         let (next, effects) = reduce(
             state,
-            .receive(message: makeMessage(text: "  hello  "), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: "  hello  "), turnID: makeTurnID(1), agentRole: "test")
         )
 
         guard case .running(let turnID) = next.status else {
@@ -115,7 +115,7 @@ struct ConversationReducerTests {
         let initial = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             initial,
-            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), agentRole: "test")
         )
         guard case .running(let firstTurnID) = running.status else {
             Issue.record("Expected first turn to be running")
@@ -124,7 +124,7 @@ struct ConversationReducerTests {
 
         let (queued, _) = reduce(
             running,
-            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2))
+            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
         )
         #expect(queued.pendingMessages.count == 1)
 
@@ -159,7 +159,8 @@ struct ConversationReducerTests {
             initial,
             .receive(
                 message: message,
-                turnID: makeTurnID(1)
+                turnID: makeTurnID(1),
+                agentRole: "test"
             )
         )
         guard case .running(let turnID) = running.status else {
@@ -178,7 +179,8 @@ struct ConversationReducerTests {
             completed,
             .receive(
                 message: message,
-                turnID: makeTurnID(2)
+                turnID: makeTurnID(2),
+                agentRole: "test"
             )
         )
 
@@ -191,7 +193,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -229,7 +231,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1), agentRole: "test")
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -260,7 +262,8 @@ struct ConversationReducerTests {
     func recoveryRestartsRunningTurnWithoutChangingItsState() {
         let pending = PendingConversationMessage(
             message: makeMessage(text: "hello"),
-            turnID: makeTurnID(1)
+            turnID: makeTurnID(1),
+            agentRole: "test"
         )
         let running = ConversationState(
             conversationID: conversationID,
@@ -277,7 +280,8 @@ struct ConversationReducerTests {
                     ConversationTurnRequest(
                         conversationID: conversationID,
                         turnID: pending.turnID,
-                        message: pending.message
+                        message: pending.message,
+                        agentRole: pending.agentRole
                     )
                 )
             ])
@@ -287,7 +291,8 @@ struct ConversationReducerTests {
     func recoveryStartsAQueuedTurnLeftAfterAnIdleCrashWindow() {
         let pending = PendingConversationMessage(
             message: makeMessage(text: "queued"),
-            turnID: makeTurnID(1)
+            turnID: makeTurnID(1),
+            agentRole: "test"
         )
         let state = ConversationState(
             conversationID: conversationID,
@@ -313,7 +318,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
         let staleTurnID = makeTurnID(99)
 
@@ -334,7 +339,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), agentRole: "test")
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -342,7 +347,7 @@ struct ConversationReducerTests {
         }
         let (queued, _) = reduce(
             running,
-            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2))
+            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
         )
         let failure = ConversationFailure(kind: .model, message: "Ollama unavailable")
         let (failed, failureEffects) = reduce(
@@ -384,7 +389,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -404,7 +409,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (next, effects) = reduce(
             state,
-            .receive(message: makeMessage(text: " \n\t "), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: " \n\t "), turnID: makeTurnID(1), agentRole: "test")
         )
 
         #expect(next == state)
@@ -427,7 +432,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1))
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
         guard case .running(let turnID) = running.status else {
             Issue.record("Expected a running turn")
@@ -436,7 +441,7 @@ struct ConversationReducerTests {
 
         let (next, effects) = reduce(
             running,
-            .receive(message: makeMessage(text: "  "), turnID: makeTurnID(2))
+            .receive(message: makeMessage(text: "  "), turnID: makeTurnID(2), agentRole: "test")
         )
 
         #expect(next == running)

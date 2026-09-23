@@ -39,8 +39,11 @@ struct TurgaiPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("app-page")) {
-            div(.class("app-shell")) {
-                AppHeader(user: user, section: .bots)
+            PageShell(
+                kind: .private,
+                header: PageHeader(user: user, navigation: .active(.bots)),
+                footer: PageFooter { EmptyFooterContent() }
+            ) {
                 section(.class("page-intro")) {
                     div {
                         p(.class("eyebrow")) { "Your Turgai" }

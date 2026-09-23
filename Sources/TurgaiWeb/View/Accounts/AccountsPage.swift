@@ -30,8 +30,11 @@ struct AccountsPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("app-page")) {
-            div(.class("app-shell")) {
-                AppHeader(user: user, section: .accounts)
+            PageShell(
+                kind: .private,
+                header: PageHeader(user: user, navigation: .active(.accounts)),
+                footer: PageFooter { EmptyFooterContent() }
+            ) {
                 section(.class("page-intro detail-page-intro")) {
                     div {
                         h1 { "Accounts" }

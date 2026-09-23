@@ -577,7 +577,8 @@ public struct ScheduleActivities {
             on: context.system,
             conversationID: input.conversationID,
             agentDirectoryID: input.agentDirectoryID,
-            agentRole: input.agentRole
+            agentRole: input.agentRole,
+            memoryExtraction: nil
         )
 
         switch input.action {
@@ -596,7 +597,11 @@ public struct ScheduleActivities {
             )
             try await conversation.send(
                 message,
-                turnID: Schedule.turnID(for: context.workflowID)
+                turnID: Schedule.turnID(for: context.workflowID),
+                configuration: Conversation.TurnConfiguration(
+                    agentRole: input.agentRole,
+                    memoryExtraction: nil
+                )
             )
         }
 

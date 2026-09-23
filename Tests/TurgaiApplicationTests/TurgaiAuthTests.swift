@@ -75,8 +75,8 @@ struct TurgaiAuthTests {
         }
     }
 
-    @Test("member registration is pending until approval")
-    func pendingRegistration() async throws {
+    @Test("member registration is approved and can sign in immediately")
+    func immediateRegistration() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
@@ -85,12 +85,8 @@ struct TurgaiAuthTests {
             username: "member",
             password: "correct horse battery staple"
         )
-        #expect(account.status == .pending)
-        await #expect(throws: TurgaiAuthError.accountNotApproved) {
-            try await auth.signIn(username: "member", password: "correct horse battery staple")
-        }
+        #expect(account.status == .approved)
 
-        try await auth.approve(username: "member")
         let session = try await auth.signIn(
             username: "member",
             password: "correct horse battery staple"

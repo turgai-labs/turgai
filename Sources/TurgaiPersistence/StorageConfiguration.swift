@@ -134,47 +134,21 @@ public struct PostgresStorageConfiguration: Codable, Equatable, Sendable {
     }
 }
 
-public struct PostgresPersistenceStack: Sendable {
-    public let client: PostgresClient
-    public let eventStore: PostgresEventStore
-    public let snapshotStore: PostgresSnapshotStore
-
-    public init(
-        configuration: PostgresStorageConfiguration,
-        password: String
-    ) throws {
-        guard !password.isEmpty else {
-            throw TurgaiStorageConfigurationError.invalidPostgresPassword
-        }
-        let clientConfiguration = PostgresClient.Configuration(
-            host: configuration.host,
-            port: configuration.port,
-            username: configuration.username,
-            password: password,
-            database: configuration.database,
-            tls: .prefer(.makeClientConfiguration())
-        )
-        let client = PostgresClient(configuration: clientConfiguration)
-        self.client = client
-        self.eventStore = PostgresEventStore(client: client)
-        self.snapshotStore = PostgresSnapshotStore(client: client)
+/// One persistence backend selected before the cluster starts.
+///
+/// Nothing here retains an event or snapshot store: stores are constructed at
+/// the point of use — the composition root builds each one exactly once and
+/// passes it to the cluster journal plugin's factory — so the plugin boundary
+/// is the only place a store ever lives.
+public struct TurgaiPersistence: Sendable {
+    /// The driver behind the selected backend. Store construction branches on
+    /// this, once, where the stores are used.
+    public enum Backend: Sendable {
+        case file(FileClient)
+        case postgres(PostgresClient)
     }
 
-    public func setupDatabase() async throws {
-        try await eventStore.setupDatabase()
-        try await snapshotStore.setupDatabase()
-    }
-}
-
-/// One persistence runtime selected before the cluster starts. The concrete
-/// stores stay behind the EventSourcing protocols at the application boundary.
-public enum TurgaiPersistenceRuntime: Sendable {
-    case file(
-        client: FilePersistenceClient,
-        eventStore: FileEventStore,
-        snapshotStore: FileSnapshotStore
-    )
-    case postgres(PostgresPersistenceStack)
+    public let backend: Backend
 
     public init(
         configuration: TurgaiStorageConfiguration,
@@ -182,60 +156,24 @@ public enum TurgaiPersistenceRuntime: Sendable {
     ) throws {
         switch configuration {
         case .file(let directory):
-            let client = try FilePersistenceClient(directory: directory)
-            self = .file(
-                client: client,
-                eventStore: FileEventStore(client: client),
-                snapshotStore: FileSnapshotStore(client: client)
-            )
+            backend = .file(try FileClient(directory: directory))
         case .postgres(let url, let username):
-            guard let postgresPassword else {
+            guard let postgresPassword, !postgresPassword.isEmpty else {
                 throw TurgaiStorageConfigurationError.invalidPostgresPassword
             }
             let configuration = PostgresStorageConfiguration(url: url, username: username)
-            self = .postgres(
-                try PostgresPersistenceStack(
-                    configuration: configuration,
-                    password: postgresPassword
+            backend = .postgres(
+                PostgresClient(
+                    configuration: PostgresClient.Configuration(
+                        host: configuration.host,
+                        port: configuration.port,
+                        username: configuration.username,
+                        password: postgresPassword,
+                        database: configuration.database,
+                        tls: .prefer(.makeClientConfiguration())
+                    )
                 )
             )
-        }
-    }
-
-    public var eventStore: any EventStore {
-        switch self {
-        case .file(_, let eventStore, _): eventStore
-        case .postgres(let stack): stack.eventStore
-        }
-    }
-
-    public var snapshotStore: any SnapshotStore {
-        switch self {
-        case .file(_, _, let snapshotStore): snapshotStore
-        case .postgres(let stack): stack.snapshotStore
-        }
-    }
-
-    public var postgresClient: PostgresClient? {
-        guard case .postgres(let stack) = self else { return nil }
-        return stack.client
-    }
-
-    public func setupDatabase() async throws {
-        if case .postgres(let stack) = self {
-            try await stack.setupDatabase()
-        }
-    }
-
-    public func conversationJournals() async throws -> [ConversationJournal] {
-        switch self {
-        case .file(let client, _, _):
-            return try await ConversationJournalReader(client: client).conversationJournals()
-        case .postgres(let stack):
-            return try await PostgresConversationJournalReader(
-                client: stack.client,
-                eventStore: stack.eventStore
-            ).conversationJournals()
         }
     }
 }

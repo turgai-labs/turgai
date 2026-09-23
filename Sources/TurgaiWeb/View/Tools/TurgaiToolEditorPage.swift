@@ -61,8 +61,11 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
 
     var body: some HTML {
         main(.class("app-page")) {
-            div(.class("app-shell tool-editor-shell")) {
-                AppHeader(user: user, section: .tools)
+            PageShell(
+                kind: .private,
+                header: PageHeader(user: user, navigation: .active(.tools)),
+                footer: PageFooter { EmptyFooterContent() }
+            ) {
                 section(.class("page-intro detail-page-intro")) {
                     div {
                         TurgaiBreadcrumb(
@@ -76,12 +79,15 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                         }
                     }
                 }
-                if let error {
+                switch (error, issue) {
+                case (.some(let error), _):
                     p(.class("error page-error")) { error }
-                } else if issue != nil {
+                case (.none, .some):
                     p(.class("error page-error")) {
                         "This tool needs attention. Repair its setup below or remove it."
                     }
+                default:
+                    EmptyFooterContent()
                 }
                 div(.class("tool-editor-layout")) {
                     section(.class("tool-editor-main")) {

@@ -20,8 +20,13 @@ struct OnboardingPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("setup-page")) {
-            div(.class("setup-shell")) {
-                SetupHeader()
+            PageShell(
+                kind: .setup,
+                header: PageHeader(),
+                footer: PageFooter {
+                    SetupFooterContent(step: 1, forwardHref: "/onboarding/register", forwardLabel: "Let’s begin")
+                }
+            ) {
                 section(.class("setup-content setup-content-hero")) {
                     div(.class("setup-copy")) {
                         p(.class("eyebrow")) { "Start here" }
@@ -47,7 +52,6 @@ struct OnboardingPage: HTMLDocument, Sendable {
                         }
                     }
                 }
-                SetupFooter(step: 1, forwardHref: "/onboarding/register", forwardLabel: "Let’s begin")
             }
         }
     }

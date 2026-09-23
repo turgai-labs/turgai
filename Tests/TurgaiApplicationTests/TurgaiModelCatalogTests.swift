@@ -12,7 +12,8 @@ struct TurgaiModelCatalogTests {
         let configuredProfile = TurgaiAgentProfile(
             id: "conversation",
             name: "Conversation",
-            model: try AgentModel("openai/gpt-4.1")
+            model: try AgentModel("openai/gpt-4.1"),
+            providerConfiguration: .none
         )
         let catalog = await TurgaiModelCatalogLoader.load(
             profiles: [configuredProfile],
@@ -35,7 +36,8 @@ struct TurgaiModelCatalogTests {
         let configuredProfile = TurgaiAgentProfile(
             id: "conversation",
             name: "Conversation",
-            model: try AgentModel("custom-provider/quiet-model")
+            model: try AgentModel("custom-provider/quiet-model"),
+            providerConfiguration: .none
         )
         let catalog = await TurgaiModelCatalogLoader.load(
             profiles: [configuredProfile],
@@ -56,13 +58,13 @@ struct TurgaiModelCatalogTests {
             id: "first",
             name: "First",
             model: try AgentModel("ollama/llama3.2"),
-            ollamaBaseURL: URL(string: "http://first.test:11434")!
+            providerConfiguration: .ollama(baseURL: URL(string: "http://first.test:11434")!)
         )
         let secondProfile = TurgaiAgentProfile(
             id: "second",
             name: "Second",
             model: try AgentModel("ollama/mistral"),
-            ollamaBaseURL: URL(string: "http://second.test:11434")!
+            providerConfiguration: .ollama(baseURL: URL(string: "http://second.test:11434")!)
         )
         let discovery = TurgaiModelCatalogLoader.Discovery(
             ollama: { url in

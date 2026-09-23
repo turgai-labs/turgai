@@ -14,17 +14,20 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
     private let auth: TurgaiAuth
     private let setup: TurgaiSetupStore
     private let agentProfiles: TurgaiAgentProfileStore
+    private let channelSecrets: ChannelSecretStore
 
     public init(
         auth: TurgaiAuth,
         directory: URL,
         agentProfiles: TurgaiAgentProfileStore,
-        setup: TurgaiSetupStore
+        setup: TurgaiSetupStore,
+        channelSecrets: ChannelSecretStore
     ) throws {
         self.directory = directory
         self.auth = auth
         self.setup = setup
         self.agentProfiles = agentProfiles
+        self.channelSecrets = channelSecrets
     }
 
     public func registerRoutes(on router: Router<BasicWebSocketRequestContext>) {
@@ -32,12 +35,14 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
             auth: auth,
             setup: setup,
             agentProfiles: agentProfiles,
+            channelSecrets: channelSecrets,
             defaultFileDirectory: directory,
             runtimeSnapshots: { [] },
             userToolRegistry: UserToolRegistry(
                 directory: directory.appendingPathComponent("tools", isDirectory: true)
             ),
-            webChatBridge: TurgaiWebChatBridge()
+            webChatBridge: TurgaiWebChatBridge(),
+            apiConfiguration: .init()
         )
         registerOnboardingRoutes(on: router, dependencies: dependencies)
     }

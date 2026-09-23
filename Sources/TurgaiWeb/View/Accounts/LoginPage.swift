@@ -24,8 +24,13 @@ struct LoginPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("setup-page")) {
-            div(.class("setup-shell")) {
-                SetupHeader()
+            PageShell(
+                kind: .setup,
+                header: PageHeader(),
+                footer: PageFooter {
+                    SetupFooterContent(step: nil, submitFormID: "login-form", submitLabel: "Sign in")
+                }
+            ) {
                 section(.class("setup-content setup-content-compact")) {
                     div(.class("setup-copy")) {
                         p(.class("eyebrow")) { "Your sky, waiting" }
@@ -53,7 +58,6 @@ struct LoginPage: HTMLDocument, Sendable {
                         }
                     }
                 }
-                SetupFooter(step: nil, submitFormID: "login-form", submitLabel: "Sign in")
             }
         }
     }

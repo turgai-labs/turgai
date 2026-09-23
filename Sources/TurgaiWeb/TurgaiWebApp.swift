@@ -18,8 +18,6 @@ import TurgaiTelegram
 public struct TurgaiWebConfiguration: Sendable {
     public let storage: TurgaiStorageConfiguration?
     public let postgresPassword: String?
-    public let telegramToken: String?
-    public let telegramChatIDs: [Int64]
     public let complete: Bool
 
     public var isReady: Bool {
@@ -34,19 +32,15 @@ public struct TurgaiWebConfiguration: Sendable {
 
     public static func load(directory: URL) throws -> Self {
         let stateURL = directory.appendingPathComponent("setup.json")
-        let secretURL = directory.appendingPathComponent("telegram-token")
         let postgresPasswordURL = directory.appendingPathComponent("postgres-password")
         let state =
             try (try? Data(contentsOf: stateURL)).map {
                 try JSONDecoder().decode(TurgaiSetupStore.State.self, from: $0)
             } ?? TurgaiSetupStore.State()
-        let token = try? String(contentsOf: secretURL, encoding: .utf8)
         let postgresPassword = try? String(contentsOf: postgresPasswordURL, encoding: .utf8)
         return Self(
             storage: state.storage,
             postgresPassword: postgresPassword,
-            telegramToken: token,
-            telegramChatIDs: state.telegramChatIDs,
             complete: state.complete
         )
     }
@@ -54,14 +48,10 @@ public struct TurgaiWebConfiguration: Sendable {
     private init(
         storage: TurgaiStorageConfiguration?,
         postgresPassword: String?,
-        telegramToken: String?,
-        telegramChatIDs: [Int64],
         complete: Bool
     ) {
         self.storage = storage
         self.postgresPassword = postgresPassword
-        self.telegramToken = telegramToken
-        self.telegramChatIDs = telegramChatIDs
         self.complete = complete
     }
 }
@@ -75,22 +65,28 @@ public struct TurgaiMainWebApp: Sendable {
     let auth: TurgaiAuth
     let setup: TurgaiSetupStore
     let agentProfiles: TurgaiAgentProfileStore
+    let channelSecrets: ChannelSecretStore
     let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
     let webChatBridge: TurgaiWebChatBridge
+    let apiConfiguration: APIConfiguration
 
     public init(
         auth: TurgaiAuth,
         directory: URL,
         agentProfiles: TurgaiAgentProfileStore,
+        channelSecrets: ChannelSecretStore,
         runtimeSnapshots: @escaping @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = { [] },
         setup: TurgaiSetupStore,
-        webChatBridge: TurgaiWebChatBridge
+        webChatBridge: TurgaiWebChatBridge,
+        apiConfiguration: APIConfiguration = .init()
     ) throws {
         self.directory = directory
         self.auth = auth
         self.setup = setup
         self.agentProfiles = agentProfiles
+        self.channelSecrets = channelSecrets
         self.runtimeSnapshots = runtimeSnapshots
         self.webChatBridge = webChatBridge
+        self.apiConfiguration = apiConfiguration
     }
 }

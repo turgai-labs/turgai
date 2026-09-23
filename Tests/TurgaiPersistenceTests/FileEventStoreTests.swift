@@ -1,7 +1,7 @@
 import EventSourcing
 import Testing
-
-@testable import TurgaiPersistence
+import TurgaiDomain
+import TurgaiPersistence
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -17,11 +17,9 @@ struct FileEventStoreTests {
 
     @Test
     func persistsAndStreamsEventsInSequenceOrder() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("turgai-file-event-store-" + UUID().uuidString)
-        let store = FileEventStore(
-            client: try FilePersistenceClient(directory: directory)
-        )
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileEventStore(client: try FileClient(directory: directory))
 
         try await store.persistEvent(TestEvent.started("hello"), id: "agent/one", sequenceNumber: 1)
         try await store.persistEvent(TestEvent.finished, id: "agent/one", sequenceNumber: 2)
@@ -42,11 +40,9 @@ struct FileEventStoreTests {
 
     @Test
     func rejectsDuplicateSequenceNumbers() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("turgai-file-event-store-" + UUID().uuidString)
-        let store = FileEventStore(
-            client: try FilePersistenceClient(directory: directory)
-        )
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileEventStore(client: try FileClient(directory: directory))
 
         try await store.persistEvent(TestEvent.finished, id: "agent/two", sequenceNumber: 1)
 
@@ -57,15 +53,97 @@ struct FileEventStoreTests {
 
     @Test
     func missingJournalStreamsAsEmpty() async throws {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("turgai-file-event-store-" + UUID().uuidString)
-        let store = FileEventStore(
-            client: try FilePersistenceClient(directory: directory)
-        )
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileEventStore(client: try FileClient(directory: directory))
 
         let events: [TestEvent] = try await store.eventsFor(id: "missing")
 
         #expect(events.isEmpty)
     }
 
+    @Test
+    func discoversAndReadsPersistedJournals() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // A journal written by an earlier process, with the store's layout.
+        let journalDirectory = directory.appendingPathComponent("journal", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: journalDirectory,
+            withIntermediateDirectories: true
+        )
+        let envelope = EventEnvelope(
+            persistenceID: "conversation-one",
+            sequenceNumber: 1,
+            event: TestEvent.started("one")
+        )
+        var encoded = try JSONEncoder().encode(envelope)
+        encoded.append(0x0A)
+        try encoded.write(
+            to: journalDirectory.appendingPathComponent("conversation-one.jsonl")
+        )
+
+        let store = FileEventStore(client: try FileClient(directory: directory))
+
+        let reader = FileJournalReader(client: try FileClient(directory: directory))
+        #expect(try await reader.persistenceIDs(withPrefix: "conversation-") == ["conversation-one"])
+        let events: [TestEvent] = try await store.eventsFor(id: "conversation-one")
+        #expect(events == [.started("one")])
+    }
+
+    @Test
+    func startupRecoveryReadsOnlyConversationJournals() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let conversationID = ConversationID(
+            channel: ChannelID("telegram"),
+            externalAddress: ExternalConversationAddress("42")
+        )
+        let message = InboundMessage(
+            conversationID: conversationID,
+            participantID: ParticipantID(channel: ChannelID("telegram"), rawValue: "7"),
+            text: "hello",
+            receivedAt: Date(timeIntervalSince1970: 1)
+        )
+        let persistenceID = "turgai-conversation-\(conversationID.stableKey)"
+        let envelope = EventEnvelope(
+            persistenceID: persistenceID,
+            sequenceNumber: 1,
+            event: ConversationEvent.messageQueued(
+                PendingConversationMessage(
+                    message: message,
+                    turnID: TurnID(),
+                    agentRole: "test"
+                )
+            )
+        )
+        var data = try JSONEncoder().encode(envelope)
+        data.append(0x0A)
+        let journalDirectory = directory.appendingPathComponent("journal", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: journalDirectory,
+            withIntermediateDirectories: true
+        )
+        try data.write(
+            to: journalDirectory.appendingPathComponent("turgai-conversation-telegram_42.jsonl")
+        )
+
+        let store = FileEventStore(client: try FileClient(directory: directory))
+        let reader = FileJournalReader(client: try FileClient(directory: directory))
+        let persistenceIDs = try await reader.persistenceIDs(withPrefix: ConversationPersistenceID.prefix)
+        let recoveredIDs = persistenceIDs.compactMap {
+            ConversationPersistenceID(rawValue: $0)?.conversationID
+        }
+
+        #expect(recoveredIDs == [conversationID])
+        let events: [ConversationEvent] = try await store.eventsFor(id: persistenceID)
+        #expect(events.count == 1)
+    }
+
+    private func makeDirectory() throws -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("turgai-file-event-store-\(UUID().uuidString)", isDirectory: true)
+    }
 }

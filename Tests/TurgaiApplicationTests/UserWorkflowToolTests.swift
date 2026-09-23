@@ -96,18 +96,22 @@ struct UserWorkflowToolTests {
             steps: [
                 UserTool.WorkflowStep(
                     id: "forecast",
-                    kind: .fetch,
-                    url: "https://weather.example/forecast?city={{city}}"
+                    payload: .fetch(
+                        .init(url: "https://weather.example/forecast?city={{city}}")
+                    )
                 ),
                 UserTool.WorkflowStep(
                     id: "rule",
-                    kind: .execute,
                     saveAs: "decision",
-                    writeDirectory: "reports",
-                    script: fixture.script.lastPathComponent,
-                    interpreter: "/bin/sh",
-                    arguments: ["--city", "{{city}}"],
-                    inputs: ["weather": "forecast"]
+                    inputs: ["weather": "forecast"],
+                    payload: .execute(
+                        .init(
+                            script: .path(fixture.script.lastPathComponent),
+                            interpreter: "/bin/sh",
+                            arguments: ["--city", "{{city}}"],
+                            writeDirectory: "reports"
+                        )
+                    )
                 ),
             ]
         )
@@ -152,8 +156,7 @@ struct UserWorkflowToolTests {
             steps: [
                 UserTool.WorkflowStep(
                     id: "forecast",
-                    kind: .fetch,
-                    url: "https://weather.example/forecast"
+                    payload: .fetch(.init(url: "https://weather.example/forecast"))
                 )
             ]
         )
@@ -184,10 +187,13 @@ struct UserWorkflowToolTests {
             steps: [
                 UserTool.WorkflowStep(
                     id: "rule",
-                    kind: .execute,
-                    script: fixture.script.lastPathComponent,
-                    interpreter: "/bin/sh",
-                    arguments: ["{{city}}", "{{input}}"]
+                    payload: .execute(
+                        .init(
+                            script: .path(fixture.script.lastPathComponent),
+                            interpreter: "/bin/sh",
+                            arguments: ["{{city}}", "{{input}}"]
+                        )
+                    )
                 )
             ]
         )

@@ -1,5 +1,5 @@
 import Hail
-import TurgaiDomain
+import TurgaiPersistence
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -16,69 +16,119 @@ import TurgaiDomain
 public enum AgentAvailability: String, Codable, Sendable, Equatable {
     case enabled
     case disabled
+}
+
+/// Provider-owned configuration for a profile.
+public enum AgentProviderConfiguration: Codable, Sendable, Equatable {
+    case ollama(baseURL: URL)
+    case none
+
+    private enum CodingKeys: String, CodingKey { case kind, baseURL }
+    private enum Kind: String, Codable { case ollama, none }
 
     public init(from decoder: Decoder) throws {
-        if let value = try? decoder.singleValueContainer().decode(String.self),
-            let availability = Self(rawValue: value)
-        {
-            self = availability
-            return
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        switch try values.decode(Kind.self, forKey: .kind) {
+        case .ollama:
+            self = .ollama(baseURL: try values.decode(URL.self, forKey: .baseURL))
+        case .none:
+            self = .none
         }
-        // Older profile files stored this state as a Boolean.
-        let legacy = try decoder.singleValueContainer().decode(Bool.self)
-        self = legacy ? .enabled : .disabled
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .ollama(let baseURL):
+            try values.encode(Kind.ollama, forKey: .kind)
+            try values.encode(baseURL, forKey: .baseURL)
+        case .none:
+            try values.encode(Kind.none, forKey: .kind)
+        }
     }
 }
 
 public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, model, reasoningEffort, providerConfiguration, contextWindow, persona, instructions,
+            availability
+    }
+
     public let id: String
     public var name: String
     public var model: AgentModel
-    /// The Ollama server used by this profile, when its model is provided by
-    /// Ollama. Other providers do not need an endpoint here.
-    public var ollamaBaseURL: URL?
+    /// Optional provider-facing reasoning effort. Nil delegates the choice to
+    /// the selected model provider.
+    public var reasoningEffort: ReasoningEffort?
+    public var providerConfiguration: AgentProviderConfiguration
     public var contextWindow: Int
-    /// Optional override for Turgai's default voice. Nil keeps the built-in
-    /// persona, while an empty string is treated the same way at runtime.
+    /// Optional persona supplied by configuration. Nil or an empty string
+    /// means that no persona instructions are added.
     public var persona: String?
     public var instructions: String
     public var availability: AgentAvailability
-    public var telegramChatIDs: [Int64]
 
     public init(
         id: String,
         name: String,
         model: AgentModel,
-        ollamaBaseURL: URL? = nil,
+        reasoningEffort: ReasoningEffort? = nil,
+        providerConfiguration: AgentProviderConfiguration,
         contextWindow: Int = 16_384,
         persona: String? = nil,
         instructions: String = "",
-        availability: AgentAvailability = .enabled,
-        telegramChatIDs: [Int64] = []
+        availability: AgentAvailability = .enabled
     ) {
         self.id = id
         self.name = name
         self.model = model
-        self.ollamaBaseURL = ollamaBaseURL
+        self.reasoningEffort = reasoningEffort
+        self.providerConfiguration = providerConfiguration
         self.contextWindow = contextWindow
         self.persona = persona
         self.instructions = instructions
         self.availability = availability
-        self.telegramChatIDs = telegramChatIDs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        model = try values.decode(AgentModel.self, forKey: .model)
+        reasoningEffort = try values.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort)
+        providerConfiguration = try values.decode(AgentProviderConfiguration.self, forKey: .providerConfiguration)
+        contextWindow = try values.decode(Int.self, forKey: .contextWindow)
+        persona = try values.decodeIfPresent(String.self, forKey: .persona)
+        instructions = try values.decode(String.self, forKey: .instructions)
+        availability = try values.decode(AgentAvailability.self, forKey: .availability)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(name, forKey: .name)
+        try values.encode(model, forKey: .model)
+        try values.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
+        try values.encode(providerConfiguration, forKey: .providerConfiguration)
+        try values.encode(contextWindow, forKey: .contextWindow)
+        try values.encodeIfPresent(persona, forKey: .persona)
+        try values.encode(instructions, forKey: .instructions)
+        try values.encode(availability, forKey: .availability)
     }
 }
 
 public enum TurgaiAgentProfileError: Error, Equatable, Sendable {
     case invalidID(String)
     case invalidName
-    case invalidOllamaBaseURL(String)
+    case invalidEndpointURL(String)
     case invalidContextWindow(Int)
     case unknownProfile(String)
-    case duplicateTelegramChatID(Int64)
     case cannotDeleteDefaultProfile
+    case noEnabledProfile
 }
 
-/// Durable catalog and routing table for user-facing agents.
+/// Durable catalog of user-facing agent definitions and the application
+/// default. Channel-specific routing belongs to the channel aggregate.
 ///
 /// The catalog is intentionally a small local file rather than a distributed
 /// actor. It is application configuration, and all writes are atomic. Reads
@@ -93,27 +143,14 @@ public actor TurgaiAgentProfileStore {
         var profiles: [TurgaiAgentProfile] = []
     }
 
-    private let stateURL: URL
+    private static let statePath = "agents/profiles.json"
+
+    private let files: FileClient
     private var state: State
 
-    public init(directory: URL) throws {
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        let stateURL = directory.appendingPathComponent("profiles.json")
-        self.stateURL = stateURL
-
-        let loadedState: State
-        if FileManager.default.fileExists(atPath: stateURL.path) {
-            let data = try Data(contentsOf: stateURL)
-            loadedState = try JSONDecoder().decode(State.self, from: data)
-        } else {
-            loadedState = State()
-        }
-
-        var initialState = loadedState
+    public init(files: FileClient) throws {
+        self.files = files
+        var initialState: State = try files.loadDocument(at: Self.statePath) ?? State()
         var shouldPersist = false
         if !initialState.profiles.isEmpty,
             !initialState.profiles.contains(where: { $0.id == initialState.defaultProfileID })
@@ -129,9 +166,6 @@ public actor TurgaiAgentProfileStore {
                 canonical.name = "Turgai"
                 shouldPersist = true
             }
-            if canonical.model.provider != .ollama {
-                canonical.ollamaBaseURL = nil
-            }
             return canonical
         }
         if canonicalProfiles != initialState.profiles {
@@ -141,7 +175,7 @@ public actor TurgaiAgentProfileStore {
         try Self.validateState(initialState)
         self.state = initialState
         if shouldPersist {
-            try Self.persist(initialState, to: stateURL)
+            try files.saveDocument(initialState, at: Self.statePath)
         }
     }
 
@@ -172,37 +206,23 @@ public actor TurgaiAgentProfileStore {
         try persist()
     }
 
-    /// Resolves a channel conversation to a profile. Telegram chat IDs are
-    /// explicit bindings; all other conversations use the catalog default.
-    public func profileID(for conversationID: ConversationID) -> String {
-        if conversationID.channel.rawValue == "telegram",
-            let chatID = Int64(conversationID.externalAddress.rawValue),
-            let profile = state.profiles.first(where: {
-                if case .enabled = $0.availability {
-                    return $0.telegramChatIDs.contains(chatID)
-                }
-                return false
-            })
-        {
-            return profile.id
+    /// Resolves the configured default agent. Channel-specific routing is
+    /// owned by the channel actor and never inferred from this catalog.
+    public func defaultProfileID() throws -> String {
+        guard let profile = defaultProfile(), profile.availability == .enabled else {
+            throw TurgaiAgentProfileError.noEnabledProfile
         }
-
-        return defaultProfile()?.id ?? Self.defaultProfileID
+        return profile.id
     }
 
     public func update(_ profile: TurgaiAgentProfile) throws {
-        var profile = profile
-        if profile.model.provider != .ollama {
-            profile.ollamaBaseURL = nil
-        }
-        try Self.validate(profile)
         guard let index = state.profiles.firstIndex(where: { $0.id == profile.id }) else {
             throw TurgaiAgentProfileError.unknownProfile(profile.id)
         }
+        try Self.validate(profile)
         if profile.id == state.defaultProfileID, case .disabled = profile.availability {
             throw TurgaiAgentProfileError.invalidName
         }
-        try validateUniqueTelegramChatIDs(profile, replacing: profile.id)
         state.profiles[index] = profile
         try persist()
     }
@@ -211,11 +231,11 @@ public actor TurgaiAgentProfileStore {
     public func create(
         name: String,
         model: AgentModel,
-        ollamaBaseURL: URL? = nil,
+        reasoningEffort: ReasoningEffort? = nil,
+        providerConfiguration: AgentProviderConfiguration,
         contextWindow: Int = TurgaiAgentProfileStore.defaultContextWindow,
         persona: String? = nil,
-        instructions: String = "",
-        telegramChatIDs: [Int64] = []
+        instructions: String = ""
     ) throws -> TurgaiAgentProfile {
         let wasEmpty = state.profiles.isEmpty
         let id = Self.uniqueID(for: name, existing: Set(state.profiles.map(\.id)))
@@ -223,24 +243,19 @@ public actor TurgaiAgentProfileStore {
             id: id,
             name: name,
             model: model,
-            ollamaBaseURL: ollamaBaseURL,
+            reasoningEffort: reasoningEffort,
+            providerConfiguration: providerConfiguration,
             contextWindow: contextWindow,
             persona: persona,
-            instructions: instructions,
-            telegramChatIDs: telegramChatIDs
+            instructions: instructions
         )
-        var canonicalProfile = profile
-        if canonicalProfile.model.provider != .ollama {
-            canonicalProfile.ollamaBaseURL = nil
-        }
-        try Self.validate(canonicalProfile)
-        try validateUniqueTelegramChatIDs(canonicalProfile, replacing: nil)
-        state.profiles.append(canonicalProfile)
+        try Self.validate(profile)
+        state.profiles.append(profile)
         if wasEmpty {
-            state.defaultProfileID = canonicalProfile.id
+            state.defaultProfileID = profile.id
         }
         try persist()
-        return canonicalProfile
+        return profile
     }
 
     public func delete(id: String) throws {
@@ -263,20 +278,18 @@ public actor TurgaiAgentProfileStore {
         else {
             throw TurgaiAgentProfileError.invalidName
         }
-        if profile.model.provider == .ollama {
-            guard let ollamaBaseURL = profile.ollamaBaseURL,
-                Self.validHTTPURL(ollamaBaseURL)
-            else {
-                throw TurgaiAgentProfileError.invalidOllamaBaseURL(
-                    profile.ollamaBaseURL?.absoluteString ?? ""
-                )
+        switch profile.providerConfiguration {
+        case .ollama(let baseURL):
+            guard profile.model.provider == .ollama, Self.validHTTPURL(baseURL) else {
+                throw TurgaiAgentProfileError.invalidEndpointURL(baseURL.absoluteString)
+            }
+        case .none:
+            guard profile.model.provider != .ollama else {
+                throw TurgaiAgentProfileError.invalidEndpointURL("")
             }
         }
         guard profile.contextWindow > 0 else {
             throw TurgaiAgentProfileError.invalidContextWindow(profile.contextWindow)
-        }
-        guard profile.telegramChatIDs.allSatisfy({ $0 != 0 }) else {
-            throw TurgaiAgentProfileError.duplicateTelegramChatID(0)
         }
     }
 
@@ -288,41 +301,10 @@ public actor TurgaiAgentProfileStore {
             }
             try validate(profile)
         }
-        var telegramChatIDs = Set<Int64>()
-        for profile in state.profiles {
-            guard case .enabled = profile.availability else { continue }
-            for chatID in profile.telegramChatIDs {
-                guard telegramChatIDs.insert(chatID).inserted else {
-                    throw TurgaiAgentProfileError.duplicateTelegramChatID(chatID)
-                }
-            }
-        }
-    }
-
-    private func validateUniqueTelegramChatIDs(
-        _ profile: TurgaiAgentProfile,
-        replacing profileID: String?
-    ) throws {
-        var used = Set<Int64>()
-        for existing in state.profiles where existing.id != profileID {
-            guard case .enabled = existing.availability else { continue }
-            used.formUnion(existing.telegramChatIDs)
-        }
-        for chatID in profile.telegramChatIDs {
-            guard used.insert(chatID).inserted else {
-                throw TurgaiAgentProfileError.duplicateTelegramChatID(chatID)
-            }
-        }
     }
 
     private func persist() throws {
-        try Self.persist(state, to: stateURL)
-    }
-
-    private static func persist(_ state: State, to stateURL: URL) throws {
-        let data = try JSONEncoder.pretty.encode(state)
-        try data.write(to: stateURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
+        try files.saveDocument(state, at: Self.statePath)
     }
 
     private static func validID(_ value: String) -> Bool {
@@ -364,13 +346,5 @@ public actor TurgaiAgentProfileStore {
             scheme == "http" || scheme == "https"
         else { return false }
         return url.host != nil
-    }
-}
-
-extension JSONEncoder {
-    fileprivate static var pretty: JSONEncoder {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return encoder
     }
 }

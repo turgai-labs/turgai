@@ -1,9 +1,10 @@
+import Hail
 import TurgaiApplication
 
 public struct TurgaiAgentRuntimeSnapshot: Codable, Sendable, Equatable {
     public let profileID: String
     public let contextID: String
-    public let phase: String
+    public let phase: AgentRuntimeState
     public let currentTool: String?
     public let contextUsedTokens: Int?
     public let contextLimitTokens: Int?
@@ -13,7 +14,7 @@ public struct TurgaiAgentRuntimeSnapshot: Codable, Sendable, Equatable {
     public init(
         profileID: String,
         contextID: String,
-        phase: String,
+        phase: AgentRuntimeState,
         currentTool: String? = nil,
         contextUsedTokens: Int? = nil,
         contextLimitTokens: Int? = nil,
@@ -50,7 +51,6 @@ struct BotCard: Identifiable, Sendable, Equatable {
     let name: String
     let model: String
     let availability: AgentAvailability
-    let telegramChatCount: Int
 }
 
 public struct TurgaiDashboardSnapshot: Codable, Sendable, Equatable {
@@ -69,5 +69,6 @@ public struct TurgaiDashboardSnapshot: Codable, Sendable, Equatable {
 enum TurgaiAppSection: Sendable {
     case bots
     case tools
+    case channels
     case accounts
 }

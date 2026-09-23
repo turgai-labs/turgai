@@ -14,8 +14,7 @@ struct ContextPresentationTests {
     func rendersFullSnapshot() {
         let snapshot = AgentContextSnapshot(
             agentID: AgentID(role: Role("conversation"), contextID: AgentContextID("telegram:1")),
-            phase: .generating,
-            currentToolName: "now",
+            state: .executingTool,
             contextUsage: ContextUsage(usedTokens: 6_429, limitTokens: 16_384, source: .reported),
             usageSummary: AgentUsageSummary(
                 requestCount: 4,
@@ -30,7 +29,7 @@ struct ContextPresentationTests {
 
         let text = ContextPresentation.text(for: snapshot)
 
-        #expect(text.contains("Status: generating (running tool: now)"))
+        #expect(text.contains("Status: executingTool"))
         #expect(text.contains("Context window: 6,429 / 16,384 tokens (39%, reported by the model)"))
         #expect(text.contains("Messages in context: 9"))
         #expect(text.contains("Compaction summary: yes"))
@@ -44,7 +43,7 @@ struct ContextPresentationTests {
     func rendersEmptySnapshot() {
         let snapshot = AgentContextSnapshot(
             agentID: AgentID(role: Role("conversation"), contextID: AgentContextID("telegram:1")),
-            phase: .idle
+            state: .idle
         )
 
         let text = ContextPresentation.text(for: snapshot)

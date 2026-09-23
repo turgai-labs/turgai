@@ -7,7 +7,6 @@ import NIOCore
 import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
-import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -48,8 +47,11 @@ struct AgentDetailPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("app-page")) {
-            div(.class("app-shell")) {
-                AppHeader(user: user, section: .bots)
+            PageShell(
+                kind: .private,
+                header: PageHeader(user: user, navigation: .active(.bots)),
+                footer: PageFooter { EmptyFooterContent() }
+            ) {
                 section(.class("page-intro detail-page-intro")) {
                     div {
                         TurgaiBreadcrumb(
@@ -117,7 +119,9 @@ struct AgentDetailPage: HTMLDocument, Sendable {
                                 }
                                 p {
                                     strong { "Persona" }
-                                    profile.persona?.isEmpty == false ? profile.persona! : "Default Turgai voice"
+                                    profile.persona?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                                        ? profile.persona!
+                                        : "No persona configured"
                                 }
                             }
                         }

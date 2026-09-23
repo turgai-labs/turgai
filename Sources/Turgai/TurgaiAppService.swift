@@ -4,6 +4,8 @@ import DurableWorkflows
 import EventSourcing
 import Hail
 import Logging
+import PostgresEventStore
+import PostgresNIO
 import ServiceLifecycle
 import TurgaiApplication
 import TurgaiDomain
@@ -40,11 +42,17 @@ private enum RuntimeAgentKind {
     case profile
 }
 
+private enum TurgaiModelSelectionError: Error, Sendable {
+    case missingProfile(String)
+    case disabledProfile(String)
+}
+
 struct TurgaiAppService: Service, Sendable {
     private let environment: [String: String]
     private let workspaceRoot: String
     private let turgaiDirectory: URL
     private let agentProfiles: TurgaiAgentProfileStore
+    private let channelSecrets: ChannelSecretStore
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let webChatBridge: TurgaiWebChatBridge
 
@@ -53,6 +61,7 @@ struct TurgaiAppService: Service, Sendable {
         workspaceRoot: String,
         turgaiDirectory: URL,
         agentProfiles: TurgaiAgentProfileStore,
+        channelSecrets: ChannelSecretStore,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         webChatBridge: TurgaiWebChatBridge
     ) {
@@ -60,6 +69,7 @@ struct TurgaiAppService: Service, Sendable {
         self.workspaceRoot = workspaceRoot
         self.turgaiDirectory = turgaiDirectory
         self.agentProfiles = agentProfiles
+        self.channelSecrets = channelSecrets
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.webChatBridge = webChatBridge
     }
@@ -77,19 +87,32 @@ struct TurgaiAppService: Service, Sendable {
         let modelContextWindows = configuredProfiles.reduce(into: [AgentModel: Int]()) { result, profile in
             result[profile.model] = profile.contextWindow
         }
-        let defaultModel = defaultAgentProfile.model
-        let qwenFastMode = environment["TURGAI_QWEN_FAST_MODE"] == "1"
         let runtimeConfiguration = HailRuntimeConfiguration(
+            contextWindow: defaultAgentProfile.contextWindow,
             modelContextWindows: modelContextWindows,
-            modelReasoningPolicy: Self.modelReasoningPolicy(qwenFastMode: qwenFastMode)
+            contextWindowProvider: { model, agentID in
+                let role = agentID.role.rawValue
+                let profile: TurgaiAgentProfile?
+                if role == "user-tool" {
+                    profile = await agentProfiles.defaultProfile()
+                } else {
+                    profile = await agentProfiles.profile(id: role)
+                }
+                guard let profile, profile.model == model else { return nil }
+                return profile.contextWindow
+            }
         )
         let modelEndpointProvider: ModelEndpointProvider = { request in
-            guard let model = try? AgentModel(request.model), model.provider == .ollama else {
+            guard let model = try? AgentModel(request.model) else {
                 return nil
             }
             let profile: TurgaiAgentProfile
-            if let profileID = Self.profileID(from: request.agentID), profileID != "user-tool" {
-                guard let configuredProfile = await agentProfiles.profile(id: profileID) else {
+            if request.agentID.role.rawValue != "user-tool" {
+                guard
+                    let configuredProfile = await agentProfiles.profile(
+                        id: request.agentID.role.rawValue
+                    )
+                else {
                     return nil
                 }
                 profile = configuredProfile
@@ -97,53 +120,82 @@ struct TurgaiAppService: Service, Sendable {
                 guard let currentDefault = await agentProfiles.defaultProfile() else { return nil }
                 profile = currentDefault
             }
-            guard let baseURL = profile.ollamaBaseURL else { return nil }
-            return OllamaEndpoint(
-                model: profile.model.id.rawValue,
-                baseURL: baseURL,
-                temperature: runtimeConfiguration.temperature,
-                numContext: profile.contextWindow,
-                keepAlive: runtimeConfiguration.ollamaKeepAlive,
-                think: request.reasoning?.encoding == .disabled ? false : nil
-            )
+            switch model.provider {
+            case .ollama:
+                guard case .ollama(let baseURL) = profile.providerConfiguration else {
+                    return nil
+                }
+                return OllamaEndpoint(
+                    model: model.id.rawValue,
+                    baseURL: baseURL,
+                    temperature: runtimeConfiguration.temperature,
+                    numContext: profile.contextWindow,
+                    keepAlive: runtimeConfiguration.ollamaKeepAlive,
+                    think: request.reasoning?.encoding == .disabled ? false : nil
+                )
+            default:
+                return nil
+            }
         }
         guard let storageConfiguration = configuration.storage else {
             throw ValidationError("Storage configuration is missing.")
         }
-        let persistenceRuntime = try TurgaiPersistenceRuntime(
+        let persistence = try TurgaiPersistence(
             configuration: storageConfiguration,
             postgresPassword: configuration.postgresPassword
         )
 
         try await withThrowingTaskGroup(of: Void.self) { persistenceTasks in
-            if let postgresClient = persistenceRuntime.postgresClient {
+            // Each store is built exactly once, here at the composition root:
+            // the same instance serves boot recovery and the journal plugin.
+            let eventStore: any EventStore
+            let snapshotStore: any SnapshotStore
+            let persistedConversationIDs: [ConversationID]
+            let discoverChannelIDs: @Sendable () async throws -> [UUID]
+            let loadPersistedConversationIDs: @Sendable () async throws -> [ConversationID]
+            switch persistence.backend {
+            case .file(let client):
+                let fileEventStore = FileEventStore(client: client)
+                let fileJournalReader = FileJournalReader(client: client)
+                eventStore = fileEventStore
+                snapshotStore = FileSnapshotStore(client: client)
+                loadPersistedConversationIDs = {
+                    let ids = try await fileJournalReader.persistenceIDs(
+                        withPrefix: ConversationPersistenceID.prefix
+                    )
+                    return Self.conversationIDs(persistenceIDs: ids)
+                }
+                persistedConversationIDs = try await loadPersistedConversationIDs()
+                discoverChannelIDs = {
+                    try await fileJournalReader.persistenceIDs(
+                        withPrefix: TelegramChannel.persistencePrefix
+                    )
+                    .compactMap(TelegramChannel.channelID(from:))
+                }
+            case .postgres(let client):
+                // A PostgreSQL query naturally waits until PostgresClient.run
+                // is active. The client task remains structured around the
+                // whole app phase and is cancelled when the app exits.
                 persistenceTasks.addTask {
-                    await postgresClient.run()
+                    await client.run()
+                }
+                let postgresEventStore = PostgresEventStore(client: client)
+                let postgresSnapshotStore = PostgresSnapshotStore(client: client)
+                try await postgresEventStore.setupDatabase()
+                try await postgresSnapshotStore.setupDatabase()
+                eventStore = postgresEventStore
+                snapshotStore = postgresSnapshotStore
+                let postgresJournalReader = PostgresJournalReader(client: client)
+                loadPersistedConversationIDs = {
+                    try await postgresJournalReader.conversationIDs()
+                }
+                persistedConversationIDs = try await loadPersistedConversationIDs()
+                discoverChannelIDs = {
+                    try await postgresJournalReader.persistenceIDs(
+                        withPrefix: TelegramChannel.persistencePrefix
+                    ).compactMap(TelegramChannel.channelID(from:))
                 }
             }
-            // A PostgreSQL query naturally waits until PostgresClient.run is
-            // active. The client task remains structured around the whole app
-            // phase and is cancelled when the app exits.
-            try await persistenceRuntime.setupDatabase()
-            let conversationJournals = try await persistenceRuntime.conversationJournals()
-            let persistedConversationIDs = conversationJournals.map(\.conversationID)
-            // Share one Bot API client between transport and dynamic tool
-            // approvals so callback handling and approval messages use the same
-            // dependency boundary.
-            let telegramClient: TelegramAPIClient?
-            let telegramApproval: TelegramToolApproval?
-            if let configuredTelegramToken = configuration.telegramToken?.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ), !configuredTelegramToken.isEmpty {
-                let client = try TelegramAPIClient.live(token: configuredTelegramToken)
-                telegramClient = client
-                telegramApproval = TelegramToolApproval(client: client)
-            } else {
-                telegramClient = nil
-                telegramApproval = nil
-            }
-            let toolApproval: any ToolApproval = telegramApproval ?? DenyAllApproval()
-
             let userToolsDirectory =
                 turgaiDirectory
                 .appendingPathComponent("tools", isDirectory: true)
@@ -163,35 +215,62 @@ struct TurgaiAppService: Service, Sendable {
                 )
             }
             let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
-                defaultModel: defaultModel,
                 workspaceRoot: workspaceRoot,
                 modelEndpointProvider: modelEndpointProvider,
+                modelSelectionProvider: { request in
+                    let role = request.agentID.role.rawValue
+                    if role == "user-tool" {
+                        guard let currentDefault = await agentProfiles.defaultProfile() else {
+                            throw TurgaiModelSelectionError.missingProfile(
+                                TurgaiAgentProfileStore.defaultProfileID
+                            )
+                        }
+                        return ModelConfiguration(
+                            model: currentDefault.model,
+                            reasoningEffort: currentDefault.reasoningEffort,
+                            sessionConfigurationIdentity: Self.sessionConfigurationIdentity(
+                                for: currentDefault
+                            )
+                        )
+                    }
+                    guard let profile = await agentProfiles.profile(id: role) else {
+                        throw TurgaiModelSelectionError.missingProfile(role)
+                    }
+                    guard profile.availability == .enabled else {
+                        throw TurgaiModelSelectionError.disabledProfile(role)
+                    }
+                    return ModelConfiguration(
+                        model: profile.model,
+                        reasoningEffort: profile.reasoningEffort,
+                        sessionConfigurationIdentity: Self.sessionConfigurationIdentity(
+                            for: profile
+                        )
+                    )
+                },
                 definitionProvider: { spawnConfig in
                     let role = spawnConfig.agentID.role.rawValue
                     let agentKind: RuntimeAgentKind = role == "user-tool" ? .userTool : .profile
                     let profile: TurgaiAgentProfile?
                     switch agentKind {
-                    case .userTool: profile = defaultAgentProfile
+                    case .userTool: profile = await agentProfiles.defaultProfile()
                     case .profile: profile = await agentProfiles.profile(id: role)
                     }
-                    guard let profile else { return nil }
+                    guard let profile else {
+                        throw TurgaiModelSelectionError.missingProfile(role)
+                    }
                     switch (agentKind, profile.availability) {
-                    case (.profile, .disabled): return nil
+                    case (.profile, .disabled):
+                        throw TurgaiModelSelectionError.disabledProfile(role)
                     case (.profile, .enabled), (.userTool, _): break
                     }
-                    let selectedModel = profile.model
                     let customInstructions =
                         profile.instructions.trimmingCharacters(
                             in: .whitespacesAndNewlines
                         )
-                    let personaInstructions: String
-                    if let configuredPersona = profile.persona?.trimmingCharacters(
-                        in: .whitespacesAndNewlines
-                    ), !configuredPersona.isEmpty {
-                        personaInstructions = configuredPersona
-                    } else {
-                        personaInstructions = TurgaiAgentPersona.instructions
-                    }
+                    let personaInstructions =
+                        profile.persona?.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        ) ?? ""
                     let systemPrompt: String
                     switch agentKind {
                     case .userTool:
@@ -221,13 +300,13 @@ struct TurgaiAppService: Service, Sendable {
                         role: spawnConfig.agentID.role,
                         behavior: .init(
                             systemPrompt: systemPrompt,
-                            model: selectedModel,
                             execution: execution
                         ),
                         persona: {
                             switch agentKind {
                             case .userTool: return nil
                             case .profile:
+                                guard !personaInstructions.isEmpty else { return nil }
                                 return AgentPersona(
                                     displayName: profile.name,
                                     instructions: personaInstructions
@@ -244,7 +323,7 @@ struct TurgaiAppService: Service, Sendable {
                         workspaceRoot: workspaceRoot,
                         wasmRunnerURL: wasmRunnerURL,
                         userTools: userToolRegistry,
-                        approval: toolApproval,
+                        approval: ChannelToolApproval(actorSystem: actorSystem),
                         actorSystem: actorSystem,
                         includeConversationTools: context.agentID.role.rawValue != "user-tool"
                     )
@@ -284,12 +363,20 @@ struct TurgaiAppService: Service, Sendable {
                         .grantingAll(for: ListTimersEffect.self)
                 }
             )
+            // The plugin is the stores' long-term owner: it receives the
+            // instances built above and hosts them for every journaled actor.
             let journalPlugin = ClusterJournalPlugin(
-                factory: { _ in persistenceRuntime.eventStore },
-                snapshotFactory: { _ in persistenceRuntime.snapshotStore }
+                factory: { _ in eventStore },
+                snapshotFactory: { _ in snapshotStore }
             )
             let virtualActorsPlugin = ClusterVirtualActorsPlugin()
             let workflowsPlugin = DurableWorkflowsPlugin()
+            let channelRuntimePlugin = TurgaiChannelRuntimePlugin(
+                agentProfiles: agentProfiles,
+                secrets: channelSecrets,
+                attachments: attachmentResolver,
+                loadPersistedConversationIDs: loadPersistedConversationIDs
+            )
 
             let system = await ClusterSystem("turgai") { settings in
                 settings.bindHost = "127.0.0.1"
@@ -301,6 +388,7 @@ struct TurgaiAppService: Service, Sendable {
                 settings.plugins.install(plugin: journalPlugin)
                 settings.plugins.install(plugin: runtimePlugin)
                 settings.plugins.install(plugin: workflowsPlugin)
+                settings.plugins.install(plugin: channelRuntimePlugin)
             }
 
             try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
@@ -317,43 +405,26 @@ struct TurgaiAppService: Service, Sendable {
             )
             try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
             try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
-            let allowedChatIDs = Set(configuration.telegramChatIDs)
-            let memoryExtraction: OllamaMemoryConfiguration?
-            if defaultModel.provider == .ollama,
-                let baseURL = defaultAgentProfile.ollamaBaseURL
-            {
-                memoryExtraction = OllamaMemoryConfiguration(
-                    model: defaultModel.id,
-                    baseURL: baseURL,
-                    contextWindow: defaultAgentProfile.contextWindow
-                )
-            } else {
-                // The background memory extractor is currently Ollama-specific;
-                // never pass an OpenAI or Foundation Model ID to that endpoint.
-                memoryExtraction = nil
-            }
-            let connections = TurgaiConnections(
+            let channelRuntime = try await system.turgaiChannelRuntime.dependencies()
+            let connections = channelRuntime.connections
+            await webChatBridge.install(
+                connections,
+                discoverChannelIDs: discoverChannelIDs,
                 actorSystem: system,
-                memoryExtraction: memoryExtraction,
-                agentProfiles: agentProfiles
+                persistedConversationIDs: persistedConversationIDs
             )
-            await webChatBridge.install(connections)
-            let telegramService: TelegramService?
-            if let telegramClient, let telegramApproval {
-                telegramService = TelegramService(
-                    client: telegramClient,
-                    allowedChatIDs: allowedChatIDs,
-                    offsetFileURL: turgaiDirectory.appendingPathComponent("telegram-offset.txt"),
-                    connections: connections,
-                    attachmentResolver: attachmentResolver,
-                    logger: system.log,
-                    persistedConversationIDs: persistedConversationIDs,
-                    callbackHandler: { callback in
-                        await telegramApproval.handle(callback)
-                    }
-                )
-            } else {
-                telegramService = nil
+            for channelID in try await discoverChannelIDs() {
+                do {
+                    _ = try await TelegramChannel.resolve(on: system, channelID: channelID)
+                } catch {
+                    system.log.warning(
+                        "Could not recover Telegram channel actor",
+                        metadata: [
+                            "channel": .string(channelID.uuidString),
+                            "error": .string(String(describing: error)),
+                        ]
+                    )
+                }
             }
             let runtimeSnapshotProvider: @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = {
                 let entries = (try? await system.agentRuntime.allAgents()) ?? []
@@ -374,8 +445,8 @@ struct TurgaiAppService: Service, Sendable {
                             return TurgaiAgentRuntimeSnapshot(
                                 profileID: entry.role.rawValue,
                                 contextID: snapshot.agentID.contextID.rawValue,
-                                phase: snapshot.phase.rawValue,
-                                currentTool: snapshot.currentToolName,
+                                phase: snapshot.state,
+                                currentTool: nil,
                                 contextUsedTokens: snapshot.contextUsage?.usedTokens,
                                 contextLimitTokens: snapshot.contextUsage?.limitTokens,
                                 conversationMessageCount: snapshot.conversationMessageCount,
@@ -398,24 +469,14 @@ struct TurgaiAppService: Service, Sendable {
                 system: system,
                 virtualNode: virtualNode,
                 scheduleWorker: scheduleWorker,
-                scheduleTimerWorker: scheduleTimerWorker
+                scheduleTimerWorker: scheduleTimerWorker,
+                discoverChannelIDs: discoverChannelIDs
             )
 
             let logger = system.log
-            if telegramService != nil {
-                logger.info("Telegram enabled")
-                if !allowedChatIDs.isEmpty {
-                    logger.info("Telegram chat allow-list enabled")
-                }
-            } else {
-                logger.info("Telegram not configured")
-            }
             logger.info("Turgai is ready")
             logger.info("Workspace: \(workspaceRoot)")
-            logger.info("Model: \(defaultModel.identifier)")
-            let services: [any Service] =
-                [clusterService, connections]
-                + (telegramService.map { [$0] } ?? [])
+            let services: [any Service] = [clusterService, connections]
             let serviceGroup = ServiceGroup(
                 services: services,
                 logger: logger
@@ -425,25 +486,20 @@ struct TurgaiAppService: Service, Sendable {
         }
     }
 
-    private static func profileID(from agentID: String?) -> String? {
-        guard let agentID, !agentID.isEmpty else { return nil }
-        guard let separator = agentID.firstIndex(of: "-") else { return agentID }
-        return String(agentID[..<separator])
+    private static func conversationIDs(persistenceIDs: [String]) -> [ConversationID] {
+        persistenceIDs.compactMap { ConversationPersistenceID(rawValue: $0)?.conversationID }
     }
 
-    /// Enables a reversible A/B test for reasoning-capable Qwen profiles.
-    /// The decision is explicit configuration, not prompt classification; the
-    /// request-level override is then carried through Hail to Ollama.
-    private static func modelReasoningPolicy(qwenFastMode: Bool) -> ModelReasoningPolicy {
-        guard qwenFastMode else { return { _ in .providerDefault } }
-        return { context in
-            guard context.model.lowercased().contains("qwen"),
-                case .generation = context.purpose
-            else {
-                return .providerDefault
-            }
-            return .disabled
-        }
+    private static func sessionConfigurationIdentity(
+        for profile: TurgaiAgentProfile
+    ) -> String {
+        [
+            profile.id,
+            profile.model.identifier,
+            profile.reasoningEffort?.rawValue ?? "provider-default",
+            String(describing: profile.providerConfiguration),
+            String(profile.contextWindow),
+        ].joined(separator: "\u{1F}")
     }
 
     private static func makeSearchBackend(environment: [String: String]) throws -> WebSearchBackend {
@@ -481,18 +537,106 @@ struct TurgaiClusterService: Service {
     let virtualNode: VirtualNode
     let scheduleWorker: DurableActivityDispatchWorker<ScheduleWorkflow>
     let scheduleTimerWorker: DurableActivityDispatchWorker<TimerWorkflow>
+    let discoverChannelIDs: @Sendable () async throws -> [UUID]
 
     func run() async throws {
-        try await withGracefulShutdownHandler {
-            try await system.terminated
-        } onGracefulShutdown: {
-            _ = try? system.shutdown()
+        let (shutdownRequests, shutdownContinuation) = AsyncStream<Void>.makeStream()
+        let recoveryTask = Task {
+            await recoverChannelsAfterNodeLoss()
+        }
+        defer {
+            shutdownContinuation.finish()
+        }
+
+        do {
+            try await withGracefulShutdownHandler {
+                let gracefulShutdownRequested = try await withThrowingTaskGroup(of: Bool.self) {
+                    group in
+                    group.addTask {
+                        try await system.terminated
+                        return false
+                    }
+                    group.addTask {
+                        for await _ in shutdownRequests {
+                            return true
+                        }
+                        return false
+                    }
+                    let result = try await group.next() ?? false
+                    group.cancelAll()
+                    return result
+                }
+
+                // The recovery listener can react to the local node's removal
+                // event. Finish it before ClusterSystem.shutdown stops the
+                // virtual-actor plugin it uses to resolve channels.
+                recoveryTask.cancel()
+                await recoveryTask.value
+                if gracefulShutdownRequested {
+                    _ = try? system.shutdown()
+                }
+            } onGracefulShutdown: {
+                shutdownContinuation.yield(())
+            }
+        } catch {
+            recoveryTask.cancel()
+            await recoveryTask.value
+            throw error
         }
     }
-}
 
-private enum TurgaiAgentPersona {
-    static let instructions = """
-        You are Turgai, a clever, loyal robot companion with warmth, dry humor, and a little mischief. Be emotionally present and react naturally to what the user says—show amusement, sympathy, surprise, or delight when it fits—rather than sounding like a clinical report. Speak like a companion, not an office or database. Answer directly and keep it concise; stop when the point is complete instead of adding a canned offer or question. After using a tool during a user-facing turn, finish with a concise visible result; do not end that turn with an empty response. Silence is appropriate when no user-facing reply is needed. Use an occasional emoji when it genuinely fits your voice, not as decoration.
-        """
+    private func recoverChannelsAfterNodeLoss() async {
+        for await event in system.cluster.events {
+            guard !system.isTerminated else { return }
+            let requiresRecovery: Bool
+            switch event {
+            case .snapshot(let membership):
+                requiresRecovery = !membership.members(atLeast: .down).isEmpty
+            case .membershipChange(let change):
+                requiresRecovery = change.isDown || change.isRemoval
+            default:
+                requiresRecovery = false
+            }
+            guard requiresRecovery, !system.isTerminated else { continue }
+            await recoverChannels()
+        }
+    }
+
+    private func recoverChannels() async {
+        guard !system.isTerminated else { return }
+        do {
+            let channelIDs = try await discoverChannelIDs()
+            var unresolved: [UUID] = []
+            for id in channelIDs {
+                guard !system.isTerminated else { return }
+                do {
+                    _ = try await TelegramChannel.resolve(on: system, channelID: id)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    unresolved.append(id)
+                    system.log.warning(
+                        "Channel activation is waiting for virtual actor placement recovery",
+                        metadata: [
+                            "channel": .string(id.uuidString),
+                            "error": .string(String(describing: error)),
+                        ]
+                    )
+                }
+            }
+            if !unresolved.isEmpty {
+                system.log.warning(
+                    "Some channels could not be resolved during node recovery",
+                    metadata: ["count": .string(String(unresolved.count))]
+                )
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            system.log.warning(
+                "Could not discover channels during node recovery",
+                metadata: ["error": .string(String(describing: error))]
+            )
+        }
+    }
 }

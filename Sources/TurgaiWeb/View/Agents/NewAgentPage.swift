@@ -7,7 +7,6 @@ import NIOCore
 import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
-import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -34,8 +33,11 @@ struct NewAgentPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("app-page")) {
-            div(.class("app-shell")) {
-                AppHeader(user: user, section: .bots)
+            PageShell(
+                kind: .private,
+                header: PageHeader(user: user, navigation: .active(.bots)),
+                footer: PageFooter { EmptyFooterContent() }
+            ) {
                 section(.class("page-intro detail-page-intro")) {
                     div {
                         TurgaiBreadcrumb(

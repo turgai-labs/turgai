@@ -53,16 +53,26 @@ enum TurgaiWebSupport {
         }
     }
 
-    static func telegramErrorMessage(_ error: Error) -> String {
+    static func channelErrorMessage(_ error: Error) -> String {
         switch error {
         case FormValidationError.invalidValue(let field):
             "Enter a valid \(field)."
+        case TurgaiChannelError.invalidLabel:
+            "Give the channel a label and keep it under 120 characters."
+        case TurgaiChannelError.invalidToken:
+            "Enter a bot token or leave the token field empty."
+        case TurgaiChannelError.unknownChannel:
+            "That channel no longer exists."
+        case ChannelFormError.unknownBot:
+            "Choose an enabled agent for this connection."
+        case ChannelFormError.unsupportedChannel:
+            "Choose a supported channel type."
         case TelegramAPIError.httpStatus(401), TelegramAPIError.api(code: 401, message: _):
             "Telegram rejected this bot token. Check it with BotFather and try again."
         case TelegramAPIError.rateLimited:
             "Telegram is temporarily rate-limiting validation. Wait a moment and try again."
         default:
-            "Could not validate the Telegram token. Check your connection and try again."
+            "Could not save the channel."
         }
     }
 
@@ -94,12 +104,10 @@ enum TurgaiWebSupport {
         switch error {
         case FormValidationError.invalidValue(let field):
             "Enter a valid \(field)."
-        case TurgaiAgentProfileError.invalidOllamaBaseURL:
-            "Ollama server URL must be an http(s) URL with a host."
+        case TurgaiAgentProfileError.invalidEndpointURL:
+            "Model endpoint URL must be an http(s) URL with a host."
         case TurgaiAgentProfileError.invalidContextWindow:
             "Context window must be a positive number."
-        case TurgaiAgentProfileError.duplicateTelegramChatID(let id):
-            "Telegram chat ID \(id) is already assigned to another agent."
         case TurgaiAgentProfileError.invalidName:
             "Give the agent a name and keep it under 120 characters."
         case TurgaiAgentProfileError.invalidID(let id):
@@ -196,8 +204,7 @@ enum TurgaiWebSupport {
             id: profile.id,
             name: profile.name,
             model: profile.model.identifier,
-            availability: profile.availability,
-            telegramChatCount: profile.telegramChatIDs.count
+            availability: profile.availability
         )
     }
 

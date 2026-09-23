@@ -105,7 +105,7 @@ struct TurgaiWorkflowStepDraft: Sendable {
         self.id = step.id
         self.kind = WorkflowStepKind(rawValue: step.kind.rawValue) ?? .fetch
         self.saveAs = step.saveAs ?? ""
-        self.permission = WorkflowPermission(rawValue: step.permission?.rawValue ?? "") ?? .inherit
+        self.permission = WorkflowPermission(rawValue: step.permission.rawValue) ?? .inherit
         self.allowedHosts = Self.lines(step.allowedHosts ?? [])
         self.writeDirectory = step.writeDirectory ?? ""
         self.url = step.url ?? ""
@@ -286,7 +286,7 @@ struct TurgaiToolDraft: Sendable {
             let id = step.id.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !id.isEmpty else { throw ToolDraftError.invalid("Step \(index + 1) needs a name.") }
             var definition: [String: Any] = [
-                "id": id, "kind": step.kind.rawValue, "permission": step.permission.rawValue,
+                "id": id, "permission": step.permission.rawValue,
             ]
             let saveAs = step.saveAs.trimmingCharacters(in: .whitespacesAndNewlines)
             if !saveAs.isEmpty { definition["saveAs"] = saveAs }
@@ -294,45 +294,49 @@ struct TurgaiToolDraft: Sendable {
             if !inputs.isEmpty { definition["inputs"] = inputs }
             switch step.kind {
             case .fetch:
+                var payload: [String: Any] = [:]
                 let url = step.url.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !url.isEmpty else { throw ToolDraftError.invalid("Fetch step '\(id)' needs a URL.") }
-                definition["url"] = url
+                payload["url"] = url
                 let method = step.method.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !method.isEmpty { definition["method"] = method.uppercased() }
-                if let hosts = commaList(step.allowedHosts) { definition["allowedHosts"] = hosts }
+                if !method.isEmpty { payload["method"] = method.uppercased() }
+                if let hosts = commaList(step.allowedHosts) { payload["allowedHosts"] = hosts }
                 let headers = try pairs(step.headers, separator: ":")
-                if !headers.isEmpty { definition["headers"] = headers }
+                if !headers.isEmpty { payload["headers"] = headers }
                 let body = step.body.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !body.isEmpty { definition["body"] = body }
+                if !body.isEmpty { payload["body"] = body }
+                definition["payload"] = ["fetch": payload]
             case .execute:
+                var payload: [String: Any] = [:]
                 let source = step.scriptSource.trimmingCharacters(in: .whitespacesAndNewlines)
                 let file = step.scriptFile.trimmingCharacters(in: .whitespacesAndNewlines)
                 if step.scriptMode == .file {
                     guard !file.isEmpty else {
                         throw ToolDraftError.invalid("Execute step '\(id)' needs a script file.")
                     }
-                    definition["script"] = file
+                    payload["script"] = ["path": file]
                 } else {
                     guard !source.isEmpty else { throw ToolDraftError.invalid("Execute step '\(id)' needs a script.") }
-                    definition["scriptSource"] = source
+                    payload["script"] = ["inline": source]
                 }
                 let interpreter = step.interpreter.trimmingCharacters(in: .whitespacesAndNewlines)
                 if step.scriptMode != .file, interpreter.isEmpty {
                     throw ToolDraftError.invalid("Choose an interpreter for the script in step '\(id)'.")
                 }
-                if !interpreter.isEmpty { definition["interpreter"] = interpreter }
+                if !interpreter.isEmpty { payload["interpreter"] = interpreter }
                 let arguments = nonEmptyLines(step.arguments)
-                if !arguments.isEmpty { definition["arguments"] = arguments }
+                if !arguments.isEmpty { payload["arguments"] = arguments }
                 let environment = try environmentDefinition(step.environment)
-                if !environment.isEmpty { definition["environment"] = environment }
+                if !environment.isEmpty { payload["environment"] = environment }
                 let directory = step.writeDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !directory.isEmpty { definition["writeDirectory"] = directory }
+                if !directory.isEmpty { payload["writeDirectory"] = directory }
+                definition["payload"] = ["execute": payload]
             case .think:
                 let instruction = step.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !instruction.isEmpty else {
                     throw ToolDraftError.invalid("Think step '\(id)' needs an instruction.")
                 }
-                definition["instruction"] = instruction
+                definition["payload"] = ["think": ["instruction": instruction]]
             }
             result.append(definition)
         }

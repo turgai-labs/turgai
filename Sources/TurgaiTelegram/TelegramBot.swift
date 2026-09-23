@@ -1,6 +1,5 @@
 import AsyncAlgorithms
 import Logging
-import TurgaiApplication
 import TurgaiDomain
 
 #if canImport(FoundationEssentials)
@@ -192,9 +191,10 @@ public enum TelegramBotError: Error, Equatable, Sendable {
 
 /// The Telegram bot adapter.
 ///
-/// It owns the one physical long-polling loop, offset persistence, update
-/// normalization, and the logical per-chat connections. Its connection stream
-/// is a work stream with one consumer; it is not a broadcast mechanism.
+/// It owns the one physical long-polling loop, update normalization, and the
+/// logical per-chat connections. The caller supplies the recovered offset and
+/// persists each accepted checkpoint. Its connection stream is a work stream
+/// with one consumer; it is not a broadcast mechanism.
 public actor TelegramBot {
     public typealias IDFactory = @Sendable () -> (MessageID, TurnID)
     public typealias ConnectionStream = AsyncStream<TelegramConnection>
@@ -202,7 +202,9 @@ public actor TelegramBot {
 
     private let client: TelegramAPIClient
     private let allowedChatIDs: Set<Int64>
-    private let offsetStore: any TelegramOffsetStore
+    private let conversationChannel: ChannelID
+    private let initialOffset: Int64?
+    private let checkpointOffset: @Sendable (Int64) async throws -> Void
     private let configuration: TelegramBotConfiguration
     private let idFactory: IDFactory
     private let publisher: TelegramEventPublisher
@@ -216,16 +218,20 @@ public actor TelegramBot {
 
     public init(
         client: TelegramAPIClient,
+        conversationChannel: ChannelID,
         allowedChatIDs: Set<Int64> = [],
-        offsetStore: any TelegramOffsetStore,
+        initialOffset: Int64? = nil,
+        checkpointOffset: @escaping @Sendable (Int64) async throws -> Void,
         configuration: TelegramBotConfiguration = TelegramBotConfiguration(),
         idFactory: @escaping IDFactory = { (MessageID(), TurnID()) },
         logger: Logger = Logger(label: "turgai.telegram"),
         callbackHandler: @escaping CallbackHandler = { _ in false }
     ) {
         self.client = client
+        self.conversationChannel = conversationChannel
         self.allowedChatIDs = allowedChatIDs
-        self.offsetStore = offsetStore
+        self.initialOffset = initialOffset
+        self.checkpointOffset = checkpointOffset
         self.configuration = configuration
         self.idFactory = idFactory
         self.publisher = TelegramEventPublisher(
@@ -290,7 +296,7 @@ public actor TelegramBot {
     /// Recreates a logical chat connection so the application can resume
     /// durable work even when Telegram has no new update to deliver.
     public func connect(conversationID: ConversationID) async -> Bool {
-        guard conversationID.channel == ChannelID("telegram"),
+        guard conversationID.channel == conversationChannel,
             let chatID = Int64(conversationID.externalAddress.rawValue),
             allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID)
         else {
@@ -316,6 +322,7 @@ public actor TelegramBot {
 
     public static func event(
         for update: TelegramUpdate,
+        conversationChannel: ChannelID,
         messageID: MessageID,
         turnID: TurnID,
         attachments: [Attachment] = []
@@ -335,7 +342,10 @@ public actor TelegramBot {
             return nil
         }
 
-        let conversationID = conversationID(for: message.chat.id)
+        let conversationID = ConversationID(
+            channel: conversationChannel,
+            externalAddress: ExternalConversationAddress(String(message.chat.id))
+        )
         let participantID = participantID(for: sender.id)
         let userID = UserID(participantID: participantID)
         let displayName = [sender.firstName, sender.lastName]
@@ -457,7 +467,7 @@ public actor TelegramBot {
     }
 
     private func poll() async throws {
-        var offset = try await offsetStore.load()
+        var offset = initialOffset
         let updates = client.updates(
             startingAt: offset,
             timeout: configuration.timeout,
@@ -486,6 +496,7 @@ public actor TelegramBot {
                     let attachments = attachments(for: update.message)
                     if let event = Self.event(
                         for: update,
+                        conversationChannel: conversationChannel,
                         messageID: ids.0,
                         turnID: ids.1,
                         attachments: attachments
@@ -508,8 +519,10 @@ public actor TelegramBot {
             // disallowed or non-message updates replay on every restart.
             guard update.updateID < Int64.max else { continue }
             let nextOffset = update.updateID + 1
-            guard offset == nil || nextOffset > offset! else { continue }
-            try await offsetStore.save(nextOffset)
+            if let currentOffset = offset, nextOffset <= currentOffset {
+                continue
+            }
+            try await checkpointOffset(nextOffset)
             offset = nextOffset
         }
     }
@@ -526,7 +539,7 @@ public actor TelegramBot {
             attachments.append(
                 Attachment(
                     id: AttachmentID(
-                        channel: ChannelID("telegram"),
+                        channel: conversationChannel,
                         externalID: photo.fileID
                     ),
                     kind: .image,
@@ -539,7 +552,7 @@ public actor TelegramBot {
             attachments.append(
                 Attachment(
                     id: AttachmentID(
-                        channel: ChannelID("telegram"),
+                        channel: conversationChannel,
                         externalID: document.fileID
                     ),
                     kind: document.mimeType?.hasPrefix("image/") == true ? .image : .file,

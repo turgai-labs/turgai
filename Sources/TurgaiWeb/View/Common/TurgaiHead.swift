@@ -20,6 +20,8 @@ struct TurgaiHead: HTML, Sendable {
         meta(.charset(.utf8))
         meta(.name(.viewport), .content("width=device-width, initial-scale=1, viewport-fit=cover"))
         link(.href("/turgai.css"), .rel(.stylesheet))
+        script(.src("https://unpkg.com/htmx.org@2.0.3")) {}
+        script(.src("https://unpkg.com/htmx-ext-ws@2.0.1/ws.js")) {}
         HTMLRaw(
             """
             <script>
@@ -179,6 +181,113 @@ struct TurgaiHead: HTML, Sendable {
                     root.classList.remove("turgai-page-leaving");
                 });
             })();
+            </script>
+            """
+        )
+        HTMLRaw(
+            """
+            <script>
+            document.addEventListener("keydown", (event) => {
+                const target = event.target;
+                if (!(target instanceof HTMLTextAreaElement)) return;
+                if (!target.closest(".chat-composer-form") || event.key !== "Enter" || event.shiftKey) return;
+                event.preventDefault();
+                target.form?.requestSubmit();
+            });
+
+            document.addEventListener("htmx:wsAfterSend", (event) => {
+                const form = event.target;
+                if (!(form instanceof HTMLFormElement)) return;
+                if (!form.classList.contains("chat-composer-form")) return;
+                form.reset();
+                const textarea = form.querySelector("textarea[name='text']");
+                textarea?.focus();
+            }, true);
+
+            let chatStickToBottom = true;
+            const chatBottomThreshold = 80;
+
+            const isChatNearBottom = (element) => {
+                return element.scrollHeight - element.scrollTop - element.clientHeight <=
+                    chatBottomThreshold;
+            };
+
+            const scrollChatToBottom = () => {
+                const chatWrapper = document.querySelector(".overlay-scroll-page") ||
+                    document.querySelector(".chat-wrapper");
+                if (!chatWrapper) return;
+                chatWrapper.scrollTop = chatWrapper.scrollHeight;
+                chatWrapper.scrollLeft = 0;
+                requestAnimationFrame(() => {
+                    chatWrapper.scrollTop = chatWrapper.scrollHeight;
+                    chatWrapper.scrollLeft = 0;
+                });
+            };
+
+            document.addEventListener("scroll", (event) => {
+                const element = event.target;
+                if (element?.classList?.contains("overlay-scroll-page") ||
+                    element?.classList?.contains("chat-wrapper")) {
+                    chatStickToBottom = isChatNearBottom(element);
+                    // The page is never horizontally scrollable; discard any
+                    // horizontal drift (scroll anchoring, trackpads) so the
+                    // layout cannot end up stuck off-center.
+                    if (element.scrollLeft) element.scrollLeft = 0;
+                }
+            }, true);
+
+            const maybeScrollChat = () => {
+                if (chatStickToBottom && document.querySelector("#chat-messages-content")) {
+                    requestAnimationFrame(scrollChatToBottom);
+                }
+            };
+
+            const applyChatBubbleGeometry = (root = document) => {
+                root.querySelectorAll(".chat-message").forEach((message) => {
+                    if (message.dataset.chatGeometryBound === "true") return;
+                    const seed = message.id || message.textContent || "chat-message";
+                    let hash = 0;
+                    for (let index = 0; index < seed.length; index++) {
+                        hash = ((hash << 5) - hash + seed.charCodeAt(index)) | 0;
+                    }
+                    const angle = ((Math.abs(hash) % 49) - 24) / 10;
+                    message.style.setProperty("--chat-tilt", `${angle.toFixed(1)}deg`);
+                    message.dataset.chatGeometryBound = "true";
+                });
+            };
+
+            const handleChatMutations = () => {
+                applyChatBubbleGeometry();
+                maybeScrollChat();
+            };
+
+            let observedChatWrapper = null;
+            const observeChat = () => {
+                const chatWrapper = document.querySelector(".chat-wrapper");
+                if (!chatWrapper || chatWrapper === observedChatWrapper) return;
+                observedChatWrapper = chatWrapper;
+                new MutationObserver(handleChatMutations).observe(chatWrapper, {
+                    childList: true,
+                    subtree: true
+                });
+            };
+
+            document.addEventListener("htmx:oobAfterSwap", () => {
+                observeChat();
+                applyChatBubbleGeometry();
+                if (document.querySelector(".chat-wrapper") && chatStickToBottom) {
+                    maybeScrollChat();
+                }
+            }, true);
+            document.addEventListener("htmx:afterSettle", () => {
+                if (!document.querySelector(".chat-app-page")) return;
+                observeChat();
+                applyChatBubbleGeometry();
+                chatStickToBottom = true;
+                maybeScrollChat();
+            }, true);
+            observeChat();
+            applyChatBubbleGeometry();
             </script>
             """
         )

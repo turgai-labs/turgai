@@ -27,7 +27,8 @@ struct ConversationTests {
                 text: "first",
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
-            turnID: TurnID()
+            turnID: TurnID(),
+            agentRole: "test"
         )
         let second = PendingConversationMessage(
             message: InboundMessage(
@@ -36,7 +37,8 @@ struct ConversationTests {
                 text: "second",
                 receivedAt: Date(timeIntervalSince1970: 2)
             ),
-            turnID: TurnID()
+            turnID: TurnID(),
+            agentRole: "test"
         )
 
         var record = ConversationState(conversationID: conversationID)
@@ -75,7 +77,8 @@ struct ConversationTests {
                 text: "hello",
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
-            turnID: TurnID()
+            turnID: TurnID(),
+            agentRole: "test"
         )
         record.apply(.turnStarted(message))
         record.apply(

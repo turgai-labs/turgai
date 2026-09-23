@@ -7,6 +7,7 @@ let package = Package(
         .macOS("26.4")
     ],
     products: [
+        .library(name: "TurgaiModels", targets: ["TurgaiModels"]),
         .library(name: "TurgaiDomain", targets: ["TurgaiDomain"]),
         .library(name: "TurgaiHail", targets: ["TurgaiHail"]),
         .library(name: "TurgaiApplication", targets: ["TurgaiApplication"]),
@@ -69,6 +70,7 @@ let package = Package(
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.16.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.2.0"),
         .package(url: "https://github.com/elementary-swift/elementary.git", from: "0.7.0"),
+        .package(url: "https://github.com/elementary-swift/elementary-htmx.git", from: "0.1.0"),
         .package(url: "https://github.com/hummingbird-community/hummingbird-elementary.git", from: "0.4.2"),
         .package(
             url: "https://github.com/apple/swift-log.git",
@@ -81,17 +83,21 @@ let package = Package(
         ),
     ],
     targets: [
+        .target(name: "TurgaiModels"),
         .target(name: "TurgaiDomain"),
         .target(
             name: "TurgaiWeb",
             dependencies: [
                 "TurgaiApplication",
+                "TurgaiModels",
                 "TurgaiHail",
                 "TurgaiPersistence",
                 "TurgaiTelegram",
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "Elementary", package: "elementary"),
+                .product(name: "ElementaryHTMX", package: "elementary-htmx"),
+                .product(name: "ElementaryHTMXWS", package: "elementary-htmx"),
                 .product(name: "HummingbirdElementary", package: "hummingbird-elementary"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Markdown", package: "swift-markdown"),
@@ -119,6 +125,8 @@ let package = Package(
                 "TurgaiDomain",
                 "TurgaiMemory",
                 "TurgaiHail",
+                "TurgaiPersistence",
+                "TurgaiTelegram",
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
@@ -128,13 +136,13 @@ let package = Package(
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
             ]
         ),
         .target(
             name: "TurgaiTelegram",
             dependencies: [
                 "TurgaiDomain",
-                "TurgaiApplication",
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Logging", package: "swift-log"),
@@ -155,6 +163,8 @@ let package = Package(
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
+                .product(name: "PostgresEventStore", package: "postgres-event-store"),
+                .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Logging", package: "swift-log"),
             ]
@@ -169,6 +179,10 @@ let package = Package(
         .testTarget(
             name: "TurgaiDomainTests",
             dependencies: ["TurgaiDomain"]
+        ),
+        .testTarget(
+            name: "TurgaiModelsTests",
+            dependencies: ["TurgaiModels"]
         ),
         .testTarget(
             name: "TurgaiMemoryTests",
@@ -188,7 +202,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TurgaiDeliveryTests",
-            dependencies: ["Turgai"]
+            dependencies: ["Turgai", "TurgaiApplication"]
         ),
         .target(
             name: "TurgaiPersistence",

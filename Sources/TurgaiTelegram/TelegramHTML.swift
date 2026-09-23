@@ -939,16 +939,19 @@ extension TelegramHTMLFormatter {
 
         var depth = 1
         var end = labelEnd + 2
-        while end < characters.count {
+        linkScan: while end < characters.count {
             if characters[end] == "\\" {
                 end += 2
                 continue
             }
-            if characters[end] == "(" {
+            switch characters[end] {
+            case "(":
                 depth += 1
-            } else if characters[end] == ")" {
+            case ")":
                 depth -= 1
-                if depth == 0 { break }
+                if depth == 0 { break linkScan }
+            default:
+                break
             }
             end += 1
         }
@@ -964,10 +967,13 @@ extension TelegramHTMLFormatter {
 
     fileprivate static func allowedURL(_ rawValue: String) -> String? {
         var value = rawValue
-        if value.first == "<", value.last == ">", value.count >= 2 {
+        switch (value.first, value.last, value.count >= 2) {
+        case ("<", ">", true):
             value = String(value.dropFirst().dropLast())
-        } else if let whitespace = value.firstIndex(where: { $0.isWhitespace }) {
-            value = String(value[..<whitespace])
+        default:
+            if let whitespace = value.firstIndex(where: { $0.isWhitespace }) {
+                value = String(value[..<whitespace])
+            }
         }
 
         guard let scheme = value.split(separator: ":", maxSplits: 1).first,

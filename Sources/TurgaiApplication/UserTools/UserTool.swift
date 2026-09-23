@@ -71,10 +71,10 @@ public struct UserTool: Sendable {
             case think
         }
 
-        /// Additional permission for this stage. `nil`/`.inherit` keeps the
-        /// lane authority as the upper bound and adds no restriction;
-        /// `.denied` closes this stage; `.allowed` records an explicit grant
-        /// that still cannot override a lane denial.
+        /// Additional permission for this stage. `.inherit` keeps the lane
+        /// authority as the upper bound and adds no restriction; `.denied`
+        /// closes this stage; `.allowed` records an explicit grant that still
+        /// cannot override a lane denial.
         public enum Permission: String, Sendable, Equatable, Codable {
             case inherit
             case allowed
@@ -82,80 +82,212 @@ public struct UserTool: Sendable {
         }
 
         public let id: String
-        public let kind: Kind
         public let saveAs: String?
-        public let permission: Permission?
-        /// Exact host names allowed by a fetch stage. `nil` means that the
-        /// workflow policy does not add a host restriction; an empty list
-        /// denies every host. Ignored for execute and think stages.
-        public let allowedHosts: [String]?
-        /// Directory, relative to the workspace root, that an execute stage
-        /// may modify. nil preserves the original workspace-wide behavior.
-        public let writeDirectory: String?
-
-        // Fetch configuration.
-        public let url: String?
-        public let method: String?
-        public let headers: [String: String]?
-        public let body: String?
-
-        // Execute configuration. The script path is relative to the tool
-        // directory. An interpreter such as `python3` or `bash` is optional;
-        // nil means the script itself is executable.
-        public let script: String?
-        /// Inline source supplied by the workflow editor.
-        public let scriptSource: String?
-        public let interpreter: String?
-        public let arguments: [String]?
-        public let environment: [String: String]?
-
-        // Values selected from the workflow context. The dictionary key is
-        // the name presented to the script/agent; the value is a context path
-        // such as `input.city` or `forecast.body`.
+        public let permission: Permission
         public let inputs: [String: String]?
+        public let payload: Payload
 
-        // Think configuration.
-        public let instruction: String?
-        public let agentRole: String?
+        public enum Payload: Sendable, Equatable, Codable {
+            public struct Fetch: Sendable, Equatable, Codable {
+                public let url: String
+                public let method: String?
+                public let headers: [String: String]?
+                public let body: String?
+                public let allowedHosts: [String]?
+
+                public init(
+                    url: String,
+                    method: String? = nil,
+                    headers: [String: String]? = nil,
+                    body: String? = nil,
+                    allowedHosts: [String]? = nil
+                ) {
+                    self.url = url
+                    self.method = method
+                    self.headers = headers
+                    self.body = body
+                    self.allowedHosts = allowedHosts
+                }
+            }
+
+            public enum Script: Sendable, Equatable, Codable {
+                case path(String)
+                case inline(String)
+
+                private enum CodingKeys: String, CodingKey {
+                    case path
+                    case inline
+                }
+
+                public init(from decoder: Decoder) throws {
+                    let values = try decoder.container(keyedBy: CodingKeys.self)
+                    if values.contains(.path) {
+                        self = .path(try values.decode(String.self, forKey: .path))
+                    } else if values.contains(.inline) {
+                        self = .inline(try values.decode(String.self, forKey: .inline))
+                    } else {
+                        throw DecodingError.dataCorruptedError(
+                            forKey: .path,
+                            in: values,
+                            debugDescription: "A script must contain path or inline source."
+                        )
+                    }
+                }
+
+                public func encode(to encoder: Encoder) throws {
+                    var values = encoder.container(keyedBy: CodingKeys.self)
+                    switch self {
+                    case .path(let path): try values.encode(path, forKey: .path)
+                    case .inline(let source): try values.encode(source, forKey: .inline)
+                    }
+                }
+            }
+
+            public struct Execute: Sendable, Equatable, Codable {
+                public let script: Script
+                public let interpreter: String?
+                public let arguments: [String]?
+                public let environment: [String: String]?
+                public let writeDirectory: String?
+
+                public init(
+                    script: Script,
+                    interpreter: String? = nil,
+                    arguments: [String]? = nil,
+                    environment: [String: String]? = nil,
+                    writeDirectory: String? = nil
+                ) {
+                    self.script = script
+                    self.interpreter = interpreter
+                    self.arguments = arguments
+                    self.environment = environment
+                    self.writeDirectory = writeDirectory
+                }
+            }
+
+            public struct Think: Sendable, Equatable, Codable {
+                public let instruction: String
+                public let agentRole: String?
+
+                public init(instruction: String, agentRole: String? = nil) {
+                    self.instruction = instruction
+                    self.agentRole = agentRole
+                }
+            }
+
+            case fetch(Fetch)
+            case execute(Execute)
+            case think(Think)
+
+            private enum CodingKeys: String, CodingKey {
+                case fetch
+                case execute
+                case think
+            }
+
+            public init(from decoder: Decoder) throws {
+                let values = try decoder.container(keyedBy: CodingKeys.self)
+                if values.contains(.fetch) {
+                    self = .fetch(try values.decode(Fetch.self, forKey: .fetch))
+                } else if values.contains(.execute) {
+                    self = .execute(try values.decode(Execute.self, forKey: .execute))
+                } else if values.contains(.think) {
+                    self = .think(try values.decode(Think.self, forKey: .think))
+                } else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .fetch,
+                        in: values,
+                        debugDescription: "A workflow payload must be fetch, execute, or think."
+                    )
+                }
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var values = encoder.container(keyedBy: CodingKeys.self)
+                switch self {
+                case .fetch(let fetch): try values.encode(fetch, forKey: .fetch)
+                case .execute(let execute): try values.encode(execute, forKey: .execute)
+                case .think(let think): try values.encode(think, forKey: .think)
+                }
+            }
+        }
 
         public init(
             id: String,
-            kind: Kind,
             saveAs: String? = nil,
-            permission: Permission? = nil,
-            allowedHosts: [String]? = nil,
-            writeDirectory: String? = nil,
-            url: String? = nil,
-            method: String? = nil,
-            headers: [String: String]? = nil,
-            body: String? = nil,
-            script: String? = nil,
-            scriptSource: String? = nil,
-            interpreter: String? = nil,
-            arguments: [String]? = nil,
-            environment: [String: String]? = nil,
+            permission: Permission = .inherit,
             inputs: [String: String]? = nil,
-            instruction: String? = nil,
-            agentRole: String? = nil
+            payload: Payload
         ) {
             self.id = id
-            self.kind = kind
             self.saveAs = saveAs
             self.permission = permission
-            self.allowedHosts = allowedHosts
-            self.writeDirectory = writeDirectory
-            self.url = url
-            self.method = method
-            self.headers = headers
-            self.body = body
-            self.script = script
-            self.scriptSource = scriptSource
-            self.interpreter = interpreter
-            self.arguments = arguments
-            self.environment = environment
             self.inputs = inputs
-            self.instruction = instruction
-            self.agentRole = agentRole
+            self.payload = payload
+        }
+
+        public var kind: Kind {
+            switch payload {
+            case .fetch: return .fetch
+            case .execute: return .execute
+            case .think: return .think
+            }
+        }
+        public var allowedHosts: [String]? {
+            guard case .fetch(let fetch) = payload else { return nil }
+            return fetch.allowedHosts
+        }
+        public var writeDirectory: String? {
+            guard case .execute(let execute) = payload else { return nil }
+            return execute.writeDirectory
+        }
+        public var url: String? {
+            guard case .fetch(let fetch) = payload else { return nil }
+            return fetch.url
+        }
+        public var method: String? {
+            guard case .fetch(let fetch) = payload else { return nil }
+            return fetch.method
+        }
+        public var headers: [String: String]? {
+            guard case .fetch(let fetch) = payload else { return nil }
+            return fetch.headers
+        }
+        public var body: String? {
+            guard case .fetch(let fetch) = payload else { return nil }
+            return fetch.body
+        }
+        public var script: String? {
+            guard case .execute(let execute) = payload,
+                case .path(let path) = execute.script
+            else { return nil }
+            return path
+        }
+        public var scriptSource: String? {
+            guard case .execute(let execute) = payload,
+                case .inline(let source) = execute.script
+            else { return nil }
+            return source
+        }
+        public var interpreter: String? {
+            guard case .execute(let execute) = payload else { return nil }
+            return execute.interpreter
+        }
+        public var arguments: [String]? {
+            guard case .execute(let execute) = payload else { return nil }
+            return execute.arguments
+        }
+        public var environment: [String: String]? {
+            guard case .execute(let execute) = payload else { return nil }
+            return execute.environment
+        }
+        public var instruction: String? {
+            guard case .think(let think) = payload else { return nil }
+            return think.instruction
+        }
+        public var agentRole: String? {
+            guard case .think(let think) = payload else { return nil }
+            return think.agentRole
         }
 
         public var outputName: String { saveAs ?? id }

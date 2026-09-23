@@ -20,8 +20,18 @@ struct FinishPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("setup-page")) {
-            div(.class("setup-shell")) {
-                SetupHeader()
+            PageShell(
+                kind: .setup,
+                header: PageHeader(),
+                footer: PageFooter {
+                    SetupFooterContent(
+                        step: 5,
+                        backHref: "/onboarding/storage",
+                        submitFormID: "finish-form",
+                        submitLabel: "Start Turgai"
+                    )
+                }
+            ) {
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
                         p(.class("eyebrow")) { "Ready when you are" }
@@ -37,12 +47,6 @@ struct FinishPage: HTMLDocument, Sendable {
                         ) {}
                     }
                 }
-                SetupFooter(
-                    step: 5,
-                    backHref: "/onboarding/storage",
-                    submitFormID: "finish-form",
-                    submitLabel: "Start Turgai"
-                )
             }
         }
     }

@@ -62,11 +62,12 @@ private struct HailConversationInput: Codable, Sendable {
             return details
         }
 
-        if attachmentLines.isEmpty {
+        switch (attachmentLines.isEmpty, message.text.isEmpty) {
+        case (true, _):
             self.content = message.text
-        } else if message.text.isEmpty {
+        case (false, true):
             self.content = "Attachments:\n" + attachmentLines.joined(separator: "\n")
-        } else {
+        case (false, false):
             self.content =
                 message.text
                 + "\n\nAttachments:\n"
@@ -251,6 +252,7 @@ public struct HailConversationPeer: Sendable {
     public typealias ActivityHandler = @Sendable (HailModelEvent) async throws -> Void
     public typealias ContextHandler = @Sendable () async throws -> AgentContextSnapshot
     public typealias HistoryHandler = @Sendable () async throws -> [ChatMessage]
+    public typealias DeactivationHandler = @Sendable () async throws -> Void
 
     private let runHandler:
         @Sendable (
@@ -260,6 +262,7 @@ public struct HailConversationPeer: Sendable {
         ) async throws -> HailResponse
     private let contextHandler: ContextHandler
     private let historyHandler: HistoryHandler
+    private let deactivationHandler: DeactivationHandler
 
     public init(
         run:
@@ -275,6 +278,7 @@ public struct HailConversationPeer: Sendable {
             throw HailAdapterError.contextUnavailable
         }
         self.historyHandler = { [] }
+        self.deactivationHandler = {}
     }
 
     public init(
@@ -287,11 +291,12 @@ public struct HailConversationPeer: Sendable {
         context: @escaping ContextHandler = {
             throw HailAdapterError.contextUnavailable
         },
-        history: @escaping HistoryHandler = { [] }
+        history: @escaping HistoryHandler = { [] }, deactivate: @escaping DeactivationHandler = {}
     ) {
         self.runHandler = runWithContext
         self.contextHandler = context
         self.historyHandler = history
+        self.deactivationHandler = deactivate
     }
 
     public func run(
@@ -323,6 +328,10 @@ public struct HailConversationPeer: Sendable {
 
     public func history() async throws -> [ChatMessage] {
         try await historyHandler()
+    }
+
+    public func deactivate() async throws {
+        try await deactivationHandler()
     }
 }
 
@@ -361,8 +370,6 @@ public struct HailAgentAdapter: Sendable {
     public func peer(
         for conversationID: ConversationID
     ) async throws -> HailConversationPeer {
-        let agent = try await agent(for: conversationID)
-
         return HailConversationPeer(
             runWithContext: { request, turnContext, onActivity in
                 guard request.conversationID == conversationID else {
@@ -374,6 +381,7 @@ public struct HailAgentAdapter: Sendable {
                     message: message,
                     context: turnContext
                 )
+                let agent = try await self.agent(for: conversationID)
                 return try await withThrowingTaskGroup(of: HailRunResult.self) { group in
                     group.addTask {
                         // Plain chat is a String output. Attachments remain
@@ -416,10 +424,13 @@ public struct HailAgentAdapter: Sendable {
                 }
             },
             context: {
-                try await agent.contextSnapshot
+                try await self.agent(for: conversationID).contextSnapshot
             },
             history: {
-                try await agent.getConversationHistory()
+                try await self.agent(for: conversationID).getConversationHistory()
+            },
+            deactivate: {
+                try await self.deactivate(for: conversationID)
             }
         )
     }
@@ -431,7 +442,6 @@ public struct HailAgentAdapter: Sendable {
         output: Output.Type
     ) async throws -> HailStructuredConversationPeer<Output>
     where Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Codable & Sendable {
-        let agent = try await agent(for: conversationID)
         let actorSystem = self.actorSystem
 
         return HailStructuredConversationPeer(run: { request, onEvent in
@@ -439,6 +449,7 @@ public struct HailAgentAdapter: Sendable {
                 throw HailAdapterError.conversationMismatch
             }
             let message = request.message
+            let agent = try await self.agent(for: conversationID)
 
             let input = HailConversationInput(
                 sender: message.userID.rawValue,
@@ -488,6 +499,11 @@ public struct HailAgentAdapter: Sendable {
             identifiedBy: VirtualActorID(rawValue: agentID.rawValue),
             dependency: spawnConfig
         )
+    }
+
+    public func deactivate(for conversationID: ConversationID) async throws {
+        let agent = try await agent(for: conversationID)
+        guard try await actorSystem.virtualActors.deactivate(agent) else { return }
     }
 
     public static func agentID(

@@ -7,7 +7,6 @@ import NIOCore
 import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
-import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -22,10 +21,6 @@ struct AgentConfigurationForm: HTML, Sendable {
     let submitLabel: String
 
     private var selectedModel: AgentModel? { profile?.model }
-
-    private var chatIDs: String {
-        profile?.telegramChatIDs.map(String.init).joined(separator: ", ") ?? ""
-    }
 
     var body: some HTML {
         form(.method(.post), .action(action), .class("config-form")) {
@@ -43,13 +38,43 @@ struct AgentConfigurationForm: HTML, Sendable {
                 h3 { "Model" }
                 ModelPicker(catalog: modelCatalog, selectedModel: selectedModel)
                 label(.class("form-field")) {
-                    span(.class("field-label")) { "Ollama address" }
+                    span(.class("field-label")) { "Model endpoint" }
                     input(
-                        .type(.url), .name("ollamaBaseURL"),
-                        .value(profile?.ollamaBaseURL?.absoluteString ?? ""),
+                        .type(.url), .name("endpointURL"),
+                        .value(
+                            profile.flatMap { profile in
+                                guard case .ollama(let baseURL) = profile.providerConfiguration else { return nil }
+                                return baseURL.absoluteString
+                            } ?? ""),
                         .placeholder(OllamaConfiguration.defaultBaseURL.absoluteString)
                     )
-                    p(.class("hint")) { "Used when this bot uses an Ollama model." }
+                    p(.class("hint")) { "Used by providers that need a configured endpoint." }
+                }
+                label(.class("form-field")) {
+                    span(.class("field-label")) { "Reasoning effort" }
+                    select(.name("reasoningEffort")) {
+                        if profile?.reasoningEffort == nil {
+                            option(.value(""), .selected) { "Provider default" }
+                        } else {
+                            option(.value("")) { "Provider default" }
+                        }
+                        for effort in [
+                            ReasoningEffort.none,
+                            .minimal,
+                            .low,
+                            .medium,
+                            .high,
+                            .xhigh,
+                            .max,
+                        ] {
+                            if profile?.reasoningEffort == effort {
+                                option(.value(effort.rawValue), .selected) { effort.rawValue }
+                            } else {
+                                option(.value(effort.rawValue)) { effort.rawValue }
+                            }
+                        }
+                    }
+                    p(.class("hint")) { "Leave it at provider default unless this model supports a specific level." }
                 }
                 label(.class("form-field")) {
                     span(.class("field-label")) { "Context window" }
@@ -59,17 +84,6 @@ struct AgentConfigurationForm: HTML, Sendable {
                         .required
                     )
                     p(.class("hint")) { "Maximum context passed to the model." }
-                }
-            }
-            section(.class("config-group")) {
-                h3 { "Telegram" }
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "Telegram chats" }
-                    input(
-                        .type(.text), .name("telegramChatIDs"), .value(chatIDs),
-                        .placeholder("Optional chat IDs, separated by commas")
-                    )
-                    p(.class("hint")) { "Leave empty for the default route." }
                 }
             }
             section(.class("config-group")) {

@@ -801,7 +801,8 @@ public struct TimerActivities {
             on: context.system,
             conversationID: input.conversationID,
             agentDirectoryID: input.agentDirectoryID,
-            agentRole: input.agentRole
+            agentRole: input.agentRole,
+            memoryExtraction: nil
         )
 
         switch input.action {
@@ -820,7 +821,11 @@ public struct TimerActivities {
             )
             try await conversation.send(
                 message,
-                turnID: Timer.turnID(for: context.workflowID)
+                turnID: Timer.turnID(for: context.workflowID),
+                configuration: Conversation.TurnConfiguration(
+                    agentRole: input.agentRole,
+                    memoryExtraction: nil
+                )
             )
         }
 

@@ -2,7 +2,6 @@ import AsyncAlgorithms
 import Hail
 import Logging
 import ServiceLifecycle
-import TurgaiApplication
 import TurgaiDomain
 import TurgaiHail
 import TurgaiTelegram
@@ -149,10 +148,13 @@ enum TelegramDelivery {
                 return .none
             }
 
-            if let current = state.nextPreviewAt, current < until {
+            switch state.nextPreviewAt {
+            case let current? where current < until:
                 state.nextPreviewAt = until
-            } else if state.nextPreviewAt == nil {
+            case nil:
                 state.nextPreviewAt = until
+            default:
+                break
             }
 
             if state.terminalizedTurns.contains(preview.turnID) {
@@ -247,8 +249,11 @@ enum TelegramDelivery {
         switch event {
         case .reply(let reply):
             switch reply {
+            case .userMessage(_, let turnID, _, _):
+                turnID
             case .started(_, let turnID),
                 .phase(_, let turnID, _),
+                .status(_, let turnID, _),
                 .partial(_, let turnID, _),
                 .keepAlive(_, let turnID, _),
                 .finished(_, let turnID, _),
@@ -273,68 +278,61 @@ enum TelegramDelivery {
 /// TelegramConnection per chat. This service attaches each one to a Turgai
 /// live session and bridges the returned outbound stream back to Telegram.
 actor TelegramService: Service {
-    private let telegramIntegration: TelegramIntegration
+    private let bot: TelegramBot
+    private let client: TelegramAPIClient
     private let connections: TurgaiConnections
+    private let channelID: UUID
     private let attachmentResolver: AttachmentResolver
+    private let attachmentOwner: UUID
     private let logger: Logger
     private let deliveryConfiguration: TelegramDeliveryConfiguration
     private let persistedConversationIDs: [ConversationID]
 
     init(
-        token: String,
-        allowedChatIDs: Set<Int64>,
-        offsetFileURL: URL,
-        connections: TurgaiConnections,
-        attachmentResolver: AttachmentResolver,
-        logger: Logger,
-        delivery: TelegramDeliveryConfiguration = TelegramDeliveryConfiguration(),
-        persistedConversationIDs: [ConversationID] = []
-    ) throws {
-        let client = try TelegramAPIClient.live(token: token)
-        self.init(
-            client: client,
-            allowedChatIDs: allowedChatIDs,
-            offsetFileURL: offsetFileURL,
-            connections: connections,
-            attachmentResolver: attachmentResolver,
-            logger: logger,
-            delivery: delivery,
-            persistedConversationIDs: persistedConversationIDs
-        )
-    }
-
-    init(
         client: TelegramAPIClient,
         allowedChatIDs: Set<Int64>,
-        offsetFileURL: URL,
+        initialOffset: Int64?,
+        checkpointOffset: @escaping @Sendable (Int64) async throws -> Void,
         connections: TurgaiConnections,
+        channelID: UUID,
         attachmentResolver: AttachmentResolver,
+        attachmentOwner: UUID,
         logger: Logger,
         delivery: TelegramDeliveryConfiguration = TelegramDeliveryConfiguration(),
         persistedConversationIDs: [ConversationID] = [],
         callbackHandler: @escaping TelegramBot.CallbackHandler = { _ in false }
     ) {
-        self.telegramIntegration = TelegramIntegration(
-            bot: TelegramBot(
-                client: client,
-                allowedChatIDs: allowedChatIDs,
-                offsetStore: FileTelegramOffsetStore(fileURL: offsetFileURL),
-                configuration: TelegramBotConfiguration(delivery: delivery),
-                logger: logger,
-                callbackHandler: callbackHandler
+        self.bot = TelegramBot(
+            client: client,
+            conversationChannel: ChannelID(
+                provider: "telegram",
+                instanceID: channelID.uuidString
             ),
-            client: client
+            allowedChatIDs: allowedChatIDs,
+            initialOffset: initialOffset,
+            checkpointOffset: checkpointOffset,
+            configuration: TelegramBotConfiguration(delivery: delivery),
+            logger: logger,
+            callbackHandler: callbackHandler
         )
+        self.client = client
         self.connections = connections
+        self.channelID = channelID
         self.attachmentResolver = attachmentResolver
+        self.attachmentOwner = attachmentOwner
         self.logger = logger
         self.deliveryConfiguration = delivery
         self.persistedConversationIDs = persistedConversationIDs
     }
 
     public func run() async throws {
-        let client = telegramIntegration.client
-        await attachmentResolver.register(channel: AttachmentChannel("telegram")) {
+        let client = self.client
+        await attachmentResolver.register(
+            channel: AttachmentChannel(
+                "telegram/\(attachmentOwner.uuidString)"
+            ),
+            owner: attachmentOwner
+        ) {
             externalID,
             expectedContentType in
             let file = try await client.downloadFile(externalID)
@@ -350,14 +348,14 @@ actor TelegramService: Service {
             return ToolData(body: file.body, contentType: contentType)
         }
 
-        let telegramConnections = try await telegramIntegration.bot.connections()
+        let telegramConnections = try await bot.connections()
 
         do {
             try await withTaskCancellationOrGracefulShutdownHandler(
                 operation: {
                     try await withThrowingTaskGroup(of: Void.self) { group in
                         group.addTask {
-                            try await self.telegramIntegration.bot.run()
+                            try await self.bot.run()
                         }
                         group.addTask {
                             await self.consume(telegramConnections)
@@ -378,10 +376,16 @@ actor TelegramService: Service {
                 }
             )
         } catch {
-            await attachmentResolver.unregister(channel: AttachmentChannel("telegram"))
+            await attachmentResolver.unregister(
+                channel: AttachmentChannel("telegram/\(attachmentOwner.uuidString)"),
+                owner: attachmentOwner
+            )
             throw error
         }
-        await attachmentResolver.unregister(channel: AttachmentChannel("telegram"))
+        await attachmentResolver.unregister(
+            channel: AttachmentChannel("telegram/\(attachmentOwner.uuidString)"),
+            owner: attachmentOwner
+        )
     }
 
     private func consume(
@@ -400,10 +404,12 @@ actor TelegramService: Service {
     private func bridge(_ connection: TelegramConnection) async {
         let connectionID = await connection.id
         let inbound = await connection.inbound
-        let output = await connections.addLiveSession(
+        let session = await connections.addLiveSession(
             id: connectionID,
+            source: .channel(channelID),
             inbound: inbound
         )
+        let output = session.output
 
         let (deliveryStream, deliveryContinuation) =
             AsyncStream<TelegramDelivery.Input>.makeStream(
@@ -474,7 +480,8 @@ actor TelegramService: Service {
             }
         }
 
-        await telegramIntegration.bot.remove(connectionID: connectionID)
+        await connections.finishLiveSession(id: connectionID, handle: session.handle)
+        await bot.remove(connectionID: connectionID)
     }
 
     private static func consumeDeliveries(
@@ -677,7 +684,7 @@ actor TelegramService: Service {
     }
 
     private func stop() async {
-        await telegramIntegration.bot.stop()
+        await bot.stop()
     }
 
     private func connectPersistedConversations() async {
@@ -689,7 +696,7 @@ actor TelegramService: Service {
         )
 
         for conversationID in persistedConversationIDs {
-            let connected = await telegramIntegration.bot.connect(
+            let connected = await bot.connect(
                 conversationID: conversationID
             )
             if !connected {
@@ -701,54 +708,5 @@ actor TelegramService: Service {
                 )
             }
         }
-    }
-}
-
-/// The complete Telegram channel dependency graph for one bot.
-struct TelegramIntegration: Sendable {
-    let bot: TelegramBot
-    let client: TelegramAPIClient
-
-    static func live(
-        token: String,
-        allowedChatIDs: Set<Int64>,
-        offsetFileURL: URL,
-        logger: Logger,
-        delivery: TelegramDeliveryConfiguration
-    ) throws -> TelegramIntegration {
-        let client = try TelegramAPIClient.live(token: token)
-        return TelegramIntegration(
-            bot: TelegramBot(
-                client: client,
-                allowedChatIDs: allowedChatIDs,
-                offsetStore: FileTelegramOffsetStore(fileURL: offsetFileURL),
-                configuration: TelegramBotConfiguration(delivery: delivery),
-                logger: logger
-            ),
-            client: client
-        )
-    }
-
-    static func live(
-        client: TelegramAPIClient,
-        allowedChatIDs: Set<Int64>,
-        offsetFileURL: URL,
-        logger: Logger,
-        delivery: TelegramDeliveryConfiguration,
-        callbackHandler: @escaping TelegramBot.CallbackHandler = { _ in false }
-    ) -> TelegramIntegration {
-        let offsetStore = FileTelegramOffsetStore(fileURL: offsetFileURL)
-        let bot = TelegramBot(
-            client: client,
-            allowedChatIDs: allowedChatIDs,
-            offsetStore: offsetStore,
-            configuration: TelegramBotConfiguration(delivery: delivery),
-            logger: logger,
-            callbackHandler: callbackHandler
-        )
-        return TelegramIntegration(
-            bot: bot,
-            client: client
-        )
     }
 }

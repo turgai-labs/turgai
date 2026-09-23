@@ -191,22 +191,21 @@ struct UserToolRegistryTests {
                 "steps": [
                   {
                     "id": "forecast",
-                    "kind": "fetch",
-                    "url": "https://weather.example/forecast?city={{city}}",
+                    "permission": "inherit",
+                    "payload": {"fetch": {"url": "https://weather.example/forecast?city={{city}}"}},
                     "saveAs": "forecast"
                   },
                   {
                     "id": "rule",
-                    "kind": "execute",
-                    "script": "rule.py",
-                    "interpreter": "python3",
+                    "permission": "inherit",
+                    "payload": {"execute": {"script": {"path": "rule.py"}, "interpreter": "python3"}},
                     "inputs": {"weather": "forecast"},
                     "saveAs": "rule_result"
                   },
                   {
                     "id": "explain",
-                    "kind": "think",
-                    "instruction": "Explain {{rule_result}} using {{city}}."
+                    "permission": "inherit",
+                    "payload": {"think": {"instruction": "Explain {{rule_result}} using {{city}}."}}
                   }
                 ]
               }
@@ -244,8 +243,8 @@ struct UserToolRegistryTests {
               "body": {
                 "kind": "workflow",
                 "steps": [
-                  {"id": "same", "kind": "fetch", "url": "https://example.com"},
-                  {"id": "same", "kind": "think", "instruction": "Nope"}
+                  {"id": "same", "permission": "inherit", "payload": {"fetch": {"url": "https://example.com"}}},
+                  {"id": "same", "permission": "inherit", "payload": {"think": {"instruction": "Nope"}}}
                 ]
               }
             }

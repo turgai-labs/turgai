@@ -110,6 +110,19 @@ public struct OutboundDelivery: Sendable {
     }
 }
 
+/// Identifies how a live session entered Turgai. A Telegram session belongs
+/// to one channel actor; a web session has no provider-channel binding.
+public enum LiveSessionSource: Sendable, Equatable {
+    case web
+    case channel(UUID)
+}
+
+private enum LiveSessionRoutingError: Error {
+    case channelIdentityMismatch
+    case channelUnavailable
+    case unavailableProfile(String)
+}
+
 private actor OutboundDeliveryRegistry {
     private var pending: [UUID: OutboundDelivery] = [:]
 
@@ -136,13 +149,23 @@ private actor OutboundDeliveryRegistry {
 /// stream to `addLiveSession`, the factory creates a live session, and the
 /// returned outbound stream is consumed by that channel service.
 public actor TurgaiConnections: Service {
+    public struct LiveSessionConnection: Sendable {
+        public let output: AsyncStream<OutboundDelivery>
+        let handle: UUID
+
+        init(output: AsyncStream<OutboundDelivery>, handle: UUID) {
+            self.output = output
+            self.handle = handle
+        }
+    }
+
     public struct WebSession: Sendable {
         public let input: AsyncChannel<ConversationInputDelivery>
-        public let output: AsyncChannel<OutboundDelivery>
+        public let output: AsyncStream<OutboundDelivery>
 
         init(
             input: AsyncChannel<ConversationInputDelivery>,
-            output: AsyncChannel<OutboundDelivery>
+            output: AsyncStream<OutboundDelivery>
         ) {
             self.input = input
             self.output = output
@@ -186,22 +209,34 @@ public actor TurgaiConnections: Service {
             guard connections[connection.id]?.handle == connection.handle else { return }
             connections.removeValue(forKey: connection.id)
         }
+
+        func finish(id: String, handle: UUID) async {
+            guard connections[id]?.handle == handle,
+                let connection = connections.removeValue(forKey: id)
+            else { return }
+            await connection.finish()
+        }
+
+        func finishAll() async {
+            let connections = Array(connections.values)
+            self.connections.removeAll()
+            for connection in connections {
+                await connection.finish()
+            }
+        }
     }
 
     private let actorSystem: ClusterSystem
-    private let memoryExtraction: OllamaMemoryConfiguration?
-    private let agentProfiles: TurgaiAgentProfileStore?
+    private let agentProfiles: TurgaiAgentProfileStore
     private let connectionStream: AsyncStream<Connection>
     private let connectionContinuation: AsyncStream<Connection>.Continuation
     private let outboundConnections = OutboundConnections()
 
     public init(
         actorSystem: ClusterSystem,
-        memoryExtraction: OllamaMemoryConfiguration? = nil,
-        agentProfiles: TurgaiAgentProfileStore? = nil
+        agentProfiles: TurgaiAgentProfileStore
     ) {
         self.actorSystem = actorSystem
-        self.memoryExtraction = memoryExtraction
         self.agentProfiles = agentProfiles
         (self.connectionStream, self.connectionContinuation) =
             AsyncStream<Connection>.makeStream()
@@ -213,23 +248,29 @@ public actor TurgaiConnections: Service {
     /// is the same factory boundary as StagehandConnections.addLiveSession.
     public func addLiveSession(
         id: String,
+        source: LiveSessionSource,
         inbound: AsyncChannel<ConversationInputDelivery>
-    ) async -> AsyncChannel<OutboundDelivery> {
+    ) async -> LiveSessionConnection {
         let session = LiveSession(
             id: id,
             actorSystem: actorSystem,
             inbound: inbound,
-            memoryExtraction: memoryExtraction,
-            agentProfiles: agentProfiles
+            agentProfiles: agentProfiles,
+            source: source
         )
+        await outboundConnections.add(.live(session))
         connectionContinuation.yield(.live(session))
-        return session.output
+        return LiveSessionConnection(output: session.output, handle: session.handle)
     }
 
     public func addWebSession(id: WebSessionID) async -> WebSession {
         let inbound = AsyncChannel<ConversationInputDelivery>()
-        let output = await addLiveSession(id: id.rawValue.uuidString, inbound: inbound)
-        return WebSession(input: inbound, output: output)
+        let session = await addLiveSession(
+            id: id.rawValue.uuidString,
+            source: .web,
+            inbound: inbound
+        )
+        return WebSession(input: inbound, output: session.output)
     }
 
     public func conversationHistory(
@@ -239,16 +280,36 @@ public actor TurgaiConnections: Service {
         let conversation = try await Conversation.resolve(
             on: actorSystem,
             conversationID: conversationID,
+            agentDirectoryID: "agent-directory",
             agentRole: role.rawValue,
-            memoryExtraction: memoryExtraction
+            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+                forProfileID: role.rawValue
+            )
         )
         return try await conversation.history()
     }
 
+    public func conversationStatus(
+        for conversationID: ConversationID,
+        role: TurgaiAgentRole
+    ) async throws -> ConversationStatus {
+        let conversation = try await Conversation.resolve(
+            on: actorSystem,
+            conversationID: conversationID,
+            agentDirectoryID: "agent-directory",
+            agentRole: role.rawValue,
+            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+                forProfileID: role.rawValue
+            )
+        )
+        return try await conversation.currentStatus()
+    }
+
     /// Stops accepting sessions. Existing session workers are cancelled by
     /// the task group and finish their sessions after their input stream ends.
-    public func stop() {
+    public func stop() async {
         connectionContinuation.finish()
+        await outboundConnections.finishAll()
     }
 
     public func run() async throws {
@@ -257,7 +318,6 @@ public actor TurgaiConnections: Service {
                 await withDiscardingTaskGroup { group in
                     for await connection in self.connectionStream {
                         group.addTask {
-                            await self.outboundConnections.add(connection)
                             await self.handleMessages(from: connection)
                             await self.outboundConnections.remove(connection)
                             await connection.finish()
@@ -267,9 +327,16 @@ public actor TurgaiConnections: Service {
                 }
             },
             onCancelOrGracefulShutdown: {
-                self.connectionContinuation.finish()
+                Task { await self.stop() }
             }
         )
+    }
+
+    /// Ends one transport-owned session. The session is removed from the
+    /// active set before it is finished, so a replacement with the same
+    /// external ID cannot be closed by a late cleanup from the old session.
+    public func finishLiveSession(id: String, handle: UUID) async {
+        await outboundConnections.finish(id: id, handle: handle)
     }
 
     private func handleMessages(from connection: Connection) async {
@@ -299,7 +366,12 @@ private enum UserCommand {
 }
 
 actor LiveSession {
-    typealias OutputStream = AsyncChannel<OutboundDelivery>
+    /// Unbounded delivery buffer. Unlike `AsyncChannel` (a rendezvous that
+    /// suspends `send` until a consumer iterates), yielding into this stream
+    /// never waits: a slow or dead client can only fill its own buffer, and
+    /// the only backpressure left in the system lives in the route's socket
+    /// writer, where it belongs.
+    typealias OutputStream = AsyncStream<OutboundDelivery>
 
     let id: String
     let handle = UUID()
@@ -307,8 +379,9 @@ actor LiveSession {
 
     private let actorSystem: ClusterSystem
     private let inbound: AsyncChannel<ConversationInputDelivery>
-    private let memoryExtraction: OllamaMemoryConfiguration?
-    private let agentProfiles: TurgaiAgentProfileStore?
+    private let outputContinuation: OutputStream.Continuation
+    private let agentProfiles: TurgaiAgentProfileStore
+    private let source: LiveSessionSource
     private let conversationConnection: ConversationConnection
     private let deliveryRegistry: OutboundDeliveryRegistry
     private var conversations: [ConversationID: Conversation] = [:]
@@ -318,30 +391,25 @@ actor LiveSession {
         id: String,
         actorSystem: ClusterSystem,
         inbound: AsyncChannel<ConversationInputDelivery>,
-        memoryExtraction: OllamaMemoryConfiguration? = nil,
-        agentProfiles: TurgaiAgentProfileStore? = nil
+        agentProfiles: TurgaiAgentProfileStore,
+        source: LiveSessionSource
     ) {
         self.id = id
         self.actorSystem = actorSystem
         self.inbound = inbound
-        self.memoryExtraction = memoryExtraction
         self.agentProfiles = agentProfiles
-        self.output = OutputStream()
+        self.source = source
+        let (output, outputContinuation) = OutputStream.makeStream()
+        self.output = output
+        self.outputContinuation = outputContinuation
         self.deliveryRegistry = OutboundDeliveryRegistry()
-        let output = self.output
         let deliveryRegistry = self.deliveryRegistry
         self.conversationConnection = ConversationConnection(
             actorSystem: actorSystem,
             onEvent: { event in
                 let delivery = OutboundDelivery(event: event)
                 await deliveryRegistry.insert(delivery)
-                await output.send(delivery)
-                do {
-                    try await delivery.wait()
-                } catch {
-                    await deliveryRegistry.remove(delivery)
-                    throw error
-                }
+                outputContinuation.yield(delivery)
                 await deliveryRegistry.remove(delivery)
             }
         )
@@ -362,30 +430,34 @@ actor LiveSession {
     }
 
     func finish() async {
-        guard !finished else { return }
-        finished = true
-        // Unblock both the output consumer and any Conversation broadcast
-        // waiting for Telegram to complete delivery.
-        output.finish()
-        await deliveryRegistry.failAll()
-        for conversation in conversations.values {
+        guard !self.finished else { return }
+        self.finished = true
+        // Unblock the output consumer and fail any deliveries Telegram's
+        // pipeline still considers in flight.
+        self.outputContinuation.finish()
+        await self.deliveryRegistry.failAll()
+        for conversation in self.conversations.values {
             try? await conversation.removeConnection(conversationConnection)
         }
-        conversations.removeAll()
+        self.conversations.removeAll()
     }
 
     private func handle(_ input: ConversationInput) async -> Bool {
         switch input {
         case .connect(let conversationID):
             do {
-                let conversation = try await resolveConversation(conversationID)
-                try await attach(
+                let role = try await self.resolvedAgentRole(for: conversationID)
+                let conversation = try await self.resolveConversation(
+                    conversationID,
+                    agentRole: role
+                )
+                try await self.attach(
                     to: conversation,
                     conversationID: conversationID
                 )
                 return true
             } catch {
-                actorSystem.log.error(
+                self.actorSystem.log.error(
                     "Could not connect persisted conversation",
                     metadata: [
                         "conversationID": .string(conversationID.stableKey),
@@ -403,14 +475,24 @@ actor LiveSession {
                 )
                 try await user.link(participantID: message.participantID)
 
-                let conversation = try await resolveConversation(message.conversationID)
-                try await attach(
+                let agentRole = try await self.resolvedAgentRole(for: message.conversationID)
+                let conversation = try await self.resolveConversation(
+                    message.conversationID,
+                    agentRole: agentRole
+                )
+                try await self.attach(
                     to: conversation,
                     conversationID: message.conversationID
                 )
                 try await conversation.send(
                     message,
-                    turnID: turnID
+                    turnID: turnID,
+                    configuration: Conversation.TurnConfiguration(
+                        agentRole: agentRole,
+                        memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+                            forProfileID: agentRole
+                        )
+                    ),
                 )
                 return true
             } catch {
@@ -428,7 +510,11 @@ actor LiveSession {
 
         case .reset(let conversationID):
             do {
-                let conversation = try await resolveConversation(conversationID)
+                let role = try await resolvedAgentRole(for: conversationID)
+                let conversation = try await resolveConversation(
+                    conversationID,
+                    agentRole: role
+                )
                 try await attach(
                     to: conversation,
                     conversationID: conversationID
@@ -538,8 +624,12 @@ actor LiveSession {
             let user = try await User.resolve(on: actorSystem, userID: userID)
             try await user.link(participantID: participantID)
 
-            let conversation = try await resolveConversation(conversationID)
-            try await attach(
+            let role = try await self.resolvedAgentRole(for: conversationID)
+            let conversation = try await self.resolveConversation(
+                conversationID,
+                agentRole: role
+            )
+            try await self.attach(
                 to: conversation,
                 conversationID: conversationID
             )
@@ -585,14 +675,57 @@ actor LiveSession {
         try? await conversationConnection.broadcast(event)
     }
 
-    private func resolveConversation(_ conversationID: ConversationID) async throws -> Conversation {
-        let agentRole = await agentProfiles?.profileID(for: conversationID) ?? "conversation"
-        return try await Conversation.resolve(
+    private func resolveConversation(
+        _ conversationID: ConversationID,
+        agentRole: String
+    ) async throws -> Conversation {
+        try await Conversation.resolve(
             on: actorSystem,
             conversationID: conversationID,
+            agentDirectoryID: "agent-directory",
             agentRole: agentRole,
-            memoryExtraction: memoryExtraction
+            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+                forProfileID: agentRole
+            )
         )
+    }
+
+    /// The channel actor is the routing authority for channel sessions. Web
+    /// sessions use the configured application default.
+    private func resolvedAgentRole(for conversationID: ConversationID) async throws -> String {
+        if case .channel(let channelID) = source {
+            let expectedChannelID = ChannelID(
+                provider: TelegramProvider.providerID,
+                instanceID: channelID.uuidString
+            )
+            guard conversationID.channel == expectedChannelID else {
+                throw LiveSessionRoutingError.channelIdentityMismatch
+            }
+
+            let channel = try await TelegramChannel.resolve(
+                on: actorSystem,
+                channelID: channelID
+            )
+            guard case .active(let configuration, _) = try await channel.currentState(),
+                configuration.enabled
+            else {
+                throw LiveSessionRoutingError.channelUnavailable
+            }
+
+            let agentRouting = configuration.agentRouting
+            switch agentRouting {
+            case .defaultProfile:
+                return try await agentProfiles.defaultProfileID()
+            case .profile(let binding):
+                guard let profile = await agentProfiles.profile(id: binding),
+                    profile.availability == .enabled
+                else {
+                    throw LiveSessionRoutingError.unavailableProfile(binding)
+                }
+                return profile.id
+            }
+        }
+        return try await agentProfiles.defaultProfileID()
     }
 
     private func attach(

@@ -19,7 +19,7 @@ typeclass-like contract.
 - Provider-aware model routing through [Hail](../hail): Apple Foundation
   Models on supported macOS, local Ollama, and OpenAI-compatible API models.
 - Automatic semantic memory with provenance, retrieval, revisions, and
-  background extraction.
+  background extraction where the selected provider supports it.
 - Web search, URL fetching, attachment fetching, and Open-Meteo weather.
 - Composable typed effects, including the clock and network effects used by
   the weather tool.
@@ -37,9 +37,9 @@ evolving.
 - A model provider: Ollama, Apple Foundation Models, or an OpenAI API account.
 - A Telegram bot token from BotFather when Telegram is enabled.
 
-The onboarding dashboard chooses the first bot's model. For Ollama, leaving
-the server URL unchanged uses `http://127.0.0.1:11434`; the concrete URL is
-stored with each bot.
+The onboarding dashboard chooses the first bot's model. Providers that need an
+endpoint store that endpoint with the bot; Ollama defaults to
+`http://127.0.0.1:11434`.
 
 ## Run
 
@@ -64,8 +64,9 @@ PostgreSQL for both journals and snapshots. PostgreSQL credentials are kept in
 separate local secret files.
 
 The Telegram chat allow-list, model, persona, and context window are configured
-in the dashboard. If the allow-list is empty, the bot accepts messages from
-every chat. The dashboard's default file store and the Telegram polling
+in the dashboard. Background memory extraction follows the configured provider
+when an extraction adapter is available. If the allow-list is empty, the bot
+accepts messages from every chat. The dashboard's default file store and the Telegram polling
 checkpoint live below `.turgai/` unless you choose another file-store URL.
 That directory is local runtime data and is intentionally ignored by Git.
 
@@ -77,7 +78,7 @@ Run the complete test suite with:
 swift test
 ```
 
-The tests do not require a live Telegram bot or Ollama server.
+The tests do not require a live Telegram bot or model provider server.
 
 ## Architecture
 

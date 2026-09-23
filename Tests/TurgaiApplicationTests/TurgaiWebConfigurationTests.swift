@@ -11,46 +11,24 @@ struct TurgaiWebConfigurationTests {
 
         let configuration = try TurgaiWebConfiguration.load(directory: directory)
 
-        #expect(configuration.telegramToken == nil)
         #expect(configuration.storage == nil)
         #expect(configuration.complete == false)
         #expect(configuration.isReady == false)
     }
 
-    @Test("dashboard state and secret bridge into runtime configuration")
+    @Test("completed file storage is ready")
     func persistedState() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let state = Data(
-            #"{"storage":{"kind":"file","directory":"file:///tmp/turgai-data"},"telegramChatIDs":[42],"telegramConfigured":true,"complete":true}"#
-                .utf8
-        )
-        try state.write(to: directory.appendingPathComponent("setup.json"))
-        try Data("123456:telegram-token".utf8).write(to: directory.appendingPathComponent("telegram-token"))
-
-        let configuration = try TurgaiWebConfiguration.load(directory: directory)
-
-        #expect(configuration.telegramToken == "123456:telegram-token")
-        #expect(configuration.telegramChatIDs == [42])
-        #expect(configuration.complete)
-        #expect(configuration.isReady)
-    }
-
-    @Test("completed file storage does not require Telegram")
-    func persistedStateWithoutTelegram() throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let state = Data(
-            #"{"storage":{"kind":"file","directory":"file:///tmp/turgai-data"},"telegramChatIDs":[],"telegramConfigured":false,"complete":true}"#
+            #"{"storage":{"kind":"file","directory":"file:///tmp/turgai-data"},"complete":true}"#
                 .utf8
         )
         try state.write(to: directory.appendingPathComponent("setup.json"))
 
         let configuration = try TurgaiWebConfiguration.load(directory: directory)
 
-        #expect(configuration.telegramToken == nil)
         #expect(configuration.complete)
         #expect(configuration.isReady)
     }

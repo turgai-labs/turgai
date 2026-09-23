@@ -3,6 +3,7 @@ import Hummingbird
 import HummingbirdWebSocket
 import ServiceLifecycle
 import TurgaiApplication
+import TurgaiPersistence
 import TurgaiWeb
 
 public typealias OutboundDelivery = TurgaiApplication.OutboundDelivery
@@ -35,11 +36,21 @@ struct Serve: AsyncParsableCommand {
     @Option(name: .long, help: "Local web server port.")
     var port: Int = 3333
 
+    @Option(name: .long, help: "Public API authentication mode: local, api-key, or trusted-proxy.")
+    var apiAuth: String = APIAuthMode.local.rawValue
+
     mutating func run() async throws {
         let environment = ProcessInfo.processInfo.environment
         let workspaceRoot = FileManager.default.currentDirectoryPath
         guard (1...65_535).contains(port) else {
             throw ValidationError("Port must be between 1 and 65535.")
+        }
+        guard let apiAuthMode = APIAuthMode(rawValue: apiAuth) else {
+            throw ValidationError("API authentication must be local, api-key, or trusted-proxy.")
+        }
+        let apiKey = environment["TURGAI_API_KEY"]
+        if apiAuthMode == .apiKey, apiKey?.isEmpty != false {
+            throw ValidationError("TURGAI_API_KEY is required when --api-auth is api-key.")
         }
         let turgaiDirectory = Self.dataDirectory(
             option: directory,
@@ -49,9 +60,9 @@ struct Serve: AsyncParsableCommand {
             directory: turgaiDirectory.appendingPathComponent("auth", isDirectory: true)
         )
 
-        let agentProfiles = try TurgaiAgentProfileStore(
-            directory: turgaiDirectory.appendingPathComponent("agents", isDirectory: true)
-        )
+        let fileClient = try FileClient(directory: turgaiDirectory)
+        let agentProfiles = try TurgaiAgentProfileStore(files: fileClient)
+        let channelSecrets = ChannelSecretStore(files: fileClient)
         let setup = try TurgaiSetupStore(directory: turgaiDirectory)
         let webChatBridge = TurgaiWebChatBridge()
         let runtimeSnapshotSource = TurgaiRuntimeSnapshotSource()
@@ -59,15 +70,18 @@ struct Serve: AsyncParsableCommand {
             auth: auth,
             directory: turgaiDirectory,
             agentProfiles: agentProfiles,
-            setup: setup
+            setup: setup,
+            channelSecrets: channelSecrets
         )
         let mainWebApp = try TurgaiMainWebApp(
             auth: auth,
             directory: turgaiDirectory,
             agentProfiles: agentProfiles,
+            channelSecrets: channelSecrets,
             runtimeSnapshots: { await runtimeSnapshotSource.snapshots() },
             setup: setup,
-            webChatBridge: webChatBridge
+            webChatBridge: webChatBridge,
+            apiConfiguration: APIConfiguration(authMode: apiAuthMode, apiKey: apiKey)
         )
         let router = Router(context: BasicWebSocketRequestContext.self)
         router.addMiddleware {
@@ -85,6 +99,7 @@ struct Serve: AsyncParsableCommand {
             workspaceRoot: workspaceRoot,
             turgaiDirectory: turgaiDirectory,
             agentProfiles: agentProfiles,
+            channelSecrets: channelSecrets,
             runtimeSnapshotSource: runtimeSnapshotSource,
             webChatBridge: webChatBridge
         )
@@ -94,7 +109,10 @@ struct Serve: AsyncParsableCommand {
             application: appService
         )
         let serviceGroup = ServiceGroup(
-            services: [application, runtimeService],
+            // ServiceLifecycle shuts services down in reverse order. Stop the
+            // HTTP application first so no new request can reach the cluster
+            // while the runtime is draining its connections and actors.
+            services: [runtimeService, application],
             gracefulShutdownSignals: [.sigterm, .sigint]
         )
         try await serviceGroup.run()

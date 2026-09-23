@@ -66,8 +66,18 @@ struct StoragePage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("setup-page")) {
-            div(.class("setup-shell")) {
-                SetupHeader()
+            PageShell(
+                kind: .setup,
+                header: PageHeader(),
+                footer: PageFooter {
+                    SetupFooterContent(
+                        step: 4,
+                        backHref: "/onboarding/model",
+                        submitFormID: "storage-form",
+                        submitLabel: "Save this choice"
+                    )
+                },
+            ) {
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
                         p(.class("eyebrow")) { "A home for memory" }
@@ -75,96 +85,90 @@ struct StoragePage: HTMLDocument, Sendable {
                         p(.class("lede")) {
                             "Choose where Turgai keeps its memory and history. The local option is the simplest place to begin."
                         }
-                    }
-                    div(.class("setup-form-area")) {
-                        if let error { p(.class("error")) { error } }
-                        form(
-                            .method(.post), .action("/onboarding/storage"),
-                            .init(name: "id", value: "storage-form")
-                        ) {
-                            label(.class("form-field")) {
-                                span(.class("field-label")) { "Memory home" }
-                                select(
-                                    .name("backend"),
-                                    .id("turgai-storage-backend"),
-                                    .init(
-                                        name: "onchange",
-                                        value:
-                                            "document.querySelectorAll('[data-storage-panel]').forEach((panel) => panel.hidden = panel.dataset.storagePanel !== this.value)"
-                                    )
+                        div(.class("setup-form-area")) {
+                            if let error { p(.class("error")) { error } }
+                            form(
+                                .method(.post), .action("/onboarding/storage"),
+                                .init(name: "id", value: "storage-form")
+                            ) {
+                                label(.class("form-field")) {
+                                    span(.class("field-label")) { "Memory home" }
+                                    select(
+                                        .name("backend"),
+                                        .id("turgai-storage-backend"),
+                                        .init(
+                                            name: "onchange",
+                                            value:
+                                                "document.querySelectorAll('[data-storage-panel]').forEach((panel) => panel.hidden = panel.dataset.storagePanel !== this.value)"
+                                        )
+                                    ) {
+                                        switch values.backend {
+                                        case .file:
+                                            option(.value("file"), .selected) { "File store" }
+                                        case .postgres:
+                                            option(.value("file")) { "File store" }
+                                        }
+                                        switch values.backend {
+                                        case .postgres:
+                                            option(.value("postgres"), .selected) { "PostgreSQL" }
+                                        case .file:
+                                            option(.value("postgres")) { "PostgreSQL" }
+                                        }
+                                    }
+                                }
+                                div(
+                                    .class("storage-panel"),
+                                    .init(name: "data-storage-panel", value: "file"),
+                                    values.backend == .file ? .init(name: "data-active", value: "true") : .hidden
                                 ) {
-                                    switch values.backend {
-                                    case .file:
-                                        option(.value("file"), .selected) { "File store" }
-                                    case .postgres:
-                                        option(.value("file")) { "File store" }
-                                    }
-                                    switch values.backend {
-                                    case .postgres:
-                                        option(.value("postgres"), .selected) { "PostgreSQL" }
-                                    case .file:
-                                        option(.value("postgres")) { "PostgreSQL" }
+                                    label(.class("form-field")) {
+                                        span(.class("field-label")) { "Local folder" }
+                                        input(
+                                            .type(.url), .name("fileURL"), .value(values.fileURL),
+                                            .placeholder("file:///path/to/turgai")
+                                        )
+                                        p(.class("hint")) {
+                                            "Default: \(defaultFileDirectory.absoluteString)"
+                                        }
                                     }
                                 }
-                            }
-                            div(
-                                .class("storage-panel"),
-                                .init(name: "data-storage-panel", value: "file"),
-                                values.backend == .file ? .init(name: "data-active", value: "true") : .hidden
-                            ) {
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Local folder" }
-                                    input(
-                                        .type(.url), .name("fileURL"), .value(values.fileURL),
-                                        .placeholder("file:///path/to/turgai")
-                                    )
-                                    p(.class("hint")) {
-                                        "Default: \(defaultFileDirectory.absoluteString)"
+                                div(
+                                    .class("storage-panel"),
+                                    .init(name: "data-storage-panel", value: "postgres"),
+                                    values.backend == .postgres ? .init(name: "data-active", value: "true") : .hidden
+                                ) {
+                                    label(.class("form-field")) {
+                                        span(.class("field-label")) { "PostgreSQL address" }
+                                        input(
+                                            .type(.url), .name("postgresURL"), .value(values.postgresURL),
+                                            .placeholder("postgres://localhost:5432/turgai")
+                                        )
                                     }
-                                }
-                            }
-                            div(
-                                .class("storage-panel"),
-                                .init(name: "data-storage-panel", value: "postgres"),
-                                values.backend == .postgres ? .init(name: "data-active", value: "true") : .hidden
-                            ) {
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "PostgreSQL address" }
-                                    input(
-                                        .type(.url), .name("postgresURL"), .value(values.postgresURL),
-                                        .placeholder("postgres://localhost:5432/turgai")
-                                    )
-                                }
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Username" }
-                                    input(
-                                        .type(.text), .name("postgresUsername"),
-                                        .value(values.postgresUsername), .autocomplete("username")
-                                    )
-                                }
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Password" }
-                                    input(
-                                        .type(.password), .name("postgresPassword"),
-                                        .autocomplete("new-password")
-                                    )
-                                    p(.class("hint")) {
-                                        "Kept separately from the connection details."
+                                    label(.class("form-field")) {
+                                        span(.class("field-label")) { "Username" }
+                                        input(
+                                            .type(.text), .name("postgresUsername"),
+                                            .value(values.postgresUsername), .autocomplete("username")
+                                        )
+                                    }
+                                    label(.class("form-field")) {
+                                        span(.class("field-label")) { "Password" }
+                                        input(
+                                            .type(.password), .name("postgresPassword"),
+                                            .autocomplete("new-password")
+                                        )
+                                        p(.class("hint")) {
+                                            "Kept separately from the connection details."
+                                        }
                                     }
                                 }
                             }
-                        }
-                        p(.class("hint storage-restart-note")) {
-                            "Turgai will start using this home when setup is complete."
+                            p(.class("hint storage-restart-note")) {
+                                "Turgai will start using this home when setup is complete."
+                            }
                         }
                     }
                 }
-                SetupFooter(
-                    step: 4,
-                    backHref: "/onboarding/model",
-                    submitFormID: "storage-form",
-                    submitLabel: "Save this choice"
-                )
             }
         }
     }

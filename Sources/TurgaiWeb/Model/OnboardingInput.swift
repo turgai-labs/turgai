@@ -30,19 +30,30 @@ enum OnboardingInput {
         return model
     }
 
-    static func ollamaBaseURL(from values: ModelFormValues, for model: AgentModel) throws -> URL? {
-        guard model.provider == .ollama else { return nil }
-        guard let rawValue = values.ollamaBaseURL, !rawValue.isEmpty else {
-            return OllamaConfiguration.defaultBaseURL
+    static func providerConfiguration(
+        from values: ModelFormValues,
+        for model: AgentModel
+    ) throws -> AgentProviderConfiguration {
+        guard model.provider == .ollama else { return .none }
+        guard let rawValue = values.endpointURL, !rawValue.isEmpty else {
+            return .ollama(baseURL: OllamaConfiguration.defaultBaseURL)
         }
         guard let url = URL(string: rawValue),
             let scheme = url.scheme?.lowercased(),
             scheme == "http" || scheme == "https",
             url.host != nil
         else {
-            throw FormValidationError.invalidValue("Ollama server URL")
+            throw FormValidationError.invalidValue("model endpoint URL")
         }
-        return url
+        return .ollama(baseURL: url)
+    }
+
+    static func reasoningEffort(from values: ModelFormValues) throws -> ReasoningEffort? {
+        guard let rawValue = values.reasoningEffort, !rawValue.isEmpty else { return nil }
+        guard let effort = try? ReasoningEffort(rawValue) else {
+            throw FormValidationError.invalidValue("reasoning effort")
+        }
+        return effort
     }
 
     static func storageConfiguration(

@@ -20,7 +20,7 @@ avoid duplicating a tool manual in the persona prompt.
 
 ## Implemented baseline
 
-- Swift 6.4 executable with local Hail and configurable Ollama routing.
+- Swift 6.4 executable with local Hail and provider-aware model routing.
 - Channel-neutral domain/reducer; durable Conversation and User actors.
 - Telegram polling and persisted acceptance checkpoint, text/attachments,
   HTML formatting, reactions, and replies to source messages.
@@ -120,7 +120,7 @@ model endpoint remain separate external trust boundaries.
 
 - [ ] Make Telegram access explicit and default-deny. An empty allow-list
   currently permits every chat to reach Turgai.
-- [ ] Keep Ollama local unless explicitly configured otherwise. Make a remote
+- [ ] Keep local providers local unless explicitly configured otherwise. Make a remote
   model endpoint an obvious, deliberate configuration choice.
 - [ ] Define the local at-rest protection contract and key-loss behavior.
 - [ ] Add encryption to `FilePersistenceClient`, covering event journals and

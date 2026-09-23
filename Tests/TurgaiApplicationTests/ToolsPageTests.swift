@@ -33,7 +33,7 @@ struct ToolsPageTests {
                 "stageInstruction": ["", "Explain the result.", ""],
             ],
             fileName: "weather.tool.json",
-            isNew: true
+            kind: .new
         )
 
         let definition = try draft.encodedDefinition()

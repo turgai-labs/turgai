@@ -27,8 +27,18 @@ struct RegisterPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("setup-page")) {
-            div(.class("setup-shell")) {
-                SetupHeader()
+            PageShell(
+                kind: .setup,
+                header: PageHeader(),
+                footer: PageFooter {
+                    SetupFooterContent(
+                        step: 2,
+                        backHref: "/onboarding",
+                        submitFormID: "register-form",
+                        submitLabel: "Create my account"
+                    )
+                },
+            ) {
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
                         p(.class("eyebrow")) { "Make it yours" }
@@ -53,12 +63,6 @@ struct RegisterPage: HTMLDocument, Sendable {
                         }
                     }
                 }
-                SetupFooter(
-                    step: 2,
-                    backHref: "/onboarding",
-                    submitFormID: "register-form",
-                    submitLabel: "Create my account"
-                )
             }
         }
     }

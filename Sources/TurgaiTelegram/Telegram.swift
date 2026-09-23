@@ -253,65 +253,6 @@ public enum TelegramInboundEvent: Equatable, Sendable {
     case command(ConversationCommand)
 }
 
-public protocol TelegramOffsetStore: Sendable {
-    func load() async throws -> Int64?
-    func save(_ offset: Int64) async throws
-}
-
-public actor InMemoryTelegramOffsetStore: TelegramOffsetStore {
-    private var offset: Int64?
-
-    public init(offset: Int64? = nil) {
-        self.offset = offset
-    }
-
-    public func load() async throws -> Int64? {
-        offset
-    }
-
-    public func save(_ offset: Int64) async throws {
-        self.offset = offset
-    }
-
-    public var currentOffset: Int64? {
-        offset
-    }
-}
-
-public enum TelegramOffsetStoreError: Error, Equatable, Sendable {
-    case invalidFile
-}
-
-public actor FileTelegramOffsetStore: TelegramOffsetStore {
-    private let fileURL: URL
-
-    public init(fileURL: URL) {
-        self.fileURL = fileURL
-    }
-
-    public func load() async throws -> Int64? {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            return nil
-        }
-
-        let data = try Data(contentsOf: fileURL)
-        guard let string = String(data: data, encoding: .utf8),
-            let offset = Int64(string.trimmingCharacters(in: .whitespacesAndNewlines))
-        else {
-            throw TelegramOffsetStoreError.invalidFile
-        }
-        return offset
-    }
-
-    public func save(_ offset: Int64) async throws {
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try Data(String(offset).utf8).write(to: fileURL, options: .atomic)
-    }
-}
-
 public enum TelegramPublisherError: Error, Equatable, Sendable {
     case invalidConversation(ConversationID)
 }
@@ -373,6 +314,8 @@ public actor TelegramEventPublisher {
         switch event {
         case .reply(let reply):
             switch reply {
+            case .userMessage:
+                break
             case .started(let conversationID, let turnID):
                 await setReaction(
                     .thinking,
@@ -435,6 +378,9 @@ public actor TelegramEventPublisher {
                         .html
                     )
                 }
+                try await sendTypingAction(for: conversationID)
+
+            case .status(let conversationID, _, _):
                 try await sendTypingAction(for: conversationID)
 
             case .finished(let conversationID, let turnID, let text):
@@ -657,7 +603,7 @@ public actor TelegramEventPublisher {
     }
 
     private func chatID(for conversationID: ConversationID) throws -> Int64 {
-        guard conversationID.channel == ChannelID("telegram"),
+        guard conversationID.channel.providerName == "telegram",
             let chatID = Int64(conversationID.externalAddress.rawValue)
         else {
             throw TelegramPublisherError.invalidConversation(conversationID)

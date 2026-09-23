@@ -1,5 +1,3 @@
-import TurgaiDomain
-
 /// Signals that a transient input has been consumed by the application lane.
 ///
 /// Channel adapters use this as their checkpoint boundary. It deliberately

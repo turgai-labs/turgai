@@ -1,5 +1,5 @@
 {
-  "originHash" : "3bf950bcc90eb8eee8ca86ecd0967112820f9cc61a279bb9e38b8137f99b6e6d",
+  "originHash" : "38f6494ca104ddf4c910d176aba6158bf562992d2149b34d90da247a9542b8c3",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -53,6 +53,15 @@
       "state" : {
         "revision" : "f0141ba98c0f3ec9eeaee40fb4bffd1427482a1d",
         "version" : "0.8.1"
+      }
+    },
+    {
+      "identity" : "elementary-htmx",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/elementary-swift/elementary-htmx.git",
+      "state" : {
+        "revision" : "1cbf32fd20d1eff7fc8c587e22ebda21b71a799b",
+        "version" : "0.5.2"
       }
     },
     {

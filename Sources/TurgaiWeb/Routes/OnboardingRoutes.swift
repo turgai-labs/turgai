@@ -100,14 +100,19 @@ extension TurgaiOnboardingWebApp {
                 let values = BotFormValues(form: form, nameKey: "agentName")
                 let modelValues = ModelFormValues(form: form)
                 let model = try OnboardingInput.model(from: modelValues)
-                let ollamaBaseURL = try OnboardingInput.ollamaBaseURL(from: modelValues, for: model)
+                let reasoningEffort = try OnboardingInput.reasoningEffort(from: modelValues)
+                let providerConfiguration = try OnboardingInput.providerConfiguration(
+                    from: modelValues,
+                    for: model
+                )
                 let contextWindow = try OnboardingInput.positiveInteger(
                     values.contextWindow,
                     field: "context window"
                 )
                 if var profile = await agentProfiles.defaultProfile() {
                     profile.model = model
-                    profile.ollamaBaseURL = ollamaBaseURL
+                    profile.reasoningEffort = reasoningEffort
+                    profile.providerConfiguration = providerConfiguration
                     profile.name = values.name
                     profile.persona = values.persona
                     profile.instructions = values.instructions
@@ -117,7 +122,8 @@ extension TurgaiOnboardingWebApp {
                     _ = try await agentProfiles.create(
                         name: values.name,
                         model: model,
-                        ollamaBaseURL: ollamaBaseURL,
+                        reasoningEffort: reasoningEffort,
+                        providerConfiguration: providerConfiguration,
                         contextWindow: contextWindow,
                         persona: values.persona,
                         instructions: values.instructions
@@ -174,45 +180,6 @@ extension TurgaiOnboardingWebApp {
                     )
                 }.response(from: request, context: context)
             }
-        }
-        router.get("/onboarding/telegram") { request, context in
-            guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
-            }
-            let chatIDs = await setup.telegramChatIDs
-            return HTMLResponse {
-                TelegramPage(chatIDs: chatIDs)
-            }.response(from: request, context: context)
-        }
-        router.post("/onboarding/telegram") { request, context in
-            guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
-            }
-            let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let values = TelegramFormValues(form: form)
-            guard let token = values.token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty
-            else {
-                return HTMLResponse { TelegramPage(error: "A Telegram bot token is required.") }
-                    .response(from: request, context: context)
-            }
-            let chatIDs: [Int64]
-            do {
-                chatIDs = try OnboardingInput.chatIDs(from: values.chatIDs)
-            } catch {
-                return HTMLResponse {
-                    TelegramPage(error: TurgaiWebSupport.telegramErrorMessage(error))
-                }.response(from: request, context: context)
-            }
-            do {
-                let telegramClient = try TelegramAPIClient.live(token: token)
-                try await telegramClient.validateToken()
-                try await setup.setTelegramToken(token, chatIDs: chatIDs)
-            } catch {
-                return HTMLResponse {
-                    TelegramPage(chatIDs: chatIDs, error: TurgaiWebSupport.telegramErrorMessage(error))
-                }.response(from: request, context: context)
-            }
-            return Response(status: .seeOther, headers: [.location: "/onboarding/finish"])
         }
         router.get("/onboarding/finish") { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {

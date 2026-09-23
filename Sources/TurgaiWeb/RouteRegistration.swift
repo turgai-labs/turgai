@@ -19,10 +19,12 @@ struct TurgaiRouteDependencies: Sendable {
     let auth: TurgaiAuth
     let setup: TurgaiSetupStore
     let agentProfiles: TurgaiAgentProfileStore
+    let channelSecrets: ChannelSecretStore
     let defaultFileDirectory: URL
     let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
     let userToolRegistry: UserToolRegistry
     let webChatBridge: TurgaiWebChatBridge
+    let apiConfiguration: APIConfiguration
 }
 
 extension TurgaiMainWebApp {
@@ -31,16 +33,20 @@ extension TurgaiMainWebApp {
             auth: auth,
             setup: setup,
             agentProfiles: agentProfiles,
+            channelSecrets: channelSecrets,
             defaultFileDirectory: directory,
             runtimeSnapshots: runtimeSnapshots,
             userToolRegistry: UserToolRegistry(
                 directory: directory.appendingPathComponent("tools", isDirectory: true)
             ),
-            webChatBridge: webChatBridge
+            webChatBridge: webChatBridge,
+            apiConfiguration: apiConfiguration
         )
         registerCoreRoutes(on: router, dependencies: dependencies)
         registerToolRoutes(on: router, dependencies: dependencies)
         registerAgentRoutes(on: router, dependencies: dependencies)
+        registerChannelRoutes(on: router, dependencies: dependencies)
+        registerPublicChatRoutes(on: router, dependencies: dependencies)
         registerAccountRoutes(on: router, dependencies: dependencies)
     }
 }

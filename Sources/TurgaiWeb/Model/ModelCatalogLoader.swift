@@ -54,7 +54,10 @@ public enum TurgaiModelCatalogLoader {
             notices[.system] = "Uses the on-device Foundation Model; there is no remote model list."
         #endif
 
-        var ollamaBaseURLs = Array(Set(profiles.compactMap(\.ollamaBaseURL)))
+        var ollamaBaseURLs: [URL] = profiles.compactMap { profile in
+            guard case .ollama(let baseURL) = profile.providerConfiguration else { return nil }
+            return baseURL
+        }
         if ollamaBaseURLs.isEmpty {
             ollamaBaseURLs = [OllamaConfiguration.defaultBaseURL]
         }

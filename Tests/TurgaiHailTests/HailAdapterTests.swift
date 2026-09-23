@@ -118,8 +118,10 @@ struct HailAdapterTests {
             contextWindow: 131_072
         )
         let plugin = try configuration.makeAgentRuntimePlugin(
-            defaultModel: try AgentModel("ollama/test"),
-            workspaceRoot: "/tmp/turgai-test-workspace"
+            workspaceRoot: "/tmp/turgai-test-workspace",
+            modelSelectionProvider: { _ in
+                ModelConfiguration(model: try AgentModel("ollama/test"))
+            }
         )
 
         guard let compactor = await plugin.contextCompactor as? SlidingWindowCompactor else {
@@ -206,7 +208,8 @@ struct HailAdapterTests {
                 participantID: ParticipantID("user"),
                 text: "hello",
                 receivedAt: Date(timeIntervalSince1970: 1)
-            )
+            ),
+            agentRole: "test"
         )
 
         let response = try await peer.run(to: request) { event in
@@ -296,7 +299,7 @@ struct HailAdapterTests {
     @Test
     func fetchAttachmentRoutesOpaqueIDThroughOwningChannel() async throws {
         let resolver = AttachmentResolver()
-        await resolver.register(channel: AttachmentChannel("telegram")) {
+        await resolver.register(channel: AttachmentChannel("telegram"), owner: UUID()) {
             externalID,
             expectedContentType in
             #expect(externalID == "telegram-file-id")

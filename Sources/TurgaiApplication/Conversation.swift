@@ -53,25 +53,24 @@ public distributed actor ConversationConnection {
     }
 }
 
-/// Transient connection ownership shared by the durable conversation actor
-/// and any reply scope it starts. It is deliberately not part of the journal.
-private actor ConversationConnectionRegistry {
-    private var values: Set<ConversationConnection> = []
+/// Non-persistent state for activity belonging to the currently running turn.
+///
+/// This state is intentionally separate from ``ConversationState``: it is not
+/// part of the journal and is reconstructed only while the conversation actor
+/// is alive. Every transition is applied before its outbound projection is
+/// delivered by ``Conversation.broadcast``.
+private struct ConversationLiveState: Sendable {
+    private(set) var latestActivity: ReplyEvent?
 
-    func insert(_ connection: ConversationConnection) {
-        values.insert(connection)
-    }
-
-    func remove(_ connection: ConversationConnection) {
-        values.remove(connection)
-    }
-
-    func snapshot() -> [ConversationConnection] {
-        Array(values)
-    }
-
-    func isEmpty() -> Bool {
-        values.isEmpty
+    mutating func apply(_ reply: ReplyEvent) {
+        switch reply {
+        case .userMessage, .started, .phase, .keepAlive, .status:
+            latestActivity = reply
+        case .finished, .completed, .failed:
+            latestActivity = nil
+        case .partial:
+            break
+        }
     }
 }
 
@@ -86,7 +85,25 @@ private actor ReplyTextAccumulator {
 
 private enum ConversationProgress: Sendable {
     case thinking
+    case status(String)
     case text(String)
+}
+
+private enum PublishEvent: Sendable {
+    case userMessage(PendingConversationMessage)
+    case turnStarted(PendingConversationMessage)
+
+    init?(conversationEvent: ConversationEvent) {
+        switch conversationEvent {
+        case .messageQueued(let pending):
+            self = .userMessage(pending)
+        case .turnStarted(let pending):
+            self = .turnStarted(pending)
+        case .replyQueued, .replyDelivered, .turnCompleted, .turnFailed,
+            .memoryObservationQueued, .memoryObservationsCompleted, .reset:
+            return nil
+        }
+    }
 }
 
 private enum MemoryPresentation {
@@ -187,10 +204,7 @@ enum ContextPresentation {
     static func text(for snapshot: AgentContextSnapshot) -> String {
         var lines: [String] = ["Context diagnostics", ""]
 
-        var status = snapshot.phase.rawValue
-        if let tool = snapshot.currentToolName {
-            status += " (running tool: \(tool))"
-        }
+        let status = snapshot.state.rawValue
         lines.append("Status: \(status)")
 
         if let usage = snapshot.contextUsage {
@@ -272,16 +286,12 @@ private struct ConversationScope: ScopeLifecycle {
 
     let conversationID: ConversationID
     let turnID: TurgaiDomain.TurnID
-    let connections: ConversationConnectionRegistry
+    let broadcast: @Sendable (OutboundEvent) async -> Void
     let complete: @Sendable (ConversationCompletion) async -> Void
     let operation: @Sendable (PartialSink<ConversationProgress>) async throws -> ConversationCompletion
     let phase = ConversationPhase()
 
-    func start() async {
-        await broadcast(
-            .reply(.started(conversationID: conversationID, turnID: turnID))
-        )
-    }
+    func start() async {}
 
     func heartbeat() async {
         await broadcast(
@@ -305,6 +315,17 @@ private struct ConversationScope: ScopeLifecycle {
         switch progress {
         case .thinking:
             await publishPhase(.thinking)
+
+        case .status(let message):
+            await broadcast(
+                .reply(
+                    .status(
+                        conversationID: conversationID,
+                        turnID: turnID,
+                        message: message
+                    )
+                )
+            )
 
         case .text(let text):
             await publishPhase(.typing)
@@ -354,12 +375,6 @@ private struct ConversationScope: ScopeLifecycle {
             )
         )
     }
-
-    private func broadcast(_ event: OutboundEvent) async {
-        for connection in await connections.snapshot() {
-            try? await connection.broadcast(event)
-        }
-    }
 }
 
 /// One durable Turgai conversation aggregate.
@@ -376,18 +391,34 @@ public distributed actor Conversation {
     public typealias Dependency = Config
     public typealias PersistenceID = ConversationPersistenceID
 
+    /// Configuration that is selected for one turn. The value is required at
+    /// the send boundary so a new turn cannot silently inherit a previous
+    /// runtime choice.
+    public struct TurnConfiguration: Codable, Sendable {
+        public let agentRole: String
+        public let memoryExtraction: MemoryExtractionConfiguration?
+
+        public init(
+            agentRole: String,
+            memoryExtraction: MemoryExtractionConfiguration?
+        ) {
+            self.agentRole = agentRole
+            self.memoryExtraction = memoryExtraction
+        }
+    }
+
     public struct Config: Codable, Sendable {
         public let conversationID: ConversationID
         public let agentDirectoryID: AgentDirectoryID
         public let agentRole: String
         /// Optional background memory extractor configuration.
-        public let memoryExtraction: OllamaMemoryConfiguration?
+        public let memoryExtraction: MemoryExtractionConfiguration?
 
         public init(
             conversationID: ConversationID,
-            agentDirectoryID: AgentDirectoryID = "agent-directory",
-            agentRole: String = "conversation",
-            memoryExtraction: OllamaMemoryConfiguration? = nil
+            agentDirectoryID: AgentDirectoryID,
+            agentRole: String,
+            memoryExtraction: MemoryExtractionConfiguration?
         ) {
             self.conversationID = conversationID
             self.agentDirectoryID = agentDirectoryID
@@ -404,18 +435,25 @@ public distributed actor Conversation {
     )
 
     private let conversationID: ConversationID
-    private let peer: HailConversationPeer
-    private let memoryExtractionEndpoint: (any ModelEndpoint)?
+    private let agentDirectoryID: AgentDirectoryID
+    private var peer: HailConversationPeer
+    private var agentRole: String
+    private var turnConfigurations: [TurgaiDomain.TurnID: TurnConfiguration] = [:]
+    private var memoryExtractionConfiguration: MemoryExtractionConfiguration?
     /// The pending extraction timer. A new completed turn cancels and
     /// reschedules it, so extraction fires once per quiet period over
     /// everything accumulated in User's pending set.
     private let extractionScheduler = ExtractionScheduler()
-    private let connectionRegistry = ConversationConnectionRegistry()
+    private var connections: Set<ConversationConnection> = []
+    private var liveState = ConversationLiveState()
+    /// Live-only echo bookkeeping: message IDs whose user-message echo was
+    /// already broadcast. Bounded like `ConversationState.acceptedMessageIDs`.
+    private var echoedMessageIDs: [MessageID] = []
     private var modelTask: Task<Void, Never>?
-
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
         self.conversationID = dependency.conversationID
+        self.agentDirectoryID = dependency.agentDirectoryID
         self.state = ConversationState(
             conversationID: dependency.conversationID
         )
@@ -424,19 +462,9 @@ public distributed actor Conversation {
             agentDirectoryID: dependency.agentDirectoryID,
             agentRole: dependency.agentRole
         )
+        self.agentRole = dependency.agentRole
         self.peer = try await adapter.peer(for: dependency.conversationID)
-        if let memoryExtraction = dependency.memoryExtraction {
-            self.memoryExtractionEndpoint = OllamaEndpoint(
-                model: memoryExtraction.model.rawValue,
-                baseURL: memoryExtraction.baseURL,
-                temperature: 0.2,
-                numContext: memoryExtraction.contextWindow,
-                keepAlive: memoryExtraction.keepAlive,
-                think: false
-            )
-        } else {
-            self.memoryExtractionEndpoint = nil
-        }
+        self.memoryExtractionConfiguration = dependency.memoryExtraction
         try await actorSystem.journal.register(
             actor: self,
             with: Self.persistenceID(for: dependency.conversationID)
@@ -455,9 +483,9 @@ public distributed actor Conversation {
     public static func resolve(
         on actorSystem: ClusterSystem,
         conversationID: ConversationID,
-        agentDirectoryID: AgentDirectoryID = "agent-directory",
-        agentRole: String = "conversation",
-        memoryExtraction: OllamaMemoryConfiguration? = nil
+        agentDirectoryID: AgentDirectoryID,
+        agentRole: String,
+        memoryExtraction: MemoryExtractionConfiguration?
     ) async throws -> Conversation {
         try await actorSystem.virtualActors.getActor(
             identifiedBy: actorID(for: conversationID),
@@ -474,7 +502,7 @@ public distributed actor Conversation {
     /// is marked running. The running bit is journaled, so this does not rely
     /// on a transient Task existing.
     public func shouldDeactivate() async -> Bool {
-        let noConnections = await connectionRegistry.isEmpty()
+        let noConnections = connections.isEmpty
         return state.activeTurnID == nil
             && noConnections
     }
@@ -487,38 +515,62 @@ public distributed actor Conversation {
         state.history
     }
 
+    public distributed func currentStatus() -> ConversationStatus {
+        state.status
+    }
+
     public distributed func modelHistory() async throws -> [ChatMessage] {
         try await peer.history()
     }
 
     public distributed func addConnection(_ connection: ConversationConnection) async {
-        await connectionRegistry.insert(connection)
+        connections.insert(connection)
         if let turnID = state.activeTurnID {
+            let activity = liveState.latestActivity
             try? await connection.broadcast(
                 .reply(.started(conversationID: conversationID, turnID: turnID))
             )
+            switch activity {
+            case .phase(_, _, let phase), .keepAlive(_, _, let phase):
+                try? await connection.broadcast(
+                    .reply(.phase(conversationID: conversationID, turnID: turnID, phase: phase))
+                )
+            case .status(_, _, let message):
+                try? await connection.broadcast(
+                    .reply(.status(conversationID: conversationID, turnID: turnID, message: message))
+                )
+            default:
+                break
+            }
         }
         await deliverPendingReplies()
     }
 
     public distributed func removeConnection(_ connection: ConversationConnection) async {
-        await connectionRegistry.remove(connection)
+        connections.remove(connection)
     }
 
     public distributed func send(
         _ message: InboundMessage,
-        turnID: TurgaiDomain.TurnID
+        turnID: TurgaiDomain.TurnID,
+        configuration: TurnConfiguration
     ) async throws {
         guard message.conversationID == conversationID else {
             throw ConversationActorError.conversationMismatch
         }
 
+        memoryExtractionConfiguration = configuration.memoryExtraction
+        turnConfigurations[turnID] = configuration
         try await dispatch(
             .receive(
                 message: message,
-                turnID: turnID
+                turnID: turnID,
+                agentRole: configuration.agentRole
             )
         )
+        if !state.acceptedMessageIDs.contains(message.id) {
+            turnConfigurations[turnID] = nil
+        }
     }
 
     /// Delivers a non-agent notification through the currently attached
@@ -530,7 +582,7 @@ public distributed actor Conversation {
             throw ConversationActorError.emptyNotification
         }
 
-        let connections = await connectionRegistry.snapshot()
+        let connections = Array(connections)
         guard !connections.isEmpty else {
             throw ConversationActorError.noConnection
         }
@@ -620,7 +672,11 @@ public distributed actor Conversation {
                 text: Self.diagnosticsRequest,
                 receivedAt: Date()
             ),
-            turnID: TurnID(rawValue: UUID())
+            turnID: TurnID(rawValue: UUID()),
+            configuration: TurnConfiguration(
+                agentRole: agentRole,
+                memoryExtraction: memoryExtractionConfiguration
+            )
         )
     }
 
@@ -853,17 +909,58 @@ public distributed actor Conversation {
         let state = Mutex<Task<Void, Never>?>(nil)
     }
 
-    private func startModel(for request: ConversationTurnRequest) {
+    private func startModel(for request: ConversationTurnRequest) async {
         modelTask?.cancel()
+        let turnConfiguration = turnConfigurations.removeValue(forKey: request.turnID)
+        let requestedRole = request.agentRole
+        if requestedRole != agentRole {
+            let adapter = HailAgentAdapter(
+                actorSystem: actorSystem,
+                agentDirectoryID: agentDirectoryID,
+                agentRole: requestedRole
+            )
+            do {
+                peer = try await adapter.peer(for: conversationID)
+                agentRole = requestedRole
+            } catch {
+                actorSystem.log.error(
+                    "Could not resolve agent for conversation turn",
+                    metadata: [
+                        "conversationID": .string(conversationID.stableKey),
+                        "agentRole": .string(requestedRole),
+                        "error": .string(String(describing: error)),
+                    ]
+                )
+                try? await modelEvent(
+                    .failed(
+                        turnID: request.turnID,
+                        kind: .model,
+                        message: "The selected agent configuration could not be activated."
+                    )
+                )
+                return
+            }
+        }
         let peer = self.peer
         let actorSystem = self.actorSystem
         let conversationID = self.conversationID
-        let extractionEndpoint = memoryExtractionEndpoint
+        let extractionConfiguration: MemoryExtractionConfiguration?
+        if let turnConfiguration {
+            extractionConfiguration = turnConfiguration.memoryExtraction
+        } else {
+            extractionConfiguration = memoryExtractionConfiguration
+        }
+        let extractionEndpoint = extractionConfiguration.flatMap {
+            MemoryExtractionEndpointFactory.make(configuration: $0)
+        }
         let extractionScheduler = self.extractionScheduler
+        let conversation = self
         let scope = ConversationScope(
             conversationID: conversationID,
             turnID: request.turnID,
-            connections: connectionRegistry,
+            broadcast: { event in
+                try? await conversation.publishLive(event)
+            },
             complete: { [weak self] completion in
                 try? await self?.modelEvent(
                     .completed(
@@ -939,6 +1036,12 @@ public distributed actor Conversation {
                     case .reasoning:
                         await updates.send(.thinking)
 
+                    case .status(let message):
+                        await updates.send(.status(message))
+
+                    case .tool(let name):
+                        await updates.send(.status("Using \(name)…"))
+
                     case .text(let fragment):
                         let snapshot = await accumulator.append(fragment)
                         await updates.send(.text(snapshot))
@@ -1013,13 +1116,16 @@ public distributed actor Conversation {
         let (next, effects) = reduce(previous, action)
         for event in events(for: action, from: previous, to: next) {
             try await emit(event: event)
+            if let publishEvent = PublishEvent(conversationEvent: event) {
+                await publish(publishEvent)
+            }
         }
-        state = next
 
-        if case .modelCompleted = action {
+        switch action {
+        case .modelCompleted, .modelFailed:
             modelTask = nil
-        } else if case .modelFailed = action {
-            modelTask = nil
+        default:
+            break
         }
 
         // A model completion is journaled before this point. A reply is an
@@ -1036,7 +1142,7 @@ public distributed actor Conversation {
         for effect in effects {
             switch effect {
             case .runReply(let request):
-                startModel(for: request)
+                await startModel(for: request)
             case .publish(let event):
                 await publish(event)
             case .cancelModel:
@@ -1057,7 +1163,7 @@ public distributed actor Conversation {
         let pendingReplies = state.pendingReplies
         guard !pendingReplies.isEmpty else { return }
 
-        let connections = await connectionRegistry.snapshot()
+        let connections = Array(connections)
         guard !connections.isEmpty else { return }
 
         for pendingReply in pendingReplies {
@@ -1280,13 +1386,66 @@ public distributed actor Conversation {
         }
     }
 
-    private func publish(_ event: OutboundEvent) async {
-        let connections = await connectionRegistry.snapshot()
+    /// Publishes a live event after its durable source event has been emitted.
+    /// Journal replay never creates a ``PublishEvent``.
+    ///
+    /// A user-message echo is published exactly once per message. An idle
+    /// send starts its turn in the same transition, so its only echo comes
+    /// from `.turnStarted`. A busy send echoes when queued
+    /// (`.messageQueued`) and its later `.turnStarted` must not echo again.
+    private func publish(_ event: PublishEvent) async {
+        switch event {
+        case .userMessage(let pending):
+            await publishUserMessageEcho(pending)
+        case .turnStarted(let pending):
+            await publishUserMessageEcho(pending)
+            try? await publishLive(
+                .reply(
+                    .started(
+                        conversationID: conversationID,
+                        turnID: pending.turnID
+                    )
+                )
+            )
+        }
+    }
+
+    private func publishUserMessageEcho(_ pending: PendingConversationMessage) async {
+        guard !echoedMessageIDs.contains(pending.message.id) else { return }
+        echoedMessageIDs.append(pending.message.id)
+        if echoedMessageIDs.count > 256 {
+            echoedMessageIDs.removeFirst(echoedMessageIDs.count - 256)
+        }
+        try? await publishLive(
+            .reply(
+                .userMessage(
+                    conversationID: conversationID,
+                    turnID: pending.turnID,
+                    messageID: pending.message.id,
+                    text: pending.message.text
+                )
+            )
+        )
+    }
+
+    distributed func publishLive(_ event: OutboundEvent) async {
+        if case .reply(let reply) = event {
+            liveState.apply(reply)
+        }
+
+        // Delivery rendezvous ends at the session's output channel, never at
+        // the client: a slow or dead connection cannot stall the conversation.
         for connection in connections {
             try? await connection.broadcast(event)
         }
     }
 
+    private func publish(_ event: OutboundEvent) async {
+        await publishLive(event)
+    }
+
+    /// Applies events during both live execution and journal recovery. Live
+    /// publication is intentionally handled by ``dispatch`` after ``emit``.
     public func handleEvent(_ event: ConversationEvent) {
         state.apply(event)
     }

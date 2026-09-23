@@ -7,7 +7,6 @@ import NIOCore
 import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
-import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -25,7 +24,7 @@ struct AgentRuntimeSummary: HTML, Sendable {
             if let active = runtime.first {
                 div(.class("live-state")) {
                     span(.class("live-dot")) {}
-                    strong { active.phase }
+                    strong { active.phase.rawValue }
                 }
                 div(.class("detail-facts")) {
                     p {
@@ -58,10 +57,8 @@ struct AgentRuntimeSummary: HTML, Sendable {
             }
             div(.class("detail-facts detail-facts-bottom")) {
                 p {
-                    span(.class("fact-label")) { "Telegram" }
-                    profile.telegramChatIDs.isEmpty
-                        ? "default route"
-                        : "\(profile.telegramChatIDs.count) chat(s)"
+                    span(.class("fact-label")) { "Routing" }
+                    "Selected per channel"
                 }
                 p {
                     span(.class("fact-label")) { "Context limit" }

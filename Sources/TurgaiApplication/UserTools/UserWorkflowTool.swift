@@ -551,14 +551,14 @@ private enum UserWorkflowRunner {
     }
 
     private static func networkValue(_ response: NetworkResponse) -> GeneratedContent {
+        let text = String(data: response.body, encoding: .utf8)
         let body: GeneratedContent
-        if let text = String(data: response.body, encoding: .utf8),
-            let json = try? GeneratedContent(json: text)
-        {
+        switch (text, text.flatMap({ try? GeneratedContent(json: $0) })) {
+        case (_, let json?):
             body = json
-        } else if let text = String(data: response.body, encoding: .utf8) {
+        case (let text?, nil):
             body = GeneratedContent(text)
-        } else {
+        case (nil, nil):
             body = GeneratedContent(response.body.base64EncodedString())
         }
 
@@ -638,15 +638,17 @@ private struct WorkflowContext {
         }
 
         let value: GeneratedContent
-        if let direct = values[first] {
+        switch values[first] {
+        case let direct?:
             value = direct
-        } else if let input = values["input"],
-            case .structure(let properties, _) = input.kind,
-            let property = properties[first]
-        {
+        case nil:
+            guard let input = values["input"],
+                case .structure(let properties, _) = input.kind,
+                let property = properties[first]
+            else {
+                throw UserWorkflowError.invalidReference(reference)
+            }
             value = property
-        } else {
-            throw UserWorkflowError.invalidReference(reference)
         }
 
         var current = value

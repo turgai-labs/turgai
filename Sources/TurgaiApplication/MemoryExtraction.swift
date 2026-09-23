@@ -22,19 +22,29 @@ import TurgaiMemory
 public struct MemoryExtractionReport: Codable, Sendable {
     @Generable
     public struct MemoryExtractionCandidate: Codable, Sendable {
-        @Guide(description: "Fact group: profile, preference, relationship, project, or environment")
+        @Guide(
+            description: "Fact group. Use exactly one of: profile, preference, relationship, project, environment.",
+            .anyOf(["profile", "preference", "relationship", "project", "environment"])
+        )
         public let namespace: String
         @Guide(description: "A short stable attribute name for the fact, e.g. drinksCoffee or school")
         public let predicate: String
         @Guide(description: "The fact's content, in the form valueKind describes")
         public let value: String
-        @Guide(description: "The value's form: text, person, place, date (ISO8601), or preference (true or false)")
+        @Guide(
+            description: "The value's form. Use exactly one of: text, person, place, date, preference.",
+            .anyOf(["text", "person", "place", "date", "preference"])
+        )
         public let valueKind: String
         @Guide(description: "Certainty the fact is true, between 0 and 1")
         public let confidence: Double
         @Guide(description: "How much the fact matters for future conversations, between 0 and 1")
         public let importance: Double
-        @Guide(description: "How likely the fact is to change: transient, situational, mutable, or stable")
+        @Guide(
+            description:
+                "How likely the fact is to change. Use exactly one of: transient, situational, mutable, stable.",
+            .anyOf(["transient", "situational", "mutable", "stable"])
+        )
         public let stability: String
         @Guide(
             description:

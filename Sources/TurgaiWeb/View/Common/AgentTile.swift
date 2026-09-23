@@ -7,7 +7,6 @@ import NIOCore
 import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
-import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -38,9 +37,7 @@ struct AgentTile: HTML, Sendable {
             p(.class("bot-model")) { profile.model }
             div(.class("bot-tile-bottom")) {
                 span {
-                    profile.telegramChatCount == 0
-                        ? "Telegram · default"
-                        : "Telegram · \(profile.telegramChatCount) chat(s)"
+                    "Routing is configured per channel"
                 }
                 span(.class("tile-arrow")) { "→" }
             }

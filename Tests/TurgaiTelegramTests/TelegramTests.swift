@@ -28,6 +28,7 @@ struct TelegramTests {
                     text: "/memory"
                 )
             ),
+            conversationChannel: ChannelID("telegram"),
             messageID: MessageID(rawValue: UUID()),
             turnID: TurnID()
         )
@@ -42,6 +43,7 @@ struct TelegramTests {
                     text: "/forget"
                 )
             ),
+            conversationChannel: ChannelID("telegram"),
             messageID: MessageID(rawValue: UUID()),
             turnID: TurnID()
         )
@@ -68,7 +70,9 @@ struct TelegramTests {
     func botCanRestoreAConversationWithoutATelegramUpdate() async throws {
         let bot = TelegramBot(
             client: makeClient(recorder: TelegramCallRecorder(responses: [])),
-            offsetStore: InMemoryTelegramOffsetStore()
+            conversationChannel: ChannelID("telegram"),
+            initialOffset: nil,
+            checkpointOffset: { _ in }
         )
         let conversationID = TelegramBot.conversationID(for: 42)
         let connectionStream = try await bot.connections()
@@ -142,11 +146,13 @@ struct TelegramTests {
         ]
         let recorder = TelegramCallRecorder(responses: [updates])
         let client = makeClient(recorder: recorder)
-        let offsets = InMemoryTelegramOffsetStore()
+        let offsets = TelegramOffsetRecorder()
         let bot = TelegramBot(
             client: client,
+            conversationChannel: ChannelID("telegram"),
             allowedChatIDs: [42],
-            offsetStore: offsets,
+            initialOffset: nil,
+            checkpointOffset: { offset in await offsets.checkpoint(offset) },
             configuration: TelegramBotConfiguration(
                 timeout: 1,
                 retryDelay: .milliseconds(1)
@@ -264,7 +270,9 @@ struct TelegramTests {
         await recorder.failGetUpdates(with: .httpStatus(401))
         let bot = TelegramBot(
             client: makeClient(recorder: recorder),
-            offsetStore: InMemoryTelegramOffsetStore(),
+            conversationChannel: ChannelID("telegram"),
+            initialOffset: nil,
+            checkpointOffset: { _ in },
             configuration: TelegramBotConfiguration(
                 timeout: 1,
                 retryDelay: .milliseconds(1)
@@ -292,6 +300,7 @@ struct TelegramTests {
         #expect(
             TelegramBot.event(
                 for: update,
+                conversationChannel: ChannelID("telegram"),
                 messageID: MessageID(),
                 turnID: TurnID()
             ) == nil)
@@ -329,8 +338,10 @@ struct TelegramTests {
         let recorder = TelegramCallRecorder(responses: [[update]])
         let bot = TelegramBot(
             client: makeClient(recorder: recorder),
+            conversationChannel: ChannelID("telegram"),
             allowedChatIDs: [42],
-            offsetStore: InMemoryTelegramOffsetStore(),
+            initialOffset: nil,
+            checkpointOffset: { _ in },
             configuration: TelegramBotConfiguration(
                 timeout: 1,
                 retryDelay: .milliseconds(1)
@@ -582,6 +593,14 @@ struct TelegramTests {
         #expect(throws: TelegramAPIConfigurationError.emptyToken) {
             try TelegramAPIClient.live(token: "")
         }
+    }
+}
+
+private actor TelegramOffsetRecorder {
+    private(set) var currentOffset: Int64?
+
+    func checkpoint(_ value: Int64) {
+        currentOffset = value
     }
 }
 

@@ -1,4 +1,3 @@
-import TurgaiApplication
 import TurgaiDomain
 import TurgaiTelegram
 
@@ -14,9 +13,9 @@ import TurgaiTelegram
 /// is kept in the actor until it resolves, expires, is cancelled, or the
 /// Telegram send fails. Callback data contains only an opaque request ID and
 /// every callback is checked against the originating chat and user.
-actor TelegramToolApproval: ToolApproval {
+actor TelegramToolApproval {
     private struct Pending {
-        let request: ApprovalRequest
+        let request: ChannelApprovalRequest
         let continuation: CheckedContinuation<ApprovalDecision, Error>
     }
 
@@ -28,7 +27,7 @@ actor TelegramToolApproval: ToolApproval {
         self.client = client
     }
 
-    func decide(_ request: ApprovalRequest) async throws -> ApprovalDecision {
+    func decide(_ request: ChannelApprovalRequest) async throws -> ApprovalDecision {
         guard let chatID = Self.chatID(for: request.conversationID) else {
             return .denied
         }
@@ -77,16 +76,14 @@ actor TelegramToolApproval: ToolApproval {
     private func sendRequest(
         id: UUID,
         chatID: Int64,
-        request: ApprovalRequest
+        request: ChannelApprovalRequest
     ) async {
-        let command = request.commandSummary
-        let directory = request.workingDirectory ?? "(default)"
         let text = [
             "Turgai wants permission to run user tool \(request.toolName).",
             "",
-            "Command: \(command)",
-            "Working directory: \(directory)",
-            "Arguments: \(request.summary)",
+            "Command: \(request.command)",
+            "Working directory: \(request.workingDirectory)",
+            "Arguments: \(request.arguments)",
         ].joined(separator: "\n")
         let markup = TelegramInlineKeyboardMarkup(
             inlineKeyboard: [
@@ -148,7 +145,7 @@ actor TelegramToolApproval: ToolApproval {
 
     private static func chatID(for conversationID: String) -> Int64? {
         guard let id = ConversationID(stableKey: conversationID),
-            id.channel == ChannelID("telegram")
+            id.channel.providerName == "telegram"
         else { return nil }
         return Int64(id.externalAddress.rawValue)
     }

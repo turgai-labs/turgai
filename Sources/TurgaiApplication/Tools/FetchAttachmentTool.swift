@@ -55,8 +55,11 @@ public enum AttachmentResolverError: Error, Equatable, Sendable {
 
 /// Routes durable attachment references to their owning channel adapter.
 ///
-/// It stores one loader per channel rather than one entry per attachment, so
-/// references remain restart-safe without accumulating per-message state.
+/// Several connections can serve the same channel (two Telegram bots), and a
+/// durable reference does not record which connection received it: Telegram's
+/// external IDs are only meaningful to the bot that owns them. Each loader is
+/// therefore registered under an owner and resolution tries every owner until
+/// one succeeds.
 public actor AttachmentResolver {
     public typealias Loader =
         @Sendable (
@@ -64,16 +67,25 @@ public actor AttachmentResolver {
             _ expectedContentType: String?
         ) async throws -> ToolData
 
-    private var loaders: [AttachmentChannel: Loader] = [:]
+    private var loaders: [AttachmentChannel: [UUID: Loader]] = [:]
+    private var ownerOrder: [AttachmentChannel: [UUID]] = [:]
 
     public init() {}
 
-    public func register(channel: AttachmentChannel, loader: @escaping Loader) {
-        loaders[channel] = loader
+    public func register(channel: AttachmentChannel, owner: UUID, loader: @escaping Loader) {
+        if loaders[channel]?[owner] == nil {
+            ownerOrder[channel, default: []].append(owner)
+        }
+        loaders[channel, default: [:]][owner] = loader
     }
 
-    public func unregister(channel: AttachmentChannel) {
-        loaders[channel] = nil
+    public func unregister(channel: AttachmentChannel, owner: UUID) {
+        loaders[channel]?[owner] = nil
+        ownerOrder[channel]?.removeAll { $0 == owner }
+        if loaders[channel]?.isEmpty != false {
+            loaders[channel] = nil
+            ownerOrder[channel] = nil
+        }
     }
 
     public func resolve(
@@ -85,10 +97,19 @@ public actor AttachmentResolver {
         else {
             throw AttachmentResolverError.invalidAttachmentID(id)
         }
-        guard let loader = loaders[channel] else {
+        guard let channelLoaders = loaders[channel], !channelLoaders.isEmpty else {
             throw AttachmentResolverError.unsupportedChannel(channel)
         }
-        return try await loader(externalID, expectedContentType)
+        var firstError: (any Error)?
+        for owner in ownerOrder[channel] ?? Array(channelLoaders.keys) {
+            guard let loader = channelLoaders[owner] else { continue }
+            do {
+                return try await loader(externalID, expectedContentType)
+            } catch {
+                firstError = firstError ?? error
+            }
+        }
+        throw firstError ?? AttachmentResolverError.unsupportedChannel(channel)
     }
 }
 

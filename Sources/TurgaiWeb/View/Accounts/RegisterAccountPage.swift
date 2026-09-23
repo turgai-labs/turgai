@@ -28,8 +28,18 @@ struct RegisterAccountPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
     var body: some HTML {
         main(.class("setup-page")) {
-            div(.class("setup-shell")) {
-                SetupHeader()
+            PageShell(
+                kind: .setup,
+                header: PageHeader(),
+                footer: PageFooter {
+                    SetupFooterContent(
+                        step: nil,
+                        backHref: "/login",
+                        submitFormID: "account-register-form",
+                        submitLabel: "Create account"
+                    )
+                },
+            ) {
                 section(.class("setup-content setup-content-compact")) {
                     div(.class("setup-copy")) {
                         p(.class("eyebrow")) { "Join this Turgai" }
@@ -60,14 +70,6 @@ struct RegisterAccountPage: HTMLDocument, Sendable {
                             }
                         }
                     }
-                }
-                if success == nil {
-                    SetupFooter(
-                        step: nil,
-                        backHref: "/login",
-                        submitFormID: "account-register-form",
-                        submitLabel: "Create account"
-                    )
                 }
             }
         }

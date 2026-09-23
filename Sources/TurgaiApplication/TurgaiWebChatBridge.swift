@@ -1,3 +1,4 @@
+import DistributedCluster
 import Foundation
 import Hail
 import TurgaiDomain
@@ -15,29 +16,135 @@ public struct WebSessionID: Hashable, Sendable, Codable, Identifiable {
 /// Gives the web application access to the live conversation connections
 /// after the application runtime has finished booting.
 public actor TurgaiWebChatBridge {
-    private var connections: TurgaiConnections?
+    private struct Runtime {
+        let connections: TurgaiConnections
+        let discoverChannelIDs: @Sendable () async throws -> [UUID]
+        let actorSystem: ClusterSystem
+    }
+
+    private var runtime: Runtime?
+    private var persistedConversationIDs: [ConversationID] = []
 
     public init() {}
 
-    public func install(_ connections: TurgaiConnections) {
-        self.connections = connections
+    public func install(
+        _ connections: TurgaiConnections,
+        discoverChannelIDs: @escaping @Sendable () async throws -> [UUID],
+        actorSystem: ClusterSystem,
+        persistedConversationIDs: [ConversationID]
+    ) {
+        self.runtime = Runtime(
+            connections: connections,
+            discoverChannelIDs: discoverChannelIDs,
+            actorSystem: actorSystem
+        )
+        self.persistedConversationIDs = persistedConversationIDs
+    }
+
+    public func conversationIDs() -> [ConversationID] {
+        persistedConversationIDs
+    }
+
+    public func channelIDs() async throws -> [UUID] {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return try await runtime.discoverChannelIDs()
+    }
+
+    public func rememberConversation(_ conversationID: ConversationID) {
+        guard !persistedConversationIDs.contains(conversationID) else { return }
+        persistedConversationIDs.append(conversationID)
     }
 
     public func openSession(id: WebSessionID) async throws -> TurgaiConnections.WebSession {
-        guard let connections else {
+        guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        return await connections.addWebSession(id: id)
+        return await runtime.connections.addWebSession(id: id)
+    }
+
+    public func configureChannel(
+        _ configuration: ChannelConfiguration<TelegramProvider>,
+        runtimeChange: ChannelRuntimeChange
+    ) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let channel = try await TelegramChannel.resolve(
+            on: runtime.actorSystem,
+            configuration: configuration
+        )
+        try await channel.replaceConfiguration(configuration, runtimeChange: runtimeChange)
+    }
+
+    public func channelState(
+        for configuration: ChannelConfiguration<TelegramProvider>
+    ) async throws -> ChannelState<TelegramProvider> {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let channel = try await TelegramChannel.resolve(
+            on: runtime.actorSystem,
+            configuration: configuration
+        )
+        return try await channel.currentState()
+    }
+
+    public func channelState(for channelID: UUID) async throws -> ChannelState<TelegramProvider> {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let channel = try await TelegramChannel.resolve(
+            on: runtime.actorSystem,
+            channelID: channelID
+        )
+        return try await channel.currentState()
+    }
+
+    public func deleteChannel(_ configuration: ChannelConfiguration<TelegramProvider>) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let channel = try await TelegramChannel.resolve(
+            on: runtime.actorSystem,
+            configuration: configuration
+        )
+        try await channel.delete()
+    }
+
+    public func deleteChannel(id: UUID) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let channel = try await TelegramChannel.resolve(
+            on: runtime.actorSystem,
+            channelID: id
+        )
+        try await channel.delete()
     }
 
     public func conversationHistory(
         for conversationID: ConversationID,
         role: TurgaiAgentRole
     ) async throws -> [ConversationHistoryEntry] {
-        guard let connections else {
+        guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        return try await connections.conversationHistory(
+        return try await runtime.connections.conversationHistory(
+            for: conversationID,
+            role: role
+        )
+    }
+
+    public func conversationStatus(
+        for conversationID: ConversationID,
+        role: TurgaiAgentRole
+    ) async throws -> ConversationStatus {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return try await runtime.connections.conversationStatus(
             for: conversationID,
             role: role
         )

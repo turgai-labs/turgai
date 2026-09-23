@@ -19,7 +19,7 @@ struct FileSnapshotStoreTests {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("turgai-file-snapshot-store-" + UUID().uuidString)
         let store = FileSnapshotStore(
-            client: try FilePersistenceClient(directory: directory)
+            client: try FileClient(directory: directory)
         )
 
         try await store.save(
@@ -55,7 +55,7 @@ struct FileSnapshotStoreTests {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("turgai-file-snapshot-store-" + UUID().uuidString)
         let store = FileSnapshotStore(
-            client: try FilePersistenceClient(directory: directory)
+            client: try FileClient(directory: directory)
         )
 
         for sequenceNumber in 1...3 {
@@ -85,7 +85,7 @@ struct FileSnapshotStoreTests {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("turgai-file-snapshot-store-" + UUID().uuidString)
         let store = FileSnapshotStore(
-            client: try FilePersistenceClient(directory: directory)
+            client: try FileClient(directory: directory)
         )
 
         let snapshot: Snapshot<TestState>? = try await store.latestSnapshot(id: "missing")
