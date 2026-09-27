@@ -50,7 +50,7 @@ struct ModelPicker: HTML, Sendable {
                 .init(
                     name: "onchange",
                     value:
-                        "document.getElementById('\(Self.modelFieldID)').setAttribute('list', this.options[this.selectedIndex].dataset.modelList); document.getElementById('\(Self.noticeID)').textContent = this.options[this.selectedIndex].dataset.modelNotice"
+                        "document.getElementById('\(Self.modelFieldID)').setAttribute('list', this.options[this.selectedIndex].dataset.modelList); document.getElementById('\(Self.noticeID)').textContent = this.options[this.selectedIndex].dataset.modelNotice; document.querySelectorAll('[data-provider-settings]').forEach((panel) => panel.hidden = panel.dataset.providerSettings !== this.value)"
                 )
             ) {
                 for (index, provider) in catalog.providers.enumerated() {

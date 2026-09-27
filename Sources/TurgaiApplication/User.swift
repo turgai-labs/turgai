@@ -82,6 +82,10 @@ public struct MemoryExtractionSnapshot: Codable, Sendable {
     public let input: ExtractionInput
     /// Every stored observation, for verbatim candidate matching.
     public let evidence: [MemoryObservation]
+
+    public var latestObservationSourceID: MemorySourceID? {
+        MemoryProjection.latestObservation(in: evidence)?.sourceID
+    }
 }
 
 public enum ExtractionOutcome: Codable, Sendable, Equatable {
@@ -172,9 +176,8 @@ public distributed actor User {
         try await emit(event: .participantUnlinked(participantID, at: Date()))
     }
 
-    /// Records user evidence before model work begins. Facts are not inferred
-    /// here; this event only makes the statement durable for a later unified
-    /// compaction report.
+    /// Records a completed exchange once, keyed by its source message.
+    /// Replayed turns cannot duplicate the evidence used by extraction.
     public distributed func recordObservation(_ observation: MemoryObservation) async throws {
         guard state.memory.accepts(observation),
             !state.memory.containsObservation(for: observation.sourceID)
@@ -185,8 +188,12 @@ public distributed actor User {
     /// Applies the pure extraction decision as one memory journal event.
     public distributed func commitExtraction(
         _ input: ExtractionInput,
-        proposals: [MemoryProposal]
+        proposals: [MemoryProposal],
+        expectedLatestSourceID: MemorySourceID
     ) async throws -> ExtractionOutcome {
+        guard state.memory.latestObservationSourceID == expectedLatestSourceID else {
+            return .stale
+        }
         switch MemoryExtraction.decide(
             state: state.memory,
             input: input,
@@ -203,6 +210,7 @@ public distributed actor User {
             // generation before this method resumes. Do not report a commit
             // that the current projection no longer contains.
             guard state.memory.generation == commit.generation,
+                state.memory.latestObservationSourceID == expectedLatestSourceID,
                 commit.processedSources.allSatisfy({
                     state.memory.containsObservation(for: $0)
                 })
@@ -211,7 +219,6 @@ public distributed actor User {
             }
             return .committed(
                 MemoryUpdate(
-                    observationRecorded: true,
                     factChanges: commit.changes.map(Self.change(from:))
                 )
             )

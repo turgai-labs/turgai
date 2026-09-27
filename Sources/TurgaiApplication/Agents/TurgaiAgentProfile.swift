@@ -18,32 +18,58 @@ public enum AgentAvailability: String, Codable, Sendable, Equatable {
     case disabled
 }
 
-/// Provider-owned configuration for a profile.
-public enum AgentProviderConfiguration: Codable, Sendable, Equatable {
-    case ollama(baseURL: URL)
-    case none
+public struct AgentCredentialReference: RawRepresentable, Codable, Sendable, Hashable {
+    public let rawValue: String
 
-    private enum CodingKeys: String, CodingKey { case kind, baseURL }
-    private enum Kind: String, Codable { case ollama, none }
-
-    public init(from decoder: Decoder) throws {
-        let values = try decoder.container(keyedBy: CodingKeys.self)
-        switch try values.decode(Kind.self, forKey: .kind) {
-        case .ollama:
-            self = .ollama(baseURL: try values.decode(URL.self, forKey: .baseURL))
-        case .none:
-            self = .none
-        }
+    public init(rawValue: String) {
+        self.rawValue = rawValue
     }
 
-    public func encode(to encoder: Encoder) throws {
-        var values = encoder.container(keyedBy: CodingKeys.self)
+    public static func new() -> Self {
+        Self(rawValue: UUID().uuidString)
+    }
+}
+
+public enum OpenAICompatibleAPI: String, Codable, Sendable, Equatable {
+    case chatCompletions
+    case responses
+}
+
+public struct LlamaCPPConfiguration: Codable, Sendable, Equatable {
+    public let modelPath: String
+    public let gpuLayers: Int32
+
+    public init(modelPath: String, gpuLayers: Int32 = -1) {
+        self.modelPath = modelPath
+        self.gpuLayers = gpuLayers
+    }
+}
+
+/// Complete provider-owned configuration for a profile. Each case carries
+/// exactly the values required to construct that provider for a turn.
+public enum AgentProviderConfiguration: Codable, Sendable, Equatable {
+    case ollama(baseURL: URL)
+    case openAI(credential: AgentCredentialReference)
+    case anthropic(credential: AgentCredentialReference)
+    case gemini(credential: AgentCredentialReference)
+    case openAICompatible(
+        baseURL: URL,
+        credential: AgentCredentialReference,
+        api: OpenAICompatibleAPI
+    )
+    case appleSystem
+    case llamaCPP(LlamaCPPConfiguration)
+}
+
+extension AgentProviderConfiguration {
+    public var credentialReference: AgentCredentialReference? {
         switch self {
-        case .ollama(let baseURL):
-            try values.encode(Kind.ollama, forKey: .kind)
-            try values.encode(baseURL, forKey: .baseURL)
-        case .none:
-            try values.encode(Kind.none, forKey: .kind)
+        case .openAI(let reference), .anthropic(let reference), .gemini(let reference):
+            return reference
+        case .openAICompatible(_, let reference, _):
+            return reference
+        case .ollama, .appleSystem, .llamaCPP:
+            return nil
         }
     }
 }
@@ -283,9 +309,25 @@ public actor TurgaiAgentProfileStore {
             guard profile.model.provider == .ollama, Self.validHTTPURL(baseURL) else {
                 throw TurgaiAgentProfileError.invalidEndpointURL(baseURL.absoluteString)
             }
-        case .none:
-            guard profile.model.provider != .ollama else {
+        case .openAI:
+            guard profile.model.provider == .openAI else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
+        case .anthropic:
+            guard profile.model.provider == .anthropic else {
                 throw TurgaiAgentProfileError.invalidEndpointURL("")
+            }
+        case .gemini:
+            guard profile.model.provider == .gemini else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
+        case .openAICompatible(let baseURL, _, _):
+            guard profile.model.provider == .openAICompatible, Self.validHTTPURL(baseURL) else {
+                throw TurgaiAgentProfileError.invalidEndpointURL(baseURL.absoluteString)
+            }
+        case .appleSystem:
+            guard profile.model.provider == .system else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
+        case .llamaCPP(let configuration):
+            guard profile.model.provider == .llamaCPP,
+                !configuration.modelPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                throw TurgaiAgentProfileError.invalidEndpointURL(configuration.modelPath)
             }
         }
         guard profile.contextWindow > 0 else {

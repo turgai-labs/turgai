@@ -24,6 +24,19 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
     public private(set) var processedSources: Set<MemorySourceID> = []
     public private(set) var facts: [MemoryFact] = []
 
+    public var latestObservationSourceID: MemorySourceID? {
+        Self.latestObservation(in: observations)?.sourceID
+    }
+
+    /// The latest durable observation is the last one appended to the user
+    /// journal. Messages can finish model turns out of send-time order, so
+    /// `observedAt` does not identify the newest extraction trigger.
+    public static func latestObservation(
+        in observations: [MemoryObservation]
+    ) -> MemoryObservation? {
+        observations.last
+    }
+
     public init(generation: MemoryGeneration = .initial) {
         self.generation = generation
         self.lastClearedAt = nil
@@ -90,22 +103,6 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
                 })
             else { return }
             appendObservation(observation)
-
-        case .observationCompleted(let sourceID, let response):
-            guard
-                let index = observations.firstIndex(where: {
-                    $0.sourceID == sourceID
-                })
-            else { return }
-            guard observations[index].response == nil else { return }
-            let observation = observations[index]
-            observations[index] = MemoryObservation(
-                id: observation.id,
-                sourceID: observation.sourceID,
-                text: observation.text,
-                response: response,
-                observedAt: observation.observedAt
-            )
 
         case .factAccepted(let fact):
             applyFactEvent(.factAccepted(fact))

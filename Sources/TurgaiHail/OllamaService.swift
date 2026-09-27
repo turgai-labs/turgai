@@ -25,8 +25,8 @@ public enum OllamaServiceError: Error, Sendable, Equatable {
 /// Client for Ollama's control-plane API.
 ///
 /// This is deliberately a value, not an actor: it owns no mutable state. It
-/// centralizes model discovery and metadata requests while Hail's
-/// ``OllamaEndpoint`` remains responsible for one streaming generation.
+/// centralizes model discovery and metadata requests. Generation is routed
+/// through Hail's AnyLanguageModel adapter.
 public struct OllamaService: Sendable {
     public let configuration: OllamaConfiguration
 

@@ -19,9 +19,8 @@ let package = Package(
         .package(path: "../hail"),
         .package(path: "../cluster-durable-workflows"),
         .package(
-            url: "https://github.com/huggingface/AnyLanguageModel.git",
-            from: "0.9.0",
-            traits: ["AsyncHTTPClient"]
+            path: "../AnyLanguageModel",
+            traits: ["AsyncHTTPClient", "Llama"]
         ),
         .package(
             url: "https://github.com/apple/swift-async-algorithms.git",

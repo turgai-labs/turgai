@@ -89,28 +89,13 @@ public enum MemoryExtraction {
             changes.append(event)
         }
 
-        // A source is consumed only when it actually supports an accepted
-        // change. A report whose candidates all failed evidence or policy
-        // must not burn the observations: they stay pending so a later,
-        // better extraction can still mine them.
-        let consumed: Set<ObservationID> = changes.reduce(into: []) { result, event in
-            switch event {
-            case .factAccepted(let fact):
-                result.formUnion(fact.evidence)
-            case .factReinforced(_, let evidence, _):
-                result.formUnion(evidence)
-            case .factSuperseded(_, let replacement):
-                result.formUnion(replacement.evidence)
-            }
-        }
-        guard !consumed.isEmpty else { return .alreadyHandled }
-
+        // A successfully generated report completes the captured batch even
+        // when it proposes no acceptable fact. Failed model calls never reach
+        // this decision and remain retryable.
         return .commit(
             MemoryExtractionCommit(
                 generation: input.generation,
-                processedSources: input.observations
-                    .filter { consumed.contains($0.id) }
-                    .map(\.sourceID),
+                processedSources: input.observations.map(\.sourceID),
                 observations: input.observations,
                 changes: changes
             )

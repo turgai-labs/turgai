@@ -54,12 +54,20 @@ struct ModelFormValues: Sendable, Equatable {
     let modelID: String
     let reasoningEffort: String?
     let endpointURL: String?
+    let apiKey: String?
+    let compatibleAPI: String?
+    let modelPath: String?
+    let gpuLayers: String?
 
     init(form: [String: [String]]) {
         provider = form["provider"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         modelID = form["modelID"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         reasoningEffort = form["reasoningEffort"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         endpointURL = form["endpointURL"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        apiKey = form["apiKey"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        compatibleAPI = form["compatibleAPI"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        modelPath = form["modelPath"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        gpuLayers = form["gpuLayers"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

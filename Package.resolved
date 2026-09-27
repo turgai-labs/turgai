@@ -1,15 +1,6 @@
 {
-  "originHash" : "38f6494ca104ddf4c910d176aba6158bf562992d2149b34d90da247a9542b8c3",
+  "originHash" : "8aa077bd97e79f7d49d0d2541d5ee5aec05387049217723e29e0fd65064a459a",
   "pins" : [
-    {
-      "identity" : "anylanguagemodel",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/huggingface/AnyLanguageModel.git",
-      "state" : {
-        "revision" : "f22b78e6b10f67e7d46c67dc59a8a35bc259fbce",
-        "version" : "0.9.0"
-      }
-    },
     {
       "identity" : "async-http-client",
       "kind" : "remoteSourceControl",
@@ -119,21 +110,21 @@
       }
     },
     {
+      "identity" : "llama.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mattt/llama.swift",
+      "state" : {
+        "revision" : "716419d4d7aa542fce301e809cde7234c68ddbc6",
+        "version" : "2.10549.0"
+      }
+    },
+    {
       "identity" : "murmurhash-swift",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/daisuke-t-jp/MurmurHash-Swift.git",
       "state" : {
         "revision" : "7e69bedaaaea09673524d83de12dac6e09d5b74a",
         "version" : "1.1.1"
-      }
-    },
-    {
-      "identity" : "partialjsondecoder",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mattt/PartialJSONDecoder",
-      "state" : {
-        "revision" : "e4d389e6bcc6771bb988d1a8a17695d8bfa97172",
-        "version" : "1.0.0"
       }
     },
     {

@@ -52,6 +52,7 @@ struct TurgaiAppService: Service, Sendable {
     private let workspaceRoot: String
     private let turgaiDirectory: URL
     private let agentProfiles: TurgaiAgentProfileStore
+    private let agentCredentials: AgentCredentialStore
     private let channelSecrets: ChannelSecretStore
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let webChatBridge: TurgaiWebChatBridge
@@ -61,6 +62,7 @@ struct TurgaiAppService: Service, Sendable {
         workspaceRoot: String,
         turgaiDirectory: URL,
         agentProfiles: TurgaiAgentProfileStore,
+        agentCredentials: AgentCredentialStore,
         channelSecrets: ChannelSecretStore,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         webChatBridge: TurgaiWebChatBridge
@@ -69,6 +71,7 @@ struct TurgaiAppService: Service, Sendable {
         self.workspaceRoot = workspaceRoot
         self.turgaiDirectory = turgaiDirectory
         self.agentProfiles = agentProfiles
+        self.agentCredentials = agentCredentials
         self.channelSecrets = channelSecrets
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.webChatBridge = webChatBridge
@@ -102,6 +105,7 @@ struct TurgaiAppService: Service, Sendable {
                 return profile.contextWindow
             }
         )
+        let endpointFactory = AgentModelEndpointFactory(credentials: agentCredentials)
         let modelEndpointProvider: ModelEndpointProvider = { request in
             guard let model = try? AgentModel(request.model) else {
                 return nil
@@ -120,22 +124,13 @@ struct TurgaiAppService: Service, Sendable {
                 guard let currentDefault = await agentProfiles.defaultProfile() else { return nil }
                 profile = currentDefault
             }
-            switch model.provider {
-            case .ollama:
-                guard case .ollama(let baseURL) = profile.providerConfiguration else {
-                    return nil
-                }
-                return OllamaEndpoint(
-                    model: model.id.rawValue,
-                    baseURL: baseURL,
-                    temperature: runtimeConfiguration.temperature,
-                    numContext: profile.contextWindow,
-                    keepAlive: runtimeConfiguration.ollamaKeepAlive,
-                    think: request.reasoning?.encoding == .disabled ? false : nil
-                )
-            default:
-                return nil
-            }
+            guard profile.model == model else { return nil }
+            return try await endpointFactory.endpoint(
+                for: profile,
+                temperature: runtimeConfiguration.temperature,
+                ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive,
+                reasoning: request.reasoning
+            )
         }
         guard let storageConfiguration = configuration.storage else {
             throw ValidationError("Storage configuration is missing.")
@@ -398,13 +393,20 @@ struct TurgaiAppService: Service, Sendable {
             ActorSystemDependency<CreateTimerEffect>.prepare(.live(on: system))
             let virtualNode = await VirtualNode(actorSystem: system)
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
-                actorSystem: system
+                actorSystem: system,
+                activities: ScheduleActivities()
             )
             let scheduleTimerWorker = await DurableActivityDispatchWorker<TimerWorkflow>(
-                actorSystem: system
+                actorSystem: system,
+                activities: TimerActivities()
+            )
+            let memoryExtractionWorker = await DurableActivityDispatchWorker<MemoryExtractionWorkflow>(
+                actorSystem: system,
+                activities: MemoryExtractionActivities(endpointFactory: endpointFactory)
             )
             try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
             try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
+            try await system.workflows.recoverAll(ofType: MemoryExtractionWorkflow.self)
             let channelRuntime = try await system.turgaiChannelRuntime.dependencies()
             let connections = channelRuntime.connections
             await webChatBridge.install(
@@ -470,6 +472,7 @@ struct TurgaiAppService: Service, Sendable {
                 virtualNode: virtualNode,
                 scheduleWorker: scheduleWorker,
                 scheduleTimerWorker: scheduleTimerWorker,
+                memoryExtractionWorker: memoryExtractionWorker,
                 discoverChannelIDs: discoverChannelIDs
             )
 
@@ -537,6 +540,7 @@ struct TurgaiClusterService: Service {
     let virtualNode: VirtualNode
     let scheduleWorker: DurableActivityDispatchWorker<ScheduleWorkflow>
     let scheduleTimerWorker: DurableActivityDispatchWorker<TimerWorkflow>
+    let memoryExtractionWorker: DurableActivityDispatchWorker<MemoryExtractionWorkflow>
     let discoverChannelIDs: @Sendable () async throws -> [UUID]
 
     func run() async throws {
@@ -550,7 +554,7 @@ struct TurgaiClusterService: Service {
 
         do {
             try await withGracefulShutdownHandler {
-                let gracefulShutdownRequested = try await withThrowingTaskGroup(of: Bool.self) {
+                try await withThrowingTaskGroup(of: Bool.self) {
                     group in
                     group.addTask {
                         try await system.terminated
@@ -562,18 +566,23 @@ struct TurgaiClusterService: Service {
                         }
                         return false
                     }
-                    let result = try await group.next() ?? false
+                    do {
+                        let gracefulShutdownRequested = try await group.next() ?? false
+                        recoveryTask.cancel()
+                        await recoveryTask.value
+                        if gracefulShutdownRequested || Task.isCancelled {
+                            try system.shutdown()
+                        }
+                    } catch {
+                        recoveryTask.cancel()
+                        await recoveryTask.value
+                        _ = try? system.shutdown()
+                        throw error
+                    }
+                    // ClusterSystem.terminated does not respond to task
+                    // cancellation. Initiate shutdown before leaving the
+                    // group, which must wait for that child to finish.
                     group.cancelAll()
-                    return result
-                }
-
-                // The recovery listener can react to the local node's removal
-                // event. Finish it before ClusterSystem.shutdown stops the
-                // virtual-actor plugin it uses to resolve channels.
-                recoveryTask.cancel()
-                await recoveryTask.value
-                if gracefulShutdownRequested {
-                    _ = try? system.shutdown()
                 }
             } onGracefulShutdown: {
                 shutdownContinuation.yield(())
@@ -587,7 +596,7 @@ struct TurgaiClusterService: Service {
 
     private func recoverChannelsAfterNodeLoss() async {
         for await event in system.cluster.events {
-            guard !system.isTerminated else { return }
+            guard !Task.isCancelled, !system.isTerminated else { return }
             let requiresRecovery: Bool
             switch event {
             case .snapshot(let membership):
@@ -597,18 +606,18 @@ struct TurgaiClusterService: Service {
             default:
                 requiresRecovery = false
             }
-            guard requiresRecovery, !system.isTerminated else { continue }
+            guard requiresRecovery, !Task.isCancelled, !system.isTerminated else { continue }
             await recoverChannels()
         }
     }
 
     private func recoverChannels() async {
-        guard !system.isTerminated else { return }
+        guard !Task.isCancelled, !system.isTerminated else { return }
         do {
             let channelIDs = try await discoverChannelIDs()
             var unresolved: [UUID] = []
             for id in channelIDs {
-                guard !system.isTerminated else { return }
+                guard !Task.isCancelled, !system.isTerminated else { return }
                 do {
                     _ = try await TelegramChannel.resolve(on: system, channelID: id)
                 } catch is CancellationError {

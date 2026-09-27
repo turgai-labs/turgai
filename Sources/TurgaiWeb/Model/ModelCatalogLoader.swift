@@ -33,7 +33,7 @@ public enum TurgaiModelCatalogLoader {
         profiles: [TurgaiAgentProfile],
         discovery: Discovery = .live
     ) async -> TurgaiModelCatalog {
-        var providerDescriptors = Self.baseProviders
+        let providerDescriptors = Self.baseProviders
         var choices: [ModelProviderID: [TurgaiModelChoice]] = [:]
         var notices: [ModelProviderID: String] = [:]
 
@@ -93,22 +93,19 @@ public enum TurgaiModelCatalogLoader {
             notices[.ollama] = "Ollama could not be reached. Enter a model ID manually or check its URL."
         }
 
-        notices[.openAI] = "OpenAI model discovery will be available when an account is configured."
+        notices[.openAI] = "Enter a model ID available to your OpenAI API account."
+        notices[.anthropic] = "Enter a model ID available to your Anthropic API account."
+        notices[.gemini] = "Enter a model ID available to your Gemini API account."
+        notices[.openAICompatible] = "Enter the model ID supported by the configured compatible endpoint."
+        notices[.llamaCPP] = "Choose a local GGUF file and enter its model ID."
 
         for profile in profiles {
             let model = profile.model
             let providerID = ModelProviderID(rawValue: model.provider.rawValue)
-            if !providerDescriptors.contains(where: { $0.provider == providerID }) {
-                providerDescriptors.append(
-                    TurgaiProviderDescriptor(
-                        provider: providerID,
-                        name: model.provider.rawValue,
-                        summary: "Configured provider; enter model IDs manually.",
-                        discovery: .manual
-                    )
-                )
-                notices[providerID] = "Enter a model ID for this provider."
-            }
+            // The catalog is the set of providers Turgai actually supports.
+            // A model left in a profile must not make an excluded or unknown
+            // Hail provider selectable again.
+            guard providerDescriptors.contains(where: { $0.provider == providerID }) else { continue }
             Self.add(
                 TurgaiModelChoice(
                     provider: providerID,
@@ -171,6 +168,38 @@ public enum TurgaiModelCatalogLoader {
                 name: "OpenAI",
                 summary: "Models available to an API account",
                 discovery: .account
+            )
+        )
+        providers.append(
+            TurgaiProviderDescriptor(
+                provider: .anthropic,
+                name: "Anthropic",
+                summary: "Models available to an Anthropic API account",
+                discovery: .account
+            )
+        )
+        providers.append(
+            TurgaiProviderDescriptor(
+                provider: .gemini,
+                name: "Gemini",
+                summary: "Models available to a Gemini API account",
+                discovery: .account
+            )
+        )
+        providers.append(
+            TurgaiProviderDescriptor(
+                provider: .openAICompatible,
+                name: "OpenAI-compatible endpoint",
+                summary: "A custom Chat Completions or Responses endpoint",
+                discovery: .manual
+            )
+        )
+        providers.append(
+            TurgaiProviderDescriptor(
+                provider: .llamaCPP,
+                name: "llama.cpp",
+                summary: "A local GGUF model loaded by llama.cpp",
+                discovery: .local
             )
         )
         return providers

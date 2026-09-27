@@ -14,6 +14,7 @@ extension TurgaiMainWebApp {
     func registerAgentRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
         let auth = dependencies.auth
         let agentProfiles = dependencies.agentProfiles
+        let agentCredentials = dependencies.agentCredentials
         let runtimeSnapshots = dependencies.runtimeSnapshots
         router.get("/chat") { request, context in
             guard let profile = await agentProfiles.defaultProfile() else {
@@ -90,6 +91,7 @@ extension TurgaiMainWebApp {
             guard let existingProfile = await agentProfiles.profile(id: id) else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
+            var pendingCredential: AgentCredentialReference?
             do {
                 let values = BotFormValues(form: form)
                 var profile = existingProfile
@@ -99,10 +101,16 @@ extension TurgaiMainWebApp {
                 let reasoningEffort = try OnboardingInput.reasoningEffort(from: modelValues)
                 profile.model = model
                 profile.reasoningEffort = reasoningEffort
-                profile.providerConfiguration = try OnboardingInput.providerConfiguration(
+                let submission = try OnboardingInput.providerSubmission(
                     from: modelValues,
-                    for: model
+                    for: model,
+                    existing: existingProfile.providerConfiguration
                 )
+                if let credential = submission.credential {
+                    pendingCredential = credential.reference
+                    try await agentCredentials.save(credential.value, for: credential.reference)
+                }
+                profile.providerConfiguration = submission.configuration
                 profile.contextWindow = try OnboardingInput.positiveInteger(
                     values.contextWindow,
                     field: "context window"
@@ -110,8 +118,15 @@ extension TurgaiMainWebApp {
                 profile.persona = values.persona
                 profile.instructions = values.instructions
                 try await agentProfiles.update(profile)
+                pendingCredential = nil
+                if let oldReference = existingProfile.providerConfiguration.credentialReference,
+                    oldReference != submission.configuration.credentialReference
+                {
+                    try? await agentCredentials.remove(oldReference)
+                }
                 return TurgaiWebSupport.redirect(to: "/agents/\(profile.id)")
             } catch {
+                if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
                 let profiles = await agentProfiles.profiles()
                 let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
                 let runtime = await runtimeSnapshots().filter { $0.profileID == existingProfile.id }
@@ -147,15 +162,20 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
+            var pendingCredential: AgentCredentialReference?
             do {
                 let values = BotFormValues(form: form)
                 let modelValues = ModelFormValues(form: form)
                 let model = try OnboardingInput.model(from: modelValues)
                 let reasoningEffort = try OnboardingInput.reasoningEffort(from: modelValues)
-                let providerConfiguration = try OnboardingInput.providerConfiguration(
+                let submission = try OnboardingInput.providerSubmission(
                     from: modelValues,
                     for: model
                 )
+                if let credential = submission.credential {
+                    pendingCredential = credential.reference
+                    try await agentCredentials.save(credential.value, for: credential.reference)
+                }
                 let contextWindow = try OnboardingInput.positiveInteger(
                     values.contextWindow,
                     field: "context window"
@@ -164,13 +184,15 @@ extension TurgaiMainWebApp {
                     name: values.name,
                     model: model,
                     reasoningEffort: reasoningEffort,
-                    providerConfiguration: providerConfiguration,
+                    providerConfiguration: submission.configuration,
                     contextWindow: contextWindow,
                     persona: values.persona,
                     instructions: values.instructions
                 )
+                pendingCredential = nil
                 return TurgaiWebSupport.redirect(to: "/agents/\(profile.id)")
             } catch {
+                if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
                 let profiles = await agentProfiles.profiles()
                 let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
                 return HTMLResponse {
@@ -193,6 +215,9 @@ extension TurgaiMainWebApp {
             }
             do {
                 try await agentProfiles.delete(id: id)
+                if let reference = profile.providerConfiguration.credentialReference {
+                    try? await agentCredentials.remove(reference)
+                }
                 return TurgaiWebSupport.redirect(to: "/")
             } catch {
                 let profiles = await agentProfiles.profiles()

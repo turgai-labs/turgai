@@ -45,13 +45,10 @@ public struct MemoryGeneration: Hashable, Codable, Sendable {
     }
 }
 
-/// A raw, unfiltered record of one conversation turn.
-///
-/// The response is optional while the turn is running. Once available, the
-/// pair of user text and assistant response is stored together because many
-/// facts only exist across an exchange: an assistant's question ("what is his
-/// name?") gives meaning to the user's next answer. The subject is implicit —
-/// an observation lives in exactly one user's journal.
+/// A raw, unfiltered record of one user message and its exchange context.
+/// The assistant response can explain a short answer, but only user text is
+/// evidence for a memory. The subject is implicit: each observation lives in
+/// exactly one user's journal.
 public struct MemoryObservation: Hashable, Codable, Sendable {
     public let id: ObservationID
     public let sourceID: MemorySourceID

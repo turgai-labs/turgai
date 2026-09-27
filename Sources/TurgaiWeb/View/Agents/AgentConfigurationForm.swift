@@ -37,19 +37,7 @@ struct AgentConfigurationForm: HTML, Sendable {
             section(.class("config-group")) {
                 h3 { "Model" }
                 ModelPicker(catalog: modelCatalog, selectedModel: selectedModel)
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "Model endpoint" }
-                    input(
-                        .type(.url), .name("endpointURL"),
-                        .value(
-                            profile.flatMap { profile in
-                                guard case .ollama(let baseURL) = profile.providerConfiguration else { return nil }
-                                return baseURL.absoluteString
-                            } ?? ""),
-                        .placeholder(OllamaConfiguration.defaultBaseURL.absoluteString)
-                    )
-                    p(.class("hint")) { "Used by providers that need a configured endpoint." }
-                }
+                ProviderConfigurationFields(profile: profile)
                 label(.class("form-field")) {
                     span(.class("field-label")) { "Reasoning effort" }
                     select(.name("reasoningEffort")) {

@@ -30,6 +30,25 @@ struct MemoryTests {
     }
 
     @Test
+    func latestExtractionTriggerUsesJournalOrderWhenTurnsFinishOutOfOrder() {
+        let laterMessage = MemoryObservation(
+            sourceID: sourceID,
+            text: "sent later, completed first",
+            observedAt: Date(timeIntervalSince1970: 2)
+        )
+        let earlierMessage = MemoryObservation(
+            sourceID: MemorySourceID(),
+            text: "sent earlier, completed later",
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        var projection = MemoryProjection()
+        projection.apply(.observationRecorded(laterMessage))
+        projection.apply(.observationRecorded(earlierMessage))
+
+        #expect(projection.latestObservationSourceID == earlierMessage.sourceID)
+    }
+
+    @Test
     func observationTailDropsOldestObservationsBeyondTheCap() {
         var projection = MemoryProjection()
         let first = MemoryObservation(
@@ -110,7 +129,7 @@ struct MemoryTests {
     }
 
     @Test
-    func rejectedCandidatesLeaveObservationsPending() {
+    func rejectedCandidatesCompleteTheProcessedBatch() {
         let observation = MemoryObservation(
             id: observationID,
             sourceID: sourceID,
@@ -140,14 +159,18 @@ struct MemoryTests {
             proposals: [.add(candidate)]
         )
 
-        #expect(decision == .alreadyHandled)
+        guard case .commit(let commit) = decision else {
+            Issue.record("Expected the examined batch to be committed without facts")
+            return
+        }
         var projection = MemoryProjection()
         projection.apply(.observationRecorded(observation))
-        #expect(!projection.isProcessed(observation))
+        projection.apply(.extractionCommitted(commit))
+        #expect(projection.isProcessed(observation))
     }
 
     @Test
-    func onlyObservationsSupportingAcceptedFactsAreConsumed() {
+    func successfulExtractionCompletesEveryObservationInTheBatch() {
         let first = MemoryObservation(
             id: observationID,
             sourceID: sourceID,
@@ -189,11 +212,11 @@ struct MemoryTests {
             return
         }
 
-        #expect(commit.processedSources == [sourceID])
+        #expect(commit.processedSources == [sourceID, secondSourceID])
         var projection = MemoryProjection()
         projection.apply(.extractionCommitted(commit))
         #expect(projection.isProcessed(first))
-        #expect(!projection.isProcessed(second))
+        #expect(projection.isProcessed(second))
     }
 
     @Test
@@ -262,42 +285,6 @@ struct MemoryTests {
         #expect(update.newFactCount == 1)
         #expect(update.updatedFactCount == 2)
         #expect(update.shouldNotify)
-    }
-
-    @Test
-    func completedObservationEnrichesTheExistingSource() {
-        let recorded = MemoryObservation(
-            id: observationID,
-            sourceID: sourceID,
-            text: "My name is Ada",
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
-        var projection = MemoryProjection()
-        projection.apply(.observationRecorded(recorded))
-        projection.apply(
-            .observationCompleted(
-                sourceID: sourceID,
-                response: "Nice to meet you."
-            )
-        )
-        projection.apply(
-            .observationCompleted(
-                sourceID: sourceID,
-                response: "A different response"
-            )
-        )
-
-        #expect(
-            projection.observations == [
-                MemoryObservation(
-                    id: observationID,
-                    sourceID: sourceID,
-                    text: "My name is Ada",
-                    response: "Nice to meet you.",
-                    observedAt: Date(timeIntervalSince1970: 1)
-                )
-            ]
-        )
     }
 
     @Test

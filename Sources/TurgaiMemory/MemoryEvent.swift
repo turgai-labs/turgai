@@ -7,16 +7,15 @@
 /// Events in the memory section of one user's journal.
 ///
 /// Facts are proposals over observations, not direct mutations. Rejected
-/// candidates produce no event at all, so the journal remains the complete
-/// audit trail of what was accepted, reinforced, superseded, or removed.
+/// Rejected candidates produce no fact-level event. A completed extraction
+/// still records which source messages were examined, even when no fact was
+/// accepted.
 public indirect enum MemoryEvent: Codable, Sendable, Equatable {
     /// Logically forgets the active memory projection. Earlier journal events
     /// remain available to infrastructure readers, but replay after this
     /// boundary starts a fresh memory generation.
     case cleared(at: Date)
     case observationRecorded(MemoryObservation)
-    /// Completes a previously recorded source without changing its identity.
-    case observationCompleted(sourceID: MemorySourceID, response: String)
     case factAccepted(MemoryFact)
     case factReinforced(MemoryFactID, evidence: [ObservationID], confidence: Double)
     /// One atomic event: the old fact becomes `superseded(by:)` and the
@@ -27,8 +26,8 @@ public indirect enum MemoryEvent: Codable, Sendable, Equatable {
     case extractionCommitted(MemoryExtractionCommit)
 }
 
-/// One atomic memory extraction result. The contained events are fact-level
-/// changes only; lifecycle events such as `cleared` cannot be nested here.
+/// One atomic extraction result: processed sources plus any accepted
+/// fact-level changes. Lifecycle events such as `cleared` cannot be nested.
 public struct MemoryExtractionCommit: Codable, Sendable, Equatable {
     public let generation: MemoryGeneration
     public let processedSources: [MemorySourceID]

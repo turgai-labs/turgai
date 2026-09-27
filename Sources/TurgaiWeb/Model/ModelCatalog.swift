@@ -38,6 +38,10 @@ public struct ModelProviderID: RawRepresentable, Hashable, Codable, Sendable, Eq
     public static let system = Self(rawValue: "system")
     public static let ollama = Self(rawValue: "ollama")
     public static let openAI = Self(rawValue: "openai")
+    public static let anthropic = Self(rawValue: "anthropic")
+    public static let gemini = Self(rawValue: "gemini")
+    public static let openAICompatible = Self(rawValue: "openai-compatible")
+    public static let llamaCPP = Self(rawValue: "llama-cpp")
 }
 
 public struct TurgaiProviderDescriptor: Sendable, Equatable {

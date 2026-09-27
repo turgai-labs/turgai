@@ -62,23 +62,7 @@ struct ModelPage: HTMLDocument, Sendable {
                                     catalog: modelCatalog,
                                     selectedModel: Self.selectedModel(from: profile)
                                 )
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Model endpoint" }
-                                    input(
-                                        .type(.url), .name("endpointURL"),
-                                        .value(
-                                            profile.flatMap { profile in
-                                                guard case .ollama(let baseURL) = profile.providerConfiguration else {
-                                                    return nil
-                                                }
-                                                return baseURL.absoluteString
-                                            }
-                                                ?? OllamaConfiguration.defaultBaseURL.absoluteString
-                                        ),
-                                        .placeholder(OllamaConfiguration.defaultBaseURL.absoluteString)
-                                    )
-                                    p(.class("hint")) { "Only needed for providers that use a remote endpoint." }
-                                }
+                                ProviderConfigurationFields(profile: profile)
                                 label(.class("form-field")) {
                                     span(.class("field-label")) { "Reasoning effort" }
                                     select(.name("reasoningEffort")) {

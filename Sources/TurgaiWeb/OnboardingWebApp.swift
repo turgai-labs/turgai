@@ -14,12 +14,14 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
     private let auth: TurgaiAuth
     private let setup: TurgaiSetupStore
     private let agentProfiles: TurgaiAgentProfileStore
+    private let agentCredentials: AgentCredentialStore
     private let channelSecrets: ChannelSecretStore
 
     public init(
         auth: TurgaiAuth,
         directory: URL,
         agentProfiles: TurgaiAgentProfileStore,
+        agentCredentials: AgentCredentialStore,
         setup: TurgaiSetupStore,
         channelSecrets: ChannelSecretStore
     ) throws {
@@ -27,6 +29,7 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
         self.auth = auth
         self.setup = setup
         self.agentProfiles = agentProfiles
+        self.agentCredentials = agentCredentials
         self.channelSecrets = channelSecrets
     }
 
@@ -35,6 +38,7 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
             auth: auth,
             setup: setup,
             agentProfiles: agentProfiles,
+            agentCredentials: agentCredentials,
             channelSecrets: channelSecrets,
             defaultFileDirectory: directory,
             runtimeSnapshots: { [] },

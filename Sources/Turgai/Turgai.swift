@@ -62,6 +62,7 @@ struct Serve: AsyncParsableCommand {
 
         let fileClient = try FileClient(directory: turgaiDirectory)
         let agentProfiles = try TurgaiAgentProfileStore(files: fileClient)
+        let agentCredentials = AgentCredentialStore(files: fileClient)
         let channelSecrets = ChannelSecretStore(files: fileClient)
         let setup = try TurgaiSetupStore(directory: turgaiDirectory)
         let webChatBridge = TurgaiWebChatBridge()
@@ -70,6 +71,7 @@ struct Serve: AsyncParsableCommand {
             auth: auth,
             directory: turgaiDirectory,
             agentProfiles: agentProfiles,
+            agentCredentials: agentCredentials,
             setup: setup,
             channelSecrets: channelSecrets
         )
@@ -77,6 +79,7 @@ struct Serve: AsyncParsableCommand {
             auth: auth,
             directory: turgaiDirectory,
             agentProfiles: agentProfiles,
+            agentCredentials: agentCredentials,
             channelSecrets: channelSecrets,
             runtimeSnapshots: { await runtimeSnapshotSource.snapshots() },
             setup: setup,
@@ -99,6 +102,7 @@ struct Serve: AsyncParsableCommand {
             workspaceRoot: workspaceRoot,
             turgaiDirectory: turgaiDirectory,
             agentProfiles: agentProfiles,
+            agentCredentials: agentCredentials,
             channelSecrets: channelSecrets,
             runtimeSnapshotSource: runtimeSnapshotSource,
             webChatBridge: webChatBridge

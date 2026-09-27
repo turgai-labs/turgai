@@ -65,6 +65,7 @@ public struct TurgaiMainWebApp: Sendable {
     let auth: TurgaiAuth
     let setup: TurgaiSetupStore
     let agentProfiles: TurgaiAgentProfileStore
+    let agentCredentials: AgentCredentialStore
     let channelSecrets: ChannelSecretStore
     let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
     let webChatBridge: TurgaiWebChatBridge
@@ -74,6 +75,7 @@ public struct TurgaiMainWebApp: Sendable {
         auth: TurgaiAuth,
         directory: URL,
         agentProfiles: TurgaiAgentProfileStore,
+        agentCredentials: AgentCredentialStore,
         channelSecrets: ChannelSecretStore,
         runtimeSnapshots: @escaping @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = { [] },
         setup: TurgaiSetupStore,
@@ -84,6 +86,7 @@ public struct TurgaiMainWebApp: Sendable {
         self.auth = auth
         self.setup = setup
         self.agentProfiles = agentProfiles
+        self.agentCredentials = agentCredentials
         self.channelSecrets = channelSecrets
         self.runtimeSnapshots = runtimeSnapshots
         self.webChatBridge = webChatBridge
