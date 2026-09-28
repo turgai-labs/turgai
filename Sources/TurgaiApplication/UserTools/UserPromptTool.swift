@@ -20,7 +20,6 @@ public struct UserPromptTool: HailCore.Tool {
     public let tool: UserTool
     public let actorSystem: ClusterSystem
     public let sourceAgentID: AgentID
-    public let agentDirectoryID: AgentDirectoryID
     public let approval: any ToolApproval
     public let conversationID: String
     public let requesterID: String
@@ -30,7 +29,6 @@ public struct UserPromptTool: HailCore.Tool {
         tool: UserTool,
         actorSystem: ClusterSystem,
         sourceAgentID: AgentID,
-        agentDirectoryID: AgentDirectoryID = "agent-directory",
         approval: any ToolApproval,
         conversationID: String = "unknown",
         requesterID: String = "unknown",
@@ -39,7 +37,6 @@ public struct UserPromptTool: HailCore.Tool {
         self.tool = tool
         self.actorSystem = actorSystem
         self.sourceAgentID = sourceAgentID
-        self.agentDirectoryID = agentDirectoryID
         self.approval = approval
         self.conversationID = conversationID
         self.requesterID = requesterID
@@ -96,16 +93,7 @@ public struct UserPromptTool: HailCore.Tool {
                 "\(sourceAgentID.contextID.rawValue)-\(name)-\(UUID().uuidString)"
             )
         )
-        let agent: Agent = try await actorSystem.virtualActors.getActor(
-            identifiedBy: VirtualActorID(rawValue: childID.rawValue),
-            dependency: AgentSpawnConfig(
-                agentID: childID,
-                scope: .isolatedWorkspace,
-                agentDirectoryID: agentDirectoryID,
-                resumesInterruptedTurns: false,
-                snapshotPolicy: .disabled
-            )
-        )
+        let agent: Agent = try await actorSystem.agent(childID)
         let message = ChatMessage.text(
             sender: sourceAgentID.rawValue,
             content: instruction,

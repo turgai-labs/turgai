@@ -454,7 +454,6 @@ public distributed actor Conversation {
         )
         let adapter = HailAgentAdapter(
             actorSystem: actorSystem,
-            agentDirectoryID: dependency.agentDirectoryID,
             agentRole: dependency.agentRole
         )
         self.agentRole = dependency.agentRole
@@ -903,7 +902,6 @@ public distributed actor Conversation {
         if requestedRole != agentRole {
             let adapter = HailAgentAdapter(
                 actorSystem: actorSystem,
-                agentDirectoryID: agentDirectoryID,
                 agentRole: requestedRole
             )
             do {

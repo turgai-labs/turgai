@@ -211,6 +211,27 @@ struct TurgaiAppService: Service, Sendable {
             }
             let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
                 workspaceRoot: workspaceRoot,
+                // An agent is activated by identity alone, so its configuration
+                // is a policy over that identity. Both kinds of agent keep the
+                // default workspace, private to the agent id: per conversation
+                // for profile agents (a group chat's members share one by
+                // construction), fresh per spawn for helpers, whose id embeds
+                // a UUID.
+                spawnConfigProvider: { agentID in
+                    switch agentID.role.rawValue {
+                    case "user-tool":
+                        AgentSpawnConfig(
+                            agentID: agentID,
+                            resumesInterruptedTurns: false,
+                            snapshotPolicy: .disabled
+                        )
+                    default:
+                        // Profile agents: their Conversation owns recovery and
+                        // starts exactly one model run after its own journal
+                        // replays; Hail resuming too would be a second driver.
+                        AgentSpawnConfig(agentID: agentID, resumesInterruptedTurns: false)
+                    }
+                },
                 modelEndpointProvider: modelEndpointProvider,
                 modelSelectionProvider: { request in
                     let role = request.agentID.role.rawValue
@@ -434,13 +455,10 @@ struct TurgaiAppService: Service, Sendable {
                     of: TurgaiAgentRuntimeSnapshot?.self, returning: [TurgaiAgentRuntimeSnapshot].self
                 ) { group in
                     for entry in entries where entry.role.rawValue != "user-tool" {
-                        guard let spawnConfig = entry.spawnConfig else { continue }
                         group.addTask {
                             guard
-                                let agent: Agent = try? await system.virtualActors.getActor(
-                                    identifiedBy: VirtualActorID(rawValue: entry.agentID.rawValue),
-                                    dependency: spawnConfig
-                                ), let snapshot = try? await agent.contextSnapshot
+                                let agent: Agent = try? await system.agent(entry.agentID),
+                                let snapshot = try? await agent.contextSnapshot
                             else {
                                 return nil
                             }

@@ -19,7 +19,6 @@ enum UserAgentRunner {
         toolName: String,
         actorSystem: ClusterSystem,
         sourceAgentID: AgentID,
-        agentDirectoryID: AgentDirectoryID = "agent-directory",
         turnID: String
     ) async throws -> String {
         let childID = AgentID(
@@ -28,16 +27,7 @@ enum UserAgentRunner {
                 "\(sourceAgentID.contextID.rawValue)-\(toolName)-\(UUID().uuidString)"
             )
         )
-        let agent: Agent = try await actorSystem.virtualActors.getActor(
-            identifiedBy: VirtualActorID(rawValue: childID.rawValue),
-            dependency: AgentSpawnConfig(
-                agentID: childID,
-                scope: .isolatedWorkspace,
-                agentDirectoryID: agentDirectoryID,
-                resumesInterruptedTurns: false,
-                snapshotPolicy: .disabled
-            )
-        )
+        let agent: Agent = try await actorSystem.agent(childID)
         let message = ChatMessage.text(
             sender: sourceAgentID.rawValue,
             content: instruction,

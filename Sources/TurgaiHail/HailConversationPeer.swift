@@ -354,16 +354,13 @@ private enum HailRunResult: Sendable {
 /// callers only provide a `ConversationID` and receive `HailConversationPeer`.
 public struct HailAgentAdapter: Sendable {
     public let actorSystem: ClusterSystem
-    public let agentDirectoryID: AgentDirectoryID
     public let agentRole: String
 
     public init(
         actorSystem: ClusterSystem,
-        agentDirectoryID: AgentDirectoryID = "agent-directory",
         agentRole: String = "conversation"
     ) {
         self.actorSystem = actorSystem
-        self.agentDirectoryID = agentDirectoryID
         self.agentRole = agentRole
     }
 
@@ -486,19 +483,7 @@ public struct HailAgentAdapter: Sendable {
             for: conversationID,
             role: agentRole
         )
-        let spawnConfig = AgentSpawnConfig(
-            agentID: agentID,
-            scope: .sharedRoot,
-            agentDirectoryID: agentDirectoryID,
-            // Conversation owns recovery and starts exactly one model run
-            // after its own journal has replayed. Letting Hail resume here
-            // would create a second independent recovery driver.
-            resumesInterruptedTurns: false
-        )
-        return try await actorSystem.virtualActors.getActor(
-            identifiedBy: VirtualActorID(rawValue: agentID.rawValue),
-            dependency: spawnConfig
-        )
+        return try await actorSystem.agent(agentID)
     }
 
     public func deactivate(for conversationID: ConversationID) async throws {
