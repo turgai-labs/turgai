@@ -14,9 +14,11 @@ let package = Package(
         .library(name: "TurgaiTelegram", targets: ["TurgaiTelegram"]),
         .executable(name: "Turgai", targets: ["Turgai"]),
         .executable(name: "TurgaiWasmRunner", targets: ["TurgaiWasmRunner"]),
+        .library(name: "MacApp", targets: ["MacApp"]),
     ],
     dependencies: [
         .package(path: "../hail"),
+        .package(path: "../discoverable-distributed-actors"),
         .package(path: "../cluster-durable-workflows"),
         .package(
             path: "../AnyLanguageModel",
@@ -77,6 +79,10 @@ let package = Package(
         ),
         .package(url: "https://github.com/apple/swift-markdown.git", branch: "main"),
         .package(
+            url: "https://github.com/pointfreeco/swift-composable-architecture.git",
+            from: "1.22.0"
+        ),
+        .package(
             url: "https://github.com/swiftwasm/WasmKit.git",
             from: "0.3.1"
         ),
@@ -106,6 +112,14 @@ let package = Package(
             ]
         ),
         .target(
+            name: "TurgaiObjects",
+            dependencies: [
+                "TurgaiDomain",
+                .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+            ]
+        ),
+        .target(
             name: "TurgaiMemory",
             dependencies: []
         ),
@@ -124,8 +138,10 @@ let package = Package(
                 "TurgaiDomain",
                 "TurgaiMemory",
                 "TurgaiHail",
+                "TurgaiObjects",
                 "TurgaiPersistence",
                 "TurgaiTelegram",
+                .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
@@ -147,13 +163,14 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ]
         ),
-        .executableTarget(
-            name: "Turgai",
+        .target(
+            name: "TurgaiServer",
             dependencies: [
                 "TurgaiApplication",
                 "TurgaiHail",
                 "TurgaiTelegram",
                 "TurgaiWeb",
+                "TurgaiObjects",
                 "TurgaiPersistence",
                 .product(name: "Hail", package: "hail"),
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
@@ -166,6 +183,32 @@ let package = Package(
                 .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Logging", package: "swift-log"),
+            ]
+        ),
+        .executableTarget(
+            name: "Turgai",
+            dependencies: [
+                "TurgaiServer",
+                "TurgaiWeb",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+            ]
+        ),
+        .target(
+            name: "MacApp",
+            dependencies: [
+                "TurgaiModels",
+                "TurgaiObjects",
+                "TurgaiServer",
+                "TurgaiWeb",
+                .product(name: "HailAgentRuntime", package: "hail"),
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+            ],
+            resources: [
+                .process("Resources/Assets.xcassets")
             ]
         ),
         .executableTarget(
@@ -196,12 +239,29 @@ let package = Package(
             dependencies: ["TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiWeb"]
         ),
         .testTarget(
+            name: "TurgaiObjectsTests",
+            dependencies: [
+                "TurgaiObjects",
+                "TurgaiApplication",
+                .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+            ]
+        ),
+        .testTarget(
+            name: "MacAppTests",
+            dependencies: [
+                "MacApp",
+                "TurgaiModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ]
+        ),
+        .testTarget(
             name: "TurgaiTelegramTests",
             dependencies: ["TurgaiDomain", "TurgaiTelegram"]
         ),
         .testTarget(
             name: "TurgaiDeliveryTests",
-            dependencies: ["Turgai", "TurgaiApplication"]
+            dependencies: ["TurgaiApplication"]
         ),
         .target(
             name: "TurgaiPersistence",

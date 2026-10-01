@@ -1,21 +1,25 @@
 import DistributedCluster
 import TurgaiDomain
+import TurgaiObjects
 
 public struct TurgaiChannelRuntimeDependencies: Sendable {
     public let secrets: ChannelSecretStore
     public let connections: TurgaiConnections
     public let attachments: AttachmentResolver
+    public let objectCatalog: ObjectCatalog
     public let loadPersistedConversationIDs: @Sendable () async throws -> [ConversationID]
 
     fileprivate init(
         secrets: ChannelSecretStore,
         connections: TurgaiConnections,
         attachments: AttachmentResolver,
+        objectCatalog: ObjectCatalog,
         loadPersistedConversationIDs: @escaping @Sendable () async throws -> [ConversationID]
     ) {
         self.secrets = secrets
         self.connections = connections
         self.attachments = attachments
+        self.objectCatalog = objectCatalog
         self.loadPersistedConversationIDs = loadPersistedConversationIDs
     }
 }
@@ -65,6 +69,7 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
                     agentProfiles: agentProfiles
                 ),
                 attachments: attachments,
+                objectCatalog: await ObjectCatalog(actorSystem: system),
                 loadPersistedConversationIDs: loadPersistedConversationIDs
             )
         )

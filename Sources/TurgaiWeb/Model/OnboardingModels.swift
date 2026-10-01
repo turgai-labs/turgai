@@ -37,13 +37,11 @@ struct StorageFormValues: Sendable, Equatable {
 
 struct BotFormValues: Sendable, Equatable {
     let name: String
-    let contextWindow: String?
     let persona: String?
     let instructions: String
 
     init(form: [String: [String]], nameKey: String = "name") {
         name = form[nameKey]?.first ?? ""
-        contextWindow = form["contextWindow"]?.first
         persona = form["persona"]?.first
         instructions = form["instructions"]?.first ?? ""
     }
@@ -58,6 +56,7 @@ struct ModelFormValues: Sendable, Equatable {
     let compatibleAPI: String?
     let modelPath: String?
     let gpuLayers: String?
+    let contextWindow: String?
 
     init(form: [String: [String]]) {
         provider = form["provider"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -68,6 +67,7 @@ struct ModelFormValues: Sendable, Equatable {
         compatibleAPI = form["compatibleAPI"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         modelPath = form["modelPath"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
         gpuLayers = form["gpuLayers"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        contextWindow = form["contextWindow"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

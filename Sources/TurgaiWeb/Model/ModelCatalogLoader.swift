@@ -55,7 +55,7 @@ public enum TurgaiModelCatalogLoader {
         #endif
 
         var ollamaBaseURLs: [URL] = profiles.compactMap { profile in
-            guard case .ollama(let baseURL) = profile.providerConfiguration else { return nil }
+            guard case .ollama(let baseURL, _) = profile.providerConfiguration else { return nil }
             return baseURL
         }
         if ollamaBaseURLs.isEmpty {

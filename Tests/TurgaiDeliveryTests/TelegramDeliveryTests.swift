@@ -2,7 +2,6 @@ import Testing
 import TurgaiDomain
 import TurgaiTelegram
 
-@testable import Turgai
 @testable import TurgaiApplication
 
 @Test

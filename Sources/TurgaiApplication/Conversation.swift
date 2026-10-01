@@ -6,6 +6,7 @@ import Hail
 import TurgaiDomain
 import TurgaiHail
 import TurgaiMemory
+import TurgaiObjects
 import VirtualActors
 
 #if canImport(FoundationEssentials)
@@ -445,6 +446,16 @@ public distributed actor Conversation {
     /// already broadcast. Bounded like `ConversationState.acceptedMessageIDs`.
     private var echoedMessageIDs: [MessageID] = []
     private var modelTask: Task<Void, Never>?
+    /// Questions waiting for the user, live-only like the connections that ask them.
+    private var approvals: [UUID: PendingApproval] = [:]
+    private static let approvalExpiration: Duration = .seconds(300)
+
+    private struct PendingApproval {
+        let turnID: TurgaiDomain.TurnID?
+        let prompt: ApprovalPrompt
+        let continuation: CheckedContinuation<ApprovalDecision, Never>
+    }
+
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
         self.conversationID = dependency.conversationID
@@ -537,7 +548,46 @@ public distributed actor Conversation {
                 break
             }
         }
+        for approval in approvals.values {
+            try? await connection.broadcast(
+                .approvalRequested(conversationID: conversationID, turnID: approval.turnID, prompt: approval.prompt)
+            )
+        }
         await deliverPendingReplies()
+    }
+
+    /// Asks the people in this conversation whether an action may run, and waits
+    /// for one of them to answer. Nobody connected, no answer in time, or a
+    /// cancelled turn all mean no.
+    public distributed func requestApproval(_ request: ChannelApprovalRequest) async -> ApprovalDecision {
+        guard !connections.isEmpty else { return .denied }
+        let prompt = ApprovalPrompt(id: UUID(), action: request.command, arguments: request.arguments)
+        let turnID = UUID(uuidString: request.turnID).map { TurgaiDomain.TurnID(rawValue: $0) }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                approvals[prompt.id] = PendingApproval(turnID: turnID, prompt: prompt, continuation: continuation)
+                Task {
+                    await self.publishLive(
+                        .approvalRequested(conversationID: self.conversationID, turnID: turnID, prompt: prompt)
+                    )
+                    try? await Task.sleep(for: Self.approvalExpiration)
+                    await self.resolveApproval(prompt.id, decision: .denied)
+                }
+            }
+        } onCancel: {
+            Task { await self.resolveApproval(prompt.id, decision: .denied) }
+        }
+    }
+
+    /// A user's answer to a question from ``requestApproval(_:)``.
+    public distributed func decideApproval(_ id: UUID, decision: ApprovalDecision) async {
+        await resolveApproval(id, decision: decision)
+    }
+
+    private func resolveApproval(_ id: UUID, decision: ApprovalDecision) async {
+        guard let approval = approvals.removeValue(forKey: id) else { return }
+        approval.continuation.resume(returning: decision)
+        await publishLive(.approvalResolved(conversationID: conversationID, approvalID: id, decision: decision))
     }
 
     public distributed func removeConnection(_ connection: ConversationConnection) async {
@@ -959,6 +1009,15 @@ public distributed actor Conversation {
                         conversationID: conversationID
                     )
                 )
+                if let objectCatalog = try? await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog {
+                    turnContext.append(
+                        contentsOf: await ObjectSession.turnContext(
+                            actorSystem: actorSystem,
+                            objectCatalog: objectCatalog,
+                            conversationID: conversationID
+                        )
+                    )
+                }
                 let accumulator = ReplyTextAccumulator()
                 let response = try await peer.run(
                     to: request,

@@ -967,6 +967,22 @@ html[data-theme="dark"] .button-accent:hover {
     padding: .7rem 0;
     transform: none;
 }
+.chat-approval-arguments code {
+    font-size: .85em;
+    word-break: break-all;
+}
+.chat-approval-actions {
+    display: flex;
+    gap: .5rem;
+    margin-top: .5rem;
+}
+.chat-approval-answer { margin: 0; }
+.provider-settings fieldset {
+    border: 0;
+    margin: 0;
+    min-width: 0;
+    padding: 0;
+}
 [hidden] { display: none !important; }
 @keyframes chat-bubble-stamp {
     0% {

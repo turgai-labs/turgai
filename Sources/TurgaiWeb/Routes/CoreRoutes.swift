@@ -6,6 +6,7 @@ import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
 import TurgaiHail
+import TurgaiModels
 import TurgaiPersistence
 import TurgaiTelegram
 
@@ -49,6 +50,15 @@ extension TurgaiMainWebApp {
                 }.response(from: request, context: context)
             }
             return TurgaiWebSupport.redirect(to: "/onboarding/model")
+        }
+        // Public: lets a client such as the Mac app wait for setup before opening chat.
+        router.get("/api/v1/status") { _, _ in
+            let hasAdmin = await auth.hasAdmin()
+            let isComplete = await setup.isComplete
+            let isReady = await setup.isReady
+            let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
+            let complete = hasAdmin && isComplete && isReady && hasDefaultProfile
+            return try TurgaiWebSupport.jsonResponse(TurgaiServerStatus(setup: complete ? .complete : .pending))
         }
         router.get("/api/agents") { request, _ in
             guard await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) != nil else {

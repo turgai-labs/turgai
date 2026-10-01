@@ -312,7 +312,6 @@ public struct MemoryExtractionActivities {
         let endpoint = try await endpointFactory.endpoint(
             model: input.configuration.model,
             configuration: provider,
-            contextWindow: input.configuration.contextWindow,
             temperature: 0.2,
             ollamaKeepAlive: ollamaKeepAlive,
             reasoning: reasoning

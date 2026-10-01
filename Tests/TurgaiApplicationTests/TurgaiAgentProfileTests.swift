@@ -16,13 +16,16 @@ struct TurgaiAgentProfileTests {
         let profile = try await store.create(
             name: "Conversation",
             model: try AgentModel("ollama/qwen3.5:9b"),
-            providerConfiguration: .ollama(baseURL: OllamaConfiguration.defaultBaseURL)
+            providerConfiguration: .ollama(baseURL: OllamaConfiguration.defaultBaseURL, contextWindow: 16_384)
         )
 
         #expect(profile.id == TurgaiAgentProfileStore.defaultProfileID)
         #expect(profile.name == "Conversation")
         #expect(profile.model.identifier == "ollama/qwen3.5:9b")
-        #expect(profile.providerConfiguration == .ollama(baseURL: OllamaConfiguration.defaultBaseURL))
+        #expect(
+            profile.providerConfiguration == .ollama(baseURL: OllamaConfiguration.defaultBaseURL, contextWindow: 16_384)
+        )
+        #expect(profile.contextWindow == 16_384)
         #expect(profile.persona == nil)
     }
 
@@ -32,14 +35,16 @@ struct TurgaiAgentProfileTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let store = try TurgaiAgentProfileStore(files: FileClient(directory: directory))
+        let cloud = AgentProviderConfiguration.openAI(credential: .new(), contextWindow: 128_000)
         let profile = try await store.create(
             name: "Cloud",
             model: try AgentModel("openai/gpt-4.1"),
-            providerConfiguration: .none
+            providerConfiguration: cloud
         )
 
         #expect(profile.model.provider == .openAI)
-        #expect(profile.providerConfiguration == .none)
+        #expect(profile.providerConfiguration == cloud)
+        #expect(profile.contextWindow == 128_000)
     }
 
     @Test("does not invent a profile ID for an empty catalog")
@@ -62,49 +67,46 @@ struct TurgaiAgentProfileTests {
         let profile = try await store.create(
             name: "Quiet",
             model: try AgentModel("openai/gpt-4.1"),
-            providerConfiguration: .none,
+            providerConfiguration: .openAI(credential: .new(), contextWindow: 16_384),
             persona: "   "
         )
 
         #expect(profile.persona == "   ")
     }
 
-    @Test("maps extraction capability to the configured provider")
+    @Test("captures the profile's provider for memory extraction")
     func extractionProviderMapping() throws {
         let ollama = TurgaiAgentProfile(
             id: "local",
             name: "Local",
             model: try AgentModel("ollama/llama3.2"),
-            providerConfiguration: .ollama(baseURL: OllamaConfiguration.defaultBaseURL)
+            providerConfiguration: .ollama(baseURL: OllamaConfiguration.defaultBaseURL, contextWindow: 16_384)
         )
         let cloud = TurgaiAgentProfile(
             id: "cloud",
             name: "Cloud",
             model: try AgentModel("openai/gpt-4.1"),
-            providerConfiguration: .none
+            providerConfiguration: .openAI(credential: .new(), contextWindow: 16_384)
         )
 
-        let ollamaConfiguration = try #require(MemoryExtractionConfiguration(profile: ollama))
-        let cloudConfiguration = try #require(MemoryExtractionConfiguration(profile: cloud))
+        #expect(
+            MemoryExtractionConfiguration(profile: ollama).provider
+                == .configured(ollama.providerConfiguration, ollamaKeepAlive: "10m"))
+        #expect(
+            MemoryExtractionConfiguration(profile: cloud).provider
+                == .configured(cloud.providerConfiguration, ollamaKeepAlive: nil))
+        #expect(!MemoryExtractionConfiguration(model: cloud.model, provider: .disabled).isEnabled)
+    }
 
-        guard case .ollama(let baseURL, let keepAlive) = ollamaConfiguration.provider else {
-            Issue.record("Expected Ollama extraction configuration")
-            return
-        }
-        #expect(baseURL == OllamaConfiguration.defaultBaseURL)
-        #expect(keepAlive == "10m")
-
-        guard case .unavailable(let provider) = cloudConfiguration.provider else {
-            Issue.record("Expected unavailable extraction configuration")
-            return
-        }
-        #expect(provider == .openAI)
-
-        let disabled = MemoryExtractionConfiguration(
-            model: cloud.model.id,
-            provider: .disabled
+    @Test("takes the on-device model's context window from the model")
+    func appleSystemWindowIsTheModels() throws {
+        let profile = TurgaiAgentProfile(
+            id: "local",
+            name: "Local",
+            model: try AgentModel("system/default"),
+            providerConfiguration: .appleSystem
         )
-        #expect(MemoryExtractionEndpointFactory.make(configuration: disabled) == nil)
+        #expect(profile.contextWindow == AgentProviderConfiguration.appleSystemContextWindow)
     }
 
     @Test("applies endpoint removal on the next profile snapshot")
@@ -116,17 +118,18 @@ struct TurgaiAgentProfileTests {
         let local = try await store.create(
             name: "Local",
             model: try AgentModel("ollama/llama3.2"),
-            providerConfiguration: .ollama(baseURL: OllamaConfiguration.defaultBaseURL)
+            providerConfiguration: .ollama(baseURL: OllamaConfiguration.defaultBaseURL, contextWindow: 16_384)
         )
         var cloud = local
         cloud.model = try AgentModel("openai/gpt-4.1")
-        cloud.providerConfiguration = .none
+        let cloudConfiguration = AgentProviderConfiguration.openAI(credential: .new(), contextWindow: 16_384)
+        cloud.providerConfiguration = cloudConfiguration
 
         try await store.update(cloud)
 
         let updated = try #require(await store.profile(id: local.id))
         #expect(updated.model.provider == .openAI)
-        #expect(updated.providerConfiguration == .none)
+        #expect(updated.providerConfiguration == cloudConfiguration)
     }
 
     @Test("decodes the current profile representation")
@@ -135,7 +138,7 @@ struct TurgaiAgentProfileTests {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let state = Data(
-            #"{"defaultProfileID":"conversation","profiles":[{"id":"conversation","name":"Conversation","model":"ollama/llama3.2","providerConfiguration":{"kind":"ollama","baseURL":"http://127.0.0.1:11434"},"contextWindow":8192,"instructions":"","availability":"enabled"}]}"#
+            #"{"defaultProfileID":"conversation","profiles":[{"id":"conversation","name":"Conversation","model":"ollama/llama3.2","providerConfiguration":{"ollama":{"baseURL":"http://127.0.0.1:11434","contextWindow":8192}},"instructions":"","availability":"enabled"}]}"#
                 .utf8
         )
         try FileManager.default.createDirectory(

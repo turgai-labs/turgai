@@ -11,6 +11,7 @@ import TurgaiApplication
 import TurgaiDomain
 import TurgaiHail
 import TurgaiMemory
+import TurgaiObjects
 import TurgaiPersistence
 import TurgaiTelegram
 import TurgaiWeb
@@ -55,6 +56,7 @@ struct TurgaiAppService: Service, Sendable {
     private let agentCredentials: AgentCredentialStore
     private let channelSecrets: ChannelSecretStore
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
+    private let objectCatalogSource: TurgaiObjectCatalogSource
     private let webChatBridge: TurgaiWebChatBridge
 
     init(
@@ -65,6 +67,7 @@ struct TurgaiAppService: Service, Sendable {
         agentCredentials: AgentCredentialStore,
         channelSecrets: ChannelSecretStore,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
+        objectCatalogSource: TurgaiObjectCatalogSource,
         webChatBridge: TurgaiWebChatBridge
     ) {
         self.environment = environment
@@ -74,6 +77,7 @@ struct TurgaiAppService: Service, Sendable {
         self.agentCredentials = agentCredentials
         self.channelSecrets = channelSecrets
         self.runtimeSnapshotSource = runtimeSnapshotSource
+        self.objectCatalogSource = objectCatalogSource
         self.webChatBridge = webChatBridge
     }
 
@@ -332,15 +336,18 @@ struct TurgaiAppService: Service, Sendable {
                     )
                 },
                 turnToolsProvider: { context, actorSystem in
-                    ConversationTools.make(
+                    let objectCatalog = try await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog
+                    return ConversationTools.make(
                         context: context,
                         attachmentResolver: attachmentResolver,
                         searchBackend: searchBackend,
                         workspaceRoot: workspaceRoot,
                         wasmRunnerURL: wasmRunnerURL,
                         userTools: userToolRegistry,
-                        approval: ChannelToolApproval(actorSystem: actorSystem),
+                        approval: ChannelToolApproval(
+                            actorSystem: actorSystem, agentRole: context.agentID.role.rawValue),
                         actorSystem: actorSystem,
+                        objectCatalog: objectCatalog,
                         includeConversationTools: context.agentID.role.rawValue != "user-tool"
                     )
                 },
@@ -377,6 +384,12 @@ struct TurgaiAppService: Service, Sendable {
                         .grantingAll(for: ReplaceTimerEffect.self)
                         .grantingAll(for: CancelTimerEffect.self)
                         .grantingAll(for: ListTimersEffect.self)
+                        // Actions that aren't safe also ask the user, inside the effect.
+                        .grantingAll(for: ListObjectsEffect.self)
+                        .grantingAll(for: FindObjectsEffect.self)
+                        .grantingAll(for: DescribeObjectEffect.self)
+                        .grantingAll(for: InvokeObjectEffect.self)
+                        .grantingAll(for: ReadObjectEffect.self)
                 }
             )
             // The plugin is the stores' long-term owner: it receives the
@@ -394,10 +407,15 @@ struct TurgaiAppService: Service, Sendable {
                 loadPersistedConversationIDs: loadPersistedConversationIDs
             )
 
+            // Nodes find each other through the cluster daemon, as in swift-chat.
             let system = await ClusterSystem("turgai") { settings in
                 settings.bindHost = "127.0.0.1"
-                settings.bindPort = PortFinder.findAvailablePort(host: "127.0.0.1")
-                settings.discovery = nil
+                // The lowest address leads the cluster, compared as a string, and cluster
+                // singletons such as Hail's active-agent index run on the leader. This port
+                // sorts before the daemon's (3137) and the objects node's ephemeral one, so
+                // the only node hosting those singletons leads.
+                settings.bindPort = 2550
+                settings.discovery = .clusterd
                 settings.autoLeaderElection = .lowestReachable(minNumberOfMembers: 1)
                 settings.plugins.install(plugin: ClusterSingletonPlugin())
                 settings.plugins.install(plugin: virtualActorsPlugin)
@@ -430,6 +448,7 @@ struct TurgaiAppService: Service, Sendable {
             try await system.workflows.recoverAll(ofType: MemoryExtractionWorkflow.self)
             let channelRuntime = try await system.turgaiChannelRuntime.dependencies()
             let connections = channelRuntime.connections
+            await objectCatalogSource.set(channelRuntime.objectCatalog)
             await webChatBridge.install(
                 connections,
                 discoverChannelIDs: discoverChannelIDs,

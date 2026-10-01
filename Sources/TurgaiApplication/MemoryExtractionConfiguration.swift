@@ -16,16 +16,13 @@ public enum MemoryExtractionProviderConfiguration: Codable, Sendable, Equatable 
 public struct MemoryExtractionConfiguration: Codable, Sendable, Equatable {
     public let model: AgentModel
     public let provider: MemoryExtractionProviderConfiguration
-    public let contextWindow: Int
 
     public init(
         model: AgentModel,
-        provider: MemoryExtractionProviderConfiguration,
-        contextWindow: Int = 4_096
+        provider: MemoryExtractionProviderConfiguration
     ) {
         self.model = model
         self.provider = provider
-        self.contextWindow = contextWindow
     }
 
     public init(profile: TurgaiAgentProfile) {
@@ -34,8 +31,7 @@ public struct MemoryExtractionConfiguration: Codable, Sendable, Equatable {
             provider: .configured(
                 profile.providerConfiguration,
                 ollamaKeepAlive: profile.model.provider == .ollama ? "10m" : nil
-            ),
-            contextWindow: profile.contextWindow
+            )
         )
     }
 

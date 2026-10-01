@@ -1,5 +1,7 @@
 import DistributedCluster
 import Hail
+import TurgaiDomain
+import TurgaiObjects
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -21,6 +23,7 @@ public enum ConversationTools {
         userTools: UserToolRegistry? = nil,
         approval: any ToolApproval = DenyAllApproval(),
         actorSystem: ClusterSystem? = nil,
+        objectCatalog: ObjectCatalog? = nil,
         includeConversationTools: Bool = true
     ) -> [any Tool] {
         guard includeConversationTools else { return [] }
@@ -34,6 +37,16 @@ public enum ConversationTools {
         tools += ScheduleTools(context: context).tools
         tools += WeatherTools().tools
         tools += TimerTools(context: context).tools
+
+        if let actorSystem {
+            let owner = ConversationID(stableKey: context.agentID.contextID.rawValue)?.participantUserID
+            let session = ObjectSession(
+                actorSystem: actorSystem,
+                objectCatalog: objectCatalog,
+                scopes: owner.map(ObjectScope.visible(to:)) ?? [.shared]
+            )
+            tools += ObjectTools(session: session).tools
+        }
 
         if let userTools {
             let builtinNames = Set(tools.map(\.name))

@@ -18,7 +18,6 @@ public actor AgentModelEndpointFactory {
         try await endpoint(
             model: profile.model,
             configuration: profile.providerConfiguration,
-            contextWindow: profile.contextWindow,
             temperature: temperature,
             ollamaKeepAlive: ollamaKeepAlive,
             reasoning: reasoning
@@ -28,14 +27,14 @@ public actor AgentModelEndpointFactory {
     public func endpoint(
         model agentModel: AgentModel,
         configuration: AgentProviderConfiguration,
-        contextWindow: Int,
         temperature: Double,
         ollamaKeepAlive: String? = nil,
         reasoning: ReasoningEffortSelection? = nil
     ) async throws -> any ModelEndpoint {
         let model = agentModel.id.rawValue
+        let contextWindow = configuration.contextWindow
         switch configuration {
-        case .ollama(let baseURL):
+        case .ollama(let baseURL, _):
             let think: Bool?
             switch reasoning?.encoding {
             case nil: think = nil
@@ -55,7 +54,7 @@ public actor AgentModelEndpointFactory {
                 keepAlive: ollamaKeepAlive,
                 think: think
             )
-        case .openAI(let reference):
+        case .openAI(let reference, _):
             let apiKey = try await credential(reference)
             return AnyLanguageModelEndpoint(
                 languageModel: OpenAILanguageModel(
@@ -69,7 +68,7 @@ public actor AgentModelEndpointFactory {
                     provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
                 )
             )
-        case .anthropic(let reference):
+        case .anthropic(let reference, _):
             let apiKey = try await credential(reference)
             return AnyLanguageModelEndpoint(
                 languageModel: AnthropicLanguageModel(
@@ -83,7 +82,7 @@ public actor AgentModelEndpointFactory {
                     provider: .anthropic, model: model, temperature: temperature, reasoning: reasoning
                 )
             )
-        case .gemini(let reference):
+        case .gemini(let reference, _):
             let apiKey = try await credential(reference)
             return AnyLanguageModelEndpoint(
                 languageModel: GeminiLanguageModel(
@@ -97,7 +96,7 @@ public actor AgentModelEndpointFactory {
                     model: model, temperature: temperature, reasoning: reasoning
                 )
             )
-        case .openAICompatible(let baseURL, let reference, let api):
+        case .openAICompatible(let baseURL, let reference, let api, _):
             let key = try await credential(reference)
             switch api {
             case .chatCompletions:
@@ -139,7 +138,7 @@ public actor AgentModelEndpointFactory {
             #else
                 throw AgentModelEndpointFactoryError.unavailable(.system)
             #endif
-        case .llamaCPP(let configuration):
+        case .llamaCPP(let configuration, _):
             try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
             return await llamaCache.endpoint(
                 model: model,

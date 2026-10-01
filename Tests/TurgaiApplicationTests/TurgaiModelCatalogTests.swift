@@ -13,7 +13,7 @@ struct TurgaiModelCatalogTests {
             id: "conversation",
             name: "Conversation",
             model: try AgentModel("openai/gpt-4.1"),
-            providerConfiguration: .none
+            providerConfiguration: .openAI(credential: .new(), contextWindow: 16_384)
         )
         let catalog = await TurgaiModelCatalogLoader.load(
             profiles: [configuredProfile],
@@ -31,25 +31,22 @@ struct TurgaiModelCatalogTests {
         #endif
     }
 
-    @Test("preserves configured providers that have no discovery adapter")
-    func configuredManualProvider() async throws {
+    @Test("doesn't offer a provider Turgai doesn't support, even from a saved profile")
+    func unsupportedProviderIsExcluded() async throws {
         let configuredProfile = TurgaiAgentProfile(
             id: "conversation",
             name: "Conversation",
             model: try AgentModel("custom-provider/quiet-model"),
-            providerConfiguration: .none
+            providerConfiguration: .openAI(credential: .new(), contextWindow: 16_384)
         )
         let catalog = await TurgaiModelCatalogLoader.load(
             profiles: [configuredProfile],
             discovery: Self.emptyDiscovery
         )
 
-        let provider = AgentModelProvider(rawValue: "custom-provider")
-        #expect(
-            catalog.provider(for: ModelProviderID(rawValue: provider.rawValue))?.provider.rawValue == provider.rawValue)
-        let providerID = ModelProviderID(rawValue: provider.rawValue)
-        #expect(catalog.choices(for: providerID).map(\.identifier) == ["custom-provider/quiet-model"])
-        #expect(catalog.notice(for: providerID) == "Enter a model ID for this provider.")
+        let providerID = ModelProviderID(rawValue: "custom-provider")
+        #expect(catalog.provider(for: providerID) == nil)
+        #expect(catalog.choices(for: providerID).isEmpty)
     }
 
     @Test("discovers models from every configured Ollama server")
@@ -58,13 +55,13 @@ struct TurgaiModelCatalogTests {
             id: "first",
             name: "First",
             model: try AgentModel("ollama/llama3.2"),
-            providerConfiguration: .ollama(baseURL: URL(string: "http://first.test:11434")!)
+            providerConfiguration: .ollama(baseURL: URL(string: "http://first.test:11434")!, contextWindow: 16_384)
         )
         let secondProfile = TurgaiAgentProfile(
             id: "second",
             name: "Second",
             model: try AgentModel("ollama/mistral"),
-            providerConfiguration: .ollama(baseURL: URL(string: "http://second.test:11434")!)
+            providerConfiguration: .ollama(baseURL: URL(string: "http://second.test:11434")!, contextWindow: 16_384)
         )
         let discovery = TurgaiModelCatalogLoader.Discovery(
             ollama: { url in

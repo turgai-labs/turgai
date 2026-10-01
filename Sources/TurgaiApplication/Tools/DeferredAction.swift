@@ -40,6 +40,15 @@ public enum DeferredAction: Codable, Sendable, Equatable {
     }
 }
 
+extension ConversationID {
+    /// The user a conversation belongs to: its participant on that channel.
+    var participantUserID: TurgaiDomain.UserID? {
+        let participant = externalAddress.rawValue
+        guard !participant.isEmpty else { return nil }
+        return TurgaiDomain.UserID(rawValue: "participant:\(channel.rawValue):\(participant)")
+    }
+}
+
 private struct DeferredToolTarget: Sendable {
     let ownerID: TurgaiDomain.UserID
     let conversationID: ConversationID
@@ -49,12 +58,13 @@ private struct DeferredToolTarget: Sendable {
         guard let conversationID = ConversationID(stableKey: context.agentID.contextID.rawValue) else {
             throw TimerTools.Error.invalidConversationID(context.agentID.contextID.rawValue)
         }
-        let participant = conversationID.externalAddress.rawValue
-        guard !participant.isEmpty else { throw TimerTools.Error.invalidParticipantID(participant) }
-        let sender = "participant:\(conversationID.channel.rawValue):\(participant)"
-        ownerID = TurgaiDomain.UserID(rawValue: sender)
+        guard let ownerID = conversationID.participantUserID else {
+            throw TimerTools.Error.invalidParticipantID(conversationID.externalAddress.rawValue)
+        }
+        self.ownerID = ownerID
         self.conversationID = conversationID
-        participantID = ParticipantID(channel: conversationID.channel, rawValue: participant)
+        participantID = ParticipantID(
+            channel: conversationID.channel, rawValue: conversationID.externalAddress.rawValue)
     }
 
     func timerRequest(action: DeferredAction) -> Timer.Request {

@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import Hail
 import TurgaiPersistence
 
@@ -46,37 +47,61 @@ public struct LlamaCPPConfiguration: Codable, Sendable, Equatable {
 }
 
 /// Complete provider-owned configuration for a profile. Each case carries
-/// exactly the values required to construct that provider for a turn.
+/// exactly the values required to construct that provider for a turn,
+/// including its context window where that is the user's choice.
 public enum AgentProviderConfiguration: Codable, Sendable, Equatable {
-    case ollama(baseURL: URL)
-    case openAI(credential: AgentCredentialReference)
-    case anthropic(credential: AgentCredentialReference)
-    case gemini(credential: AgentCredentialReference)
+    case ollama(baseURL: URL, contextWindow: Int)
+    case openAI(credential: AgentCredentialReference, contextWindow: Int)
+    case anthropic(credential: AgentCredentialReference, contextWindow: Int)
+    case gemini(credential: AgentCredentialReference, contextWindow: Int)
     case openAICompatible(
         baseURL: URL,
         credential: AgentCredentialReference,
-        api: OpenAICompatibleAPI
+        api: OpenAICompatibleAPI,
+        contextWindow: Int
     )
+    /// Apple's on-device model. Its context window isn't a setting: the model
+    /// reports it, and it differs between OS releases.
     case appleSystem
-    case llamaCPP(LlamaCPPConfiguration)
+    case llamaCPP(LlamaCPPConfiguration, contextWindow: Int)
 }
 
 extension AgentProviderConfiguration {
     public var credentialReference: AgentCredentialReference? {
         switch self {
-        case .openAI(let reference), .anthropic(let reference), .gemini(let reference):
+        case .openAI(let reference, _), .anthropic(let reference, _), .gemini(let reference, _):
             return reference
-        case .openAICompatible(_, let reference, _):
+        case .openAICompatible(_, let reference, _, _):
             return reference
         case .ollama, .appleSystem, .llamaCPP:
             return nil
         }
     }
+
+    /// How many tokens a prompt may use with this provider.
+    public var contextWindow: Int {
+        switch self {
+        case .ollama(_, let window), .openAI(_, let window), .anthropic(_, let window),
+            .gemini(_, let window), .openAICompatible(_, _, _, let window), .llamaCPP(_, let window):
+            return window
+        case .appleSystem:
+            return Self.appleSystemContextWindow
+        }
+    }
+
+    /// The on-device model's own context window.
+    public static var appleSystemContextWindow: Int {
+        #if canImport(FoundationModels)
+            SystemLanguageModel.default.contextSize
+        #else
+            0
+        #endif
+    }
 }
 
 public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey {
-        case id, name, model, reasoningEffort, providerConfiguration, contextWindow, persona, instructions,
+        case id, name, model, reasoningEffort, providerConfiguration, persona, instructions,
             availability
     }
 
@@ -87,7 +112,8 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
     /// the selected model provider.
     public var reasoningEffort: ReasoningEffort?
     public var providerConfiguration: AgentProviderConfiguration
-    public var contextWindow: Int
+    /// How many tokens a prompt may use, as the provider configuration says.
+    public var contextWindow: Int { providerConfiguration.contextWindow }
     /// Optional persona supplied by configuration. Nil or an empty string
     /// means that no persona instructions are added.
     public var persona: String?
@@ -100,7 +126,6 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
         model: AgentModel,
         reasoningEffort: ReasoningEffort? = nil,
         providerConfiguration: AgentProviderConfiguration,
-        contextWindow: Int = 16_384,
         persona: String? = nil,
         instructions: String = "",
         availability: AgentAvailability = .enabled
@@ -110,7 +135,6 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
         self.model = model
         self.reasoningEffort = reasoningEffort
         self.providerConfiguration = providerConfiguration
-        self.contextWindow = contextWindow
         self.persona = persona
         self.instructions = instructions
         self.availability = availability
@@ -123,7 +147,6 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
         model = try values.decode(AgentModel.self, forKey: .model)
         reasoningEffort = try values.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort)
         providerConfiguration = try values.decode(AgentProviderConfiguration.self, forKey: .providerConfiguration)
-        contextWindow = try values.decode(Int.self, forKey: .contextWindow)
         persona = try values.decodeIfPresent(String.self, forKey: .persona)
         instructions = try values.decode(String.self, forKey: .instructions)
         availability = try values.decode(AgentAvailability.self, forKey: .availability)
@@ -136,7 +159,6 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
         try values.encode(model, forKey: .model)
         try values.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
         try values.encode(providerConfiguration, forKey: .providerConfiguration)
-        try values.encode(contextWindow, forKey: .contextWindow)
         try values.encodeIfPresent(persona, forKey: .persona)
         try values.encode(instructions, forKey: .instructions)
         try values.encode(availability, forKey: .availability)
@@ -162,6 +184,7 @@ public enum TurgaiAgentProfileError: Error, Equatable, Sendable {
 /// without an unchecked sendability escape hatch.
 public actor TurgaiAgentProfileStore {
     public static let defaultProfileID = "conversation"
+    /// The context window a new profile starts with, for providers where it's a choice.
     public static let defaultContextWindow = 16_384
 
     private struct State: Codable, Sendable {
@@ -259,7 +282,6 @@ public actor TurgaiAgentProfileStore {
         model: AgentModel,
         reasoningEffort: ReasoningEffort? = nil,
         providerConfiguration: AgentProviderConfiguration,
-        contextWindow: Int = TurgaiAgentProfileStore.defaultContextWindow,
         persona: String? = nil,
         instructions: String = ""
     ) throws -> TurgaiAgentProfile {
@@ -271,7 +293,6 @@ public actor TurgaiAgentProfileStore {
             model: model,
             reasoningEffort: reasoningEffort,
             providerConfiguration: providerConfiguration,
-            contextWindow: contextWindow,
             persona: persona,
             instructions: instructions
         )
@@ -305,7 +326,7 @@ public actor TurgaiAgentProfileStore {
             throw TurgaiAgentProfileError.invalidName
         }
         switch profile.providerConfiguration {
-        case .ollama(let baseURL):
+        case .ollama(let baseURL, _):
             guard profile.model.provider == .ollama, Self.validHTTPURL(baseURL) else {
                 throw TurgaiAgentProfileError.invalidEndpointURL(baseURL.absoluteString)
             }
@@ -317,13 +338,13 @@ public actor TurgaiAgentProfileStore {
             }
         case .gemini:
             guard profile.model.provider == .gemini else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
-        case .openAICompatible(let baseURL, _, _):
+        case .openAICompatible(let baseURL, _, _, _):
             guard profile.model.provider == .openAICompatible, Self.validHTTPURL(baseURL) else {
                 throw TurgaiAgentProfileError.invalidEndpointURL(baseURL.absoluteString)
             }
         case .appleSystem:
             guard profile.model.provider == .system else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
-        case .llamaCPP(let configuration):
+        case .llamaCPP(let configuration, _):
             guard profile.model.provider == .llamaCPP,
                 !configuration.modelPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {

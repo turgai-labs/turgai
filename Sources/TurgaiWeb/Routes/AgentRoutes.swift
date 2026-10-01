@@ -111,10 +111,6 @@ extension TurgaiMainWebApp {
                     try await agentCredentials.save(credential.value, for: credential.reference)
                 }
                 profile.providerConfiguration = submission.configuration
-                profile.contextWindow = try OnboardingInput.positiveInteger(
-                    values.contextWindow,
-                    field: "context window"
-                )
                 profile.persona = values.persona
                 profile.instructions = values.instructions
                 try await agentProfiles.update(profile)
@@ -176,16 +172,11 @@ extension TurgaiMainWebApp {
                     pendingCredential = credential.reference
                     try await agentCredentials.save(credential.value, for: credential.reference)
                 }
-                let contextWindow = try OnboardingInput.positiveInteger(
-                    values.contextWindow,
-                    field: "context window"
-                )
                 let profile = try await agentProfiles.create(
                     name: values.name,
                     model: model,
                     reasoningEffort: reasoningEffort,
                     providerConfiguration: submission.configuration,
-                    contextWindow: contextWindow,
                     persona: values.persona,
                     instructions: values.instructions
                 )

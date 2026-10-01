@@ -411,6 +411,7 @@ public enum ConversationInput: Sendable, Equatable {
     )
     case connect(ConversationID)
     case reset(ConversationID)
+    case approval(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision)
     case memory(
         conversationID: ConversationID,
         participantID: ParticipantID,
@@ -814,8 +815,32 @@ public struct OutboundAction: Hashable, Codable, Sendable {
     }
 }
 
+public enum ApprovalDecision: Hashable, Codable, Sendable {
+    case granted
+    case denied
+}
+
+/// A question to the user before an action runs, asked in the conversation that
+/// wants it. It's answered by its ID.
+public struct ApprovalPrompt: Hashable, Codable, Sendable, Identifiable {
+    public let id: UUID
+    /// What would run, such as `Music.play`.
+    public let action: String
+    /// Its arguments, as the user should read them.
+    public let arguments: String
+
+    public init(id: UUID, action: String, arguments: String) {
+        self.id = id
+        self.action = action
+        self.arguments = arguments
+    }
+}
+
 public enum OutboundEvent: Hashable, Codable, Sendable {
     case reply(ReplyEvent)
+    case approvalRequested(conversationID: ConversationID, turnID: TurnID?, prompt: ApprovalPrompt)
+    /// Every connection hears the answer, so each can stop asking.
+    case approvalResolved(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision)
     case notice(conversationID: ConversationID, turnID: TurnID?, text: String)
     case noticeWithActions(
         conversationID: ConversationID,

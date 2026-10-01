@@ -329,11 +329,30 @@ extension TurgaiMainWebApp {
                         for try await input in inbound.messages(maxSize: 1_000_000) {
                             guard case .text(let text) = input,
                                 let data = text.data(using: .utf8),
-                                let command = try? JSONDecoder().decode(
-                                    TurgaiModels.SendMessageRequest.self,
+                                let chatCommand = try? JSONDecoder().decode(
+                                    TurgaiModels.ChatCommand.self,
                                     from: data
                                 )
                             else { continue }
+                            let command: TurgaiModels.SendMessageRequest
+                            switch chatCommand {
+                            case .message(let request):
+                                command = request
+                            case .approval(let id, let decision):
+                                let receipt = ConversationInputReceipt()
+                                await session.input.send(
+                                    ConversationInputDelivery(
+                                        input: .approval(
+                                            conversationID: conversation.domainID,
+                                            approvalID: id,
+                                            decision: decision.domain
+                                        ),
+                                        receipt: receipt
+                                    )
+                                )
+                                _ = await receipt.wait()
+                                continue
+                            }
                             let messageText = command.text.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !messageText.isEmpty else {
                                 try await writer.write(
@@ -784,13 +803,40 @@ private actor HTMLChatSocketWriter {
             return ChatLiveFragment.failed(text)
         case .reset:
             return ChatLiveFragment.cleared()
+        case .approvalRequested(_, _, let prompt):
+            return ChatLiveFragment.approval(
+                .init(id: prompt.id, action: prompt.action, arguments: prompt.arguments)
+            )
+        case .approvalResolved(_, let approvalID, let decision):
+            return ChatLiveFragment.approvalResolved(approvalID, decision: decision.public)
         }
     }
 }
 
-private struct HTMLChatMessage: Decodable, Sendable {
-    let command: String
-    let text: String
+/// What the browser chat's forms send over the socket.
+private enum HTMLChatCommand: Decodable, Sendable {
+    case message(text: String)
+    case approval(id: UUID, decision: TurgaiModels.ApprovalDecision)
+
+    private enum CodingKeys: String, CodingKey {
+        case command, text, id, decision
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        switch try values.decode(String.self, forKey: .command) {
+        case "message":
+            self = .message(text: try values.decode(String.self, forKey: .text))
+        case "approval":
+            self = .approval(
+                id: try values.decode(UUID.self, forKey: .id),
+                decision: try values.decode(TurgaiModels.ApprovalDecision.self, forKey: .decision)
+            )
+        case let other:
+            throw DecodingError.dataCorruptedError(
+                forKey: .command, in: values, debugDescription: "Unknown chat command \(other)")
+        }
+    }
 }
 
 private func runHTMLChatSocket(
@@ -815,11 +861,29 @@ private func runHTMLChatSocket(
             for try await input in inbound.messages(maxSize: 1_000_000) {
                 guard case .text(let text) = input,
                     let data = text.data(using: .utf8),
-                    let command = try? JSONDecoder().decode(HTMLChatMessage.self, from: data),
-                    command.command == "message"
+                    let command = try? JSONDecoder().decode(HTMLChatCommand.self, from: data)
                 else { continue }
 
-                let messageText = command.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let commandText: String
+                switch command {
+                case .message(let text):
+                    commandText = text
+                case .approval(let id, let decision):
+                    let receipt = ConversationInputReceipt()
+                    await session.input.send(
+                        ConversationInputDelivery(
+                            input: .approval(
+                                conversationID: conversation.domainID,
+                                approvalID: id,
+                                decision: decision.domain
+                            ),
+                            receipt: receipt
+                        )
+                    )
+                    _ = await receipt.wait()
+                    continue
+                }
+                let messageText = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !messageText.isEmpty else { continue }
                 let messageID = TurgaiModels.MessageID()
                 let receipt = ConversationInputReceipt()
@@ -884,6 +948,22 @@ private struct PublicChatEvent: Sendable {
                     conversationID: publicConversationID,
                     turnID: nil,
                     error: .init(code: "reset", message: "Conversation reset.")
+                )
+            )
+        case .approvalRequested(_, let turnID, let prompt):
+            self.event = .init(
+                payload: .approvalRequested(
+                    conversationID: publicConversationID,
+                    turnID: turnID.map { .init(rawValue: $0.rawValue) },
+                    approval: .init(id: prompt.id, action: prompt.action, arguments: prompt.arguments)
+                )
+            )
+        case .approvalResolved(_, let approvalID, let decision):
+            self.event = .init(
+                payload: .approvalResolved(
+                    conversationID: publicConversationID,
+                    approvalID: approvalID,
+                    decision: decision.public
                 )
             )
         }
@@ -973,6 +1053,24 @@ private struct PublicChatEvent: Sendable {
                     turnID: nil,
                     error: .init(code: "completed", message: "Conversation completed.")
                 ))
+        }
+    }
+}
+
+extension TurgaiModels.ApprovalDecision {
+    fileprivate var domain: TurgaiDomain.ApprovalDecision {
+        switch self {
+        case .granted: .granted
+        case .denied: .denied
+        }
+    }
+}
+
+extension TurgaiDomain.ApprovalDecision {
+    fileprivate var `public`: TurgaiModels.ApprovalDecision {
+        switch self {
+        case .granted: .granted
+        case .denied: .denied
         }
     }
 }

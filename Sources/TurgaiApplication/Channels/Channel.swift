@@ -1,6 +1,7 @@
 import Distributed
 import DistributedCluster
 import EventSourcing
+import TurgaiDomain
 import VirtualActors
 
 #if canImport(FoundationEssentials)

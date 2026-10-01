@@ -148,6 +148,72 @@ public struct SendMessageRequest: Codable, Equatable, Sendable, Identifiable {
 
 public typealias ChatMessageRequest = SendMessageRequest
 
+public enum ApprovalDecision: String, Codable, Sendable {
+    case granted
+    case denied
+}
+
+/// The assistant asks before an action runs, such as playing music.
+public struct Approval: Codable, Equatable, Sendable, Identifiable {
+    public let id: UUID
+    /// What would run, such as `Music.play`.
+    public let action: String
+    /// Its arguments, as JSON.
+    public let arguments: String
+
+    public init(id: UUID, action: String, arguments: String) {
+        self.id = id
+        self.action = action
+        self.arguments = arguments
+    }
+}
+
+/// What a client sends over the chat socket.
+public enum ChatCommand: Codable, Equatable, Sendable {
+    case message(SendMessageRequest)
+    case approval(id: UUID, decision: ApprovalDecision)
+
+    private enum Kind: String, Codable {
+        case message
+        case approval
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case type, id, text, decision
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        switch try values.decode(Kind.self, forKey: .type) {
+        case .message:
+            self = .message(
+                SendMessageRequest(
+                    id: try values.decode(MessageID.self, forKey: .id),
+                    text: try values.decode(String.self, forKey: .text)
+                ))
+        case .approval:
+            self = .approval(
+                id: try values.decode(UUID.self, forKey: .id),
+                decision: try values.decode(ApprovalDecision.self, forKey: .decision)
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .message(let request):
+            try values.encode(Kind.message, forKey: .type)
+            try values.encode(request.id, forKey: .id)
+            try values.encode(request.text, forKey: .text)
+        case .approval(let id, let decision):
+            try values.encode(Kind.approval, forKey: .type)
+            try values.encode(id, forKey: .id)
+            try values.encode(decision, forKey: .decision)
+        }
+    }
+}
+
 public enum ChatEventKind: String, Codable, Sendable {
     case ready
     case history
@@ -158,6 +224,8 @@ public enum ChatEventKind: String, Codable, Sendable {
     case turnPartial = "turn.partial"
     case turnCompleted = "turn.completed"
     case turnFailed = "turn.failed"
+    case approvalRequested = "approval.requested"
+    case approvalResolved = "approval.resolved"
     case notice
 }
 
@@ -214,6 +282,16 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             turnID: TurnID?,
             error: ChatError
         )
+        case approvalRequested(
+            conversationID: ConversationID,
+            turnID: TurnID?,
+            approval: Approval
+        )
+        case approvalResolved(
+            conversationID: ConversationID,
+            approvalID: UUID,
+            decision: ApprovalDecision
+        )
         case notice(
             conversationID: ConversationID?,
             turnID: TurnID?,
@@ -231,6 +309,8 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             case .turnPartial: .turnPartial
             case .turnCompleted: .turnCompleted
             case .turnFailed: .turnFailed
+            case .approvalRequested: .approvalRequested
+            case .approvalResolved: .approvalResolved
             case .notice: .notice
             }
         }
@@ -247,6 +327,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case type, conversationID, botID, turnID
         case status, phase, activity, message, messages, error
+        case approval, approvalID, decision
     }
 
     public init(from decoder: Decoder) throws {
@@ -306,6 +387,18 @@ public struct ChatEvent: Codable, Equatable, Sendable {
                 turnID: try values.decodeIfPresent(TurnID.self, forKey: .turnID),
                 error: try values.decode(ChatError.self, forKey: .error)
             )
+        case .approvalRequested:
+            payload = .approvalRequested(
+                conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
+                turnID: try values.decodeIfPresent(TurnID.self, forKey: .turnID),
+                approval: try values.decode(Approval.self, forKey: .approval)
+            )
+        case .approvalResolved:
+            payload = .approvalResolved(
+                conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
+                approvalID: try values.decode(UUID.self, forKey: .approvalID),
+                decision: try values.decode(ApprovalDecision.self, forKey: .decision)
+            )
         case .notice:
             payload = .notice(
                 conversationID: try values.decodeIfPresent(ConversationID.self, forKey: .conversationID),
@@ -351,6 +444,14 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             try values.encode(conversationID, forKey: .conversationID)
             try values.encodeIfPresent(turnID, forKey: .turnID)
             try values.encode(error, forKey: .error)
+        case .approvalRequested(let conversationID, let turnID, let approval):
+            try values.encode(conversationID, forKey: .conversationID)
+            try values.encodeIfPresent(turnID, forKey: .turnID)
+            try values.encode(approval, forKey: .approval)
+        case .approvalResolved(let conversationID, let approvalID, let decision):
+            try values.encode(conversationID, forKey: .conversationID)
+            try values.encode(approvalID, forKey: .approvalID)
+            try values.encode(decision, forKey: .decision)
         case .notice(let conversationID, let turnID, let error):
             try values.encodeIfPresent(conversationID, forKey: .conversationID)
             try values.encodeIfPresent(turnID, forKey: .turnID)

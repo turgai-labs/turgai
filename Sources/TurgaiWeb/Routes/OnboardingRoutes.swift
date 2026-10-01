@@ -113,10 +113,6 @@ extension TurgaiOnboardingWebApp {
                     pendingCredential = credential.reference
                     try await agentCredentials.save(credential.value, for: credential.reference)
                 }
-                let contextWindow = try OnboardingInput.positiveInteger(
-                    values.contextWindow,
-                    field: "context window"
-                )
                 if var profile = await agentProfiles.defaultProfile() {
                     profile.model = model
                     profile.reasoningEffort = reasoningEffort
@@ -125,7 +121,6 @@ extension TurgaiOnboardingWebApp {
                     profile.name = values.name
                     profile.persona = values.persona
                     profile.instructions = values.instructions
-                    profile.contextWindow = contextWindow
                     try await agentProfiles.update(profile)
                     pendingCredential = nil
                     if let oldReference,
@@ -139,7 +134,6 @@ extension TurgaiOnboardingWebApp {
                         model: model,
                         reasoningEffort: reasoningEffort,
                         providerConfiguration: submission.configuration,
-                        contextWindow: contextWindow,
                         persona: values.persona,
                         instructions: values.instructions
                     )

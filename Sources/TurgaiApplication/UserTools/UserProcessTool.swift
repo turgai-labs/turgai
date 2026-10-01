@@ -1,6 +1,7 @@
 import AnyLanguageModel
 import Hail
 import HailCore
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

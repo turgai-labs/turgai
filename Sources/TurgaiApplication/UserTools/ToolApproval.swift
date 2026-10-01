@@ -37,10 +37,33 @@ public struct ApprovalRequest: Sendable {
     }
 
     /// A bounded, human-readable rendering of the arguments for the
-    /// approval prompt.
+    /// approval prompt: one `name: value` line per argument.
     public var summary: String {
-        let json = arguments.jsonString
-        return json.count > 500 ? String(json.prefix(500)) + "…" : json
+        let text = Self.readable(arguments)
+        return text.count > 500 ? String(text.prefix(500)) + "…" : text
+    }
+
+    private static func readable(_ content: GeneratedContent) -> String {
+        switch content.kind {
+        case .structure(let properties, let orderedKeys):
+            orderedKeys.compactMap { key in
+                guard let value = properties[key], value.kind != .null else { return nil }
+                return "\(key): \(inline(value))"
+            }
+            .joined(separator: "\n")
+        default:
+            inline(content)
+        }
+    }
+
+    private static func inline(_ content: GeneratedContent) -> String {
+        switch content.kind {
+        case .string(let text): text
+        case .bool(let value): value ? "yes" : "no"
+        case .number(let value): value.rounded() == value && abs(value) < 1e15 ? String(Int(value)) : String(value)
+        case .array(let elements): elements.map(inline).joined(separator: ", ")
+        case .null, .structure: content.jsonString
+        }
     }
 
     public var commandSummary: String {
@@ -48,11 +71,6 @@ public struct ApprovalRequest: Sendable {
         guard !command.isEmpty else { return toolName }
         return command.count > 700 ? String(command.prefix(700)) + "…" : command
     }
-}
-
-public enum ApprovalDecision: Codable, Sendable, Equatable {
-    case granted
-    case denied
 }
 
 /// The serializable part of an approval request sent to the channel actor
@@ -77,28 +95,42 @@ public struct ChannelApprovalRequest: Codable, Sendable, Equatable {
     }
 }
 
-/// Sends a consent request to the virtual channel actor identified by the
-/// originating conversation. There is no in-memory per-channel approval map:
-/// the channel's active provider runtime handles the request.
+/// Asks for consent where the request came from: a Telegram chat asks through
+/// its channel's inline buttons; any other conversation, such as the web and Mac
+/// chat, asks its connected clients.
 public struct ChannelToolApproval: ToolApproval {
     private let actorSystem: ClusterSystem
+    /// The agent role of the conversation asking, used to find its actor.
+    private let agentRole: String
 
-    public init(actorSystem: ClusterSystem) {
+    public init(actorSystem: ClusterSystem, agentRole: String) {
         self.actorSystem = actorSystem
+        self.agentRole = agentRole
     }
 
     public func decide(_ request: ApprovalRequest) async throws -> ApprovalDecision {
-        guard let conversationID = ConversationID(stableKey: request.conversationID),
-            conversationID.channel.providerName == TelegramProvider.providerID,
-            let channelID = UUID(uuidString: conversationID.channel.instanceID)
-        else {
+        guard let conversationID = ConversationID(stableKey: request.conversationID) else {
             return .denied
         }
-        let channel = try await TelegramChannel.resolve(
+        if conversationID.channel.providerName == TelegramProvider.providerID {
+            guard let channelID = UUID(uuidString: conversationID.channel.instanceID) else {
+                return .denied
+            }
+            let channel = try await TelegramChannel.resolve(
+                on: actorSystem,
+                channelID: channelID
+            )
+            return try await channel.decideApproval(ChannelApprovalRequest(request))
+        }
+        // The conversation is running the turn that asks, so it's already active.
+        let conversation = try await Conversation.resolve(
             on: actorSystem,
-            channelID: channelID
+            conversationID: conversationID,
+            agentDirectoryID: "agent-directory",
+            agentRole: agentRole,
+            memoryExtraction: nil
         )
-        return try await channel.decideApproval(ChannelApprovalRequest(request))
+        return try await conversation.requestApproval(ChannelApprovalRequest(request))
     }
 }
 

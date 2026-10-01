@@ -266,7 +266,9 @@ enum TelegramDelivery {
             turnID
         case .noticeWithActions(_, let turnID, _, _):
             turnID
-        case .reset:
+        case .approvalRequested(_, let turnID, _):
+            turnID
+        case .reset, .approvalResolved:
             nil
         }
     }

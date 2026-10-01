@@ -39,6 +39,10 @@ enum OnboardingInput {
         for model: AgentModel,
         existing: AgentProviderConfiguration? = nil
     ) throws -> ProviderSubmission {
+        /// Only providers whose window is a choice ask for one.
+        func contextWindow() throws -> Int {
+            try positiveInteger(values.contextWindow, field: "context window")
+        }
         switch model.provider {
         case .ollama:
             let rawValue =
@@ -46,7 +50,7 @@ enum OnboardingInput {
                 ? values.endpointURL!
                 : OllamaConfiguration.defaultBaseURL.absoluteString
             return ProviderSubmission(
-                configuration: .ollama(baseURL: try httpURL(rawValue)),
+                configuration: .ollama(baseURL: try httpURL(rawValue), contextWindow: try contextWindow()),
                 credential: nil
             )
         case .openAI:
@@ -54,21 +58,21 @@ enum OnboardingInput {
                 value: values.apiKey,
                 existing: existing,
                 matches: { if case .openAI = $0 { true } else { false } },
-                configuration: AgentProviderConfiguration.openAI
+                configuration: { [window = try contextWindow()] in .openAI(credential: $0, contextWindow: window) }
             )
         case .anthropic:
             return try credentialSubmission(
                 value: values.apiKey,
                 existing: existing,
                 matches: { if case .anthropic = $0 { true } else { false } },
-                configuration: AgentProviderConfiguration.anthropic
+                configuration: { [window = try contextWindow()] in .anthropic(credential: $0, contextWindow: window) }
             )
         case .gemini:
             return try credentialSubmission(
                 value: values.apiKey,
                 existing: existing,
                 matches: { if case .gemini = $0 { true } else { false } },
-                configuration: AgentProviderConfiguration.gemini
+                configuration: { [window = try contextWindow()] in .gemini(credential: $0, contextWindow: window) }
             )
         case .openAICompatible:
             guard let endpoint = values.endpointURL, !endpoint.isEmpty else {
@@ -78,7 +82,7 @@ enum OnboardingInput {
                 throw FormValidationError.invalidValue("compatible API")
             }
             let existingReference: AgentCredentialReference?
-            if case .openAICompatible(_, let reference, _) = existing {
+            if case .openAICompatible(_, let reference, _, _) = existing {
                 existingReference = reference
             } else {
                 existingReference = nil
@@ -88,7 +92,8 @@ enum OnboardingInput {
                 configuration: .openAICompatible(
                     baseURL: httpURL(endpoint),
                     credential: reference,
-                    api: api
+                    api: api,
+                    contextWindow: contextWindow()
                 ),
                 reference: reference,
                 apiKey: values.apiKey,
@@ -102,7 +107,8 @@ enum OnboardingInput {
             }
             let gpuLayers = values.gpuLayers.flatMap(Int32.init) ?? -1
             return ProviderSubmission(
-                configuration: .llamaCPP(.init(modelPath: modelPath, gpuLayers: gpuLayers)),
+                configuration: .llamaCPP(
+                    .init(modelPath: modelPath, gpuLayers: gpuLayers), contextWindow: try contextWindow()),
                 credential: nil
             )
         default:

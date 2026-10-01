@@ -119,6 +119,7 @@ struct HailAdapterTests {
         )
         let plugin = try configuration.makeAgentRuntimePlugin(
             workspaceRoot: "/tmp/turgai-test-workspace",
+            spawnConfigProvider: { AgentSpawnConfig(agentID: $0) },
             modelSelectionProvider: { _ in
                 ModelConfiguration(model: try AgentModel("ollama/test"))
             }

@@ -3,6 +3,7 @@ import Hail
 import Synchronization
 import Testing
 import TurgaiApplication
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

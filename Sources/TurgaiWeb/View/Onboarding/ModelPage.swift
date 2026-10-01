@@ -106,16 +106,6 @@ struct ModelPage: HTMLDocument, Sendable {
                                     p(.class("hint")) { "Describe how you want Turgai to speak." }
                                 }
                                 label(.class("form-field")) {
-                                    span(.class("field-label")) { "Working memory" }
-                                    input(
-                                        .type(.number), .name("contextWindow"),
-                                        .value(
-                                            String(
-                                                profile?.contextWindow ?? TurgaiAgentProfileStore.defaultContextWindow)),
-                                        .required
-                                    )
-                                }
-                                label(.class("form-field")) {
                                     span(.class("field-label")) { "Guidance" }
                                     textarea(.name("instructions"), .init(name: "rows", value: "4")) {
                                         profile?.instructions ?? ""

@@ -64,15 +64,6 @@ struct AgentConfigurationForm: HTML, Sendable {
                     }
                     p(.class("hint")) { "Leave it at provider default unless this model supports a specific level." }
                 }
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "Context window" }
-                    input(
-                        .type(.number), .name("contextWindow"),
-                        .value(String(profile?.contextWindow ?? TurgaiAgentProfileStore.defaultContextWindow)),
-                        .required
-                    )
-                    p(.class("hint")) { "Maximum context passed to the model." }
-                }
             }
             section(.class("config-group")) {
                 h3 { "Behavior" }

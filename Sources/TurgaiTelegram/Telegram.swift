@@ -499,6 +499,10 @@ public actor TelegramEventPublisher {
                 $0.key.conversationID != conversationID
             }
             lastTypingActionReservation[conversationID] = nil
+
+        case .approvalRequested, .approvalResolved:
+            // Telegram asks with its own inline buttons (TelegramToolApproval).
+            break
         }
     }
 
