@@ -66,6 +66,11 @@ private struct ObjectRowView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(Color.signalBlue)
             }
+            if !row.events.isEmpty {
+                Label(row.events.joined(separator: " · "), systemImage: "dot.radiowaves.left.and.right")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(Color.turgaiAccent)
+            }
         }
         .padding(.vertical, 4)
     }

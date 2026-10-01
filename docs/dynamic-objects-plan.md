@@ -1,4 +1,4 @@
-# User objects
+# Dynamic objects
 
 The vision's example, working for real:
 
@@ -34,40 +34,42 @@ distributed func read(property name: String) async throws -> JSONValue
 
 Callers resolve objects through `$DiscoverableActor` without knowing their Swift
 type. So one hand-written actor, driven by a spec, can stand in for any number of
-user-made objects, and to the catalog, the objects tool, and the model it's an object
+objects made at runtime, and to the catalog, the objects tool, and the model it's an object
 like any other.
 
 A user tool is already a spec with a body: a workflow, a Wasm module, a native process,
-or a prompt run by a helper agent. A user object is those bodies as actions and event
-handlers on one thing, plus properties they can change.
+or a prompt run by a helper agent. A dynamic object is those bodies as actions on one
+thing, plus properties they can change.
 
 ## The spec
 
-Stored as data next to the user's tools, validated before the object starts:
+An `ObjectSpec`, stored as data, validated before the object starts. It's state and
+actions only:
 
 ```json
 {
   "id": "order-tracker",
   "title": "Order tracker",
-  "description": "Tracks the shop's orders and refunds.",
   "properties": {
-    "orders": { "schema": { "type": "array" }, "initial": [] }
-  },
-  "on": {
-    "shop.orderPlaced": [{ "set": { "orders": "{{orders + [event.order]}}" } }],
-    "shop.refundRequested": [
-      { "ask": "Refund order {{event.order.number}} for {{event.amount}}?" },
-      { "call": "warehouse.refundApproved", "arguments": { "order": "{{event.order}}" } }
-    ]
+    "orders": { "schema": { "type": "array" }, "initial": [] },
+    "warehouse": { "schema": { "x-actor-reference": true }, "initial": null }
   },
   "actions": {
-    "summary": { "description": "Open orders and pending refunds.", "tool": "order-summary" }
+    "recordOrder": { "input": { "type": "object", "properties": { "event": {} } },
+      "steps": [ { "append": "orders", "value": { "from": "arguments.event.order" } } ] },
+    "refundRequested": { "input": { "type": "object", "properties": { "event": {} } },
+      "steps": [ { "call": "warehouse", "action": "refundApproved",
+                   "arguments": { "order": { "from": "arguments.event.order" } } } ] }
   }
 }
 ```
 
-An action either has its own body, in the same forms user tools have, or names an
-existing user tool, which is also how tools are bundled into an object.
+A dynamic object doesn't look for or listen to anything itself:
+- **The objects it works with are references** in its properties, given when it's created,
+  and `call` uses them directly.
+- **Who it listens to is wired from outside:** its creator subscribes it to another object's
+  event, naming the action that receives it (`shop.subscribeEvent("RefundRequested",
+  listener: tracker, action: "refundRequested")`).
 
 ## Steps
 
@@ -89,20 +91,20 @@ subscribe call, so one object can ask to hear another's `refundRequested`. Deliv
 distributed call back to the subscriber. *Done when:* a test object receives
 `Shop.refundRequested` with no model involved.
 
-**3. `UserObject`.** A distributed actor that conforms to `DiscoverableActor` by hand and
+**3. `DynamicObject`.** A distributed actor that conforms to `DiscoverableActor` by hand and
 runs a spec.
 - `describe()` builds the description from the spec; `read` returns a property's value.
 - `invoke` validates arguments against the action's schema, then runs its body. The
   macro does this check today, so discoverable exposes its schema validation publicly.
 - Each object is a virtual actor keyed by its spec ID: it starts on demand on any node,
   journals its properties as conversations do, and checks in under `.owned(by: user)`.
-- Handlers and actions run workflow steps, with three new ones: `set` changes a
-  property, `call` sends an action to another object, and `ask` waits for the owner
-  (step 4).
+- Actions run steps: `set` and `append` change properties, `call` runs an action of the
+  object a property refers to, `return` answers. `ask`, which waits for the owner, comes
+  with step 4.
 - They run under the same authority and approval as user tools.
 
-*Done when:* a hand-written tracker spec reacts to `Shop` events, keeps its orders, and
-still has them after a restart.
+*Done when:* a hand-written tracker spec, wired to `Shop`'s events, keeps its orders and
+tells `Warehouse` about refunds (done), and still has its orders after a restart.
 
 **4. Asking the owner, durably.** Today's approval lives only during a chat turn and
 expires after five minutes. An object's question has to wait days and survive restarts.
@@ -145,11 +147,11 @@ The model is the headline, but the same runtime serves people directly:
 
 - **Expressions.** `orders + [event.order]` needs a small, safe expression language, or
   steps take only values computed by earlier steps.
-- **Child objects.** Reminders returns its lists as objects. Whether a user object can
+- **Child objects.** Reminders returns its lists as objects. Whether a dynamic object can
   make child objects, or only return data, is left for later.
 - **Sharing.** Objects start as `.owned(by:)`. Making one `.shared` is a separate
   permission.
 - **Spec changes.** When a spec changes a property's type, the journaled state needs a
   rule: reset, convert, or refuse the edit.
 - **MCP.** An MCP server can join as one object, and Turgai's objects can be offered to
-  MCP clients. Both use the same hand-written conformance as `UserObject`.
+  MCP clients. Both use the same hand-written conformance as `DynamicObject`.

@@ -50,6 +50,7 @@ public actor ObjectSession {
                     "title": .string(entry.title),
                     "description": entry.description.map(DiscoveryJSON.string) ?? .null,
                     "actions": .array(entry.actions.map(DiscoveryJSON.string)),
+                    "events": .array(entry.events.map(DiscoveryJSON.string)),
                 ]
             })
     }
@@ -216,7 +217,13 @@ public actor ObjectSession {
                     guard case .array(let values) = value else { return nil }
                     return values.compactMap { if case .string(let text) = $0 { text } else { nil } }
                 } ?? []
-            let affordances = actions.isEmpty ? "" : "; actions: \(actions.joined(separator: ", "))"
+            let events = entry["events"].flatMap { value -> [String]? in
+                guard case .array(let values) = value else { return nil }
+                return values.compactMap { if case .string(let text) = $0 { text } else { nil } }
+            } ?? []
+            let affordances =
+                (actions.isEmpty ? "" : "; actions: \(actions.joined(separator: ", "))")
+                + (events.isEmpty ? "" : "; events: \(events.joined(separator: ", "))")
             return "- `\(handle)`, \(title)\(description)\(affordances)"
         }
         let more = entries.count > limit ? ["…and \(entries.count - limit) more; use objects find."] : []

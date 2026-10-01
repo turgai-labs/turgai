@@ -10,19 +10,23 @@ public struct ObjectEntry: Codable, Sendable {
     public let scope: ObjectScope
     /// Each action with its arguments, such as `play(query)`.
     public let actions: [String]
+    /// What the object announces, such as `RefundRequested`.
+    public let events: [String]
 
     public init(
         object: DiscoverableObject,
         title: String,
         description: String?,
         scope: ObjectScope,
-        actions: [String]
+        actions: [String],
+        events: [String] = []
     ) {
         self.object = object
         self.title = title
         self.description = description
         self.scope = scope
         self.actions = actions
+        self.events = events
     }
 }
 
@@ -37,6 +41,7 @@ public distributed actor ObjectCatalog: LifecycleWatch {
         public let title: String
         public let description: String?
         public let actions: [String]
+        public let events: [String]
     }
 
     private var records: [ObjectScope: [ClusterSystem.ActorID: Record]] = [:]
@@ -90,7 +95,8 @@ public distributed actor ObjectCatalog: LifecycleWatch {
                 id: object.id,
                 title: description.title,
                 description: description.description,
-                actions: description.actions.map { Self.signature($0.key, input: $0.value.input) }.sorted()
+                actions: description.actions.map { Self.signature($0.key, input: $0.value.input) }.sorted(),
+                events: description.events.keys.sorted()
             )
             self.watchTermination(of: object)
             self.notifyObservers()
@@ -127,7 +133,8 @@ public distributed actor ObjectCatalog: LifecycleWatch {
                         title: record.title,
                         description: record.description,
                         scope: scope,
-                        actions: record.actions
+                        actions: record.actions,
+                        events: record.events
                     ))
             }
         }

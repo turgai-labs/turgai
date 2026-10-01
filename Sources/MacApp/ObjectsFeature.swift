@@ -9,6 +9,8 @@ struct ObjectRow: Equatable, Identifiable, Sendable {
     let title: String
     let summary: String?
     let actions: [String]
+    /// What it announces, such as `RefundRequested`.
+    let events: [String]
     /// The node the object lives on, such as `127.0.0.1:52034`.
     let node: String
 }
@@ -58,6 +60,7 @@ extension ObjectRow {
             title: entry.title,
             summary: entry.description,
             actions: entry.actions,
+            events: entry.events,
             node: "\(endpoint.host):\(endpoint.port)"
         )
     }

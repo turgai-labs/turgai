@@ -10,6 +10,7 @@ struct ObjectsFeatureTests {
         title: "Mac",
         summary: "This computer.",
         actions: ["status"],
+        events: [],
         node: "127.0.0.1:52034"
     )
     let reminders = ObjectRow(
@@ -17,6 +18,7 @@ struct ObjectsFeatureTests {
         title: "Reminders",
         summary: nil,
         actions: ["add", "list"],
+        events: ["ReminderAdded"],
         node: "127.0.0.1:52034"
     )
 
