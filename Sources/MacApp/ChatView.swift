@@ -7,6 +7,7 @@ import TurgaiModels
 struct ChatView: View {
     let session: Session
     @Bindable var store: StoreOf<ChatFeature>
+    @Environment(\.openWindow) private var openWindow
 
     private var state: ChatFeature.State { store.state }
 
@@ -80,8 +81,19 @@ struct ChatView: View {
         if case .connected = state.connection { true } else { false }
     }
 
-    /// A floating glass capsule: the mark, the name, and the connection.
+    /// A floating glass capsule: the mark, the name, and the connection. Clicking it opens
+    /// the agent's turns.
     private var header: some View {
+        Button { openWindow(id: WindowID.turns) } label: { headerLabel }
+            .buttonStyle(.plain)
+            .help("Show the agent's turns")
+            .frame(maxWidth: .infinity)
+            // Clear of the window's traffic lights under the hidden title bar.
+            .padding(.top, 36)
+            .padding(.bottom, 8)
+    }
+
+    private var headerLabel: some View {
         HStack(spacing: 10) {
             Image.skylark
                 .resizable()
@@ -98,11 +110,7 @@ struct ChatView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .glassEffect(.regular, in: .capsule)
-        .frame(maxWidth: .infinity)
-        // Clear of the window's traffic lights under the hidden title bar.
-        .padding(.top, 36)
-        .padding(.bottom, 8)
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
 
     private var connectionColor: Color {

@@ -137,6 +137,16 @@ public actor TurgaiWebChatBridge {
         )
     }
 
+    public func conversationTurns(
+        for conversationID: ConversationID,
+        role: TurgaiAgentRole
+    ) async throws -> [ConversationTurn] {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return try await runtime.connections.conversationTurns(for: conversationID, role: role)
+    }
+
     public func conversationStatus(
         for conversationID: ConversationID,
         role: TurgaiAgentRole

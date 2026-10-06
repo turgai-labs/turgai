@@ -142,6 +142,21 @@ public struct HailRuntimeConfiguration: Sendable {
                 outputReserve: compactionMaxOutputTokens
             ),
             compactionOperation: compactionOperation,
+            modelReasoningPolicy: ReasoningPolicy.thinkWhenDeciding
         )
+    }
+}
+
+/// When a model thinks before it answers.
+public enum ReasoningPolicy {
+    /// Think when deciding, not when executing: on a turn's first round, and after a tool call
+    /// failed, but not on the rounds that carry out the plan. Requests without tools, and
+    /// profiles that fix their own reasoning, keep the provider's behavior.
+    public static func thinkWhenDeciding(_ context: ModelReasoningContext) -> ModelReasoningOverride {
+        guard context.purpose == .generation, context.hasTools else { return .providerDefault }
+        switch context.lastToolRound {
+        case nil, .failed: return .enabled
+        case .succeeded: return .disabled
+        }
     }
 }

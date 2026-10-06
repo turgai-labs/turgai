@@ -1,9 +1,11 @@
 import AppKit
+import DiscoverableActors
 import DistributedCluster
 import HailAgentRuntime
 import Logging
 import Observation
 import ServiceLifecycle
+import VirtualActors
 import TurgaiObjects
 import TurgaiServer
 import TurgaiWeb
@@ -97,6 +99,11 @@ actor MacObjectsService: Service {
             settings.bindHost = "127.0.0.1"
             settings.bindPort = PortFinder.findAvailablePort(host: "127.0.0.1")
             settings.discovery = .clusterd
+            // Lets objects here reach virtual ones, such as the demo shop's managers.
+            settings.plugins.install(plugin: ClusterSingletonPlugin())
+            let virtualActors = ClusterVirtualActorsPlugin.configuring(&settings)
+            settings.plugins.install(plugin: virtualActors)
+            settings.plugins.install(plugin: DiscoveryPlugin())
         }
         defer { _ = try? system.shutdown() }
         try await withGracefulShutdownHandler {

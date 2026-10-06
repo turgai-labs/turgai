@@ -1,8 +1,10 @@
+import struct AnyLanguageModel.GeneratedContent
 import DiscoverableActors
 import DistributedCluster
 import Foundation
 import Hail
 import Testing
+import VirtualActors
 import TurgaiDomain
 
 @testable import TurgaiApplication
@@ -73,6 +75,10 @@ func withObjectNodes(
     func configure(_ settings: inout ClusterSystemSettings) {
         settings.bindHost = "127.0.0.1"
         settings.bindPort = PortFinder.findAvailablePort(host: "127.0.0.1")
+        // Shops reach their owners as virtual actors.
+        settings.plugins.install(plugin: ClusterSingletonPlugin())
+        let virtualActors = ClusterVirtualActorsPlugin.configuring(&settings)
+        settings.plugins.install(plugin: virtualActors)
     }
     let first = await ClusterSystem("objects", configuredWith: configure)
     let second = await ClusterSystem("session", configuredWith: configure)
@@ -181,6 +187,69 @@ struct ObjectToolsTests {
         }
     }
 
+    /// Each action is a tool of its own, with typed arguments, and an object the model meets
+    /// during a turn brings its tools with it on the next round.
+    @Test
+    func actionsAreToolsOfTheirOwn() async throws {
+        try await withObjectNodes { objectsNode, sessionNode in
+            let memory = MemoryReminders(lists: [ReminderListRecord(id: .init(rawValue: "work"), title: "Work")])
+            let reminders = try await Reminders(actorSystem: objectsNode, client: makeClient(memory: memory))
+            let session = ObjectSession(actorSystem: sessionNode, scopes: [.shared])
+            _ = try await waitForRoots(1, in: session)
+            func tool(_ name: String) async -> ObjectActionTool? {
+                await session.actionTools().first { $0.name == name }
+            }
+
+            let lists = try #require(await tool("reminders_lists"))
+            #expect(lists.description.hasPrefix("lists on Reminders (`reminders`)"))
+            let found = try await AnyTool(lists).runOutput(
+                generatedContent: GeneratedContent(properties: [:]), authority: FullAuthority())
+            #expect(found.textRepresentation.contains("reminder-list"))
+
+            // The list it was handed is reachable now, through tools of its own.
+            let add = try #require(await tool("reminder-list_add"))
+            let schema = try JSONDecoder().decode(DiscoveryJSON.self, from: JSONEncoder().encode(add.schema.parameters))
+            #expect(schema["properties"]?["title"]?["type"] == "string")
+            _ = try await AnyTool(add).runOutput(
+                generatedContent: GeneratedContent(properties: ["title": "Milk"]), authority: FullAuthority())
+            #expect(try await memory.reminders(in: .init(rawValue: "work"), includeCompleted: false).map(\.title) == ["Milk"])
+            _ = reminders
+        }
+    }
+
+    /// A YAML mistake is explained, Elm-style: the line, a caret under the spot, why, and the fix.
+    @Test
+    func yamlMistakesAreExplained() {
+        func explanation(_ text: String) -> String {
+            do {
+                _ = try ObjectSession.parse(text)
+                return "parsed"
+            } catch {
+                return String(describing: error)
+            }
+        }
+        let colon = explanation("actions:\n  - startShift: call the shop (from: self).")
+        #expect(colon.contains("I couldn't read line 2 of the arguments"))
+        #expect(colon.contains("has a second \": \" in it"))
+        #expect(colon.contains(#"- startShift: "call the shop (from: self).""#))
+        #expect(explanation("name: Ann\n\tshop: shop").contains("indented with a tab"))
+        #expect(explanation("name: Ann\nproperties:\n  pending: {value: []}\n shop: {object: shop}").contains("isn't indented like the lines around it"))
+    }
+
+    /// Results are YAML; reading one back gives the same value, even text that looks like
+    /// something else.
+    @Test
+    func resultsAreYAMLThatReadsBackTheSame() throws {
+        let value: DiscoveryJSON = [
+            "flag": "true", "number": "1", "time": "08:30", "answer": "no", "empty": "",
+            "missing": nil, "count": 3, "price": 2.5, "done": false,
+            "items": [["title": "Milk", "list": "Groceries"]],
+        ]
+        let text = try ObjectSession.text(value)
+        #expect(!text.contains("{\""))
+        #expect(try ObjectSession.parse(text) == value)
+    }
+
     @Test
     func rootAddsToTheDefaultOrANamedList() async throws {
         try await withObjectNodes { objectsNode, sessionNode in
@@ -280,7 +349,7 @@ struct ObjectToolsTests {
                 if lines.count == 3 { break }
                 try await Task.sleep(for: .milliseconds(100))
             }
-            #expect(lines.first == "Objects you can use with the objects tool, by handle:")
+            #expect(lines.first == "Objects here, by handle. Each action of an object is its own tool, named handle_action, such as shop_startShift:")
             #expect(lines.contains { $0.hasPrefix("- `mac`, Mac: ") })
             #expect(lines.contains { $0.hasPrefix("- `reminders`, Reminders: ") })
 

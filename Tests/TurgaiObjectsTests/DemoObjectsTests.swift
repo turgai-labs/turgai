@@ -6,19 +6,30 @@ import TurgaiDomain
 @testable import TurgaiApplication
 @testable import TurgaiObjects
 
-/// Hears the shop's refund requests, on the session's node.
+/// A customer, told how their refunds end.
 @Discoverable
-distributed actor RefundWatcher {
+distributed actor Customer {
     typealias ActorSystem = ClusterSystem
 
-    private var heard: [Int] = []
+    private var heard: [String] = []
 
-    /// Order numbers of the refunds requested, oldest first.
-    public distributed var requests: [Int] { heard }
+    init(actorSystem: ActorSystem) {
+        self.actorSystem = actorSystem
+    }
 
-    /// A customer asked for their money back.
-    public distributed func refundRequested(_ request: RefundRequested) {
-        heard.append(request.order.number)
+    /// What the customer was told, oldest first.
+    public distributed var news: [String] { heard }
+
+    /// Your refund was paid out.
+    /// - Parameter number: The order's number.
+    public distributed func refunded(number: Int) {
+        heard.append("refunded \(number)")
+    }
+
+    /// Your refund was refused.
+    /// - Parameter number: The order's number.
+    public distributed func refundDenied(number: Int) {
+        heard.append("refund denied \(number)")
     }
 }
 
@@ -29,20 +40,25 @@ struct DemoObjectsTests {
         try await withObjectNodes { objectsNode, sessionNode in
             let shop = try await Shop(actorSystem: objectsNode)
             let warehouse = try await Warehouse(actorSystem: objectsNode)
+            // The customer is an object the model sees too, to name as who the shop replies to.
+            let customer = Customer(actorSystem: sessionNode)
+            await sessionNode.receptionist.checkIn(
+                try DiscoverableObject.resolve(id: customer.id, using: sessionNode), with: ObjectScope.shared.receptionistKey)
             let catalog = await ObjectCatalog(actorSystem: sessionNode)
             let session = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog, scopes: [.shared])
 
-            let roots = try await waitForRoots(2, in: session)
+            let roots = try await waitForRoots(3, in: session)
             guard case .array(let entries) = roots else {
                 Issue.record("Expected roots, got \(roots)")
                 return
             }
-            #expect(Set(entries.compactMap { $0["handle"] }) == ["shop", "warehouse"])
+            #expect(Set(entries.compactMap { $0["handle"] }) == ["customer", "shop", "warehouse"])
 
             // Today the model carries the story; step 2 lets the objects do it themselves.
             let order = try await session.invoke("shop", action: "placeOrder", arguments: #"{"item": "Lamp", "amount": 40}"#)
             #expect(order["status"] == "placed")
-            let requested = try await session.invoke("shop", action: "requestRefund", arguments: "1")
+            let request = #"{"number": 1, "replyTo": "customer"}"#
+            let requested = try await session.invoke("shop", action: "requestRefund", arguments: request)
             #expect(requested["status"] == "refundRequested")
             _ = try await session.invoke(
                 "warehouse", action: "refundApproved",
@@ -53,7 +69,7 @@ struct DemoObjectsTests {
             #expect(notes.map(\.instruction) == [.expectReturn])
 
             await #expect(throws: ObjectToolError.failed(ShopError.notRefundable(1, .refundRequested).description)) {
-                try await session.invoke("shop", action: "requestRefund", arguments: "1")
+                try await session.invoke("shop", action: "requestRefund", arguments: request)
             }
             _ = (shop, catalog)
         }
@@ -84,20 +100,23 @@ struct DemoObjectsTests {
         }
     }
 
-    @Test
-    func aListenerOnAnotherNodeHearsRefundRequests() async throws {
+    @Test(.timeLimit(.minutes(1)))
+    func aSubscriberOnAnotherNodeHearsRefundRequests() async throws {
         try await withObjectNodes { objectsNode, sessionNode in
             let shop = try await Shop(actorSystem: objectsNode)
-            let watcher = RefundWatcher(actorSystem: sessionNode)
             let remoteShop = try DiscoverableObject.resolve(id: shop.id, using: sessionNode)
 
-            try await remoteShop.subscribeEvent(
-                "RefundRequested", listener: ActorReference(watcher), action: "refundRequested")
+            let requests = try await remoteShop.subscribe(to: RefundRequested.self)
             _ = try await shop.placeOrder(item: "Lamp", amount: 40)
             _ = try await shop.placeOrder(item: "Chair", amount: 90)
-            _ = try await shop.requestRefund(number: 2)
+            let customer = Customer(actorSystem: sessionNode)
+            _ = try await shop.requestRefund(number: 2, replyTo: try DiscoverableObject.resolve(id: customer.id, using: objectsNode))
 
-            #expect(try await watcher.requests == [2])
+            for try await request in requests {
+                #expect(request.order.number == 2)
+                break
+            }
+            await requests.cancel()
         }
     }
 }

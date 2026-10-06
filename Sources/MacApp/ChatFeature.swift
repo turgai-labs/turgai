@@ -32,6 +32,8 @@ struct ChatFeature {
         var approvals: IdentifiedArrayOf<Approval> = []
         var draft = ""
         var error: ChatError?
+        /// The agent's turns, step by step: the past ones, then each new one as it runs.
+        var turns: IdentifiedArrayOf<TurnRecord> = []
     }
 
     enum Action: BindableAction {
@@ -49,6 +51,7 @@ struct ChatFeature {
 
     @Dependency(\.chat) var chat
     @Dependency(\.continuousClock) var clock
+    @Dependency(\.date.now) var now
     @Dependency(\.uuid) var uuid
 
     var body: some ReducerOf<Self> {
@@ -133,20 +136,28 @@ struct ChatFeature {
         case .messageAccepted(_, _, let message):
             state.pending.removeAll { $0.id == message.id }
             append(message, to: &state)
-        case .turnStarted:
+        case .turnStarted(_, let turnID):
             state.turn = Turn()
+            let message = state.messages.last { $0.role == .user }?.text ?? ""
+            state.turns.updateOrAppend(TurnRecord(id: turnID.rawValue.uuidString, message: message, startedAt: now))
         case .turnPhase(_, _, let phase):
             state.turn = Turn(phase: phase, activity: state.turn?.activity, partial: state.turn?.partial)
         case .turnStatus(_, _, let activity):
             state.turn = Turn(phase: state.turn?.phase, activity: activity, partial: state.turn?.partial)
         case .turnPartial(_, _, let message):
             state.turn = Turn(phase: .typing, activity: state.turn?.activity, partial: message)
-        case .turnCompleted(_, _, let message):
+        case .turnCompleted(_, let turnID, let message):
             state.turn = nil
             append(message, to: &state)
-        case .turnFailed(_, _, let error):
+            state.turns[id: turnID.rawValue.uuidString]?.outcome = .replied(message.text, at: now)
+        case .turnFailed(_, let turnID, let error):
             state.turn = nil
             state.error = error
+            if let turnID { state.turns[id: turnID.rawValue.uuidString]?.outcome = .failed(error.message, at: now) }
+        case .turns(_, let turns):
+            state.turns = IdentifiedArray(uniqueElements: turns)
+        case .turnStep(_, let turnID, let step):
+            state.turns[id: turnID.rawValue.uuidString]?.steps.append(step)
         case .approvalRequested(_, _, let approval):
             state.approvals.updateOrAppend(approval)
         case .approvalResolved(_, let id, _):

@@ -289,6 +289,23 @@ public actor TurgaiConnections: Service {
         return try await conversation.history()
     }
 
+    /// The agent's past turns in a conversation, step by step.
+    public func conversationTurns(
+        for conversationID: ConversationID,
+        role: TurgaiAgentRole
+    ) async throws -> [ConversationTurn] {
+        let conversation = try await Conversation.resolve(
+            on: actorSystem,
+            conversationID: conversationID,
+            agentDirectoryID: "agent-directory",
+            agentRole: role.rawValue,
+            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+                forProfileID: role.rawValue
+            )
+        )
+        return try await conversation.turns()
+    }
+
     public func conversationStatus(
         for conversationID: ConversationID,
         role: TurgaiAgentRole

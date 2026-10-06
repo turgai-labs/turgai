@@ -323,6 +323,13 @@ extension TurgaiMainWebApp {
                             messages: history.map(publicAPIMessage)
                         ))
                 )
+                // The agent's turns, step by step; the chat works without them.
+                let turns =
+                    (try? await dependencies.webChatBridge.conversationTurns(
+                        for: conversation.domainID, role: .profile(conversation.profile.id))) ?? []
+                try await writer.write(
+                    .init(payload: .turns(conversationID: conversation.publicID, turns: turns.map(TurnRecord.init)))
+                )
 
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask {
@@ -755,10 +762,12 @@ private actor HTMLChatSocketWriter {
     }
 
     func write(_ event: OutboundEvent) async throws {
-        try await write(fragment(for: event))
+        guard let fragment = fragment(for: event) else { return }
+        try await write(fragment)
     }
 
-    private func fragment(for event: OutboundEvent) -> String {
+    /// The HTML for `event`, or `nil` for what the web chat doesn't show, such as a turn's steps.
+    private func fragment(for event: OutboundEvent) -> String? {
         switch event {
         case .reply(let reply):
             switch reply {
@@ -774,6 +783,8 @@ private actor HTMLChatSocketWriter {
                 )
             case .status(_, _, let message):
                 return ChatLiveFragment.status(message)
+            case .step:
+                return nil
             case .partial(_, let turnID, let text):
                 let id = turnID.rawValue
                 let message = TurgaiModels.Message(
@@ -1014,6 +1025,14 @@ private struct PublicChatEvent: Sendable {
                     activity: message
                 )
             )
+        case .step(_, let turnID, let step):
+            return .init(
+                payload: .turnStep(
+                    conversationID: publicConversationID,
+                    turnID: .init(rawValue: turnID.rawValue),
+                    step: TurnStep(step)
+                )
+            )
         case .partial(_, let turnID, let text):
             return .init(
                 payload: .turnPartial(
@@ -1072,5 +1091,32 @@ extension TurgaiDomain.ApprovalDecision {
         case .granted: .granted
         case .denied: .denied
         }
+    }
+}
+
+extension TurnStep {
+    /// The domain's step, as the chat protocol sends it.
+    init(_ step: ReplyStep) {
+        switch step {
+        case .toolCalled(let name, let arguments, let at):
+            self.init(at: at, kind: .toolCalled(name: name, arguments: arguments))
+        case .toolFinished(let name, let output, let failure, let at):
+            self.init(at: at, kind: .toolFinished(name: name, output: output, failure: failure))
+        }
+    }
+}
+
+extension TurnRecord {
+    /// A past turn, as the chat protocol sends it, identified by when it started.
+    init(_ turn: ConversationTurn) {
+        let outcome: TurnOutcome =
+            switch turn.outcome {
+            case .running: .running
+            case .replied(let text, let at): .replied(text, at: at)
+            case .failed(let reason, let at): .failed(reason, at: at)
+            }
+        self.init(
+            id: "\(turn.startedAt.timeIntervalSince1970)", message: turn.message, startedAt: turn.startedAt,
+            steps: turn.steps.map(TurnStep.init), outcome: outcome)
     }
 }

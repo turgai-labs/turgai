@@ -68,25 +68,17 @@ private struct ConversationLiveState: Sendable {
             latestActivity = reply
         case .finished, .completed, .failed:
             latestActivity = nil
-        case .partial:
+        case .partial, .step:
             break
         }
     }
 }
 
-private actor ReplyTextAccumulator {
-    private var text = ""
-
-    func append(_ fragment: String) -> String {
-        text += fragment
-        return text
-    }
-}
-
-private enum ConversationProgress: Sendable {
-    case thinking
-    case status(String)
-    case text(String)
+/// The turn whose activity the conversation is following: what it shows, so far.
+private struct FollowedTurn: Sendable {
+    let id: TurgaiDomain.TurnID
+    var phase: ReplyPhase = .thinking
+    var text = ""
 }
 
 private enum PublishEvent: Sendable {
@@ -261,20 +253,6 @@ enum ContextPresentation {
     private static let numberLocale = Locale(identifier: "en_US")
 }
 
-private actor ConversationPhase {
-    private var value: ReplyPhase = .thinking
-
-    func transition(to next: ReplyPhase) -> Bool {
-        guard value != next else { return false }
-        value = next
-        return true
-    }
-
-    func current() -> ReplyPhase {
-        value
-    }
-}
-
 /// The application-side interpreter for one scoped model output.
 ///
 /// It resolves the live connections for every lifecycle event. This matters
@@ -282,14 +260,15 @@ private actor ConversationPhase {
 /// is still running, and the terminal reply must reach that new connection.
 private struct ConversationScope: ScopeLifecycle {
     typealias Result = ConversationCompletion
-    typealias Update = ConversationProgress
+    typealias Update = Never
 
     let conversationID: ConversationID
     let turnID: TurgaiDomain.TurnID
     let broadcast: @Sendable (OutboundEvent) async -> Void
+    /// What the turn is doing now, which the conversation follows from the agent's activity.
+    let phase: @Sendable () async -> ReplyPhase
     let complete: @Sendable (ConversationCompletion) async -> Void
-    let operation: @Sendable (PartialSink<ConversationProgress>) async throws -> ConversationCompletion
-    let phase = ConversationPhase()
+    let operation: @Sendable () async throws -> ConversationCompletion
 
     func start() async {}
 
@@ -299,47 +278,17 @@ private struct ConversationScope: ScopeLifecycle {
                 .keepAlive(
                     conversationID: conversationID,
                     turnID: turnID,
-                    phase: await phase.current()
+                    phase: await phase()
                 )
             )
         )
     }
 
-    func perform(
-        using updates: PartialSink<ConversationProgress>
-    ) async throws -> ConversationCompletion {
-        try await operation(updates)
+    func perform(using _: PartialSink<Never>) async throws -> ConversationCompletion {
+        try await operation()
     }
 
-    func update(_ progress: ConversationProgress) async {
-        switch progress {
-        case .thinking:
-            await publishPhase(.thinking)
-
-        case .status(let message):
-            await broadcast(
-                .reply(
-                    .status(
-                        conversationID: conversationID,
-                        turnID: turnID,
-                        message: message
-                    )
-                )
-            )
-
-        case .text(let text):
-            await publishPhase(.typing)
-            await broadcast(
-                .reply(
-                    .partial(
-                        conversationID: conversationID,
-                        turnID: turnID,
-                        text: text
-                    )
-                )
-            )
-        }
-    }
+    func update(_ update: Never) async {}
 
     func finish(_ outcome: ScopeOutcome<ConversationCompletion>) async {
         switch outcome {
@@ -363,18 +312,6 @@ private struct ConversationScope: ScopeLifecycle {
         }
     }
 
-    private func publishPhase(_ next: ReplyPhase) async {
-        guard await phase.transition(to: next) else { return }
-        await broadcast(
-            .reply(
-                .phase(
-                    conversationID: conversationID,
-                    turnID: turnID,
-                    phase: next
-                )
-            )
-        )
-    }
 }
 
 /// One durable Turgai conversation aggregate.
@@ -448,6 +385,10 @@ public distributed actor Conversation {
     private var modelTask: Task<Void, Never>?
     /// Questions waiting for the user, live-only like the connections that ask them.
     private var approvals: [UUID: PendingApproval] = [:]
+    /// Follows the agent's activity while anyone watches this conversation.
+    private var activityTask: Task<Void, Never>?
+    /// The turn the agent is running, as its activity shows it.
+    private var followedTurn: FollowedTurn?
     private static let approvalExpiration: Duration = .seconds(300)
 
     private struct PendingApproval {
@@ -528,8 +469,14 @@ public distributed actor Conversation {
         try await peer.history()
     }
 
+    /// The agent's past turns, step by step.
+    public distributed func turns() async throws -> [ConversationTurn] {
+        ConversationTurns.fold(try await peer.history())
+    }
+
     public distributed func addConnection(_ connection: ConversationConnection) async {
         connections.insert(connection)
+        followActivity()
         if let turnID = state.activeTurnID {
             let activity = liveState.latestActivity
             try? await connection.broadcast(
@@ -592,6 +539,92 @@ public distributed actor Conversation {
 
     public distributed func removeConnection(_ connection: ConversationConnection) async {
         connections.remove(connection)
+        // Nobody watches: stop listening, so an empty room doesn't keep the agent awake.
+        if connections.isEmpty { stopFollowingActivity() }
+    }
+
+    // MARK: Following the agent's activity
+
+    /// Listens to the agent's activity while anyone watches. When the stream ends, because the
+    /// agent deactivated or moved, it subscribes again, which wakes the agent. When subscribing
+    /// fails it stops, and the next connection or turn starts it again.
+    private func followActivity() {
+        guard activityTask == nil, !connections.isEmpty else { return }
+        let peer = peer
+        let log = actorSystem.log
+        activityTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, await self.whenLocal({ !$0.connections.isEmpty }) == true else { break }
+                do {
+                    for await event in try await peer.activities() {
+                        await self.whenLocal { await $0.follow(event) }
+                    }
+                } catch {
+                    log.debug("Could not follow the agent's activity", metadata: ["error": .string(String(describing: error))])
+                    break
+                }
+            }
+            await self?.whenLocal { $0.activityLoopEnded() }
+        }
+    }
+
+    private func stopFollowingActivity() {
+        activityTask?.cancel()
+    }
+
+    /// The loop ended. If it was stopped and someone joined while it wound down, or the agent
+    /// changed, it follows again.
+    private func activityLoopEnded() {
+        let stopped = activityTask?.isCancelled == true
+        activityTask = nil
+        if stopped { followActivity() }
+    }
+
+    /// One thing the agent did, shown as part of the turn it belongs to: this conversation's
+    /// running turn, or one it didn't ask for, such as a timer's.
+    private func follow(_ event: HailModelEvent) async {
+        if case .started = event {
+            followedTurn = FollowedTurn(id: state.activeTurnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
+            return
+        }
+        if case .completed = event {
+            followedTurn = nil
+            return
+        }
+        var turn = followedTurn ?? FollowedTurn(id: state.activeTurnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
+        defer { followedTurn = turn }
+        let turnID = turn.id
+        switch event {
+        case .reasoning:
+            await publish(phase: .thinking, of: &turn)
+        case .status(let message):
+            await publishLive(.reply(.status(conversationID: conversationID, turnID: turnID, message: message)))
+        case .toolCalled(let name, let arguments, let at):
+            await publishLive(.reply(.status(conversationID: conversationID, turnID: turnID, message: "Using \(name)…")))
+            await publishLive(.reply(.step(
+                conversationID: conversationID, turnID: turnID,
+                step: .toolCalled(name: name, arguments: arguments, at: at))))
+        case .toolFinished(let name, let output, let failure, let at):
+            await publishLive(.reply(.step(
+                conversationID: conversationID, turnID: turnID,
+                step: .toolFinished(name: name, output: output, failure: failure, at: at))))
+        case .text(let fragment):
+            await publish(phase: .typing, of: &turn)
+            turn.text += fragment
+            await publishLive(.reply(.partial(conversationID: conversationID, turnID: turnID, text: turn.text)))
+        default:
+            break
+        }
+    }
+
+    private func publish(phase: ReplyPhase, of turn: inout FollowedTurn) async {
+        guard turn.phase != phase else { return }
+        turn.phase = phase
+        await publishLive(.reply(.phase(conversationID: conversationID, turnID: turn.id, phase: phase)))
+    }
+
+    private func followedPhase() -> ReplyPhase {
+        followedTurn?.phase ?? .thinking
     }
 
     public distributed func send(
@@ -957,6 +990,8 @@ public distributed actor Conversation {
             do {
                 peer = try await adapter.peer(for: conversationID)
                 agentRole = requestedRole
+                // Listen to the new agent instead.
+                stopFollowingActivity()
             } catch {
                 actorSystem.log.error(
                     "Could not resolve agent for conversation turn",
@@ -992,6 +1027,9 @@ public distributed actor Conversation {
             broadcast: { event in
                 try? await conversation.publishLive(event)
             },
+            phase: {
+                await conversation.whenLocal { $0.followedPhase() } ?? .thinking
+            },
             complete: { [weak self] completion in
                 try? await self?.modelEvent(
                     .completed(
@@ -1000,7 +1038,7 @@ public distributed actor Conversation {
                     )
                 )
             },
-            operation: { updates in
+            operation: {
                 var turnContext = ["Current date and time: \(Self.timeAnchor())"]
                 turnContext.append(
                     contentsOf: await Self.memoryContext(
@@ -1018,29 +1056,10 @@ public distributed actor Conversation {
                         )
                     )
                 }
-                let accumulator = ReplyTextAccumulator()
-                let response = try await peer.run(
-                    to: request,
-                    turnContext: turnContext
-                ) { event in
-                    switch event {
-                    case .reasoning:
-                        await updates.send(.thinking)
-
-                    case .status(let message):
-                        await updates.send(.status(message))
-
-                    case .tool(let name):
-                        await updates.send(.status("Using \(name)…"))
-
-                    case .text(let fragment):
-                        let snapshot = await accumulator.append(fragment)
-                        await updates.send(.text(snapshot))
-
-                    default:
-                        break
-                    }
-                }
+                // What the agent does meanwhile reaches the room through its activity; this
+                // only asks, and waits for the reply.
+                await conversation.whenLocal { $0.followActivity() }
+                let response = try await peer.run(to: request, turnContext: turnContext)
                 let text = request.message.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !text.isEmpty,
                     let extractionConfiguration,

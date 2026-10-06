@@ -314,7 +314,7 @@ public actor TelegramEventPublisher {
         switch event {
         case .reply(let reply):
             switch reply {
-            case .userMessage:
+            case .userMessage, .step:
                 break
             case .started(let conversationID, let turnID):
                 await setReaction(

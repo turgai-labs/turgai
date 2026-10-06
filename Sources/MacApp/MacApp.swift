@@ -7,6 +7,10 @@ import SwiftUI
 /// `@main` entry point live in `Clients/Mac`.
 public struct TurgaiScenes: Scene {
     @State private var runtime = Runtime()
+    /// The app's state, shared by the chat and the turns window, so both follow one connection.
+    @State private var app = Store(initialState: AppFeature.State()) {
+        AppFeature()
+    }
 
     public init() {}
 
@@ -18,7 +22,7 @@ public struct TurgaiScenes: Scene {
         }
 
         Window("Turgai", id: WindowID.chat) {
-            MacAppRootView()
+            RootView(store: app)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 960, height: 720)
@@ -27,23 +31,18 @@ public struct TurgaiScenes: Scene {
             ObjectsWindow(objects: runtime.objects)
         }
         .defaultSize(width: 420, height: 560)
+
+        Window("Turns", id: WindowID.turns) {
+            TurnsView(store: app.scope(state: \.chat, action: \.chat))
+        }
+        .defaultSize(width: 560, height: 640)
     }
 }
 
 enum WindowID {
     static let chat = "chat"
     static let objects = "objects"
-}
-
-/// The chat: waits for the server, signs in, then talks to the assistant.
-struct MacAppRootView: View {
-    @State private var store = Store(initialState: AppFeature.State()) {
-        AppFeature()
-    }
-
-    var body: some View {
-        RootView(store: store)
-    }
+    static let turns = "turns"
 }
 
 private struct ObjectsWindow: View {

@@ -12,14 +12,6 @@ import TurgaiDomain
     import Foundation
 #endif
 
-private actor HailModelEventCollector {
-    private(set) var events: [HailModelEvent] = []
-
-    func append(_ event: HailModelEvent) {
-        events.append(event)
-    }
-}
-
 struct HailAdapterTests {
     @Test
     func modelTransportFailureHasHumanFacingMessage() {
@@ -192,14 +184,15 @@ struct HailAdapterTests {
             channel: ChannelID("test"),
             externalAddress: ExternalConversationAddress("chat")
         )
-        let collector = HailModelEventCollector()
-        let peer = HailConversationPeer(run: { request, onActivity in
-            try await onActivity(.text("partial"))
-            guard let response = HailResponse(content: request.message.text) else {
-                throw HailAdapterError.emptyResponse
-            }
-            return response
-        })
+        let peer = HailConversationPeer(
+            run: { request, _ in
+                guard let response = HailResponse(content: request.message.text) else {
+                    throw HailAdapterError.emptyResponse
+                }
+                return response
+            },
+            activities: { AsyncStream { $0.yield(.text("partial")); $0.finish() } }
+        )
         let request = ConversationTurnRequest(
             conversationID: conversationID,
             turnID: TurnID(rawValue: UUID()),
@@ -213,11 +206,10 @@ struct HailAdapterTests {
             agentRole: "test"
         )
 
-        let response = try await peer.run(to: request) { event in
-            await collector.append(event)
-        }
+        let response = try await peer.run(to: request)
         #expect(response.content == "hello")
-        let events = await collector.events
+        var events: [HailModelEvent] = []
+        for await event in try await peer.activities() { events.append(event) }
         try #require(events.count == 1)
         guard case .text(let fragment) = events[0] else {
             Issue.record("Expected a text event, got \(events)")

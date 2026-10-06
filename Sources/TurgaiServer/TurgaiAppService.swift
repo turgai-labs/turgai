@@ -1,4 +1,5 @@
 import ArgumentParser
+import DiscoverableActors
 import DistributedCluster
 import DurableWorkflows
 import EventSourcing
@@ -385,7 +386,10 @@ struct TurgaiAppService: Service, Sendable {
                         .grantingAll(for: CancelTimerEffect.self)
                         .grantingAll(for: ListTimersEffect.self)
                         // Actions that aren't safe also ask the user, inside the effect.
+                        .grantingAll(for: ObjectsGuideEffect.self)
                         .grantingAll(for: ListObjectsEffect.self)
+                        .grantingAll(for: DefineObjectEffect.self)
+                        .grantingAll(for: RemoveObjectEffect.self)
                         .grantingAll(for: FindObjectsEffect.self)
                         .grantingAll(for: DescribeObjectEffect.self)
                         .grantingAll(for: InvokeObjectEffect.self)
@@ -398,7 +402,6 @@ struct TurgaiAppService: Service, Sendable {
                 factory: { _ in eventStore },
                 snapshotFactory: { _ in snapshotStore }
             )
-            let virtualActorsPlugin = ClusterVirtualActorsPlugin()
             let workflowsPlugin = DurableWorkflowsPlugin()
             let channelRuntimePlugin = TurgaiChannelRuntimePlugin(
                 agentProfiles: agentProfiles,
@@ -418,7 +421,9 @@ struct TurgaiAppService: Service, Sendable {
                 settings.discovery = .clusterd
                 settings.autoLeaderElection = .lowestReachable(minNumberOfMembers: 1)
                 settings.plugins.install(plugin: ClusterSingletonPlugin())
+                let virtualActorsPlugin = ClusterVirtualActorsPlugin.configuring(&settings)
                 settings.plugins.install(plugin: virtualActorsPlugin)
+                settings.plugins.install(plugin: DiscoveryPlugin())
                 settings.plugins.install(plugin: journalPlugin)
                 settings.plugins.install(plugin: runtimePlugin)
                 settings.plugins.install(plugin: workflowsPlugin)
@@ -431,6 +436,8 @@ struct TurgaiAppService: Service, Sendable {
             // virtual-actor actions serve every effect type.
             ActorSystemDependency<CreateTimerEffect>.prepare(.live(on: system))
             let virtualNode = await VirtualNode(actorSystem: system)
+            // The objects models made: started, so they're findable again after a restart.
+            try await DynamicObjects.resolve(on: system, scope: .shared).start()
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
                 activities: ScheduleActivities()

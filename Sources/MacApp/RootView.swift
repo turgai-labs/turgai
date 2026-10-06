@@ -5,86 +5,120 @@ struct RootView: View {
     @Bindable var store: StoreOf<AppFeature>
 
     var body: some View {
-        Group {
-            switch (store.connection, store.account) {
-            case (.ready, .signedIn(let session)):
+        // One background, and one card on it whose content changes, so a new screen reshapes
+        // the card instead of tearing it down and building another.
+        ZStack {
+            ColorField()
+            switch screen {
+            case .chat(let session):
                 ChatView(session: session, store: store.scope(state: \.chat, action: \.chat))
-            case (.ready, .signedOut):
-                LoginView(store: store)
-            case (.ready, .unknown):
-                WaitingView(connection: .checking) { store.send($0) }
-            case (let connection, _):
-                WaitingView(connection: connection) { store.send($0) }
+                    .transition(.opacity)
+            case .card(let card):
+                self.card(card)
+                    .transition(.opacity)
             }
         }
+        .animation(.smooth, value: screen)
         .frame(minWidth: 640, minHeight: 480)
         .task { store.send(.appeared) }
     }
+
+    /// What the window shows: the chat, or a card before it.
+    private enum Screen: Equatable {
+        case card(Card)
+        case chat(Session)
+    }
+
+    private enum Card: Equatable {
+        case waiting(AppFeature.Connection)
+        case login
+    }
+
+    private var screen: Screen {
+        switch (store.connection, store.account) {
+        case (.ready, .signedIn(let session)): .chat(session)
+        case (.ready, .signedOut): .card(.login)
+        case (.ready, .unknown): .card(.waiting(.checking))
+        case (let connection, _): .card(.waiting(connection))
+        }
+    }
+
+    /// The glass card for the screens before the chat.
+    private func card(_ card: Card) -> some View {
+        Group {
+            switch card {
+            case .waiting(let connection):
+                WaitingView(connection: connection) { store.send($0) }
+                    .transition(.blurReplace)
+            case .login:
+                LoginView(store: store)
+                    .transition(.blurReplace)
+            }
+        }
+        .padding(40)
+        .glassEffect(.regular, in: .rect(cornerRadius: 32))
+    }
 }
 
-/// Signs in to the local server, or creates a chat account there.
+/// Signs in to the local server, or creates a chat account there: the card's content.
 struct LoginView: View {
     @Bindable var store: StoreOf<AppFeature>
 
     private var form: AppFeature.LoginForm { store.login }
 
     var body: some View {
-        ZStack {
-            ColorField()
-            VStack(alignment: .leading, spacing: 20) {
-                Image.skylark
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 56, height: 56)
+        VStack(alignment: .leading, spacing: 20) {
+            Image.skylark
+                .resizable()
+                .scaledToFit()
+                .frame(width: 56, height: 56)
+                .foregroundStyle(Color.turgaiAccent)
+            Text(title)
+                .font(.system(size: 40, weight: .heavy))
+                .foregroundStyle(Color.turgaiInk)
+                .contentTransition(.opacity)
+            if let notice {
+                Text(notice)
+                    .font(.callout)
                     .foregroundStyle(Color.turgaiAccent)
-                Text(title)
-                    .font(.system(size: 40, weight: .heavy))
-                    .foregroundStyle(Color.turgaiInk)
-                if let notice {
-                    Text(notice)
-                        .font(.callout)
-                        .foregroundStyle(Color.turgaiAccent)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Username", text: $store.login.username)
+                    .textContentType(.username)
+                SecureField("Password", text: $store.login.password)
+                    .textContentType(form.mode == .register ? .newPassword : .password)
+                if form.mode == .register {
+                    Text("Letters, numbers, dots, dashes, or underscores. A password of at least 12 characters.")
+                        .font(.caption)
+                        .foregroundStyle(Color.turgaiMuted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                VStack(alignment: .leading, spacing: 12) {
-                    TextField("Username", text: $store.login.username)
-                        .textContentType(.username)
-                    SecureField("Password", text: $store.login.password)
-                        .textContentType(form.mode == .register ? .newPassword : .password)
-                    if form.mode == .register {
-                        Text("Letters, numbers, dots, dashes, or underscores. A password of at least 12 characters.")
-                            .font(.caption)
-                            .foregroundStyle(Color.turgaiMuted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.large)
-                .onSubmit { store.send(.submitTapped) }
-                HStack(spacing: 16) {
-                    Button {
-                        store.send(.submitTapped)
-                    } label: {
-                        if form.progress == .submitting {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text(title)
-                        }
-                    }
-                    .buttonStyle(.glassProminent)
-                    .tint(.turgaiAccent)
-                    .controlSize(.large)
-                    .disabled(form.progress == .submitting || form.username.isEmpty || form.password.isEmpty)
-                    Button(switchPrompt) { store.send(.modeChanged(otherMode)) }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Color.signalBlue)
-                        .disabled(form.progress == .submitting)
-                }
             }
-            .frame(maxWidth: 360, alignment: .leading)
-            .padding(40)
-            .glassEffect(.regular, in: .rect(cornerRadius: 32))
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.large)
+            .onSubmit { store.send(.submitTapped) }
+            HStack(spacing: 16) {
+                Button {
+                    store.send(.submitTapped)
+                } label: {
+                    if form.progress == .submitting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text(title)
+                    }
+                }
+                .buttonStyle(.glassProminent)
+                .tint(.turgaiAccent)
+                .controlSize(.large)
+                .disabled(form.progress == .submitting || form.username.isEmpty || form.password.isEmpty)
+                Button(switchPrompt) { store.send(.modeChanged(otherMode)) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.signalBlue)
+                    .disabled(form.progress == .submitting)
+            }
         }
+        .frame(maxWidth: 360, alignment: .leading)
         .animation(.smooth, value: form.mode)
     }
 
@@ -122,34 +156,31 @@ struct LoginView: View {
     }
 }
 
-/// Shown until the chat is ready: a bold statement on a color field, and the next step.
+/// Shown until the chat is ready: a bold statement, and the next step. The card's content.
 struct WaitingView: View {
     let connection: AppFeature.Connection
     let send: (AppFeature.Action) -> Void
 
     var body: some View {
-        ZStack {
-            ColorField()
-            VStack(alignment: .leading, spacing: 20) {
-                Image.skylark
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 56, height: 56)
-                    .foregroundStyle(Color.turgaiAccent)
-                Text(title)
-                    .font(.system(size: 40, weight: .heavy))
-                    .foregroundStyle(Color.turgaiInk)
-                Text(message)
-                    .font(.title3)
-                    .foregroundStyle(Color.turgaiMuted)
-                    .fixedSize(horizontal: false, vertical: true)
-                nextStep
-            }
-            .frame(maxWidth: 420, alignment: .leading)
-            .padding(40)
-            .glassEffect(.regular, in: .rect(cornerRadius: 32))
+        VStack(alignment: .leading, spacing: 20) {
+            Image.skylark
+                .resizable()
+                .scaledToFit()
+                .frame(width: 56, height: 56)
+                .foregroundStyle(Color.turgaiAccent)
+            Text(title)
+                .font(.system(size: 40, weight: .heavy))
+                .foregroundStyle(Color.turgaiInk)
+                .contentTransition(.opacity)
+            Text(message)
+                .font(.title3)
+                .foregroundStyle(Color.turgaiMuted)
+                .fixedSize(horizontal: false, vertical: true)
+                .contentTransition(.opacity)
+            nextStep
+                .transition(.blurReplace)
         }
-        .animation(.smooth, value: connection)
+        .frame(maxWidth: 420, alignment: .leading)
     }
 
     private var title: String {

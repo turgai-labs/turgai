@@ -8,6 +8,11 @@ public distributed actor Shop {
     public typealias ActorSystem = ClusterSystem
 
     private var placed: [ShopOrder] = []
+    /// Managers on duty, in the order they started their shift.
+    private var managersOnDuty: [(identity: ObjectIdentity, manager: DynamicObject)] = []
+    private var nextManager = 0
+    /// Refunds waiting for a manager's decision, by order number.
+    private var openRefunds: [Int: OpenRefund] = [:]
 
     public init(actorSystem: ActorSystem, scope: ObjectScope = .shared) async throws {
         self.actorSystem = actorSystem
@@ -17,6 +22,9 @@ public distributed actor Shop {
 
     /// The shop's orders, oldest first.
     public distributed var orders: [ShopOrder] { placed }
+
+    /// The managers on duty, who decide on refunds.
+    public distributed var managers: [DynamicObject] { managersOnDuty.map(\.manager) }
 
     /// Take an order.
     /// - Parameters:
@@ -29,23 +37,97 @@ public distributed actor Shop {
         return order
     }
 
-    /// A customer asks for their money back for an order.
-    /// - Parameter number: The order's number.
-    public distributed func requestRefund(number: Int) async throws -> ShopOrder {
+    /// A manager starts their shift: refund requests go to the managers on duty, in turn,
+    /// starting with any that were waiting for one.
+    /// - Parameter manager: The manager: it receives `refundRequested(number, total)`, and answers
+    ///   the shop with ``refundApproved(number:)`` or ``refundDenied(number:)``.
+    public distributed func startShift(manager: DynamicObject) async throws {
+        let identity = try await manager.identity
+        guard !managersOnDuty.contains(where: { $0.identity == identity }) else { return }
+        managersOnDuty.append((identity, manager))
+        for number in openRefunds.filter({ $0.value.handler == .waitingForAManager }).keys.sorted() {
+            assign(number)
+        }
+    }
+
+    /// A manager ends their shift: the refunds they hadn't decided go to another manager on
+    /// duty, or wait for one.
+    /// - Parameter manager: The manager, matched by identity.
+    public distributed func endShift(manager: DynamicObject) async throws {
+        let identity = try await manager.identity
+        managersOnDuty.removeAll { $0.identity == identity }
+        for number in openRefunds.filter({ $0.value.handler == .manager(identity) }).keys.sorted() {
+            assign(number)
+        }
+    }
+
+    /// A customer asks for their money back for an order. A manager on duty decides, and the
+    /// shop returns without waiting for the decision.
+    /// - Parameters:
+    ///   - number: The order's number.
+    ///   - replyTo: The customer, to tell how it ended: an object with `refunded` and
+    ///     `refundDenied` actions taking `number`.
+    public distributed func requestRefund(number: Int, replyTo: DiscoverableObject) async throws -> ShopOrder {
         let order = try update(number) { order in
             guard order.status == .placed else { throw ShopError.notRefundable(number, order.status) }
             order.status = .refundRequested
         }
+        openRefunds[number] = OpenRefund(customer: replyTo, handler: .waitingForAManager)
         await announce(RefundRequested(order: order))
+        assign(number)
         return order
     }
 
-    /// Mark a requested refund as paid out.
+    /// A manager approved a refund: it's paid out, and the customer is told.
     /// - Parameter number: The order's number.
-    public distributed func refund(number: Int) throws -> ShopOrder {
-        try update(number) { order in
+    public distributed func refundApproved(number: Int) async throws -> ShopOrder {
+        let order = try update(number) { order in
             guard order.status == .refundRequested else { throw ShopError.notRefundable(number, order.status) }
             order.status = .refunded
+        }
+        try await openRefunds.removeValue(forKey: number)?.customer
+            .invoke("refunded", arguments: ["number": .integer(Int64(number))])
+        return order
+    }
+
+    /// A manager refused a refund: the order stands, and the customer is told.
+    /// - Parameter number: The order's number.
+    public distributed func refundDenied(number: Int) async throws -> ShopOrder {
+        let order = try update(number) { order in
+            guard order.status == .refundRequested else { throw ShopError.notRefundable(number, order.status) }
+            order.status = .refundDenied
+        }
+        try await openRefunds.removeValue(forKey: number)?.customer
+            .invoke("refundDenied", arguments: ["number": .integer(Int64(number))])
+        return order
+    }
+
+    /// Hands an open refund to the next manager on duty, or leaves it waiting for one.
+    private func assign(_ number: Int) {
+        guard var refund = openRefunds[number], let order = placed.first(where: { $0.number == number }) else { return }
+        guard !managersOnDuty.isEmpty else {
+            refund.handler = .waitingForAManager
+            openRefunds[number] = refund
+            return
+        }
+        let (identity, manager) = managersOnDuty[nextManager % managersOnDuty.count]
+        nextManager += 1
+        refund.handler = .manager(identity)
+        openRefunds[number] = refund
+        Task { await send(order, to: manager) }
+    }
+
+    /// Passes a refund request to a manager, without waiting for the decision. Like any
+    /// message, it can't fail the request: if the manager can't be reached, that's logged.
+    private func send(_ order: ShopOrder, to manager: DynamicObject) async {
+        do {
+            let total = NSDecimalNumber(decimal: order.amount).doubleValue
+            try await manager.invoke(
+                "refundRequested", arguments: ["number": .integer(Int64(order.number)), "total": .number(total)])
+        } catch {
+            actorSystem.log.warning(
+                "Couldn't pass a refund request to a manager",
+                metadata: ["order": "\(order.number)", "manager": "\(manager)", "error": "\(error)"])
         }
     }
 
@@ -109,6 +191,20 @@ public enum ShopOrderStatus: String, Codable, Sendable, CaseIterable {
     case refundRequested
     /// The money went back to the customer.
     case refunded
+    /// The refund was refused; the order stands.
+    case refundDenied
+}
+
+/// A refund waiting for a manager's decision.
+private struct OpenRefund {
+    /// Who asked, to tell how it ended.
+    let customer: DiscoverableObject
+    var handler: Handler
+
+    enum Handler: Equatable {
+        case manager(ObjectIdentity)
+        case waitingForAManager
+    }
 }
 
 public enum ShopError: Error, Codable, Equatable, Sendable, CustomStringConvertible {

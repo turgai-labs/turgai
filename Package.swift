@@ -18,7 +18,7 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../hail"),
-        .package(path: "../discoverable-distributed-actors"),
+        .package(path: "../discoverable-distributed-actors", traits: ["ClusterSystem"]),
         .package(path: "../cluster-durable-workflows"),
         .package(
             path: "../AnyLanguageModel",
@@ -36,14 +36,10 @@ let package = Package(
             url: "https://github.com/swift-server/async-http-client.git",
             from: "1.21.0"
         ),
-        .package(
-            url: "https://github.com/akbashev/cluster-virtual-actors.git",
-            branch: "main"
-        ),
-        .package(
-            url: "https://github.com/apple/swift-distributed-actors.git",
-            branch: "main"
-        ),
+        // Local branches: stable virtual actor references (stable-references) and
+        // plugin-intercepted references (plugin-actor-references). Back to URLs once merged.
+        .package(path: "../cluster-virtual-actors"),
+        .package(path: "../swift-distributed-actors"),
         .package(
             url: "https://github.com/akbashev/cluster-event-sourcing.git",
             branch: "main"
@@ -78,6 +74,8 @@ let package = Package(
             from: "1.6.0"
         ),
         .package(url: "https://github.com/apple/swift-markdown.git", branch: "main"),
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.0"),
+        .package(url: "https://github.com/pointfreeco/swift-parsing", from: "0.14.1"),
         .package(
             url: "https://github.com/pointfreeco/swift-composable-architecture.git",
             from: "1.22.0"
@@ -117,6 +115,26 @@ let package = Package(
                 "TurgaiDomain",
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+                .product(name: "Yams", package: "Yams"),
+                .product(name: "Parsing", package: "swift-parsing"),
+                .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+            ]
+        ),
+        .executableTarget(
+            name: "TurgaiModelEval",
+            dependencies: [
+                "TurgaiApplication",
+                "TurgaiHail",
+                "TurgaiPersistence",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+                .product(name: "Hail", package: "hail"),
+                .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
             ]
         ),
         .target(
@@ -152,6 +170,7 @@ let package = Package(
                 .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+                .product(name: "Yams", package: "Yams"),
             ]
         ),
         .target(
@@ -202,6 +221,7 @@ let package = Package(
                 "TurgaiServer",
                 "TurgaiWeb",
                 .product(name: "HailAgentRuntime", package: "hail"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
@@ -243,6 +263,8 @@ let package = Package(
             dependencies: [
                 "TurgaiObjects",
                 "TurgaiApplication",
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
             ]

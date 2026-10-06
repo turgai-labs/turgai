@@ -25,8 +25,9 @@ public enum ConversationTools {
         actorSystem: ClusterSystem? = nil,
         objectCatalog: ObjectCatalog? = nil,
         includeConversationTools: Bool = true
-    ) -> [any Tool] {
-        guard includeConversationTools else { return [] }
+    ) -> TurnTools {
+        guard includeConversationTools else { return TurnTools() }
+        var sources: [any ToolSource] = []
         var tools: [any Tool] = [
             WebSearchTool(backend: searchBackend),
             FetchURLTool(),
@@ -45,7 +46,9 @@ public enum ConversationTools {
                 objectCatalog: objectCatalog,
                 scopes: owner.map(ObjectScope.visible(to:)) ?? [.shared]
             )
-            tools += ObjectTools(session: session).tools
+            tools += ObjectTools(session: session).everyTurn
+            sources.append(ObjectDefiningTools(session: session))
+            sources.append(ObjectActionTools(session: session))
         }
 
         if let userTools {
@@ -152,7 +155,7 @@ public enum ConversationTools {
                 }
             }
         }
-        return tools
+        return TurnTools(tools: tools, sources: sources)
     }
 
     private static func sender(of message: ChatMessage) -> String {

@@ -254,6 +254,7 @@ enum TelegramDelivery {
             case .started(_, let turnID),
                 .phase(_, let turnID, _),
                 .status(_, let turnID, _),
+                .step(_, let turnID, _),
                 .partial(_, let turnID, _),
                 .keepAlive(_, let turnID, _),
                 .finished(_, let turnID, _),

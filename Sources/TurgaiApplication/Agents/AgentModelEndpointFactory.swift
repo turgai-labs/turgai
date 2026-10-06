@@ -39,6 +39,9 @@ public actor AgentModelEndpointFactory {
             switch reasoning?.encoding {
             case nil: think = nil
             case .disabled: think = false
+            // Ollama's `think` is on or off, so effort none means off for any model, whether or not
+            // a catalog lists the model's reasoning levels.
+            case .raw where reasoning?.effort == ReasoningEffort.none: think = false
             case .raw, .dynamic, .tokenBudget:
                 throw ModelRouterError.unsupportedReasoningEffort(
                     provider: agentModel.provider,

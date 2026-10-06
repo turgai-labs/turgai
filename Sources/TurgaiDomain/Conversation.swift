@@ -798,11 +798,42 @@ public enum ReplyEvent: Hashable, Codable, Sendable {
     case started(conversationID: ConversationID, turnID: TurnID)
     case phase(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)
     case status(conversationID: ConversationID, turnID: TurnID, message: String)
+    /// One thing the agent did, for those watching the turn step by step.
+    case step(conversationID: ConversationID, turnID: TurnID, step: ReplyStep)
     case partial(conversationID: ConversationID, turnID: TurnID, text: String)
     case keepAlive(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)
     case finished(conversationID: ConversationID, turnID: TurnID, text: String)
     case completed(conversationID: ConversationID, turnID: TurnID)
     case failed(conversationID: ConversationID, turnID: TurnID?, message: String)
+}
+
+/// One past turn of the agent: the message that started it, what it did, and how it ended.
+public struct ConversationTurn: Hashable, Codable, Sendable {
+    public enum Outcome: Hashable, Codable, Sendable {
+        case running
+        case replied(String, at: Date)
+        case failed(String, at: Date)
+    }
+
+    public let message: String
+    public let startedAt: Date
+    public var steps: [ReplyStep]
+    public var outcome: Outcome
+
+    public init(message: String, startedAt: Date, steps: [ReplyStep] = [], outcome: Outcome = .running) {
+        self.message = message
+        self.startedAt = startedAt
+        self.steps = steps
+        self.outcome = outcome
+    }
+}
+
+/// One thing the agent did during a turn.
+public enum ReplyStep: Hashable, Codable, Sendable {
+    /// A tool it called, with its arguments as the model wrote them.
+    case toolCalled(name: String, arguments: String, at: Date)
+    /// A tool call's result; `failure` says why it failed, when it did.
+    case toolFinished(name: String, output: String, failure: String?, at: Date)
 }
 
 public struct OutboundAction: Hashable, Codable, Sendable {
