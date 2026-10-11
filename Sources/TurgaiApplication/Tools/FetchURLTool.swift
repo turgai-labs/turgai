@@ -54,10 +54,7 @@ public struct FetchURLTool {
         )
     }
 
-    public func runOutput(
-        input: FetchURLToolInput,
-        token: borrowing EffectToken<NetworkEffect>
-    ) async throws -> ToolOutput {
+    public func run(_ input: FetchURLToolInput, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<NetworkEffect>) async throws -> CallReturn {
         let url = try validatedURL(input.url)
         let response = try await NetworkEffect.run(in: token)
         guard (200..<300).contains(response.statusCode) else {

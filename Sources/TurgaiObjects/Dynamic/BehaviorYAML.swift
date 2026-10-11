@@ -17,36 +17,31 @@ extension Behavior.Written {
     ///       - on: howMany()
     ///         reply: count
     public init(yaml: YAML) throws(BehaviorError) {
-        let document: JSONValue
+        try self.init(document: try Self.document(yaml))
+    }
+
+    /// A spec, or a piece of one, as the document a spec is read from: what a draft written a
+    /// piece at a time puts together before reading it whole.
+    public static func document(_ yaml: YAML) throws(BehaviorError) -> JSONValue {
         do {
-            document = try YAMLDocument.read(Self.quotingCalls(in: yaml.text))
+            return try YAMLDocument.read(Self.quotingCalls(in: yaml.text))
         } catch {
             throw BehaviorError(error.explanation)
         }
+    }
+
+    /// Reads a spec from its document, as ``init(yaml:)`` does once the YAML is read.
+    public init(document: JSONValue) throws(BehaviorError) {
         guard case .object(let members) = document else {
             throw BehaviorError("A behavior is a mapping with `fields` and `receive`, such as:\n\n\(BehaviorError.example)")
         }
-        let keys = ["speaks", "fields", "initial", "receive"]
+        let keys = ["fields", "initial", "receive"]
         if let extra = members.keys.sorted().first(where: { !keys.contains($0) }) {
             let hint =
                 extra == "behavior" || extra == "name" ? " The name is given on its own, not in the YAML."
-                : extra == "protocols" || extra == "protocol" ? " Protocols are given on their own." : ""
+                : extra == "speaks" ? " An object's type is its behavior: a parameter like another object is written `worker: bob`." : ""
             throw BehaviorError(
-                "`\(extra)` isn't part of a behavior: it has `receive`, and optionally `speaks`, `fields` and `initial`.\(hint)")
-        }
-
-        let speaks: [String]?
-        switch members["speaks"] {
-        case nil, .null?: speaks = nil
-        case .string(let name)?: speaks = [name]
-        case .array(let names)?:
-            speaks = try names.map { name throws(BehaviorError) in
-                guard case .string(let name) = name else {
-                    throw BehaviorError("`speaks` names `\(name.inline)`, but it's a list of protocols' names.")
-                }
-                return name
-            }
-        case let other?: throw BehaviorError("`speaks` is `\(other.inline)`, but it's a list of protocols' names.")
+                "`\(extra)` isn't part of a behavior: it has `receive`, and optionally `fields` and `initial`.\(hint)")
         }
 
         var fields: [Field] = []
@@ -61,11 +56,16 @@ extension Behavior.Written {
                 "`fields` is `\(other.inline)`, but it's each field with its starting value, such as:\n\n    fields:\n      count: 0\n      names: []")
         }
 
-        guard case .array(let written)? = members["receive"], !written.isEmpty else {
+        // No `receive` is no behavior yet: an object that handles nothing, as an actor can start.
+        let written: [JSONValue]
+        switch members["receive"] {
+        case nil: written = []
+        case .array(let items)?: written = items
+        case let other?:
             throw BehaviorError(
-                "A behavior needs `receive`: a list of clauses, each with `on`, and usually `do`, such as:\n\n\(BehaviorError.example)")
+                "`receive` is `\(other.inline)`, but it's a list of clauses, each with `on`, and usually `do`, such as:\n\n\(BehaviorError.example)")
         }
-        var clauses: [Clause] = []
+        var clauses: [(clause: Clause, in: String?, then: String?)] = []
         for (index, item) in written.enumerated() {
             clauses.append(try Self.clause(item, at: "receive[\(index)]"))
         }
@@ -76,8 +76,26 @@ extension Behavior.Written {
         case .string(let state)?: initial = state
         case let other?: throw BehaviorError("`initial` is `\(other.inline)`, but it's the name of a state, such as `idle`.")
         }
-        self.init(speaks: speaks, fields: fields, initial: initial, receive: clauses)
+        // States are a field: `in: idle` is a guard on it, and `then: busy` sets it.
+        guard let start = initial ?? clauses.lazy.compactMap(\.in).first ?? clauses.lazy.compactMap(\.then).first else {
+            self.init(fields: fields, receive: clauses.map(\.clause))
+            return
+        }
+        guard !fields.contains(where: { $0.name == Self.stateField }) else {
+            throw BehaviorError("`\(Self.stateField)` is a field, and a behavior with states keeps its state there. Name the field differently.")
+        }
+        let receive = clauses.map { written in
+            let clause = written.clause
+            let guarded = written.in.map { [Guard(left: .name(Self.stateField), comparison: .equal, right: .text($0))] } ?? []
+            let moved = written.then.map { [Action.set(field: Self.stateField, to: .text($0))] } ?? []
+            let when = guarded + (clause.when ?? [])
+            return Clause(on: clause.on, parameters: clause.parameters, when: when.isEmpty ? nil : when, actions: clause.actions + moved)
+        }
+        self.init(fields: fields + [Field(name: Self.stateField, start: .text(start))], receive: receive)
     }
+
+    /// The field a behavior with states keeps its state in.
+    static let stateField = "state"
 
     /// `count: 0`, or `manager: {object: Ann}` for another object.
     private static func start(_ value: JSONValue, of field: String) throws(BehaviorError) -> Value {
@@ -101,7 +119,7 @@ extension Behavior.Written {
             "`\(field)` starts as `\(value.inline)`, but a field starts as a number, text, true or false, a list of text, or `{object: Name}`.")
     }
 
-    private static func clause(_ item: JSONValue, at path: String) throws(BehaviorError) -> Clause {
+    private static func clause(_ item: JSONValue, at path: String) throws(BehaviorError) -> (clause: Clause, in: String?, then: String?) {
         guard case .object(let members) = item else {
             throw BehaviorError("\(path) is `\(item.inline)`, but a clause is a mapping with `on` and `do`, such as:\n\n\(BehaviorError.example)")
         }
@@ -135,6 +153,14 @@ extension Behavior.Written {
         case nil, .null?: break
         case .array(let items)?:
             for (index, item) in items.enumerated() { actions.append(try Self.action(item, at: "\(path).do[\(index)]")) }
+        case .object(let written)?:
+            // Actions written as a mapping: shown back as the list they should be, with `reply`
+            // moved out next to `do`, where it belongs.
+            let actions = written.filter { $0.key != "reply" }.sorted { $0.key < $1.key }
+            let reply = written["reply"].map { "\n    reply: \($0.inline)" } ?? ""
+            throw BehaviorError(
+                "\(path).do is a mapping, but it's a list: each action on a line of its own, starting with `- `, in the order they run, such as:\n\n    do:\n"
+                    + actions.map { "      - \($0.key): \($0.value.inline)" }.joined(separator: "\n") + reply)
         case let other?:
             throw BehaviorError("\(path).do is `\(other.inline)`, but it's a list of actions, such as:\n\n    do:\n      - add: 1 to count")
         }
@@ -149,17 +175,42 @@ extension Behavior.Written {
             case let other?: throw BehaviorError("\(path).\(key) is `\(other.inline)`, but it's the name of a state, such as `idle`.")
             }
         }
-        return Clause(
-            on: message, parameters: parameters, when: guards.isEmpty ? nil : guards, actions: actions, in: try state("in"),
-            then: try state("then"))
+        return (
+            Clause(on: message, parameters: parameters, when: guards.isEmpty ? nil : guards, actions: actions),
+            try state("in"), try state("then")
+        )
     }
 
-    /// `approve(number: integer)` with its parameters, or `approve` alone, for a message of a
-    /// protocol it speaks, whose parameters come from the protocol.
+    /// A name made from what was written in its place, such as `addCup` for `add cup`: one word,
+    /// as messages, fields and parameters are named.
+    public static func messageName(from text: String) -> String {
+        let words = (text.split(separator: "(").first.map(String.init) ?? text)
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        guard let first = words.first else { return "approve" }
+        // Words are joined, each after the first starting with a capital; a word's own capitals
+        // stay, so `approveBelow` is left as it is.
+        return first.prefix(1).lowercased() + first.dropFirst() + words.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
+    }
+
+    /// `approve(number: integer)`, or `approve` for one without parameters. A type is a built-in
+    /// one, or the handle of an object, for an object like it: `worker: bob`.
     private static func message(_ text: String, at path: String) throws(BehaviorError) -> (String, [Parameter]?) {
-        let signature = try MessageProtocol.Written.signature(text, at: path)
-        let parenthesized = text.contains("(")
-        return (signature.name, parenthesized ? signature.parameters : nil)
+        let syntax: Grammar.SignatureSyntax
+        do {
+            syntax = try Grammar.read(text, with: SignatureParser())
+        } catch {
+            // The example is made from its own words, so it isn't copied as a template.
+            let name = Self.messageName(from: text)
+            throw BehaviorError(
+                "\(path): `\(text)` isn't a message. A message is one word, with its parameters in parentheses: `\(name)()`, or `\(name)(amount: number)` with one. A parameter's type is string, integer, number, boolean, list, object, or an object's handle, for an object like it.\n\n\(error.description)")
+        }
+        let parameters = syntax.parameters.map { parameter in
+            if let kind = Kind(rawValue: parameter.type) {
+                return Parameter(name: parameter.name, type: kind, like: nil)
+            }
+            return Parameter(name: parameter.name, type: .object, like: parameter.type)
+        }
+        return (syntax.name, parameters.isEmpty ? nil : parameters)
     }
 
     // MARK: Guards
@@ -295,7 +346,7 @@ extension Behavior.Written {
             // Quoted text in an action or a guard is text: YAML would drop its quotes, and the
             // value would then read as a name.
             let key = line[..<colon.lowerBound].trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "- ", with: "")
-            if Self.ownKeys.contains(key), value.count >= 2, let quote = value.first, quote == "'" || quote == "\"",
+            if ["reply", "when"].contains(key), value.count >= 2, let quote = value.first, quote == "'" || quote == "\"",
                 value.last == quote
             {
                 let escaped = value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
@@ -327,85 +378,20 @@ extension Behavior.Written.Comparison {
     }
 }
 
-// MARK: - Protocols
-
-extension MessageProtocol.Written {
-    /// Protocols written together, each name with its messages, one per line:
-    ///
-    ///     salary answers:
-    ///       - raiseApproved(amount: number)
-    ///       - raiseDenied(reason: string)
-    ///     salary review:
-    ///       - raiseRequested(amount: number, worker: salary answers)
-    public static func read(yaml: YAML) throws(BehaviorError) -> [MessageProtocol.Written] {
-        let document: JSONValue
-        do {
-            document = try YAMLDocument.read(Behavior.Written.quotingCalls(in: yaml.text))
-        } catch {
-            throw BehaviorError(error.explanation)
-        }
-        guard case .object(let written) = document, !written.isEmpty else {
-            throw BehaviorError(
-                "Protocols are each protocol's name with its messages, one per line, such as:\n\n    salary answers:\n      - raiseApproved(amount: number)\n      - raiseDenied(reason: string)")
-        }
-        var read: [MessageProtocol.Written] = []
-        for name in written.keys.sorted() {
-            let lines: [JSONValue]
-            switch written[name] {
-            case .array(let items)?: lines = items
-            case .string?: lines = [written[name]!]
-            default:
-                throw BehaviorError("`\(name)` is a list of messages, one per line, such as `- raiseApproved(amount: number)`.")
-            }
-            var messages: [Message] = []
-            for item in lines {
-                guard case .string(let line) = item else {
-                    throw BehaviorError("`\(name)` lists `\(item.inline)`, but each message is one line, such as `raiseApproved(amount: number)`.")
-                }
-                messages.append(try signature(line, at: "`\(name)`"))
-            }
-            read.append(MessageProtocol.Written(name: name, messages: messages))
-        }
-        return read
-    }
-
-    /// `name(param: type, …)`, `name()`, or `name`, with an optional `-> type`. A type is a
-    /// built-in one, or a protocol's name, for an object that speaks it.
-    static func signature(_ text: String, at path: String) throws(BehaviorError) -> Message {
-        let syntax: Grammar.SignatureSyntax
-        do {
-            syntax = try Grammar.read(text, with: SignatureParser())
-        } catch {
-            throw BehaviorError(
-                "\(path): `\(text)` isn't a message. Write it `name(parameter: type, …)`, such as `approve(number: integer)`. The types are string, integer, number, boolean, list, object, or a protocol's name.\n\n\(error.description)")
-        }
-        let parameters = syntax.parameters.map { parameter in
-            if let kind = Behavior.Written.Kind(rawValue: parameter.type) {
-                return Behavior.Written.Parameter(name: parameter.name, type: kind, speaks: nil)
-            }
-            return Behavior.Written.Parameter(name: parameter.name, type: .object, speaks: parameter.type)
-        }
-        return Message(name: syntax.name, parameters: parameters, reply: syntax.reply.flatMap(Behavior.Written.Kind.init(rawValue:)))
-    }
-}
-
 // MARK: - Shown as YAML
 
 extension Behavior.Written {
     /// The spec as YAML, to show it back the way specs are read.
     public var yaml: YAML {
         var lines: [String] = []
-        if let speaks, !speaks.isEmpty { lines.append("speaks: [\(speaks.joined(separator: ", "))]") }
         if !fields.isEmpty {
             lines.append("fields:")
             lines += fields.map { "  \($0.name): \(Self.shown($0.start))" }
         }
-        if let initial { lines.append("initial: \(initial)") }
-        lines.append("receive:")
+        lines.append(receive.isEmpty ? "receive: []" : "receive:")
         for clause in receive {
-            let parameters = clause.parameters.map { "(" + $0.map { "\($0.name): \($0.speaks ?? $0.type.rawValue)" }.joined(separator: ", ") + ")" } ?? ""
+            let parameters = clause.parameters.map { "(" + $0.map { "\($0.name): \($0.like ?? $0.type.rawValue)" }.joined(separator: ", ") + ")" } ?? ""
             lines.append("  - on: \(clause.on)\(parameters)")
-            if let state = clause.in { lines.append("    in: \(state)") }
             for check in clause.when ?? [] {
                 let right = check.right.map { " \(Self.shown($0))" } ?? ""
                 lines.append("    when: \(Self.shown(check.left)) \(Behavior.Comparison(check.comparison).rawValue)\(right)")
@@ -413,18 +399,17 @@ extension Behavior.Written {
             if !clause.actions.isEmpty { lines.append("    do:") }
             for action in clause.actions {
                 switch action {
-                case .set(let field, let value): lines.append("      - set: \(field) to \(Self.shown(value))")
-                case .add(let value, let field): lines.append("      - add: \(Self.shown(value)) to \(field)")
-                case .subtract(let value, let field): lines.append("      - subtract: \(Self.shown(value)) from \(field)")
-                case .append(let value, let field): lines.append("      - append: \(Self.shown(value)) to \(field)")
-                case .remove(let value, let field): lines.append("      - remove: \(Self.shown(value)) from \(field)")
+                case .set(let field, let value): lines.append("      - set: \(Self.scalar("\(field) to \(Self.shown(value))"))")
+                case .add(let value, let field): lines.append("      - add: \(Self.scalar("\(Self.shown(value)) to \(field)"))")
+                case .subtract(let value, let field): lines.append("      - subtract: \(Self.scalar("\(Self.shown(value)) from \(field)"))")
+                case .append(let value, let field): lines.append("      - append: \(Self.scalar("\(Self.shown(value)) to \(field)"))")
+                case .remove(let value, let field): lines.append("      - remove: \(Self.scalar("\(Self.shown(value)) from \(field)"))")
                 case .send(let message, let to, let arguments):
                     let given = (arguments ?? []).map { "\($0.name): \(Self.shown($0.value))" }.joined(separator: ", ")
-                    lines.append("      - send: \(Self.shown(to)).\(message)(\(given))")
+                    lines.append("      - send: \(Self.scalar("\(Self.shown(to)).\(message)(\(given))"))")
                 case .reply(let value): lines.append("      - reply: \(Self.shown(value))")
                 }
             }
-            if let next = clause.then { lines.append("    then: \(next)") }
         }
         return YAML(lines.joined(separator: "\n"))
     }
@@ -439,30 +424,24 @@ extension Behavior.Written {
         case .object(let handle): "{object: \(handle)}"
         }
     }
+
+    /// An action is parsed as one expression. Quote the whole YAML scalar so quoted text inside
+    /// it, such as `'milk' from items`, survives a show/read round trip.
+    private static func scalar(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "''") + "'"
+    }
 }
 
 extension Behavior {
     /// Reads a behavior written as YAML.
-    public init(name: String, yaml: YAML, protocols: [String: MessageProtocol] = [:]) throws(BehaviorError) {
-        try self.init(name: name, written: try Written(yaml: yaml), protocols: protocols)
+    public init(name: String, yaml: YAML, objects: [String: MessageProtocol] = [:]) throws(BehaviorError) {
+        try self.init(name: name, written: try Written(yaml: yaml), objects: objects)
     }
 }
 
 extension Spec {
-    /// A new behavior from a spec written as YAML, with any protocols it introduces, as YAML too.
-    public static func yaml(_ spec: YAML, protocols: YAML? = nil) throws(BehaviorError) -> Spec {
-        .written(try Behavior.Written(yaml: spec), protocols: try protocols.map { (yaml: YAML) throws(BehaviorError) in try MessageProtocol.Written.read(yaml: yaml) } ?? [])
-    }
-}
-
-extension Change {
-    /// A new spec, written as YAML.
-    public static func spec(yaml: YAML) throws(BehaviorError) -> Change {
-        .spec(try Behavior.Written(yaml: yaml))
-    }
-
-    /// Protocols, new or changed, written as YAML.
-    public static func protocols(yaml: YAML) throws(BehaviorError) -> Change {
-        .protocols(try MessageProtocol.Written.read(yaml: yaml))
+    /// A new behavior from a spec written as YAML.
+    public static func yaml(_ spec: YAML) throws(BehaviorError) -> Spec {
+        .written(try Behavior.Written(yaml: spec))
     }
 }

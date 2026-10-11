@@ -187,8 +187,8 @@ struct ObjectToolsTests {
         }
     }
 
-    /// Each action is a tool of its own, with typed arguments, and an object the model meets
-    /// during a turn brings its tools with it on the next round.
+    /// Each action is a tool of its own, with typed arguments, and a result that hands the model an
+    /// object links to that object's tools.
     @Test
     func actionsAreToolsOfTheirOwn() async throws {
         try await withObjectNodes { objectsNode, sessionNode in
@@ -196,18 +196,26 @@ struct ObjectToolsTests {
             let reminders = try await Reminders(actorSystem: objectsNode, client: makeClient(memory: memory))
             let session = ObjectSession(actorSystem: sessionNode, scopes: [.shared])
             _ = try await waitForRoots(1, in: session)
-            func tool(_ name: String) async -> ObjectActionTool? {
-                await session.actionTools().first { $0.name == name }
-            }
 
-            let lists = try #require(await tool("reminders_lists"))
+            // Finding an object links to its first page, which links to its actions.
+            let find = try #require(try await ObjectTools(session: session).tools().first { $0.name == "search_objects" })
+            let described = try await AnyTool(find).runOutput(
+                generatedContent: GeneratedContent(properties: ["query": "reminders"]), authority: FullAuthority())
+            let remindersPage = try #require(try await next(described, in: session).first { $0.name == "reminders" })
+            let openedReminders = try await AnyTool(remindersPage).runOutput(
+                generatedContent: GeneratedContent(properties: [:]), authority: FullAuthority())
+            let lists = try #require(try await next(openedReminders, in: session).first { $0.name == "reminders_lists" })
             #expect(lists.description.hasPrefix("lists on Reminders (`reminders`)"))
+
             let found = try await AnyTool(lists).runOutput(
                 generatedContent: GeneratedContent(properties: [:]), authority: FullAuthority())
-            #expect(found.textRepresentation.contains("reminder-list"))
+            #expect(found.result.textRepresentation.contains("reminder-list"))
 
-            // The list it was handed is reachable now, through tools of its own.
-            let add = try #require(await tool("reminder-list_add"))
+            // The list it was handed comes as a reference; its first page has the tools.
+            let reminderList = try #require(try await next(found, in: session).first { $0.name == "reminder-list" })
+            let openedList = try await AnyTool(reminderList).runOutput(
+                generatedContent: GeneratedContent(properties: [:]), authority: FullAuthority())
+            let add = try #require(try await next(openedList, in: session).first { $0.name == "reminder-list_add" })
             let schema = try JSONDecoder().decode(DiscoveryJSON.self, from: JSONEncoder().encode(add.schema.parameters))
             #expect(schema["properties"]?["title"]?["type"] == "string")
             _ = try await AnyTool(add).runOutput(
@@ -229,7 +237,7 @@ struct ObjectToolsTests {
             }
         }
         let colon = explanation("actions:\n  - startShift: call the shop (from: self).")
-        #expect(colon.contains("I couldn't read line 2 of the arguments"))
+        #expect(colon.contains("I couldn't read line 2:"))
         #expect(colon.contains("has a second \": \" in it"))
         #expect(colon.contains(#"- startShift: "call the shop (from: self).""#))
         #expect(explanation("name: Ann\n\tshop: shop").contains("indented with a tab"))
@@ -330,28 +338,35 @@ struct ObjectToolsTests {
     }
 
     @Test
-    func turnsListRootsAndTheirHandlesWorkWithoutListing() async throws {
+    func theObjectsPageListsRootsAndTheirHandlesWorkWithoutListing() async throws {
         try await withObjectNodes { objectsNode, sessionNode in
             let mac = try await Mac(actorSystem: objectsNode)
             let reminders = try await Reminders(
                 actorSystem: objectsNode, client: makeClient(memory: MemoryReminders(lists: [])))
-            guard let conversation = TurgaiDomain.ConversationID(stableKey: "web:ada") else {
-                Issue.record("Invalid conversation ID")
-                return
-            }
 
-            // The runtime keeps one catalog following the receptionist, as here.
+            // The runtime keeps one catalog following the receptionist, as here. The objects page
+            // says what objects are for, lists the roots by handle, and links them directly.
             let catalog = await ObjectCatalog(actorSystem: sessionNode)
+            let listing = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog, scopes: [.shared])
             var lines: [String] = []
+            var links: [String] = []
             for _ in 0..<50 {
-                lines = await ObjectSession.turnContext(
-                    actorSystem: sessionNode, objectCatalog: catalog, conversationID: conversation)
-                if lines.count == 3 { break }
+                let page = try await listing.open(ObjectAddress.objects.address)
+                lines = (page.output.textValue ?? "").split(separator: "\n").map(String.init)
+                links = page.links.map(\.name)
+                if lines.contains(where: { $0.hasPrefix("- id: `reminders`; name: `Reminders`") }),
+                    lines.contains(where: { $0.hasPrefix("- id: `mac`; name: `Mac`") }) { break }
                 try await Task.sleep(for: .milliseconds(100))
             }
-            #expect(lines.first == "Objects here, by handle. Each action of an object is its own tool, named handle_action, such as shop_startShift:")
-            #expect(lines.contains { $0.hasPrefix("- `mac`, Mac: ") })
-            #expect(lines.contains { $0.hasPrefix("- `reminders`, Reminders: ") })
+            #expect(lines.first == ObjectTools.description)
+            #expect(lines.contains("Available objects:"))
+            #expect(lines.contains { $0.hasPrefix("- id: `mac`; name: `Mac`") })
+            #expect(lines.contains { $0.hasPrefix("- id: `reminders`; name: `Reminders`") })
+            #expect(Set(links).isSuperset(of: ["create_object", "search_objects", "list_objects"]))
+            #expect(Set(links).isSuperset(of: ["mac", "reminders"]))
+            #expect(!links.contains("use_object"))
+            // Its link says what objects are for in a sentence.
+            #expect(ObjectTools.link.description == ObjectTools.description)
 
             // A new session, as a later turn gets: the listed handle works straight away.
             let session = ObjectSession(
@@ -405,4 +420,29 @@ func actionSignaturesNameTheirArguments() {
             "play", input: ["type": "object", "properties": ["query": ["type": "string"]], "required": ["query"]])
             == "play(query)")
     #expect(ObjectCatalog.signature("pause", input: nil) == "pause()")
+}
+
+@Test
+func booleanEventValuesAcceptZeroAndOne() throws {
+    #expect(try DefineStep.DataKind.boolean.start("1") == .boolean(true))
+    #expect(try DefineStep.DataKind.boolean.start("0") == .boolean(false))
+    #expect(DefineStep.Operand.number(1).forSetting(.boolean) == .boolean(true))
+    #expect(DefineStep.Operand.number(0).forSetting(.boolean) == .boolean(false))
+    #expect(DefineStep.Operand.number(2).forSetting(.boolean) == .number(2))
+    #expect(DefineStep.Operand.number(1).forSetting(.number) == .number(1))
+}
+
+/// What comes after a call: its links, or the tools of the page it landed on, opened now.
+private func next(_ returned: CallReturn, in session: ObjectSession) async throws -> [any HailCore.Tool] {
+    switch returned.next {
+    case .links(let links): links
+    case .page(let address): try await session.open(address).links
+    }
+}
+
+extension ToolOutput {
+    /// Its text, for a text output.
+    var textValue: String? {
+        if case .text(let text) = self { text } else { nil }
+    }
 }

@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "TurgaiTelegram", targets: ["TurgaiTelegram"]),
         .executable(name: "Turgai", targets: ["Turgai"]),
         .executable(name: "TurgaiWasmRunner", targets: ["TurgaiWasmRunner"]),
+        .executable(name: "TurgaiSite", targets: ["TurgaiSite"]),
         .library(name: "MacApp", targets: ["MacApp"]),
     ],
     dependencies: [
@@ -89,8 +90,15 @@ let package = Package(
         .target(name: "TurgaiModels"),
         .target(name: "TurgaiDomain"),
         .target(
+            name: "TurgaiBrand",
+            resources: [
+                .copy("Resources/Public")
+            ]
+        ),
+        .target(
             name: "TurgaiWeb",
             dependencies: [
+                "TurgaiBrand",
                 "TurgaiApplication",
                 "TurgaiModels",
                 "TurgaiHail",
@@ -104,9 +112,16 @@ let package = Package(
                 .product(name: "HummingbirdElementary", package: "hummingbird-elementary"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Markdown", package: "swift-markdown"),
+            ]
+        ),
+        .executableTarget(
+            name: "TurgaiSite",
+            dependencies: [
+                "TurgaiBrand",
+                .product(name: "Elementary", package: "elementary")
             ],
             resources: [
-                .copy("Resources/Public")
+                .process("Resources")
             ]
         ),
         .target(
@@ -130,6 +145,7 @@ let package = Package(
                 "TurgaiPersistence",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+                .product(name: "Logging", package: "swift-log"),
                 .product(name: "Hail", package: "hail"),
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),

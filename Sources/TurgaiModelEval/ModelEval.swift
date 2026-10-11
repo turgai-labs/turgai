@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import Hail
+import Logging
 import ServiceLifecycle
 
 /// Measures how well a model makes and uses objects, through the app's own path: a Hail agent
@@ -18,9 +19,30 @@ struct ModelEval: AsyncParsableCommand {
     @Option(help: "Where to write what each run did.")
     var log = "/tmp/turgai-model-eval.log"
 
+    @Option(help: "The model's sampling temperature. Small models call tools more reliably near 0.")
+    var temperature = 0.2
+
+    @Option(help: "Only the tasks whose request contains this, ignoring case; repeat for more. All tasks without it.")
+    var task: [String] = []
+
+    @Option(help: "A file with the agent's instructions, as a profile's would be. Blank without it, like a default profile.")
+    var instructions: String?
+
+    @Option(help: "Replace only the objects page introduction with text from this file, for controlled evaluations.")
+    var objectsPageDescription: String?
+
     func run() async throws {
-        let service = ModelEvalService(model: try AgentModel(model), runs: runs, log: URL(fileURLWithPath: log))
-        try await ServiceGroup(services: [service], gracefulShutdownSignals: [.sigterm, .sigint]).run()
+        let tasks = task.isEmpty
+            ? EvalTask.all : EvalTask.all.filter { request in task.contains { request.request.localizedCaseInsensitiveContains($0) } }
+        let service = ModelEvalService(
+            model: try AgentModel(model), tasks: tasks, runs: runs, log: URL(fileURLWithPath: log), temperature: temperature,
+            instructions: try instructions.map { try String(contentsOfFile: $0, encoding: .utf8) } ?? "",
+            objectsPageDescription: try objectsPageDescription.map { try String(contentsOfFile: $0, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) })
+        // Done is done: the group ends when the evals do.
+        let configuration = ServiceGroupConfiguration(
+            services: [.init(service: service, successTerminationBehavior: .gracefullyShutdownGroup)],
+            gracefulShutdownSignals: [.sigterm, .sigint], logger: Logger(label: "eval"))
+        try await ServiceGroup(configuration: configuration).run()
     }
 }
 
@@ -28,30 +50,44 @@ struct ModelEval: AsyncParsableCommand {
 /// shutdown stops it between runs' turns, stopping the node it's on.
 struct ModelEvalService: Service {
     let model: AgentModel
+    let tasks: [EvalTask]
     let runs: Int
     let log: URL
+    let temperature: Double
+    /// The agent's instructions, as a profile's: blank unless given.
+    let instructions: String
+    let objectsPageDescription: String?
 
     func run() async throws {
         try await cancelWhenGracefulShutdown {
             if model.provider == .system {
-                let node = try await EvalNode.start(model: model)
+                let node = try await EvalNode.start(model: model, temperature: temperature, instructions: instructions)
                 defer { node.stop() }
                 try await ToolTokens.report(on: node)
             }
             var written = ""
             var passed = 0
-            for task in EvalTask.all {
+            var stageTotals = Array(repeating: 0, count: EvalTask.Stages.names.count)
+            for task in tasks {
                 for run in 1...runs {
-                    let result = await task.run(with: model)
+                    let result = await task.run(with: model, temperature: temperature, instructions: instructions, objectsPageDescription: objectsPageDescription)
                     try Task.checkCancellation()
                     if result.passed { passed += 1 }
+                    for (index, stage) in result.stages.values.enumerated() where stage {
+                        stageTotals[index] += 1
+                    }
                     print(result.line)
                     fflush(stdout)
                     written += "\n##### \(task.request) (run \(run))\n" + result.transcript
                     try written.write(to: log, atomically: true, encoding: .utf8)
                 }
             }
-            print("\n\(passed)/\(runs * EvalTask.all.count) passed")
+            let total = runs * tasks.count
+            let stageSummary = "Stages: " + zip(EvalTask.Stages.names, stageTotals).map { name, count in "\(name) \(count)/\(total)" }.joined(separator: "  ")
+            print("\n" + stageSummary)
+            print("\(passed)/\(total) passed")
+            written += "\n##### Summary\n\(stageSummary)\nOutcome: \(passed)/\(total)\n"
+            try written.write(to: log, atomically: true, encoding: .utf8)
         }
     }
 }

@@ -60,9 +60,6 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// Which object this is: its own, kept across restarts, unlike its actor ID.
     public distributed var identity: ObjectIdentity { ownIdentity }
 
-    /// The state it's in, for a new spec to be checked against.
-    distributed var current: String? { state.current }
-
     /// Makes this object `name`, running `behavior`, with `start` values instead of the
     /// behavior's starting ones where given. An object is created once.
     distributed func create(
@@ -80,6 +77,18 @@ public distributed actor DynamicObject: DiscoverableActor {
         _ = try existing
         if handling > 0 { await withCheckedContinuation { idle.append($0) } }
         try await emit(event: .adopted(behavior))
+    }
+
+    /// Sets values of its own fields, for it alone: objects sharing its behavior keep theirs.
+    public distributed func set(values: [String: JSONValue]) async throws {
+        let behavior = try behavior
+        try Self.check(values, against: behavior)
+        for (name, value) in values.sorted(by: { $0.key < $1.key }) {
+            guard let type = behavior.fields[name]?.type, type.accepts(value) else {
+                throw BehaviorError("`\(name)` holds \(behavior.fields[name]?.type?.withArticle ?? "an object"), not `\(value.inline)`.")
+            }
+        }
+        try await emit(event: .handled(changes: values))
     }
 
     /// Starts it if it isn't running: being called is what starts a virtual actor, and starting
@@ -104,8 +113,16 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// Checks in under its stable reference, the one ``resolve(on:identity:)`` returns, which
     /// keeps reaching it after it restarts.
     private func checkIn(_ scope: ObjectScope) async throws {
-        let object = try DiscoverableObject.resolve(id: try await reference().id, using: actorSystem)
+        let reference = try await reference()
+        let object = try DiscoverableObject.resolve(id: reference.id, using: actorSystem)
         await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
+        await actorSystem.receptionist.checkIn(reference, with: scope.madeObjectsKey)
+    }
+
+    /// The reference it checks in under: the one to know it by. Each resolve of an object gives a
+    /// reference of its own, with an ID of its own, so only this one matches what others find.
+    public distributed var stableReference: DynamicObject {
+        get async throws { try await reference() }
     }
 
     /// Its own stable reference, which keeps reaching it after it restarts: what it checks in
@@ -136,15 +153,6 @@ public distributed actor DynamicObject: DiscoverableActor {
         }
     }
 
-    /// The state it's in, or the behavior's first, if a newer spec no longer has it.
-    private var currentState: String? {
-        get throws {
-            let behavior = try behavior
-            let states = Set(behavior.clauses.compactMap(\.state) + [behavior.initial].compactMap { $0 })
-            return state.current.flatMap { states.contains($0) ? $0 : nil } ?? behavior.initial
-        }
-    }
-
     static func check(_ start: [String: JSONValue], against behavior: Behavior) throws(BehaviorError) {
         if let unknown = start.keys.sorted().first(where: { behavior.fields[$0] == nil }) {
             let known = behavior.fields.keys.sorted().map { "`\($0)`" }.joined(separator: ", ")
@@ -157,40 +165,19 @@ public distributed actor DynamicObject: DiscoverableActor {
     // Every requirement is implemented `async`: a sync implementation can be bypassed by the
     // library's async `invoke` overloads (https://github.com/swiftlang/swift/issues/92795).
 
-    /// Its fields, and the messages it takes now, in the state it's in.
+    /// Its fields, and the messages it takes.
+    /// Its spec, typed, for changing it a step at a time.
+    public distributed var written: Behavior.Written {
+        get throws { try behavior.source }
+    }
+
+    /// Its spec as written, for changing it.
+    public distributed var spec: YAML {
+        get throws { try behavior.source.yaml }
+    }
+
     public distributed func describe() async throws -> ObjectDescription {
-        let created = try existing
-        let behavior = try behavior
-        let fields = try fields
-        var properties: [String: JSONValue] = [:]
-        for name in behavior.fields.keys {
-            var schema = Self.schema(of: fields[name] ?? .null)
-            schema["readOnly"] = true
-            properties[name] = .object(schema)
-        }
-        let current = try currentState
-        let taking = Set(behavior.messages(in: current))
-        var actions: [String: ObjectAction] = [:]
-        for message in behavior.messages where taking.contains(message.name) {
-            let input: JSONValue? =
-                message.parameters.isEmpty
-                ? nil
-                : [
-                    "type": "object",
-                    "properties": .object(
-                        Dictionary(uniqueKeysWithValues: message.parameters.map { ($0.name, $0.type.schema) })),
-                    "required": .array(message.parameters.map { .string($0.name) }),
-                ]
-            actions[message.name] = ObjectAction(description: nil, input: input)
-        }
-        let made = created.createdAt.formatted(date: .abbreviated, time: .omitted)
-        let now = current.map { " It's \($0) now." } ?? ""
-        return ObjectDescription(
-            title: created.name,
-            description: "Made with objects on \(made).\(now) Its spec:\n\(behavior.source.yaml.text)",
-            properties: properties,
-            actions: actions
-        )
+        try behavior.description(title: try existing.name, values: try fields)
     }
 
     /// Handles a message the way its behavior says: the first clause that matches changes its
@@ -199,8 +186,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     public distributed func invoke(_ action: String, arguments: JSONValue) async throws -> JSONValue {
         let created = try existing
         let fields = try fields
-        let current = try currentState
-        let outcome = try behavior.handle(action, arguments: arguments, state: current, fields: fields)
+        let outcome = try behavior.handle(action, arguments: arguments, fields: fields)
         handling += 1
         defer {
             handling -= 1
@@ -211,8 +197,8 @@ public distributed actor DynamicObject: DiscoverableActor {
         }
         var changes: [String: JSONValue] = [:]
         for (name, value) in outcome.fields where fields[name] != value { changes[name] = value }
-        if !changes.isEmpty || outcome.state != state.current {
-            try await emit(event: .handled(changes: changes, state: outcome.state))
+        if !changes.isEmpty {
+            try await emit(event: .handled(changes: changes))
         }
         let me = try JSONValue.reference(to: try await reference())
         for send in outcome.sends {
@@ -302,32 +288,19 @@ public distributed actor DynamicObject: DiscoverableActor {
         }
     }
 
-    private static func schema(of value: JSONValue) -> [String: JSONValue] {
-        switch value {
-        case .array: ["type": "array"]
-        case .string: ["type": "string"]
-        case .bool: ["type": "boolean"]
-        case .integer, .unsignedInteger: ["type": "integer"]
-        case .number: ["type": "number"]
-        case .object(let members) where members["object"] != nil || members["id"] != nil: ["x-actor-reference": true]
-        case .object: ["type": "object"]
-        case .null: [:]
-        }
-    }
 }
 
 /// What happened to a dynamic object, as journaled.
 public enum DynamicObjectEvent: Codable, Sendable {
     case created(name: String, behavior: Behavior, id: BehaviorID, start: [String: JSONValue], scope: ObjectScope, at: Date)
-    /// One message handled: the fields it changed, and the state it left the object in.
-    case handled(changes: [String: JSONValue], state: String?)
+    /// One message handled: the fields it changed.
+    case handled(changes: [String: JSONValue])
     /// A new spec of the behavior it shares.
     case adopted(Behavior)
     case removed
 }
 
-/// A dynamic object's journaled state: the behavior it runs, its state, and the field values it
-/// has set. The behavior is shared with other objects running the same one, through its directory.
+/// A dynamic object's journaled state: the behavior it runs, and the field values it has set. The behavior is shared with other objects running the same one, through its directory.
 public struct DynamicObjectState: Codable, Sendable {
     public struct Created: Codable, Sendable {
         public let name: String
@@ -340,8 +313,6 @@ public struct DynamicObjectState: Codable, Sendable {
 
     /// `nil` until the object is created.
     public var created: Created?
-    /// The behavior's state it's in, or `nil` for a behavior without states.
-    public var current: String?
     /// The values it has set: its start values, and every change since.
     public var fields: [String: JSONValue] = [:]
 
@@ -362,9 +333,8 @@ public struct DynamicObjectState: Codable, Sendable {
             fields = start
         case .adopted(let behavior):
             created?.behavior = behavior
-        case .handled(let changes, let state):
+        case .handled(let changes):
             fields.merge(changes) { _, changed in changed }
-            current = state
         case .removed:
             created?.removed = true
         }

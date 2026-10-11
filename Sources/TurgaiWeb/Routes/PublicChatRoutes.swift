@@ -1114,6 +1114,8 @@ extension TurnRecord {
             case .running: .running
             case .replied(let text, let at): .replied(text, at: at)
             case .failed(let reason, let at): .failed(reason, at: at)
+            case .cancelled(let at): .cancelled(at: at)
+            case .interrupted(let at): .interrupted(at: at)
             }
         self.init(
             id: "\(turn.startedAt.timeIntervalSince1970)", message: turn.message, startedAt: turn.startedAt,

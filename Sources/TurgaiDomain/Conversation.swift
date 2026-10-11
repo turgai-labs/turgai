@@ -813,6 +813,9 @@ public struct ConversationTurn: Hashable, Codable, Sendable {
         case running
         case replied(String, at: Date)
         case failed(String, at: Date)
+        case cancelled(at: Date)
+        /// Cut off by a restart, and closed instead of resumed.
+        case interrupted(at: Date)
     }
 
     public let message: String

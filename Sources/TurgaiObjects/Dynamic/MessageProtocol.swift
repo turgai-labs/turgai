@@ -1,8 +1,8 @@
 import DiscoverableActors
 
-/// A named set of messages: what an object accepts. Objects speak protocols, and references
-/// are typed by them: a reference typed `salary answers` holds any object that accepts at least
-/// its messages, the way set-theoretic types read a type as a set of values.
+/// A named set of messages: what an object accepts. A reference typed like an object holds any
+/// object that accepts at least its messages, the way set-theoretic types read a type as a set of
+/// values.
 public struct MessageProtocol: Codable, Sendable, Equatable {
     public let name: String
     public let messages: [Signature]
@@ -13,42 +13,6 @@ public struct MessageProtocol: Codable, Sendable, Equatable {
     }
 
     public var written: String { messages.map(\.written).joined(separator: "\n") }
-}
-
-extension MessageProtocol {
-    /// Protocols written together, which can name each other, and any protocol in `known`.
-    public static func read(_ written: [Written], known: [String: MessageProtocol]) throws(BehaviorError) -> [MessageProtocol] {
-        // Every name first, so protocols written together can name each other.
-        var protocols = known
-        for item in written { protocols[item.name] = MessageProtocol(name: item.name, messages: []) }
-        var read: [MessageProtocol] = []
-        for item in written {
-            guard !item.messages.isEmpty else {
-                throw BehaviorError("`\(item.name)` has no messages: a protocol is the messages objects that speak it take.")
-            }
-            var messages: [Signature] = []
-            for (index, message) in item.messages.enumerated() {
-                let path = "`\(item.name)`.messages[\(index)]"
-                try Signature.checkName(message.name, what: "message")
-                guard !messages.contains(where: { $0.name == message.name }) else {
-                    throw BehaviorError("`\(item.name)` has `\(message.name)` twice. Each message is written once.")
-                }
-                var parameters: [Parameter] = []
-                for (number, parameter) in (message.parameters ?? []).enumerated() {
-                    guard !parameters.contains(where: { $0.name == parameter.name }) else {
-                        throw BehaviorError("\(path): `\(message.name)` has the parameter `\(parameter.name)` twice.")
-                    }
-                    parameters.append(
-                        Parameter(
-                            name: parameter.name,
-                            type: try ValueType(parameter, at: "\(path).parameters[\(number)]", protocols: protocols)))
-                }
-                messages.append(Signature(name: message.name, parameters: parameters, reply: message.reply?.valueType))
-            }
-            read.append(MessageProtocol(name: item.name, messages: messages))
-        }
-        return read
-    }
 }
 
 extension Signature {
@@ -70,7 +34,7 @@ extension Signature {
 // MARK: - Inclusion
 
 /// Whether one type is in another, read as sets of values, the way Elixir's set-theoretic types
-/// check: `integer` is in `number`; an object that speaks a protocol accepting more messages is
+/// check: `integer` is in `number`; an object accepting more messages is
 /// in one that accepts fewer.
 struct Types {
     let protocols: [String: MessageProtocol]
@@ -112,9 +76,10 @@ struct Types {
         switch (a, b) {
         case _ where a == b: return true
         case (.integer, .number): return true
-        case (.speaks, .object), (.object, .speaks): return true
-        case (.speaks(let x), .speaks(let y)):
-            guard let left = protocols[x], let right = protocols[y] else { return false }
+        case (.like, .object), (.object, .like): return true
+        case (.like(let x), .like(let y)):
+            // An object not defined yet is checked when a message reaches it.
+            guard let left = protocols[x], let right = protocols[y] else { return true }
             return accepts(left, everythingIn: right, assuming: &assumed)
         default: return false
         }
@@ -146,5 +111,12 @@ struct Types {
         guard let expected = wanted.reply else { return true }
         guard let given = taken.reply else { return false }
         return isSubtype(given, of: expected, assuming: &assumed)
+    }
+}
+
+extension ValueType {
+    /// Whether every value of this type is one of `other`: `integer` is in `number`.
+    public func isSubtype(of other: ValueType) -> Bool {
+        Types(protocols: [:]).isSubtype(self, of: other)
     }
 }

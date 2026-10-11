@@ -79,10 +79,7 @@ public struct LocationTool {
         )
     }
 
-    public func runOutput(
-        input: LocationToolInput,
-        token: borrowing EffectToken<Effect>
-    ) async throws -> ToolOutput {
+    public func run(_ input: LocationToolInput, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<Effect>) async throws -> CallReturn {
         let results = try await LocationEffect.run(in: token)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

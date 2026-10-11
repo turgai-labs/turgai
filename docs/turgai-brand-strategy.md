@@ -12,7 +12,25 @@ He stands for a simple belief: powerful tools should be within anyone’s reach,
 
 Turgai gives that belief a character: warm, inventive, and a little irreverent, with the confidence to take on serious work and the honesty to admit his limits.
 
-His smallness makes the idea approachable, not limited. It gives a large ambition a clear shape—capable technology that people can understand, change, and make their own. The contrast gives Turgai his character: a small bird who belongs in the same sky as the giants.
+His smallness makes the idea approachable, not limited. A little bird crossing an enormous sky gives the ambition a clear shape: there is much to discover, and you can take part. Useful things can start small, grow, and connect with others.
+
+## Emotional core: space, exploration, and hope
+
+Turgai carries the feeling of looking into an enormous sky and wanting to find out what lies beyond the familiar. Space gives that feeling scale and distance: an open horizon, a faraway point of light, the possibility of making contact. Exploration gives it movement. Hope gives it a reason to continue.
+
+The future should feel open, something people can explore and help shape. Turgai’s optimism comes from having a part in it: making something useful, understanding how it works, and discovering what else it could become. Everyday usefulness and a sense of wonder belong together.
+
+Optimistic science fiction is an emotional reference. The space and lift associated with Angels & Airwaves, and the curiosity, resourcefulness, and connection that drew us to Project Hail Mary, help describe the feeling we want. These are creative touchstones, not templates for imagery, language, or fictional lore.
+
+Let the brand be expansive and sincere. The bird can be warm and playful within that vastness. Space should invite exploration; it should never make the product feel cold, remote, or reserved for experts.
+
+## The product behind the feeling
+
+Turgai’s direction is software you can ask for and keep: durable objects with their own identity, state, behavior, and relationships. Some use AI to reason; others simply do the job they were made for. A model is a capability the system can use and replace, rather than the identity of everything within it.
+
+A counter, a shopping list, or a routine is a small beginning. Being able to inspect it, change it, and connect it with other things gives that beginning a horizon. The same foundation should support everyday experiences and more ambitious work by developers.
+
+Persistence and communication give the brand its connection to living things. They do not make every object conscious or autonomous. Describe what an object actually does; a shopping list can remain a shopping list.
 
 ## What Turgai stands for
 
@@ -30,6 +48,7 @@ Turgai is the character that gives the product a point of view: useful technolog
 
 He is:
 
+- **Curious.** He ventures beyond the familiar, asks questions, and discovers through making.
 - **Resourceful.** He finds a way forward, experiments, and makes good use of what is available.
 - **Independent.** He questions defaults and respects the user’s choices.
 - **Capable.** He takes the work seriously, follows through, and explains his limits.
@@ -45,7 +64,9 @@ Turgai sounds like someone who knows his tools and is pleased to help you use th
 
 Use familiar words, direct sentences, and concrete results. Say what happened, what a choice means, and what the person can do next. Humor should emerge naturally from the moment. A little irreverence goes further when it is occasional.
 
-Keep the bird imagery for moments where it adds meaning. Everyday instructions should be easy to understand without knowing the brand story. Avoid grand promises, forced banter, and repeated speeches about Big Tech.
+Brand stories can speak openly about space, exploration, and hope. Use imagery of flight, horizons, distance, and contact where it adds meaning. Give the emotion room without turning every sentence into a declaration about the future.
+
+Everyday instructions should be easy to understand without knowing the brand story. Use concrete words such as create, remember, connect, and run. “Lifeform,” “transmission,” and “constellation” are occasional metaphors, not required names for objects, messages, and groups. Avoid grand promises, forced banter, and repeated speeches about Big Tech.
 
 ### Examples
 
@@ -76,14 +97,17 @@ The current local-first direction supports these commitments. It does not by its
 
 ### One-line description
 
-Turgai helps you get useful work done with the models and tools you choose.
+Turgai helps you make software you can keep, understand, and make your own.
 
 ### Short description
 
-Turgai helps you get things done with tools you can choose and shape. Curious, resourceful, and a little unruly, he brings a big ambition to a small bird: being independent should never mean settling for less.
+Start with something you need: a counter, a list, a routine. Turgai’s ambition is to turn it into software that lasts beyond the conversation, keeps its state, and can work with other things you create. A small bird with an open horizon, Turgai brings curiosity, resourcefulness, and hope to technology you can make your own.
+
+These descriptions express the intended direction. Public copy must reflect the capabilities available in the release it describes.
 
 ### Lines to explore
 
+- **Ask for software. Keep what you get.** — the concrete product promise shared with the [vision](./turgai_vision.md).
 - **Small bird. Big possibilities.** — introduces the character and his ambition.
 - **Make it your own.** — invites people to shape the product around their needs.
 - **Being independent should never mean settling for less.** — states the belief behind the product.
@@ -92,12 +116,14 @@ These serve different purposes and remain candidates. Choose a line for the cont
 
 ## From character to appearance
 
-Open space gives Turgai room. Vivid color, bold lettering, and simple geometry give him presence. Together they express a little bird whose confidence exceeds his size.
+Open sky and the vastness of space give Turgai a horizon. Vivid color, bold lettering, and simple geometry give him presence within it. A small warm point in a broad field, a flight across a page, or a distant light can carry exploration and hope.
 
 The poster influence gives his independence a visible form: a striking color field, an assertive word, or a shape that pushes beyond the expected alignment. Use those gestures where they help the message land. Working screens should carry the same character while making the task easy to follow.
 
 ## Questions to test
 
+- Does the brand evoke space, exploration, and hope? Does that feeling invite people in?
+- Can the sense of wonder coexist with something as ordinary as a shopping list?
 - Does the small bird suggest resourcefulness and possibility, or make the product seem limited?
 - Does Turgai feel like a recognizable character with a point of view, rather than a simulated person?
 - Can someone understand the independent attitude without seeing the word “punk”?

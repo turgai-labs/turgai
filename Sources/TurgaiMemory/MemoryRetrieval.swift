@@ -20,9 +20,6 @@ public struct MemoryQuery: Codable, Equatable, Sendable {
 /// be added behind this boundary later without changing the journal or the
 /// per-turn memory contract.
 public enum MemoryRetrieval {
-    public static let capabilityInstruction =
-        "Conversation history and saved user memory persist across turns. Relevant saved facts may be supplied below, but memory can be incomplete or outdated; the user's current message is authoritative."
-
     public static func facts(
         from projection: MemoryProjection,
         matching query: MemoryQuery,

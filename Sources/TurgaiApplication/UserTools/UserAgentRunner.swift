@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import DistributedCluster
 import Hail
 import HailCore
@@ -28,14 +29,11 @@ enum UserAgentRunner {
             )
         )
         let agent: Agent = try await actorSystem.agent(childID)
-        let message = ChatMessage.text(
-            sender: sourceAgentID.rawValue,
-            content: instruction,
-            timestamp: Date()
-        )
+        let received = AgentHistory.Input(
+            from: .agent(sourceAgentID), content: GeneratedContent(instruction), at: Date())
         return try await agent.respond(
-            message,
-            message: message,
+            instruction,
+            received: received,
             inputID: "\(turnID):\(toolName)"
         )
     }

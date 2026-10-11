@@ -1,0 +1,341 @@
+/* Turgai landing page.
+   A dawn-to-night story: the sky intro hands its wordmark to the corner, then a fixed field
+   shows one scene per section. Scroll drives the story (CSS scroll-driven animations);
+   loops inside a scene are SVG animation. No script.
+   Everything scroll moves is opacity or transform, so it runs on the compositor and keeps up with fast scrolling. */
+
+/* Only what the landing page adds. Colours, type, the header and buttons come from the shared turgai.css. */
+:root {
+  --life: var(--signal-coral);
+  --message: var(--signal-blue);
+  --code-bg: #20313d;
+  --code-fg: #eef4f3;
+  --night: #142c4f;
+  --night-ink: #f2f6fb;
+  --star: #f7d66b;
+  --gutter: var(--layout-gutter);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) { --life: var(--signal-yellow); --message: var(--signal-coral); --code-bg: #112530; }
+}
+html[data-theme="dark"] { --life: var(--signal-yellow); --message: var(--signal-coral); --code-bg: #112530; }
+
+/* known: with mandatory snapping Safari forgets the position on reload after a hand scroll, and lands on the
+   last #anchor or the top; fixing that needs script, and the page has none */
+html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+/* the shared stylesheet hides sideways overflow on html and body, which makes body a scroll container
+   and detaches the scroll timelines; clip hides overflow without that */
+html, body { overflow-x: clip; }
+/* the page colour lives on html, so the night layer behind the story can show through body */
+body { background: transparent; }
+body {
+  padding-inline: var(--gutter);
+  font-size: 1.125rem; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; border-radius: 2px; }
+.page { position: relative; z-index: 1; margin: 0; }
+
+/* ---------- pages: every section is a stop; the intro has two (sky, then headline) ---------- */
+.beat, .finale { scroll-snap-align: start; }
+.snap { position: absolute; left: 0; top: 0; width: 1px; height: 1px; scroll-snap-align: start; pointer-events: none; }
+.snap.end { top: calc(100% - 100svh); }
+
+/* ---------- the wordmark: the logo sits in the corner; a big copy in the sky shrinks into it ---------- */
+:root {
+  --logo-x: calc(var(--gutter) + 1.9375rem);
+  --logo-y: calc(env(safe-area-inset-top, 0px) + 1.575rem);
+  --hero-size: 220px;
+  --shrink: calc(20 / 220);
+}
+@media (max-width: 1100px) { :root { --hero-size: 140px; --shrink: calc(20 / 140); } }
+@media (max-width: 600px) { :root { --hero-size: 72px; --shrink: calc(20 / 72); } }
+.mark {
+  position: fixed; z-index: 6; top: calc(env(safe-area-inset-top, 0px) + 1.45rem); left: var(--gutter);
+  gap: .4375rem; line-height: 1.2; white-space: nowrap;
+}
+.mark-bird { width: 1.5rem; height: 1.5rem; fill: currentColor; flex: none; }
+/* drawn at full size and only ever scaled down, so it stays sharp */
+.hero-word {
+  position: fixed; z-index: 6; left: var(--logo-x); top: var(--logo-y); pointer-events: none; white-space: nowrap;
+  font: 700 var(--hero-size)/1 var(--font-ui); letter-spacing: -.025em; color: #fff; text-shadow: 0 2px 30px rgba(9, 21, 30, .25);
+  transform-origin: 0 0; transform: scale(var(--shrink)); opacity: 0; will-change: transform, opacity;
+  --hx: calc(50vw - var(--logo-x) - 1.3em); --hy: calc(42svh - var(--logo-y) - .5em);
+}
+.hero-in { display: block; animation: arrive 2.2s cubic-bezier(.25, .1, .25, 1) both; }
+/* the web app's header, fixed over the story; it appears once the intro hands the wordmark over */
+.bar {
+  position: fixed; z-index: 4; top: 0; left: 0; right: 0;
+  height: calc(env(safe-area-inset-top, 0px) + 4.5rem); padding-top: env(safe-area-inset-top, 0px);
+  justify-content: flex-end; opacity: 0;
+  border-bottom: 0; box-shadow: none;  /* the site's bar has no divider or shadow; the web app's keeps them */
+}
+/* night's version of the bar, faded in over it */
+.bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: color-mix(in srgb, var(--night) 70%, transparent); opacity: 0; }
+@keyframes arrive { from { opacity: 0; scale: .97; } }
+
+/* ---------- intro: the sky ---------- */
+.intro { position: relative; height: 230svh; margin-inline: calc(-1 * var(--gutter)); view-timeline-name: --intro; }
+/* no background colour: Safari paints a pinned element's colour into its bottom bar, which would turn it solid */
+.stage { position: sticky; top: 0; height: 100svh; overflow: hidden; display: grid; align-items: end; }
+/* the sky that matches the theme; both are in the page, so switching theme swaps them live */
+.sky-night { display: none; }
+@media (prefers-color-scheme: dark) {
+  .sky-day { display: none; }
+  .sky-night { display: block; }
+}
+.sky { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.veil { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 0%, var(--canvas) 92%); opacity: 0; }
+.sky-copy { position: relative; display: grid; gap: 1.4rem; padding: 0 var(--gutter) clamp(40px, 9svh, 96px); max-width: 72rem; }
+.sky-copy > * { margin: 0; }
+h1 { font: 900 clamp(2.8rem, 7vw, 6.4rem)/.92 var(--font-ui); letter-spacing: -.055em; text-wrap: balance; color: var(--ink); }
+.eyebrow { font: 600 .8rem/1.2 var(--font-code); letter-spacing: .12em; text-transform: uppercase; color: color-mix(in srgb, var(--ink) 75%, transparent); }
+.answer { font: 600 clamp(1.25rem, 2.3vw, 1.9rem)/1.25 var(--font-ui); letter-spacing: -.02em; color: var(--ink); max-width: 36rem; }
+/* the arrow to the next page: one per page, stacked; scroll shows the current one */
+.go {
+  position: fixed; z-index: 5; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); translate: -50% 0;
+  display: grid; place-items: center; width: 48px; height: 48px; color: var(--ink);
+  opacity: 0; visibility: hidden; animation: linear both;
+}
+.go-top { color: #fff; opacity: 1; visibility: visible; }
+.go svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; animation: bob 2.4s ease-in-out infinite; }
+.go:hover svg { stroke-width: 3; }
+.beat { position: relative; }
+@keyframes bob { 50% { translate: 0 5px; } }
+.flag { position: relative; display: inline-block; z-index: 0; }
+.flag::before {
+  content: ""; position: absolute; z-index: -1; inset: .14em -.08em .02em -.1em;
+  background: var(--signal-yellow); transform: rotate(var(--ga1));
+}
+
+/* ---------- the story ---------- */
+/* one screen at least; a chapter with a chat and code grows taller, clear of the top bar */
+/* a chapter, on the left: the claim, then the proof under it; the field keeps the whole right side */
+:root { --top: calc(env(safe-area-inset-top, 0px) + 4.5rem + 2svh); }
+.beat {
+  min-height: 100svh; display: grid; align-content: center; justify-items: start; row-gap: 1.6rem;
+  padding-block: var(--top) 4.5rem;
+}
+.copy, .proof { width: min(32rem, 44vw); }
+.copy { display: grid; gap: 1rem; }
+.copy > * { margin: 0; }
+.proof { display: grid; gap: .55rem; padding-top: 1.2rem; border-top: 1px solid var(--line); }
+.proof > * { margin: 0; }
+.proof-label { font: 600 .72rem/1 var(--font-code); letter-spacing: .1em; text-transform: uppercase; color: var(--life); }
+.proof-text { font-size: .95rem; line-height: 1.5; color: var(--muted); }
+/* the parts a chapter adds, as chips that match the new dots */
+h2 { font: 900 clamp(2rem, 4vw, 3.5rem)/.95 var(--font-ui); letter-spacing: -.05em; text-wrap: balance; }
+h2::before {
+  content: ""; display: block; width: 2.6rem; height: .7rem; margin-bottom: 1.1rem;
+  background: var(--c, var(--signal-coral)); transform: rotate(var(--ga1));
+}
+.beat:nth-of-type(3n+1) h2 { --c: var(--signal-yellow); }
+.beat:nth-of-type(3n+2) h2 { --c: var(--signal-blue); }
+.beat:nth-of-type(3n+3) h2::before { transform: rotate(var(--ga2)); }
+p { color: var(--muted); text-wrap: pretty; }
+p strong { color: var(--ink); font-weight: 650; }
+.code {
+  margin: 0; padding: 1rem 1.1rem; overflow-x: auto; background: var(--code-bg); color: var(--code-fg);
+  font: 400 .82rem/1.55 var(--font-code); transform: rotate(calc(var(--ga3) * .25)); box-shadow: 6px 6px 0 var(--signal-yellow);
+}
+.code b { color: var(--signal-yellow); font-weight: 600; }
+
+/* ---------- what a chapter looks like in Dopline's product: a chat, a trip page; replayed in a loop ---------- */
+.panel {
+  display: grid; align-content: start; gap: .8rem; min-width: 0; padding: 1.1rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 1rem 2.5rem color-mix(in srgb, var(--shadow) 40%, transparent);
+}
+.panel p { margin: 0; }
+.panel-title { font: 600 .75rem/1.3 var(--font-code); letter-spacing: .04em; color: var(--muted); padding-bottom: .6rem; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: .6rem; }
+/* the shop page is running: a pulsing live marker */
+.live { margin-left: auto; display: inline-flex; align-items: center; gap: .35rem; color: #2f9a5b; text-transform: uppercase; letter-spacing: .08em; }
+.live::before { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: #2fb36a; }
+@media (prefers-reduced-motion: no-preference) { .live::before { animation: live 1.6s ease-in-out infinite; } }
+@keyframes live { 50% { opacity: .3; transform: scale(.8); } }
+.bubble { max-width: 88%; padding: .6rem .8rem; border-radius: 1rem; font-size: .95rem; line-height: 1.4; }
+.from-customer { justify-self: end; background: var(--signal-blue); color: #fff; border-bottom-right-radius: .3rem; }
+.from-bot { justify-self: start; background: var(--canvas); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: .3rem; }
+.typing { justify-self: start; display: flex; gap: .3rem; background: var(--canvas); border: 1px solid var(--line); }
+/* the typing dots and the answer share one spot: one replaces the other */
+.chat .typing, .chat .from-bot { grid-area: 3 / 1; align-self: start; }
+.typing span { width: .4rem; height: .4rem; border-radius: 50%; background: var(--muted); }
+.order { display: flex; gap: .8rem; align-items: center; }
+.order-art { width: 3.2rem; height: 3.2rem; flex: none; border-radius: var(--radius); background: linear-gradient(135deg, var(--signal-yellow), var(--signal-coral)); }
+.order-name { font-weight: 650; color: var(--ink); }
+/* the cards share rows, so titles, models and instructions line up across them */
+.agent-cards { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto 1fr; column-gap: .8rem; }
+.agent-card { grid-row: span 3; grid-template-rows: subgrid; gap: .5rem; padding: .9rem 1rem; }
+.agent-model { font: 600 .78rem/1.4 var(--font-code); color: var(--message); }
+.agent-instructions { font-size: .88rem; line-height: 1.45; color: var(--ink); }
+.order-meta, .order-note { font-size: .9rem; color: var(--muted); }
+.status { display: grid; }
+.status span { grid-area: 1 / 1; justify-self: start; padding: .35rem .6rem; border-radius: 999px; font: 600 .8rem/1 var(--font-ui); color: var(--ink); }
+.status-before { background: color-mix(in srgb, var(--signal-yellow) 32%, transparent); }
+.status-after { background: color-mix(in srgb, #3fb26b 26%, transparent); opacity: 0; }
+.config .code { transform: none; box-shadow: none; font-size: .78rem; }
+.config mark { background: transparent; color: inherit; border-radius: .2rem; }
+
+/* one eight-second loop shared by every panel, so the moments line up across them */
+@media (prefers-reduced-motion: no-preference) {
+  .from-customer { animation: say-customer 8s infinite both; }
+  .typing { animation: typing 8s infinite both; }
+  .from-bot { animation: say-bot 8s infinite both; }
+  .status-before { animation: status-before 8s infinite both; }
+  .status-after { animation: status-after 8s infinite both; }
+  .order-note { animation: note 8s infinite both; }
+  .config mark { animation: rule 8s infinite both; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing, .status-before { display: none; }
+  .status-after { opacity: 1; }
+}
+@keyframes say-customer { 0% { opacity: 0; transform: translateY(8px); } 6%, 92% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@keyframes typing { 0%, 12% { opacity: 0; } 15%, 30% { opacity: 1; } 33%, 100% { opacity: 0; } }
+@keyframes say-bot { 0%, 32% { opacity: 0; transform: translateY(8px); } 38%, 92% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@keyframes status-before { 0%, 34% { opacity: 1; } 38%, 100% { opacity: 0; } }
+@keyframes status-after { 0%, 34% { opacity: 0; transform: scale(.9); } 38%, 92% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@keyframes note { 0%, 36% { opacity: 0; } 42%, 92% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes rule { 0%, 18% { background: transparent; } 24%, 34% { background: color-mix(in srgb, var(--signal-yellow) 45%, transparent); } 44%, 100% { background: transparent; } }
+
+/* ---------- the last page: exactly one screen, at night ---------- */
+.finale {
+  height: 100svh; display: flex; flex-direction: column;
+  --ink: #f2f6fb; --muted: #b6c6dc; --line: #2a4670; --accent: #c4473c;
+}
+@media (max-height: 560px) { .finale { height: auto; min-height: 100svh; } }
+.finale-main { flex: 1; min-height: 0; display: grid; align-content: center; gap: 1.8rem; padding-block: 10svh 4svh; }
+/* links to what isn't public yet: greyed out and not clickable */
+.off { cursor: default; pointer-events: none; opacity: .4; filter: grayscale(1); }
+/* a small coral sticker, tilted like the flags */
+.soon {
+  display: inline-block; justify-self: start; margin-left: .7rem; padding: .32rem .6rem; vertical-align: .1em;
+  font: 700 .7rem/1 var(--font-code); letter-spacing: .1em; text-transform: uppercase;
+  color: #fff; background: var(--signal-coral); border-radius: 6px; transform: rotate(var(--ga3));
+}
+.finale-main > .soon { margin-left: 0; font-size: .8rem; padding: .4rem .75rem; }
+.big { margin: 0; max-width: min(60rem, 100%); font: 900 clamp(2.8rem, 8vw, 7.4rem)/.92 var(--font-ui); letter-spacing: -.055em; color: var(--ink); }
+.big .flag::before { background: var(--signal-coral); transform: rotate(var(--ga2)); }
+.close { display: grid; gap: 1.2rem; max-width: 42rem; }
+.close p { margin: 0; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+/* the shared buttons, poster-sized */
+.cta .button { min-height: 3rem; padding: .9rem 1.4rem; font-size: 1rem; font-weight: 700; }
+.cta .button-accent { transform: rotate(calc(var(--ga3) * .5)); }
+footer {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding-block: 28px;
+  border-top: 1px solid var(--line); font: 400 .8rem/1.4 var(--font-code); color: var(--muted);
+}
+.night { position: fixed; inset: 0; z-index: -1; background: var(--night); opacity: 0; pointer-events: none; }
+
+/* ---------- the field: one layer per scene ---------- */
+.field {
+  position: fixed; z-index: 0; pointer-events: none; overflow: visible;
+  right: 2.5vw; top: 50%; translate: 0 -50%; width: min(45vw, 72svh); height: min(45vw, 72svh);
+  font-family: var(--font-code);
+}
+.layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.scene { opacity: 0; will-change: opacity, transform; }
+.dust circle { fill: var(--line-strong); opacity: .7; }
+.t-ink { fill: var(--ink); stroke: var(--ink); }
+.t-life { fill: var(--life); stroke: var(--life); }
+.t-message { fill: var(--message); stroke: var(--message); }
+rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-width: 0; }
+.glow { opacity: .16; }
+.link { fill: none; stroke: var(--line-strong); stroke-width: 3; }
+.pulse { fill: var(--message); }
+.label { fill: var(--ink); font-size: 27px; font-weight: 600; }
+.note { fill: var(--muted); font-size: 22px; }
+.machine { fill: color-mix(in srgb, var(--message) 5%, transparent); stroke: color-mix(in srgb, var(--message) 40%, transparent); stroke-width: 2.5; stroke-dasharray: 10 10; }
+.machine-label { fill: var(--message); font-size: 22px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.hole { fill: var(--canvas); }
+.outline { fill: none; stroke-width: 3; stroke-dasharray: 6 8; }
+.ring { fill: none; stroke: var(--life); stroke-width: 4; }
+.constellation { fill: none; stroke: var(--star); stroke-width: 2; opacity: 0; }
+.star { fill: var(--star); }
+.still { display: none; }
+
+@media (max-width: 879px) {
+  .field { right: auto; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 9svh); translate: -50% 0; width: min(84vw, 40svh); height: min(84vw, 40svh); }
+  .beat { align-items: flex-end; padding-bottom: calc(6svh + 56px); }
+  .beat { row-gap: 1rem; justify-items: stretch; }
+  .copy, .proof { width: auto; }
+  .proof { border-top: 0; padding: 1.2rem; margin-inline: -1.2rem;
+    background: var(--glass-surface); -webkit-backdrop-filter: saturate(1.8) blur(1.25rem); backdrop-filter: saturate(1.8) blur(1.25rem); }
+  .copy { max-width: 100%; padding: 1.2rem; margin-inline: -1.2rem;
+    background: var(--glass-surface); -webkit-backdrop-filter: saturate(1.8) blur(1.25rem); backdrop-filter: saturate(1.8) blur(1.25rem); }
+  .hide-narrow { display: none; }
+  /* chapters with a chat or page beside the text may need more than one screen on a phone */
+  .beat { height: auto; min-height: 100svh; padding-top: 52svh; }
+}
+
+/* ---------- scroll drives the story ---------- */
+@supports (animation-timeline: view()) {
+  /* intro: the big word moves and shrinks into the logo, which takes over as it lands */
+  .hero-word { animation: hero linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
+  .mark { animation: logo-in linear both, dusk linear both; animation-timeline: --intro, --closing; animation-range: contain 0% contain 100%, entry 40% cover 50%; }
+  .bar { animation: bar-in linear both, bar-night linear both; animation-timeline: --intro, --closing; animation-range: contain 85% contain 100%, entry 40% cover 50%; }
+  .bar::before { animation: night linear both; animation-timeline: --closing; animation-range: entry 40% cover 50%; }
+  .sky-copy { animation: reveal linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
+  .veil { animation: veil linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
+  .sky { animation: settle linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
+
+  /* each scene shows while its section fills the screen */
+  .scene { animation: scene linear both; animation-range: cover; }
+  .s-closing { animation-name: scene-last; }
+  .dust { animation: scene-last linear both; animation-range: cover; }
+
+  /* the last page: night falls and the stars gather into the skylark */
+  .night { animation: night linear both; animation-timeline: --closing; animation-range: entry 40% cover 50%; }
+  .joins { animation: join linear both; animation-range: cover 26% cover 44%; transform-box: fill-box; transform-origin: center; }
+  .star { animation: gather linear both; animation-timeline: --closing; animation-range: entry 10% cover 50%; }
+  .constellation { animation: draw linear both; animation-timeline: --closing; animation-range: cover 42% cover 50%; }
+}
+
+@keyframes hero {
+  from, 12% { transform: translate(var(--hx), var(--hy)) scale(1); opacity: 1; }
+  52% { transform: translate(0, 0) scale(var(--shrink)); opacity: 1; }
+  56%, to { transform: translate(0, 0) scale(var(--shrink)); opacity: 0; }
+}
+@keyframes logo-in { from, 51% { opacity: 0; } 56%, to { opacity: 1; } }
+@keyframes dusk { to { color: var(--night-ink); } }
+@keyframes bar-in { to { opacity: 1; } }
+@keyframes bar-night { to { --link: var(--night-ink); --link-strong: #fff; } }
+@keyframes reveal { from, 40% { opacity: 0; translate: 0 24px; } 80%, to { opacity: 1; translate: 0 0; } }
+@keyframes veil { from, 28% { opacity: 0; } 72%, 80% { opacity: .55; } to { opacity: 1; } }
+@keyframes settle { from { scale: 1.08; } 55%, to { scale: 1; } }
+/* off-screen layers leave rendering entirely (display: none), so their SVG loops cost nothing while hidden */
+@keyframes scene {
+  from, 29.9% { display: none; opacity: 0; scale: .96; }
+  30% { display: block; opacity: 0; scale: .96; }
+  42%, 58% { display: block; opacity: 1; scale: 1; }
+  70% { display: block; opacity: 0; scale: .98; }
+  70.1%, to { display: none; opacity: 0; scale: .98; }
+}
+@keyframes scene-last {
+  from, 29.9% { display: none; opacity: 0; }
+  30% { display: block; opacity: 0; }
+  42%, to { display: block; opacity: 1; }
+}
+@keyframes night { to { opacity: 1; } }
+@keyframes join { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: none; } }
+@keyframes gather { from { translate: var(--dx) var(--dy); opacity: .25; } to { translate: 0 0; opacity: 1; } }
+@keyframes draw { to { opacity: .35; } }
+
+/* no scroll-driven animations: the wordmark sits in the corner, the headline shows, the field rests */
+@supports not (animation-timeline: view()) {
+  .veil { opacity: .55; }
+  .bar { opacity: 1; }
+  .hero-word { display: none; }
+  .go:not(.go-top) { display: none; }
+  .field { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .sky { display: none; }
+  .hero-in { animation: none; }
+  .go svg { animation: none; }
+  .motion { display: none; }
+  .still { display: inline; }
+}

@@ -66,10 +66,7 @@ public struct UserPromptTool: HailCore.Tool {
         )
     }
 
-    public func runOutput(
-        input: GeneratedContent,
-        token: borrowing EffectToken<CoordinationEffect>
-    ) async throws -> ToolOutput {
+    public func run(_ input: GeneratedContent, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<CoordinationEffect>) async throws -> CallReturn {
         _ = token
         if tool.approval == .always {
             let decision = try await approval.decide(
@@ -94,14 +91,11 @@ public struct UserPromptTool: HailCore.Tool {
             )
         )
         let agent: Agent = try await actorSystem.agent(childID)
-        let message = ChatMessage.text(
-            sender: sourceAgentID.rawValue,
-            content: instruction,
-            timestamp: Date()
-        )
+        let received = AgentHistory.Input(
+            from: .agent(sourceAgentID), content: GeneratedContent(instruction), at: Date())
         let response: String = try await agent.respond(
-            message,
-            message: message,
+            instruction,
+            received: received,
             inputID: "\(turnID):\(name)"
         )
         return .text(response)

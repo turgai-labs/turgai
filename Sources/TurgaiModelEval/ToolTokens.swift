@@ -17,7 +17,7 @@ enum ToolTokens {
 
     static func report(on node: EvalNode) async throws {
         let session = ObjectSession(actorSystem: node.system, scopes: [.shared])
-        let tools = ObjectTools(session: session).tools.map { tool in
+        let tools = (try await ObjectTools(session: session).tools()).map { tool in
             Counted(name: tool.schema.name, description: tool.schema.description, parameters: tool.schema.parameters)
         }
         let model = AnyLanguageModel.SystemLanguageModel.default

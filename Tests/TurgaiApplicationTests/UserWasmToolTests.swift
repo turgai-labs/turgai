@@ -111,7 +111,7 @@ struct UserWasmToolTests {
             input: arguments(#"{"words":"hi"}"#),
             authority: FullAuthority()
         )
-        #expect(output.textRepresentation == "The user declined to run shout.")
+        #expect(output.result.textRepresentation == "The user declined to run shout.")
     }
 
     @Test("a broken approval transport is reported, not fatal")
@@ -121,7 +121,7 @@ struct UserWasmToolTests {
             input: arguments(#"{"words":"hi"}"#),
             authority: FullAuthority()
         )
-        #expect(output.textRepresentation.contains("Could not ask for approval"))
+        #expect(output.result.textRepresentation.contains("Could not ask for approval"))
     }
 
     @Test("an approved run sends the JSON request to the process dependency")
@@ -138,7 +138,7 @@ struct UserWasmToolTests {
             try await tool.runOutput(input: input, authority: FullAuthority())
         }
 
-        #expect(output.textRepresentation == "module result")
+        #expect(output.result.textRepresentation == "module result")
         let requests = capture.requests.withLock { $0 }
         #expect(requests.count == 1)
         #expect(requests[0].standardInput == Data(input.jsonString.utf8))
@@ -188,7 +188,7 @@ struct UserWasmToolTests {
                 )
             }
         }
-        #expect(output.textRepresentation.contains("no longer available"))
+        #expect(output.result.textRepresentation.contains("no longer available"))
         #expect(capture.requests.withLock { $0.isEmpty })
     }
 

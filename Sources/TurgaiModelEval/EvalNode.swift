@@ -3,8 +3,10 @@ import DistributedCluster
 import EventSourcing
 import Foundation
 import Hail
+import AnyLanguageModel
 import TurgaiApplication
 import TurgaiHail
+import TurgaiObjects
 import TurgaiPersistence
 import VirtualActors
 
@@ -15,43 +17,52 @@ struct EvalNode: Sendable {
     let system: ClusterSystem
     let virtualNode: VirtualNode
     let workspace: URL
+    let objectCatalog: ObjectCatalog
 
-    static func start(model: AgentModel) async throws -> EvalNode {
+    static func start(model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil) async throws -> EvalNode {
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("turgai-eval-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         let store = MemoryEventStore()
+        // One catalog for the node, following the objects from when it starts, as the app keeps
+        // one: a session making its own would start empty, and a later turn wouldn't find what an
+        // earlier one made.
+        let catalog = Catalog()
         let configuration = try Self.configuration(for: model)
         let endpoints = AgentModelEndpointFactory(
             credentials: AgentCredentialStore(files: try FileClient(directory: workspace.appendingPathComponent("credentials"))))
-        let runtime = HailRuntimeConfiguration(contextWindow: configuration.contextWindow)
+        let runtime = HailRuntimeConfiguration(temperature: temperature, contextWindow: configuration.contextWindow)
         let plugin = try runtime.makeAgentRuntimePlugin(
             workspaceRoot: workspace.path,
-            spawnConfigProvider: { AgentSpawnConfig(agentID: $0, resumesInterruptedTurns: false, snapshotPolicy: .disabled) },
+            spawnConfigProvider: { AgentSpawnConfig(agentID: $0, interruptedTurns: .close, snapshotPolicy: .disabled) },
             modelEndpointProvider: { _ in
-                try await endpoints.endpoint(
+                let endpoint = try await endpoints.endpoint(
                     model: model, configuration: configuration, temperature: runtime.temperature,
                     ollamaKeepAlive: runtime.ollamaKeepAlive)
+                return ProcessInfo.processInfo.environment["TURGAI_EVAL_DUMP"] == "1"
+                    ? EvalDumpEndpoint(base: endpoint)
+                    : endpoint
             },
             modelSelectionProvider: { _ in ModelConfiguration(model: model) },
             definitionProvider: { config in
-                AgentDefinition(role: config.agentID.role, behavior: .init(systemPrompt: "You help the user."))
+                // A profile's instructions, as given; blank by default. What the agent can do comes
+                // with its tools.
+                AgentDefinition(role: config.agentID.role, behavior: .init(systemPrompt: instructions))
             },
-            turnToolsProvider: { _, actorSystem in
-                let session = ObjectSession(actorSystem: actorSystem, scopes: [.shared])
-                return TurnTools(
-                    tools: ObjectTools(session: session).everyTurn,
-                    sources: [ObjectDefiningTools(session: session), ObjectActionTools(session: session)])
+            turnToolsProvider: { context, actorSystem in
+                let session = ObjectSession(actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: [.shared])
+                return TurnTools(tools: [ObjectTools.link], pages: EvalPages(base: session, introduction: objectsPageDescription))
             },
             authorityProvider: { _, _ in
                 CompositeAuthority()
-                    .grantingAll(for: ObjectsGuideEffect.self)
-                    .grantingAll(for: ListObjectsEffect.self)
-                    .grantingAll(for: DefineObjectEffect.self)
-                    .grantingAll(for: RemoveObjectEffect.self)
                     .grantingAll(for: FindObjectsEffect.self)
-                    .grantingAll(for: DescribeObjectEffect.self)
+                    .grantingAll(for: ListObjectsEffect.self)
+                    .grantingAll(for: MakeObjectEffect.self)
+                    .grantingAll(for: PageEffect.self)
+                    .grantingAll(for: EditObjectEffect.self)
+                    .grantingAll(for: DefineObjectEffect.self)
+                    .grantingAll(for: UseObjectEffect.self)
+                    .grantingAll(for: RemoveObjectEffect.self)
                     .grantingAll(for: InvokeObjectEffect.self)
-                    .grantingAll(for: ReadObjectEffect.self)
             }
         )
         let system = await ClusterSystem("eval") { settings in
@@ -66,7 +77,11 @@ struct EvalNode: Sendable {
             settings.plugins.install(plugin: plugin)
         }
         try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
-        return EvalNode(system: system, virtualNode: await VirtualNode(actorSystem: system), workspace: workspace)
+        await catalog.start(on: system)
+        guard let objectCatalog = await catalog.current else { throw EvalCatalogUnavailable() }
+        return EvalNode(
+            system: system, virtualNode: await VirtualNode(actorSystem: system), workspace: workspace,
+            objectCatalog: objectCatalog)
     }
 
     /// The provider settings the app's profiles use for this model.
@@ -86,6 +101,44 @@ struct EvalNode: Sendable {
     func stop() {
         try? system.shutdown()
         try? FileManager.default.removeItem(at: workspace)
+    }
+}
+
+/// Writes the exact Hail transcript and callable tool schemas sent to the provider, for evals
+/// where we need to inspect what the model saw. Set `TURGAI_EVAL_DUMP=1` to enable it.
+private struct EvalDumpEndpoint: ModelEndpoint {
+    let base: any ModelEndpoint
+
+    var model: String { base.model }
+    var contextOwnership: ModelContextOwnership { base.contextOwnership }
+    var effectiveContextWindow: Int? { base.effectiveContextWindow }
+    var tokenCounting: TokenCounting { base.tokenCounting }
+
+    func stream<Input, Output>(
+        request: ModelRequest<Input>,
+        tools: [AnyTool],
+        authority: any Authority,
+        generating: Output.Type,
+        purpose: ModelRequestPurpose
+    ) -> AsyncStream<ModelEvent<Output>>
+    where Input: Sendable, Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Sendable {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let entries = (try? encoder.encode(request.entries)).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
+        let schemas = (try? encoder.encode(tools.map(\.schema))).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
+        FileHandle.standardError.write(Data("\n=== EVAL REQUEST: TRANSCRIPT ===\n\(entries)\n=== EVAL REQUEST: TOOLS ===\n\(schemas)\n=== END EVAL REQUEST ===\n".utf8))
+        return base.stream(request: request, tools: tools, authority: authority, generating: generating, purpose: purpose)
+    }
+}
+
+private struct EvalCatalogUnavailable: Error {}
+
+/// The node's object catalog, made once the node is running.
+private actor Catalog {
+    private(set) var current: ObjectCatalog?
+
+    func start(on system: ClusterSystem) async {
+        current = await ObjectCatalog(actorSystem: system)
     }
 }
 

@@ -1,6 +1,6 @@
 # Turgai brand and typography plan
 
-This document translates the [brand strategy](./turgai-brand-strategy.md) into visual choices. The shared belief is: **being independent should never mean settling for less.**
+This document translates the [brand strategy](./turgai-brand-strategy.md) into visual choices. The shared belief is: **being independent should never mean settling for less.** The emotional direction is **space, exploration, and hope**.
 
 ## Starting with the character
 
@@ -9,6 +9,14 @@ Turgai is a small bird with an unruly crest and a presence beyond his size. He i
 Open space gives him room. Vibrant color makes him visible. Bold lettering gives him a voice. Simple geometry gives that voice a clear structure. These choices connect the freedom of the sky with the independent attitude described in the strategy.
 
 The steppe and open horizon remain part of the setting. They suggest breadth, light, and space; they do not require every surface to be pale or every accent to be earthy.
+
+## Space, exploration, and hope
+
+Make the vastness of space tangible through scale, distance, light, and open compositions. Explore a bright horizon, a small warm point against deep blue, or a trajectory crossing a broad field. The feeling should be inviting and full of possibility, with the bird providing warmth and a sense of life.
+
+Let compositions range from quiet expanses to bold bursts of color and type. That change in intensity can carry the lift and anticipation of exploration. Preserve the poster energy; spaciousness does not require the whole identity to become subdued.
+
+Use stars, signals, and paths selectively. A brand illustration may suggest a distant world; a working screen should show real content and relationships. Avoid decorative cockpit controls, fabricated telemetry, and constant cosmic effects. The space imagery should give people a horizon without making ordinary tasks feel like operating a spacecraft.
 
 ## Composition: a small bird can fill the page
 
@@ -23,6 +31,8 @@ Brand posters and opening screens can use the widest scale contrasts. Working sc
 ## Color
 
 Use a quiet light or dark base with vibrant accents. Electric blue, signal yellow, hot coral, and vivid violet are directions to explore; they are not yet a fixed palette.
+
+Test expansive sky blue and deep night blue alongside warm yellow or coral points of light. Light mode can carry daylight and an open horizon; dark mode can carry distance and the warmth of something present within it. Space is part of both themes, rather than a reason to make every screen black.
 
 - **Canvas:** a neutral or lightly sky-tinted background that gives content room.
 - **Ink:** deep blue-gray or near-black text in light mode, with a readable light equivalent in dark mode.
@@ -46,6 +56,8 @@ Geometry should frame a message, direct attention, or explain structure. A bar c
 The skylark is the character’s signature. Preserve a clear silhouette and test the mark at small sizes. Larger compositions may play with scale and cropping, provided the bird remains recognizable. The crest supplies a natural hint of irreverence.
 
 Keep textures and additional motifs sparse. Color, type, and geometry should be enough to express the attitude.
+
+Points, lines, and arcs can suggest contact or travel in brand compositions. In product diagrams, use them to show actual objects, messages, and relationships. Keep decorative signals distinct from activity and status indicators.
 
 ## Typography
 
@@ -84,6 +96,8 @@ The same voice should run through the copy: direct, helpful, and occasionally ir
 
 Compare a few combinations of accent colors, display typography, and geometry using the same content. Include a brand poster, an onboarding screen, and a populated tool editor so the direction is tested at different densities.
 
+Include an open daylight horizon and a deeper space composition, each with the same warm bird and confident typography. Test whether space, exploration, and hope are felt without needing explanatory copy. Include an ordinary task, such as a shopping list, to check that the atmosphere remains welcoming at everyday scale.
+
 Choose the combination that gives the small bird a strong presence and still makes everyday work comfortable. Record the chosen palette, type roles, shapes, and examples in this document.
 
 ### 2. Define tokens
@@ -103,6 +117,8 @@ Check populated screens, long labels, errors, multiple workflow steps, keyboard 
 ## Acceptance criteria
 
 - The small bird feels resourceful and confident.
+- Brand compositions evoke space, exploration, and hope while remaining warm and approachable.
+- Everyday tasks feel at home within the identity; metaphor never obscures a control or its meaning.
 - Color, geometry, and lettering communicate the independent attitude without an explanatory “punk” label.
 - Turgai is recognizable when the logo is absent.
 - Each composition has a clear focal point.

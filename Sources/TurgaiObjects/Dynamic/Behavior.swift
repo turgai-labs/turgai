@@ -7,16 +7,13 @@ import Foundation
 ///
 /// It has no code: a clause matches a message by name, guards compare values with a fixed set
 /// of operators, and actions are a fixed set too. What it accepts is typed: each message has
-/// typed parameters, and the protocols it `speaks` say which messages others can count on.
+/// typed parameters, and an object's type is its behavior, so references to it are checked
+/// against what it takes.
 public struct Behavior: Codable, Sendable, Equatable {
     public let name: String
-    /// What it was read from: read again when a protocol it uses changes, and shown back.
+    /// What it was read from: read again when a behavior it refers to changes, and shown back.
     public let source: Written
-    /// The protocols it handles in full.
-    public let speaks: [MessageProtocol]
     public let fields: [String: Field]
-    /// The state an object starts in, or `nil` for one without states.
-    public let initial: String?
     public let clauses: [Clause]
 
     /// A field: a starting value, or another object it talks to, by name.
@@ -36,18 +33,16 @@ public struct Behavior: Codable, Sendable, Equatable {
         public var type: ValueType? {
             switch self {
             case .value(let value): ValueType(of: value)
-            case .object: .object
+            case .object(let name): .like(name)
             }
         }
     }
 
-    /// One way to handle a message: in a state, if its guards hold, run its actions.
+    /// One way to handle a message: if its guards hold, run its actions.
     public struct Clause: Codable, Sendable, Equatable {
-        public let state: String?
         public let message: Signature
         public let guards: [Guard]
         public let actions: [Action]
-        public let next: String?
     }
 
     /// A value an action or a guard uses: written as it is, or a parameter, a field, or the object
@@ -111,16 +106,7 @@ public struct Behavior: Codable, Sendable, Equatable {
         return seen
     }
 
-    /// The names of the messages it takes in `state`.
-    public func messages(in state: String?) -> [String] {
-        var names: [String] = []
-        for clause in clauses where clause.state == nil || clause.state == state {
-            if !names.contains(clause.message.name) { names.append(clause.message.name) }
-        }
-        return names
-    }
-
-    /// Everything it takes, which is what `self` speaks.
+    /// Everything it takes: what `self` is, as a type.
     public var accepted: MessageProtocol {
         MessageProtocol(name: name, messages: messages)
     }
@@ -155,14 +141,14 @@ public struct Parameter: Codable, Sendable, Equatable {
     }
 }
 
-/// The type of a value, as a set of values: `integer` is in `number`, and an object that speaks
-/// a protocol is in `object`.
+/// The type of a value, as a set of values: `integer` is in `number`, and an object that behaves
+/// like another is in `object`.
 public enum ValueType: Codable, Sendable, Hashable {
     case string, integer, number, boolean, list
     /// Any object, unchecked until a message reaches it.
     case object
-    /// An object that speaks the protocol with this name.
-    case speaks(String)
+    /// An object that behaves like the object with this name: it runs the same behavior.
+    case like(String)
 
     public static let builtin: [ValueType] = [.string, .integer, .number, .boolean, .list, .object]
 
@@ -174,15 +160,15 @@ public enum ValueType: Codable, Sendable, Hashable {
         case .boolean: "boolean"
         case .list: "list"
         case .object: "object"
-        case .speaks(let name): name
+        case .like(let name): "like \(name)"
         }
     }
 
-    /// `an integer`, `a number`, `an object that speaks salary answers`.
+    /// `an integer`, `a number`, `an object like Bob`.
     public var withArticle: String {
         switch self {
         case .integer, .object: "an \(written)"
-        case .speaks(let name): "an object that speaks \(name)"
+        case .like(let name): "an object like \(name)"
         default: "a \(written)"
         }
     }
@@ -195,7 +181,7 @@ public enum ValueType: Codable, Sendable, Hashable {
         case .boolean: ["type": "boolean"]
         case .list: ["type": "array", "items": ["type": "string"]]
         case .object: ["x-actor-reference": true]
-        case .speaks(let name): ["x-actor-reference": true, "description": .string("An object that speaks \(name).")]
+        case .like(let name): ["x-actor-reference": true, "description": .string("An object like \(name).")]
         }
     }
 
@@ -216,7 +202,7 @@ public enum ValueType: Codable, Sendable, Hashable {
         switch (self, value) {
         case (.string, .string), (.boolean, .bool), (.integer, .integer), (.integer, .unsignedInteger),
             (.number, .number), (.number, .integer), (.number, .unsignedInteger), (.list, .array),
-            (.object, .object), (.speaks, .object):
+            (.object, .object), (.like, .object):
             true
         case (.integer, .number(let number)): number.rounded() == number
         default: false
@@ -242,4 +228,128 @@ public struct BehaviorError: Error, Codable, Sendable, Equatable, CustomStringCo
               - on: howMany()
                 reply: count
         """
+}
+
+extension Behavior {
+    /// What a message does, in plain words: each clause's actions, and when it runs, such as
+    /// "adds the given amount to cups" or "gives back cups". What the message is given reads as
+    /// given, so it isn't mistaken for a value of that name.
+    public func summary(of message: String) -> String {
+        source.receive.filter { $0.on == message }.map { clause in
+            let given = Set((clause.parameters ?? []).map(\.name))
+            let doing = clause.actions.map { Self.phrase($0, given: given) }.joined(separator: ", then ")
+            let when = clause.when.map { " when " + $0.map { Self.phrase($0, given: given) }.joined(separator: " and ") } ?? ""
+            return (doing.isEmpty ? "does nothing" : doing) + when
+        }.joined(separator: "; otherwise ")
+    }
+
+    /// A message's rules as Erlang reads its clauses, top to bottom: each with its condition, if
+    /// it has one, and what it does in plain words, such as `if total <= limit → tells shop
+    /// refundApproved(order: the given order)`, ending `otherwise → nothing` when nothing else
+    /// takes it.
+    public func rules(of message: String) -> [String] {
+        let clauses = source.receive.filter { $0.on == message }
+        var rules = clauses.map { clause -> String in
+            let given = Set((clause.parameters ?? []).map(\.name))
+            let doing = clause.actions.isEmpty ? "nothing" : clause.actions.map { Self.phrase($0, given: given) }.joined(separator: ", then ")
+            guard let when = clause.when, !when.isEmpty else { return (clauses.count > 1 ? "otherwise → " : "→ ") + doing }
+            return "if " + when.map { Self.written($0) }.joined(separator: " and ") + " → " + doing
+        }
+        if clauses.allSatisfy({ !($0.when ?? []).isEmpty }) { rules.append("otherwise → nothing") }
+        return rules
+    }
+
+    /// A guard as it's chosen: `total <= limit`.
+    static func written(_ condition: Written.Guard) -> String {
+        func shown(_ value: Written.Value) -> String { phrase(value, given: []) }
+        return [shown(condition.left), condition.comparison.symbol, condition.right.map(shown)].compactMap { $0 }.joined(separator: " ")
+    }
+
+    private static func phrase(_ action: Written.Action, given: Set<String>) -> String {
+        func phrase(_ value: Written.Value) -> String { Self.phrase(value, given: given) }
+        return switch action {
+        case .set(let field, let value): "sets \(field) to \(phrase(value))"
+        case .add(let value, let field): "adds \(phrase(value)) to \(field)"
+        case .subtract(let value, let field): "subtracts \(phrase(value)) from \(field)"
+        case .append(let value, let field): "appends \(phrase(value)) to \(field)"
+        case .remove(let value, let field): "removes \(phrase(value)) from \(field)"
+        case .send(let message, let target, let arguments):
+            "tells \(phrase(target)) \(message)(\((arguments ?? []).map { "\($0.name): \(phrase($0.value))" }.joined(separator: ", ")))"
+        case .reply(let value): "gives back \(phrase(value))"
+        }
+    }
+
+    private static func phrase(_ condition: Written.Guard, given: Set<String>) -> String {
+        func phrase(_ value: Written.Value) -> String { Self.phrase(value, given: given) }
+        let comparison: String =
+            switch condition.comparison {
+            case .lessThan: "is less than"
+            case .atMost: "is at most"
+            case .greaterThan: "is more than"
+            case .atLeast: "is at least"
+            case .equal: "is"
+            case .notEqual: "isn't"
+            case .contains: "contains"
+            case .isEmpty: "is empty"
+            case .isNotEmpty: "isn't empty"
+            }
+        return [phrase(condition.left), comparison, condition.right.map(phrase)].compactMap { $0 }.joined(separator: " ")
+    }
+
+    static func phrase(_ value: Written.Value, given: Set<String>) -> String {
+        switch value {
+        case .name(let name) where given.contains(name): "the given \(name)"
+        case .name(let name), .object(let name): name
+        case .number(let number): number.rounded() == number ? String(Int(number)) : String(number)
+        case .text(let text): "'\(text)'"
+        case .boolean(let flag): String(flag)
+        case .list(let items): "[" + items.joined(separator: ", ") + "]"
+        }
+    }
+}
+
+
+extension Signature {
+    /// What the message takes, as a JSON schema; nil when it takes nothing.
+    public var input: JSONValue? {
+        parameters.isEmpty
+            ? nil
+            : [
+                "type": "object",
+                "properties": .object(Dictionary(uniqueKeysWithValues: parameters.map { ($0.name, $0.type.schema) })),
+                "required": .array(parameters.map { .string($0.name) }),
+            ]
+    }
+}
+
+extension Behavior {
+    /// An object running this behavior, holding `values`, as a model reads it: what it holds, and
+    /// each action with what it does in plain words. A runtime object and a draft answer alike.
+    public func description(title: String, values: [String: JSONValue]) -> ObjectDescription {
+        var properties: [String: JSONValue] = [:]
+        for name in fields.keys {
+            var schema = Self.schema(of: values[name] ?? .null)
+            schema["readOnly"] = true
+            properties[name] = .object(schema)
+        }
+        var actions: [String: ObjectAction] = [:]
+        for message in messages {
+            actions[message.name] = ObjectAction(
+                description: summary(of: message.name), input: message.input, output: message.reply?.schema)
+        }
+        return ObjectDescription(title: title, description: nil, properties: properties, actions: actions)
+    }
+
+    static func schema(of value: JSONValue) -> [String: JSONValue] {
+        switch value {
+        case .array: ["type": "array"]
+        case .string: ["type": "string"]
+        case .bool: ["type": "boolean"]
+        case .integer, .unsignedInteger: ["type": "integer"]
+        case .number: ["type": "number"]
+        case .object(let members) where members["object"] != nil || members["id"] != nil: ["x-actor-reference": true]
+        case .object: ["type": "object"]
+        case .null: [:]
+        }
+    }
 }

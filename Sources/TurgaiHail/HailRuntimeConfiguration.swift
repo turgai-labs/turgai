@@ -136,11 +136,7 @@ public struct HailRuntimeConfiguration: Sendable {
             spawnConfigProvider: spawnConfigProvider,
             definitionProvider: definitionProvider,
             modelSelectionProvider: modelSelectionProvider,
-            contextCompactor: SlidingWindowCompactor(
-                threshold: 0.55,
-                keepRecent: 6,
-                outputReserve: compactionMaxOutputTokens
-            ),
+            contextCompactor: SlidingWindowCompactor(outputReserve: compactionMaxOutputTokens),
             compactionOperation: compactionOperation,
             modelReasoningPolicy: ReasoningPolicy.thinkWhenDeciding
         )

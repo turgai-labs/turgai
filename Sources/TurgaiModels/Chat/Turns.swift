@@ -41,4 +41,6 @@ public enum TurnOutcome: Codable, Equatable, Sendable {
     case running
     case replied(String, at: Date)
     case failed(String, at: Date)
+    case cancelled(at: Date)
+    case interrupted(at: Date)
 }

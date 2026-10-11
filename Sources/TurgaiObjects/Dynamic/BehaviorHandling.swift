@@ -4,11 +4,10 @@ import Foundation
 // MARK: - Handling a message
 
 extension Behavior {
-    /// What handling one message does: the fields after it, the state it leads to, what to send,
-    /// and the reply. Nothing happens until whoever runs it applies this.
+    /// What handling one message does: the fields after it, what to send, and the reply. Nothing
+    /// happens until whoever runs it applies this.
     public struct Outcome: Sendable, Equatable {
         public var fields: [String: JSONValue]
-        public var state: String?
         public var sends: [Send]
         public var reply: JSONValue
     }
@@ -26,19 +25,13 @@ extension Behavior {
         public let arguments: JSONValue
     }
 
-    /// Handles `message` the way `receive` does: the first clause for it, in this state, whose
-    /// guards hold. It's pure: the fields given aren't changed, and nothing is sent.
-    public func handle(
-        _ message: String, arguments: JSONValue, state: String?, fields: [String: JSONValue]
-    ) throws(BehaviorError) -> Outcome {
-        let candidates = clauses.filter { $0.message.name == message && ($0.state == nil || $0.state == state) }
+    /// Handles `message` the way `receive` does: the first clause for it whose guards hold. It's
+    /// pure: the fields given aren't changed, and nothing is sent.
+    public func handle(_ message: String, arguments: JSONValue, fields: [String: JSONValue]) throws(BehaviorError) -> Outcome {
+        let candidates = clauses.filter { $0.message.name == message }
         guard let first = candidates.first else {
-            let takes = messages(in: state).map { "`\($0)`" }.joined(separator: ", ")
-            let now = state.map { " in `\($0)`" } ?? ""
-            if messages.contains(where: { $0.name == message }) {
-                throw BehaviorError("It doesn't take `\(message)`\(now). It takes \(takes.isEmpty ? "nothing" : takes) now.")
-            }
-            throw BehaviorError("It has no message `\(message)`. It takes \(takes.isEmpty ? "nothing" : takes)\(now).")
+            let takes = messages.map { "`\($0.name)`" }.joined(separator: ", ")
+            throw BehaviorError("It has no message `\(message)`. It takes \(takes.isEmpty ? "nothing" : takes).")
         }
         let given = try Self.bind(arguments, to: first.message)
         var unmet: [String] = []
@@ -53,14 +46,14 @@ extension Behavior {
                 unmet.append(scope.describe(failed))
                 continue
             }
-            return try run(clause, scope: scope, state: state)
+            return try run(clause, scope: scope)
         }
         throw BehaviorError("`\(message)` was refused: \(unmet.joined(separator: "; and ")).")
     }
 
-    private func run(_ clause: Clause, scope: Scope, state: String?) throws(BehaviorError) -> Outcome {
+    private func run(_ clause: Clause, scope: Scope) throws(BehaviorError) -> Outcome {
         var scope = scope
-        var outcome = Outcome(fields: scope.fields, state: clause.next ?? state, sends: [], reply: .null)
+        var outcome = Outcome(fields: scope.fields, sends: [], reply: .null)
         for action in clause.actions {
             switch action {
             case .set(let field, let value):

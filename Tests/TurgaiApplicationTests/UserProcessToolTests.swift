@@ -119,7 +119,7 @@ struct UserProcessToolTests {
             try await tool.runOutput(input: input, authority: FullAuthority())
         }
 
-        #expect(output.textRepresentation == "native result")
+        #expect(output.result.textRepresentation == "native result")
         let requests = capture.requests.withLock { $0 }
         #expect(requests.count == 1)
         #expect(requests[0].executable == "/bin/sh")
@@ -133,6 +133,6 @@ struct UserProcessToolTests {
             input: arguments(#"{"value":"hello"}"#),
             authority: FullAuthority()
         )
-        #expect(output.textRepresentation == "The user declined to run native_echo.")
+        #expect(output.result.textRepresentation == "The user declined to run native_echo.")
     }
 }

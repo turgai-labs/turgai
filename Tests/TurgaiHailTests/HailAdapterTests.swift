@@ -312,7 +312,7 @@ struct HailAdapterTests {
             authority: FullAuthority()
         )
 
-        guard case .data(let data) = output else {
+        guard case .data(let data) = output.result else {
             Issue.record("Expected binary tool data")
             return
         }

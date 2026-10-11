@@ -60,6 +60,8 @@ private struct TurnRow: View {
         case .running: return "\(calls) · running"
         case .replied(_, let at): return "\(calls) · \(duration(from: turn.startedAt, to: at))"
         case .failed(_, let at): return "\(calls) · failed after \(duration(from: turn.startedAt, to: at))"
+        case .cancelled(let at): return "\(calls) · cancelled after \(duration(from: turn.startedAt, to: at))"
+        case .interrupted(let at): return "\(calls) · interrupted after \(duration(from: turn.startedAt, to: at))"
         }
     }
 }

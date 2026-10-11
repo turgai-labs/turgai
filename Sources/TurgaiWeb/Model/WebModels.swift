@@ -8,7 +8,7 @@ public struct TurgaiAgentRuntimeSnapshot: Codable, Sendable, Equatable {
     public let currentTool: String?
     public let contextUsedTokens: Int?
     public let contextLimitTokens: Int?
-    public let conversationMessageCount: Int
+    public let historyTurnCount: Int
     public let totalTokens: Int?
 
     public init(
@@ -18,7 +18,7 @@ public struct TurgaiAgentRuntimeSnapshot: Codable, Sendable, Equatable {
         currentTool: String? = nil,
         contextUsedTokens: Int? = nil,
         contextLimitTokens: Int? = nil,
-        conversationMessageCount: Int = 0,
+        historyTurnCount: Int = 0,
         totalTokens: Int? = nil
     ) {
         self.profileID = profileID
@@ -27,7 +27,7 @@ public struct TurgaiAgentRuntimeSnapshot: Codable, Sendable, Equatable {
         self.currentTool = currentTool
         self.contextUsedTokens = contextUsedTokens
         self.contextLimitTokens = contextLimitTokens
-        self.conversationMessageCount = conversationMessageCount
+        self.historyTurnCount = historyTurnCount
         self.totalTokens = totalTokens
     }
 }

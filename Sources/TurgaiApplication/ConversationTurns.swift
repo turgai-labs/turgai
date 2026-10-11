@@ -2,57 +2,45 @@ import AnyLanguageModel
 import Hail
 import TurgaiDomain
 
-#if canImport(FoundationEssentials)
-    import FoundationEssentials
-#else
-    import Foundation
-#endif
-
-/// The agent's transcript as turns, for watching what it did: a message starts a turn, its tool
-/// calls and results are the steps, and a reply or a failure ends it.
+/// The agent's history as turns, for watching what it did. Turns a compaction folded into the
+/// summary are no longer there.
 public enum ConversationTurns {
-    public static func fold(_ transcript: [ChatMessage]) -> [ConversationTurn] {
-        var turns: [ConversationTurn] = []
-        for message in transcript {
-            switch message {
-            case .text(_, let content, let at):
-                turns.append(ConversationTurn(message: content, startedAt: at))
-            case .assistantToolCall(let round, let at):
-                for call in round.calls {
-                    turns.appendStep(.toolCalled(name: call.name, arguments: call.arguments.jsonString, at: at))
-                }
-            case .toolCall(let calls, let at):
-                for call in calls {
-                    turns.appendStep(.toolCalled(name: call.name, arguments: call.arguments.jsonString, at: at))
-                }
-            case .toolResult(_, let name, let output, let failure, let at):
-                turns.appendStep(
-                    .toolFinished(name: name, output: output.textRepresentation, failure: failure?.rawValue, at: at))
-            case .response(_, let content, let at):
-                turns.end(.replied(text(content), at: at))
-            case .failure(let error, let at):
-                turns.end(.failed(String(describing: error), at: at))
-            case .decisionRequest, .decisionResolved:
-                break
-            }
+    public static func turns(of history: AgentHistory) -> [ConversationTurn] {
+        history.closed.map(closed) + (history.open.map { [open($0)] } ?? [])
+    }
+
+    private static func closed(_ turn: AgentHistory.ClosedTurn) -> ConversationTurn {
+        ConversationTurn(
+            message: text(turn.input.content), startedAt: turn.input.at, steps: turn.steps.map(step),
+            outcome: outcome(turn.outcome))
+    }
+
+    private static func open(_ turn: AgentHistory.OpenTurn) -> ConversationTurn {
+        ConversationTurn(
+            message: text(turn.input.content), startedAt: turn.input.at, steps: turn.steps.map(step), outcome: .running)
+    }
+
+    private static func step(_ step: AgentHistory.Step) -> ReplyStep {
+        switch step {
+        case .called(let call, let at):
+            .toolCalled(name: call.name, arguments: call.arguments.jsonString, at: at)
+        case .resulted(let result, let at):
+            .toolFinished(
+                name: result.name, output: result.output.textRepresentation, failure: result.failureKind?.rawValue, at: at)
         }
-        return turns
+    }
+
+    private static func outcome(_ outcome: AgentHistory.Outcome) -> ConversationTurn.Outcome {
+        switch outcome {
+        case .replied(let reply): .replied(text(reply.content), at: reply.at)
+        case .failed(let failure): .failed(String(describing: failure.error), at: failure.at)
+        case .cancelled(let at): .cancelled(at: at)
+        case .interrupted(let at): .interrupted(at: at)
+        }
     }
 
     private static func text(_ content: GeneratedContent) -> String {
         if case .string(let value) = content.kind { return value }
         return content.jsonString
-    }
-}
-
-extension [ConversationTurn] {
-    fileprivate mutating func appendStep(_ step: ReplyStep) {
-        guard !isEmpty else { return }
-        self[count - 1].steps.append(step)
-    }
-
-    fileprivate mutating func end(_ outcome: ConversationTurn.Outcome) {
-        guard !isEmpty else { return }
-        self[count - 1].outcome = outcome
     }
 }

@@ -12,11 +12,8 @@ private func diagnosticsContext() -> AgentTurnContext {
             contextID: AgentContextID("telegram:10499752")
         ),
         turnID: TurnID(rawValue: UUID().uuidString),
-        message: .text(
-            sender: "participant:telegram:10499752",
-            content: "test",
-            timestamp: Date()
-        )
+        input: AgentHistory.Input(
+            from: .user(id: "participant:telegram:10499752"), content: GeneratedContent("test"), at: Date())
     )
 }
 

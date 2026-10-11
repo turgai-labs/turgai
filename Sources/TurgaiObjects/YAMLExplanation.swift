@@ -13,14 +13,14 @@ public enum YAMLExplanation {
             let keys = duplicates.sorted().map { "`\($0)`" }.joined(separator: ", ")
             return "The key \(keys) appears twice in the same mapping. Give each key once."
         default:
-            return "I couldn't read the arguments as YAML: \(error)"
+            return "I couldn't read it as YAML: \(error)"
         }
     }
 
     private static func explain(problem: String, at mark: Mark, opened: Mark?, in yaml: String) -> String {
         let lines = yaml.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let line = lines.indices.contains(mark.line - 1) ? lines[mark.line - 1] : ""
-        let shown = "I couldn't read line \(mark.line) of the arguments:\n\n" + snippet(line, number: mark.line, column: mark.column)
+        let shown = "I couldn't read line \(mark.line):\n\n" + snippet(line, number: mark.line, column: mark.column)
 
         if problem.contains("mapping values are not allowed") {
             let advice = "This value has a second \": \" in it. YAML reads \": \" as the start of a key, so text that contains one has to be in quotes"
@@ -44,7 +44,7 @@ public enum YAMLExplanation {
             return "\(shown)\n\nThe bracket\(start) isn't closed where YAML expected. Check the brackets, or write it as indented lines instead, one key per line."
         }
         if problem.contains("expected <document start>") {
-            return "\(shown)\n\nThe arguments end before this, so whatever is here is one too many: often an extra `}` or `]`. Remove it."
+            return "\(shown)\n\nThe YAML ends before this, so whatever is here is one too many: often an extra `}` or `]`. Remove it."
         }
         if problem.contains("end of stream"), let opened {
             return "\(shown)\n\nSomething opened on line \(opened.line), a quote or a bracket, is never closed."

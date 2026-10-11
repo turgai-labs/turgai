@@ -1,8 +1,9 @@
 import Foundation
+import TurgaiBrand
 
-/// Static dashboard assets packaged with the TurgaiWeb target.
+/// Static dashboard assets shared with the public website.
 public enum TurgaiWebAssets {
     public static var publicRoot: String {
-        Bundle.module.resourceURL!.appendingPathComponent("Public").path
+        TurgaiBrandAssets.publicRoot.path
     }
 }

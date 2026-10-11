@@ -75,8 +75,9 @@ struct HailConversationInput: Codable, Sendable {
         }
     }
 
-    func chatMessage() -> ChatMessage {
-        .text(sender: sender, content: content, timestamp: self.timestamp)
+    /// What was said, as the agent's history records it.
+    func received() -> AgentHistory.Input {
+        AgentHistory.Input(from: .user(id: sender), content: GeneratedContent(content), at: timestamp)
     }
 
     func referenceEntries() -> [Transcript.Entry] {
@@ -181,10 +182,6 @@ public enum HailActivityMapper {
             case .compaction(let output, let context):
                 return [.compaction(output: output, context: context)]
             }
-        case .message:
-            // Display-only posts belong to the durable transcript, not to the
-            // model progress stream for a conversation turn.
-            return []
         }
     }
 }
@@ -216,7 +213,7 @@ public enum HailStructuredUpdateMapper {
             return [.completed(content)]
         case .runFailed(let error, _):
             return [.failed(error)]
-        case .messageHandled, .modelOutputGenerated, .toolRequested, .toolCompleted,
+        case .received, .modelOutputGenerated, .toolRequested, .toolCompleted,
             .runCompleted:
             return []
         }
@@ -260,7 +257,7 @@ public struct HailConversationPeer: Sendable {
     public typealias RunHandler = @Sendable (ConversationTurnRequest, [String]) async throws -> HailResponse
     public typealias ActivitiesHandler = @Sendable () async throws -> AsyncStream<HailModelEvent>
     public typealias ContextHandler = @Sendable () async throws -> AgentContextSnapshot
-    public typealias HistoryHandler = @Sendable () async throws -> [ChatMessage]
+    public typealias HistoryHandler = @Sendable () async throws -> AgentHistory
     public typealias DeactivationHandler = @Sendable () async throws -> Void
 
     private let runHandler: RunHandler
@@ -275,7 +272,7 @@ public struct HailConversationPeer: Sendable {
         context: @escaping ContextHandler = {
             throw HailAdapterError.contextUnavailable
         },
-        history: @escaping HistoryHandler = { [] },
+        history: @escaping HistoryHandler = { AgentHistory() },
         deactivate: @escaping DeactivationHandler = {}
     ) {
         self.runHandler = run
@@ -307,7 +304,8 @@ public struct HailConversationPeer: Sendable {
         try await contextHandler()
     }
 
-    public func history() async throws -> [ChatMessage] {
+    /// The agent's history: its turns since the last compaction, and the summary before them.
+    public func history() async throws -> AgentHistory {
         try await historyHandler()
     }
 
@@ -364,7 +362,7 @@ public struct HailAgentAdapter: Sendable {
                 // the model explicitly fetches one.
                 let response: String = try await agent.respond(
                     input,
-                    message: input.chatMessage(),
+                    received: input.received(),
                     referenceEntries: input.referenceEntries(),
                     inputID: input.inputID
                 )
@@ -391,7 +389,7 @@ public struct HailAgentAdapter: Sendable {
                 try await self.agent(for: conversationID).contextSnapshot
             },
             history: {
-                try await self.agent(for: conversationID).getConversationHistory()
+                try await self.agent(for: conversationID).history()
             },
             deactivate: {
                 try await self.deactivate(for: conversationID)
@@ -434,7 +432,7 @@ public struct HailAgentAdapter: Sendable {
                     defer { agentStream.finish() }
                     try await agentStream.send(
                         input,
-                        message: input.chatMessage(),
+                        received: input.received(),
                         referenceEntries: input.referenceEntries(),
                         inputID: input.inputID,
                         to: agent

@@ -213,7 +213,7 @@ enum ContextPresentation {
         }
 
         lines.append(
-            "Messages in context: \(snapshot.conversationMessageCount.formatted(.number.locale(Self.numberLocale)))")
+            "Turns in context: \(snapshot.historyTurnCount.formatted(.number.locale(Self.numberLocale)))")
         lines.append("Compaction summary: \(snapshot.hasContextSummary ? "yes" : "no")")
 
         let usageSummary = snapshot.usageSummary
@@ -465,13 +465,9 @@ public distributed actor Conversation {
         state.status
     }
 
-    public distributed func modelHistory() async throws -> [ChatMessage] {
-        try await peer.history()
-    }
-
     /// The agent's past turns, step by step.
     public distributed func turns() async throws -> [ConversationTurn] {
-        ConversationTurns.fold(try await peer.history())
+        ConversationTurns.turns(of: try await peer.history())
     }
 
     public distributed func addConnection(_ connection: ConversationConnection) async {
@@ -1047,15 +1043,6 @@ public distributed actor Conversation {
                         conversationID: conversationID
                     )
                 )
-                if let objectCatalog = try? await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog {
-                    turnContext.append(
-                        contentsOf: await ObjectSession.turnContext(
-                            actorSystem: actorSystem,
-                            objectCatalog: objectCatalog,
-                            conversationID: conversationID
-                        )
-                    )
-                }
                 // What the agent does meanwhile reaches the room through its activity; this
                 // only asks, and waits for the reply.
                 await conversation.whenLocal { $0.followActivity() }

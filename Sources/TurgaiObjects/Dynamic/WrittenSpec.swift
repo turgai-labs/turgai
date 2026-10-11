@@ -9,12 +9,8 @@ extension Behavior {
     /// kinds, an action one of seven, each with only what it needs.
     @Generable(description: "An object's spec: the values it remembers, and how it answers each message.")
     public struct Written: SpecPart, Sendable {
-        @Guide(description: "The protocols it handles in full, by name.")
-        public let speaks: [String]?
         @Guide(description: "The values it remembers, each with its starting value.")
         public let fields: [Field]
-        @Guide(description: "The state it starts in, for an object with states.")
-        public let initial: String?
         @Guide(description: "How it answers messages: the first clause that matches handles one.")
         public let receive: [Clause]
 
@@ -38,10 +34,6 @@ extension Behavior {
             public let when: [Guard]?
             @Guide(description: "What it does, in order.")
             public let actions: [Action]
-            @Guide(description: "For an object with states: the state this clause applies in.")
-            public let `in`: String?
-            @Guide(description: "For an object with states: the state it moves to.")
-            public let then: String?
 
         }
 
@@ -49,8 +41,8 @@ extension Behavior {
         public struct Parameter: SpecPart, Sendable {
             public let name: String
             public let type: Kind
-            @Guide(description: "For an object: the protocol it speaks.")
-            public let speaks: String?
+            @Guide(description: "For an object: the handle of an object it behaves like. Messages to it are checked against what that object takes.")
+            public let like: String?
 
         }
 
@@ -106,25 +98,6 @@ extension Behavior {
     }
 }
 
-extension MessageProtocol {
-    /// A protocol as structure: its name, and the messages an object that speaks it takes.
-    @Generable(description: "A protocol: a named set of messages that objects speaking it take.")
-    public struct Written: SpecPart, Sendable {
-        @Guide(description: "Its name, such as salary answers.")
-        public let name: String
-        public let messages: [Message]
-
-
-        @Generable(description: "A message of a protocol.")
-        public struct Message: SpecPart, Sendable {
-            public let name: String
-            public let parameters: [Behavior.Written.Parameter]?
-            @Guide(description: "The type of its reply, for a message that's answered.")
-            public let reply: Behavior.Written.Kind?
-
-        }
-    }
-}
 
 /// A part of a spec, coded and compared as the content a model writes for it, such as
 /// `{"name": "count", "start": {"type": "number", "value": 0}}`. The `@Generable` macro keeps what a

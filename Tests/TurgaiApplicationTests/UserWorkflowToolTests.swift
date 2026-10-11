@@ -127,7 +127,7 @@ struct UserWorkflowToolTests {
             )
         }
 
-        #expect(output.textRepresentation.contains("take a coat"))
+        #expect(output.result.textRepresentation.contains("take a coat"))
         #expect(capture.events.withLock { $0 } == ["fetch", "execute"])
 
         let requests = capture.networkRequests.withLock { $0 }

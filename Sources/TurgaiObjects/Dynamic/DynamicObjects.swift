@@ -4,13 +4,13 @@ import DistributedCluster
 import EventSourcing
 import VirtualActors
 
-/// One owner's protocols, behaviors and objects, the way an Erlang node holds its modules and a
-/// supervisor its processes. There's one per scope, reached by the scope alone.
+/// One owner's behaviors and objects, the way an Erlang node holds its modules and a supervisor
+/// its processes. There's one per scope, reached by the scope alone.
 ///
-/// It's where things are checked before they run: a spec is linked against the protocols here
-/// and the objects it names, and a new protocol or spec against everything that uses it. A
-/// behavior can be shared by several objects; a new spec for it reloads each of them, once it's
-/// idle, the way a new module reaches every process running it. It keeps its objects running:
+/// It's where things are checked before they run. An object's type is its behavior: a spec is
+/// linked against what the objects it refers to take, and a new spec against every spec that
+/// refers to objects running it. A behavior can be shared by several objects; a new spec for it
+/// reloads each of them, once it's idle, the way a new module reaches every process running it. It keeps its objects running:
 /// ``start()`` starts each one, so they stay findable after a restart.
 @EventSourced
 @VirtualActor
@@ -46,29 +46,20 @@ public distributed actor DynamicObjects {
 
     // MARK: Objects
 
-    /// Creates an object named `name`, running a new behavior from its spec, with any new
-    /// protocols it introduces, or the behavior of an object here, shared from then on.
+    /// Creates an object named `name`, running a new behavior from its spec, or the behavior of
+    /// an object here, shared from then on.
     /// - Parameter start: Values it starts with instead of the behavior's, where given.
     public distributed func create(name: String, spec: Spec, start: [String: JSONValue] = [:]) async throws
         -> ObjectIdentity
     {
-        guard !state.hasObject(named: name) else { throw DynamicObjectsError.nameTaken(name) }
-        var introduced: [MessageProtocol] = []
-        if case .written(_, let protocols) = spec, !protocols.isEmpty {
-            introduced = try MessageProtocol.read(protocols, known: state.protocols)
-            if let taken = introduced.first(where: { state.protocols[$0.name] != nil }) {
-                throw BehaviorError(
-                    "There's a protocol `\(taken.name)` already. Use it by name in the spec, or change it with update.")
-            }
+        guard !state.hasObject(named: name), state.kind(named: name) == nil else {
+            throw DynamicObjectsError.nameTaken(name)
         }
-        var known = state.protocols
-        for written in introduced { known[written.name] = written }
-
         let id: BehaviorID
         let behavior: Behavior
         switch spec {
-        case .written(let written, _):
-            behavior = try Behavior(name: name, written: written, protocols: known)
+        case .written(let written):
+            behavior = try Behavior(name: name, written: written, objects: knownObjects)
             try await checkSends(of: behavior)
             id = .new()
         case .sameAs(let object):
@@ -76,11 +67,15 @@ public distributed actor DynamicObjects {
             guard let entry = state.entries.first(where: { $0.identity == identity }), let shared = state.behaviors[entry.behavior]
             else { throw DynamicObjectsError.unknownObject(identity) }
             (id, behavior) = (entry.behavior, shared)
+        case .kind(let kind):
+            guard let shared = state.kind(named: kind), let found = state.behaviors[shared] else {
+                throw DynamicObjectsError.unknownKind(kind)
+            }
+            (id, behavior) = (shared, found)
         }
         try DynamicObject.check(start, against: behavior)
 
-        if !introduced.isEmpty { try await emit(event: .protocolsWritten(introduced)) }
-        if case .sameAs = spec {} else { try await emit(event: .behaviorWritten(id, behavior)) }
+        if case .written = spec { try await emit(event: .behaviorWritten(id, behavior)) }
         let identity = ObjectIdentity.new()
         try await object(identity)
             .create(name: name, behavior: behavior, id: id, start: start, scope: scope)
@@ -88,37 +83,77 @@ public distributed actor DynamicObjects {
         return identity
     }
 
-    /// Changes an object's spec, which changes every object sharing it, or protocols, which are
-    /// checked against every spec that uses them.
-    public distributed func update(_ identity: ObjectIdentity, change: Change) async throws {
-        guard let entry = state.entries.first(where: { $0.identity == identity }), let old = state.behaviors[entry.behavior]
-        else { throw DynamicObjectsError.unknownObject(identity) }
-        switch change {
-        case .spec(let written):
-            let new = try Behavior(name: old.name, written: written, protocols: state.protocols)
-            try new.check(replacing: old)
-            try await checkSends(of: new)
-            try await checkStates(of: entry.behavior, against: new)
-            try await emit(event: .behaviorWritten(entry.behavior, new))
-            try await adopt(entry.behavior)
-        case .protocols(let protocols):
-            let written = try MessageProtocol.read(protocols, known: state.protocols)
-            var known = state.protocols
-            for protocolWritten in written { known[protocolWritten.name] = protocolWritten }
-            var relinked: [(BehaviorID, Behavior)] = []
-            for (id, behavior) in state.behaviors where written.contains(where: { behavior.uses($0.name) }) {
-                do {
-                    relinked.append((id, try Behavior(name: behavior.name, written: behavior.source, protocols: known)))
-                } catch {
-                    throw BehaviorError("This version breaks the spec of \(behavior.name): \(error.description)")
-                }
-            }
-            try await emit(event: .protocolsWritten(written))
-            for (id, behavior) in relinked {
-                try await emit(event: .behaviorWritten(id, behavior))
-                try await adopt(id)
+    /// The other objects running the same behavior as the object `identity`, by name.
+    public distributed func sharing(_ identity: ObjectIdentity) throws -> [String] {
+        guard let entry = state.entries.first(where: { $0.identity == identity }) else {
+            throw DynamicObjectsError.unknownObject(identity)
+        }
+        return state.entries.filter { $0.behavior == entry.behavior && $0.identity != identity }.map(\.name)
+    }
+
+    /// Changes an object's spec, which changes every object sharing it. Every spec that refers to
+    /// those objects is checked against the new one, and the change is refused if one would break.
+    public distributed func update(_ identity: ObjectIdentity, spec written: Behavior.Written) async throws {
+        guard let entry = state.entries.first(where: { $0.identity == identity }) else {
+            throw DynamicObjectsError.unknownObject(identity)
+        }
+        try await rewrite(entry.behavior, as: written)
+    }
+
+    /// Defines a kind: a behavior with a name and no object, which objects can share and others
+    /// can be typed like. Defined again, it changes, and so does every object sharing it.
+    public distributed func defineKind(_ name: String, spec written: Behavior.Written) async throws {
+        if let id = state.kind(named: name) {
+            try await rewrite(id, as: written)
+            return
+        }
+        guard !state.hasObject(named: name) else { throw DynamicObjectsError.nameTaken(name) }
+        let behavior = try Behavior(name: name, written: written, objects: knownObjects)
+        try await checkSends(of: behavior)
+        let id = BehaviorID.new()
+        try await emit(event: .behaviorWritten(id, behavior))
+        try await emit(event: .kindNamed(name, id))
+    }
+
+    /// Gives the behavior `id` a new spec: checked as a new one is, and against every spec that
+    /// refers to the objects or kind running it. Each object running it adopts it once it's idle.
+    private func rewrite(_ id: BehaviorID, as written: Behavior.Written) async throws {
+        guard let old = state.behaviors[id] else { throw DynamicObjectsError.unknownBehavior }
+        let new = try Behavior(name: old.name, written: written, objects: knownObjects)
+        try await checkSends(of: new)
+        // The names this behavior goes by, and what they'll take.
+        let names = state.entries.filter { $0.behavior == id }.map(\.name) + state.kinds.filter { $0.value == id }.map(\.key)
+        let sharing = Set(names.flatMap { [$0, ObjectNames.handle(for: $0)] })
+        var objects = knownObjects
+        for name in sharing { objects[name] = MessageProtocol(name: name, messages: new.messages) }
+        for (other, behavior) in state.behaviors where other != id && behavior.refers(to: sharing) {
+            do {
+                _ = try Behavior(name: behavior.name, written: behavior.source, objects: objects)
+            } catch {
+                throw BehaviorError("This breaks the spec of \(behavior.name): \(error.description)")
             }
         }
+        try await emit(event: .behaviorWritten(id, new))
+        try await adopt(id)
+    }
+
+    /// What each object and kind here takes, by its name and its handle: an object's type is its
+    /// behavior.
+    private var knownObjects: [String: MessageProtocol] {
+        var objects: [String: MessageProtocol] = [:]
+        for (kind, id) in state.kinds {
+            guard let behavior = state.behaviors[id] else { continue }
+            let messages = MessageProtocol(name: kind, messages: behavior.messages)
+            objects[kind] = messages
+            objects[ObjectNames.handle(for: kind)] = messages
+        }
+        for entry in state.entries {
+            guard let behavior = state.behaviors[entry.behavior] else { continue }
+            let messages = MessageProtocol(name: entry.name, messages: behavior.messages)
+            objects[entry.name] = messages
+            objects[ObjectNames.handle(for: entry.name)] = messages
+        }
+        return objects
     }
 
     /// Removes one of these objects for good.
@@ -155,18 +190,6 @@ public distributed actor DynamicObjects {
 
     // MARK: Checks
 
-    /// Every object running `id` is in a state the new spec still has, so none is stranded.
-    private func checkStates(of id: BehaviorID, against new: Behavior) async throws {
-        let states = Set(new.clauses.compactMap(\.state) + [new.initial].compactMap { $0 })
-        for entry in state.entries where entry.behavior == id {
-            guard let current = try await object(entry.identity).current else { continue }
-            guard states.contains(current) else {
-                throw BehaviorError(
-                    "\(entry.name) is in `\(current)`, which the new spec doesn't have, so it would lose where it is. Keep a clause `in: \(current)`.")
-            }
-        }
-    }
-
     /// Hands the behavior `id`, as it is now, to every object running it, each once it's idle.
     private func adopt(_ id: BehaviorID) async throws {
         guard let behavior = state.behaviors[id] else { return }
@@ -188,7 +211,7 @@ public distributed actor DynamicObjects {
                     name = object
                 default: continue
                 }
-                let accepted = try await accepted(by: name, from: clause)
+                guard let accepted = await accepted(by: name) else { continue }
                 guard let expected = accepted.messages.first(where: { $0.name == message }) else {
                     throw BehaviorError(
                         "`\(clause.message.name)` sends `\(message)` to \(accepted.name), which doesn't take it. \(accepted.name) takes \(accepted.messages.map { "`\($0.written)`" }.joined(separator: ", ")).")
@@ -203,8 +226,9 @@ public distributed actor DynamicObjects {
     }
 
     /// What the object named `name` accepts: its whole behavior if it's one of these objects, or
-    /// what it describes, for any other.
-    private func accepted(by name: String, from clause: Behavior.Clause) async throws -> MessageProtocol {
+    /// what it describes, for any other. `nil` for an object not defined yet, which is checked when
+    /// a message reaches it.
+    private func accepted(by name: String) async -> MessageProtocol? {
         if let entry = state.entries.first(where: { ObjectNames.matches(name, title: $0.name) }),
             let behavior = state.behaviors[entry.behavior]
         {
@@ -212,10 +236,7 @@ public distributed actor DynamicObjects {
         }
         guard let (_, description) = await ObjectNames.object(
             named: name, in: DynamicObject.scopes(around: scope), using: actorSystem)
-        else {
-            throw BehaviorError(
-                "`\(clause.message.name)` sends to `\(name)`, but there's no object named \(name). Send to an object by its handle, such as `shop`, or to a parameter.")
-        }
+        else { return nil }
         return Self.accepted(by: description)
     }
 
@@ -236,18 +257,12 @@ public distributed actor DynamicObjects {
 
 /// Where a new object's behavior comes from.
 public enum Spec: Codable, Sendable, Equatable {
-    /// A new behavior, from its spec, with any protocols it introduces.
-    case written(Behavior.Written, protocols: [MessageProtocol.Written])
+    /// A new behavior, from its spec.
+    case written(Behavior.Written)
     /// The behavior another object runs, shared from then on.
     case sameAs(DynamicObject)
-}
-
-/// One change to an object.
-public enum Change: Codable, Sendable, Equatable {
-    /// Its spec: every object sharing its behavior changes too.
-    case spec(Behavior.Written)
-    /// Protocols, new or changed: checked against every spec that uses them.
-    case protocols([MessageProtocol.Written])
+    /// A kind's behavior, shared from then on.
+    case kind(String)
 }
 
 extension ValueType {
@@ -269,18 +284,23 @@ extension ValueType {
 }
 
 extension Behavior {
-    /// Whether it speaks, or types a parameter with, the protocol `name`.
-    func uses(_ name: String) -> Bool {
-        speaks.contains { $0.name == name }
-            || clauses.contains { clause in clause.message.parameters.contains { $0.type == .speaks(name) } }
+    /// Whether it refers to any of the objects `names`: as a field, a parameter's type, or where
+    /// it sends.
+    func refers(to names: Set<String>) -> Bool {
+        fields.values.contains { if case .object(let name) = $0 { names.contains(name) } else { false } }
+            || clauses.contains { clause in
+                clause.message.parameters.contains { if case .like(let name) = $0.type { names.contains(name) } else { false } }
+                    || clause.actions.contains { if case .send(.object(let name), _, _) = $0 { names.contains(name) } else { false } }
+            }
     }
 }
 
-/// What happened to an owner's protocols, behaviors and objects, as journaled.
+/// What happened to an owner's behaviors and objects, as journaled.
 public enum DynamicObjectsEvent: Codable, Sendable {
-    case protocolsWritten([MessageProtocol])
     /// A behavior's spec, new or changed.
     case behaviorWritten(BehaviorID, Behavior)
+    /// A behavior named as a kind.
+    case kindNamed(String, BehaviorID)
     case added(ObjectIdentity, name: String, behavior: BehaviorID)
     case removed(ObjectIdentity)
 }
@@ -292,10 +312,10 @@ public struct DynamicObjectsState: Codable, Sendable {
         public let behavior: BehaviorID
     }
 
-    /// The protocols, by name.
-    public var protocols: [String: MessageProtocol] = [:]
     /// Each behavior as it is now.
     public var behaviors: [BehaviorID: Behavior] = [:]
+    /// The kinds: behaviors named, with no object of their own.
+    public var kinds: [String: BehaviorID] = [:]
     /// The objects here, oldest first.
     public var entries: [Entry] = []
 
@@ -308,16 +328,21 @@ public struct DynamicObjectsState: Codable, Sendable {
         entries.contains { Self.key($0.name) == Self.key(name) }
     }
 
+    /// The kind called `name`, by its name or its handle.
+    func kind(named name: String) -> BehaviorID? {
+        kinds.first { Self.key($0.key) == Self.key(name) || ObjectNames.handle(for: $0.key) == name }?.value
+    }
+
     private static func key(_ name: String) -> String {
         name.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
     mutating func apply(_ event: DynamicObjectsEvent) {
         switch event {
-        case .protocolsWritten(let written):
-            for protocolWritten in written { protocols[protocolWritten.name] = protocolWritten }
         case .behaviorWritten(let id, let behavior):
             behaviors[id] = behavior
+        case .kindNamed(let name, let id):
+            kinds[name] = id
         case .added(let identity, let name, let behavior):
             entries.append(Entry(identity: identity, name: name, behavior: behavior))
         case .removed(let identity):
@@ -329,13 +354,19 @@ public struct DynamicObjectsState: Codable, Sendable {
 public enum DynamicObjectsError: Error, Codable, Equatable, Sendable, CustomStringConvertible {
     case unknownObject(ObjectIdentity)
     case nameTaken(String)
+    case unknownKind(String)
+    case unknownBehavior
 
     public var description: String {
         switch self {
         case .unknownObject(let identity):
             "There's no object \(identity) here."
         case .nameTaken(let name):
-            "An object named \(name) already exists. To change it, define it with its handle, or choose another name."
+            "An object or kind named \(name) already exists. To change it, define it with its handle, or choose another name."
+        case .unknownKind(let name):
+            "There's no object or kind \(name) here."
+        case .unknownBehavior:
+            "That behavior is gone."
         }
     }
 }

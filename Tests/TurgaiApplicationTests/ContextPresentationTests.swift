@@ -23,7 +23,7 @@ struct ContextPresentationTests {
                 reasoningTokens: 120,
                 totalTokens: 19_332
             ),
-            conversationMessageCount: 9,
+            historyTurnCount: 9,
             hasContextSummary: true
         )
 
@@ -31,7 +31,7 @@ struct ContextPresentationTests {
 
         #expect(text.contains("Status: executingTool"))
         #expect(text.contains("Context window: 6,429 / 16,384 tokens (39%, reported by the model)"))
-        #expect(text.contains("Messages in context: 9"))
+        #expect(text.contains("Turns in context: 9"))
         #expect(text.contains("Compaction summary: yes"))
         #expect(text.contains("Requests: 4"))
         #expect(text.contains("Input tokens: 19,021"))
@@ -50,7 +50,7 @@ struct ContextPresentationTests {
 
         #expect(text.contains("Status: idle"))
         #expect(text.contains("Context window: not reported"))
-        #expect(text.contains("Messages in context: 0"))
+        #expect(text.contains("Turns in context: 0"))
         #expect(!text.contains("Model usage"))
     }
 }

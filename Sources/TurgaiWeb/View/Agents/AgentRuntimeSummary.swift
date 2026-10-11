@@ -44,8 +44,8 @@ struct AgentRuntimeSummary: HTML, Sendable {
                         }
                     }
                     p {
-                        span(.class("fact-label")) { "Messages" }
-                        active.conversationMessageCount.formatted()
+                        span(.class("fact-label")) { "Turns" }
+                        active.historyTurnCount.formatted()
                     }
                 }
             } else {

@@ -89,13 +89,14 @@ struct DemoObjectsTests {
             }
             #expect(entry["events"] == ["OrderPlaced", "RefundRequested"])
 
-            guard let conversation = TurgaiDomain.ConversationID(stableKey: "web:ada") else {
-                Issue.record("Invalid conversation ID")
-                return
-            }
-            let lines = await ObjectSession.turnContext(
-                actorSystem: sessionNode, objectCatalog: catalog, conversationID: conversation)
-            #expect(lines.contains { $0.hasPrefix("- `shop`, Shop: ") && $0.hasSuffix("; events: OrderPlaced, RefundRequested") })
+            // The objects page lists it, with what it announces.
+            let page = try await session.open(ObjectAddress.objects.address)
+            let lines = (page.output.textValue ?? "").split(separator: "\n").map(String.init)
+            #expect(lines.contains {
+                $0.hasPrefix("- id: `shop`; name: `Shop`; purpose: ")
+                    && $0.contains("; actions:")
+                    && $0.hasSuffix("; events: OrderPlaced, RefundRequested")
+            })
             _ = shop
         }
     }

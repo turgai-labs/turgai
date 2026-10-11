@@ -25,9 +25,8 @@ public enum ConversationTools {
         actorSystem: ClusterSystem? = nil,
         objectCatalog: ObjectCatalog? = nil,
         includeConversationTools: Bool = true
-    ) -> TurnTools {
+    ) async throws -> TurnTools {
         guard includeConversationTools else { return TurnTools() }
-        var sources: [any ToolSource] = []
         var tools: [any Tool] = [
             WebSearchTool(backend: searchBackend),
             FetchURLTool(),
@@ -36,9 +35,12 @@ public enum ConversationTools {
             FetchAttachmentTool(resolver: attachmentResolver),
         ]
         tools += ScheduleTools(context: context).tools
-        tools += WeatherTools().tools
         tools += TimerTools(context: context).tools
+        // Tools that belong together and say what they're for are a page: the turn starts from
+        // their link, and the page says the rest.
+        let groups: [ToolGroup] = [WeatherTools().group]
 
+        var pages: any Pages = NoPages()
         if let actorSystem {
             let owner = ConversationID(stableKey: context.agentID.contextID.rawValue)?.participantUserID
             let session = ObjectSession(
@@ -46,14 +48,13 @@ public enum ConversationTools {
                 objectCatalog: objectCatalog,
                 scopes: owner.map(ObjectScope.visible(to:)) ?? [.shared]
             )
-            tools += ObjectTools(session: session).everyTurn
-            sources.append(ObjectDefiningTools(session: session))
-            sources.append(ObjectActionTools(session: session))
+            tools.append(ObjectTools.link)
+            pages = session
         }
 
         if let userTools {
             let builtinNames = Set(tools.map(\.name))
-            let requesterID = Self.sender(of: context.message)
+            let requesterID = Self.requester(context.input.from)
             let conversationID = context.agentID.contextID.rawValue
             let turnID = context.turnID.rawValue
             for tool in userTools.load() {
@@ -155,15 +156,14 @@ public enum ConversationTools {
                 }
             }
         }
-        return TurnTools(tools: tools, sources: sources)
+        return TurnTools(tools: tools, groups: groups, pages: pages)
     }
 
-    private static func sender(of message: ChatMessage) -> String {
-        switch message {
-        case .text(let sender, _, _), .response(let sender, _, _):
-            return sender
-        default:
-            return "unknown"
+    /// Who an approval is asked on behalf of: whoever said what the turn answers.
+    private static func requester(_ participant: AgentHistory.Participant) -> String {
+        switch participant {
+        case .user(let id): id
+        case .agent(let agentID): agentID.rawValue
         }
     }
 }

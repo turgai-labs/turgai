@@ -227,14 +227,14 @@ struct TurgaiAppService: Service, Sendable {
                     case "user-tool":
                         AgentSpawnConfig(
                             agentID: agentID,
-                            resumesInterruptedTurns: false,
+                            interruptedTurns: .close,
                             snapshotPolicy: .disabled
                         )
                     default:
                         // Profile agents: their Conversation owns recovery and
                         // starts exactly one model run after its own journal
                         // replays; Hail resuming too would be a second driver.
-                        AgentSpawnConfig(agentID: agentID, resumesInterruptedTurns: false)
+                        AgentSpawnConfig(agentID: agentID, interruptedTurns: .close)
                     }
                 },
                 modelEndpointProvider: modelEndpointProvider,
@@ -298,14 +298,9 @@ struct TurgaiAppService: Service, Sendable {
                         systemPrompt =
                             "You are an isolated helper agent. Follow the supplied task, return only the useful result, and do not perform side effects."
                     case .profile:
-                        systemPrompt = [
-                            "You are a local conversational assistant. Be helpful, concise, honest, and natural.",
-                            "Do not assume the user's physical location. The supplied date/time uses Turgai's fixed operating timezone and is not evidence of where the user is. Do not derive a place from the server's timezone, locale, IP address, language, or current date/time. For location-dependent requests such as weather, ask for a city or place unless the user provided one or it is explicitly present in saved personal memory.",
-                            customInstructions,
-                            MemoryRetrieval.capabilityInstruction,
-                        ]
-                        .filter { !$0.isEmpty }
-                        .joined(separator: "\n\n")
+                        // The profile's own instructions, blank unless its owner writes some. What the
+                        // agent can do comes with its tools and pages, not from here.
+                        systemPrompt = customInstructions
                     }
                     let execution: AgentExecutionPolicy
                     switch agentKind {
@@ -338,7 +333,7 @@ struct TurgaiAppService: Service, Sendable {
                 },
                 turnToolsProvider: { context, actorSystem in
                     let objectCatalog = try await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog
-                    return ConversationTools.make(
+                    var tools = try await ConversationTools.make(
                         context: context,
                         attachmentResolver: attachmentResolver,
                         searchBackend: searchBackend,
@@ -351,6 +346,12 @@ struct TurgaiAppService: Service, Sendable {
                         objectCatalog: objectCatalog,
                         includeConversationTools: context.agentID.role.rawValue != "user-tool"
                     )
+                    // Hail's files and agent messaging, for the agents granted them.
+                    if context.agentID.role.rawValue != "user-tool" {
+                        tools.tools = try await actorSystem.agentRuntime.agentTools(for: context, actorSystem: actorSystem)
+                            + tools.tools
+                    }
+                    return tools
                 },
                 authorityProvider: { spawnConfig, workspace in
                     if spawnConfig.agentID.role.rawValue == "user-tool" {
@@ -386,14 +387,15 @@ struct TurgaiAppService: Service, Sendable {
                         .grantingAll(for: CancelTimerEffect.self)
                         .grantingAll(for: ListTimersEffect.self)
                         // Actions that aren't safe also ask the user, inside the effect.
-                        .grantingAll(for: ObjectsGuideEffect.self)
-                        .grantingAll(for: ListObjectsEffect.self)
-                        .grantingAll(for: DefineObjectEffect.self)
-                        .grantingAll(for: RemoveObjectEffect.self)
                         .grantingAll(for: FindObjectsEffect.self)
-                        .grantingAll(for: DescribeObjectEffect.self)
+                        .grantingAll(for: ListObjectsEffect.self)
+                        .grantingAll(for: MakeObjectEffect.self)
+                        .grantingAll(for: PageEffect.self)
+                        .grantingAll(for: EditObjectEffect.self)
+                        .grantingAll(for: DefineObjectEffect.self)
+                        .grantingAll(for: UseObjectEffect.self)
+                        .grantingAll(for: RemoveObjectEffect.self)
                         .grantingAll(for: InvokeObjectEffect.self)
-                        .grantingAll(for: ReadObjectEffect.self)
                 }
             )
             // The plugin is the stores' long-term owner: it receives the
@@ -495,7 +497,7 @@ struct TurgaiAppService: Service, Sendable {
                                 currentTool: nil,
                                 contextUsedTokens: snapshot.contextUsage?.usedTokens,
                                 contextLimitTokens: snapshot.contextUsage?.limitTokens,
-                                conversationMessageCount: snapshot.conversationMessageCount,
+                                historyTurnCount: snapshot.historyTurnCount,
                                 totalTokens: snapshot.usageSummary.totalTokens
                             )
                         }
