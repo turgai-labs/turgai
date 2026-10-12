@@ -98,6 +98,8 @@ extension Behavior {
                 outcome.sends.append(Send(recipient: recipient, message: message, arguments: .object(values)))
             case .reply(let value):
                 outcome.reply = try scope.resolve(value)
+            case .reject(let reason):
+                throw BehaviorError(reason)
             }
         }
         outcome.fields = scope.fields

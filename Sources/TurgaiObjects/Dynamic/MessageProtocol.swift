@@ -20,12 +20,7 @@ extension Signature {
         let valid = name.first.map { $0.isLetter || $0 == "_" } == true
             && name.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" }
         guard valid else {
-            let words = name.split { !$0.isLetter && !$0.isNumber }
-            let suggestion = words.enumerated().map { index, word in
-                index == 0 ? word.lowercased() : word.prefix(1).uppercased() + word.dropFirst().lowercased()
-            }.joined()
-            let instead = suggestion.isEmpty || suggestion == name ? "such as `refundRequested`" : "such as `\(suggestion)`"
-            throw BehaviorError("`\(name)` isn't a valid \(what) name: use letters and digits, with no spaces, \(instead).")
+            throw BehaviorError("`\(name)` isn't a \(what) name: a name is letters and digits, starting with a letter.")
         }
     }
 }

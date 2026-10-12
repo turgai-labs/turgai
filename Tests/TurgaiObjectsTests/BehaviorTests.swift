@@ -341,4 +341,59 @@ struct BehaviorTests {
         #expect(try reply(40) == "approved")
         #expect(try reply(100) == "kept")
     }
+
+    /// Ordered event cases can reject a message explicitly. A rejecting fallback has no reply,
+    /// while the successful cases still have one typed result.
+    @Test
+    func anEventCanRejectItsFallback() throws {
+        let behavior = try Behavior(
+            name: "wallet",
+            yaml: YAML("""
+                fields:
+                  balance: 100
+                receive:
+                  - on: spend(amount: number)
+                    when: amount < 100
+                    do:
+                      - subtract: amount from balance
+                      - reply: balance
+                  - on: spend(amount: number)
+                    do:
+                      - reject: Amount must be below 100
+                """))
+        #expect(behavior.messages.first?.reply == .integer)
+        let spent = try behavior.handle("spend", arguments: ["amount": 20], fields: behavior.fields.mapValues(\.initial))
+        #expect(spent.fields["balance"] == 80)
+        #expect(spent.reply == 80)
+        #expect(throws: BehaviorError("Amount must be below 100")) {
+            try behavior.handle("spend", arguments: ["amount": 120], fields: behavior.fields.mapValues(\.initial))
+        }
+    }
+
+    /// Saving an event replaces all of its cases together and preserves their given order and the
+    /// other events around it.
+    @Test
+    func replacingAnEventIsAtomicAndOrdered() throws {
+        let old = Behavior.Written(
+            fields: [],
+            receive: [
+                .on("x", taking: [.named("n", .number)], when: nil, doing: [.reply(.text("old"))]),
+                .on("y", taking: nil, when: nil, doing: []),
+            ])
+        let edit = Behavior.Written.Edit.replaceEvent(
+            "x",
+            clauses: [
+                .on("x", taking: nil, when: [.comparing(.name("n"), .lessThan, .number(10))], doing: [.reply(.text("small"))]),
+                .on("x", taking: nil, when: nil, doing: [.reject("too large")]),
+            ],
+            taking: [.named("n", .number)], message: nil)
+        let replaced = old.applying(edit)
+        #expect(replaced.receive.map(\.on) == ["x", "x", "y"])
+        #expect(replaced.receive.filter { $0.on == "x" }.allSatisfy { $0.parameters == [.named("n", .number)] })
+        let behavior = try Behavior(name: "x", written: replaced)
+        #expect(try behavior.handle("x", arguments: ["n": 5], fields: [:]).reply == "small")
+        #expect(throws: BehaviorError("too large")) {
+            try behavior.handle("x", arguments: ["n": 20], fields: [:])
+        }
+    }
 }

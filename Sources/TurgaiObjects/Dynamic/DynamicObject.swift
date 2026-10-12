@@ -144,12 +144,12 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     /// Its fields as its behavior has them: values it has, and starting values for fields it hasn't
     /// had yet, such as ones a newer spec added.
+    /// The values it holds, for the fields its behavior has: its own, never read from the
+    /// definition, as an Erlang process's state is its own once it's spawned.
     private var fields: [String: JSONValue] {
         get throws {
             let behavior = try behavior
-            return behavior.fields.mapValues(\.initial).merging(state.fields.filter { behavior.fields[$0.key] != nil }) {
-                _, own in own
-            }
+            return state.fields.filter { behavior.fields[$0.key] != nil }
         }
     }
 
@@ -313,7 +313,8 @@ public struct DynamicObjectState: Codable, Sendable {
 
     /// `nil` until the object is created.
     public var created: Created?
-    /// The values it has set: its start values, and every change since.
+    /// The values it holds: one for every field, from when it was created or the field was added,
+    /// and every change since.
     public var fields: [String: JSONValue] = [:]
 
     public init() {}
@@ -330,9 +331,12 @@ public struct DynamicObjectState: Codable, Sendable {
         switch event {
         case .created(let name, let behavior, let id, let start, let scope, let at):
             created = Created(name: name, behavior: behavior, id: id, scope: scope, createdAt: at, removed: false)
-            fields = start
+            // It holds a value for every field from the start: what it was given, else its kind's.
+            fields = behavior.fields.mapValues(\.initial).merging(start) { _, given in given }
         case .adopted(let behavior):
             created?.behavior = behavior
+            // A field new to it starts as the definition says; the values it holds stay its own.
+            for (name, field) in behavior.fields where fields[name] == nil { fields[name] = field.initial }
         case .handled(let changes):
             fields.merge(changes) { _, changed in changed }
         case .removed:

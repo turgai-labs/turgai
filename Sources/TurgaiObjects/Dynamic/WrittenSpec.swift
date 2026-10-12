@@ -73,6 +73,7 @@ extension Behavior {
             case remove(Value, from: String)
             case send(message: String, to: Value, arguments: [Argument]?)
             case reply(Value)
+            case reject(String)
         }
 
         @Generable(description: "A condition: a value compared with another, or a list checked.")

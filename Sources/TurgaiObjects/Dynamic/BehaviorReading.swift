@@ -46,15 +46,20 @@ extension Behavior {
         var replies: [String: ValueType] = [:]
         for message in clauses.map(\.message.name).reduce(into: [String](), { if !$0.contains($1) { $0.append($1) } }) {
             let handling = clauses.filter { $0.message.name == message }
-            let replied = handling.map { clause in
+            // A rejecting clause has no successful result to type. Successful clauses either all
+            // reply, or none do, and their replies have one compatible type.
+            let successful = handling.filter { clause in
+                !clause.actions.contains { if case .reject = $0 { true } else { false } }
+            }
+            let replied = successful.map { clause in
                 clause.actions.lazy.compactMap { action -> Value? in if case .reply(let value) = action { value } else { nil } }.last
             }
             let replying = replied.compactMap { $0 }.count
-            guard replying == 0 || replying == handling.count else {
+            guard replying == 0 || replying == successful.count else {
                 throw BehaviorError("`\(message)` replies in one clause and not in another. Reply in every clause for it, or in none.")
             }
             var type: ValueType?
-            for (clause, value) in zip(handling, replied) {
+            for (clause, value) in zip(successful, replied) {
                 guard let value, let new = replyType(of: value, in: clause, fields: fields) else { continue }
                 guard let known = type, known != new else {
                     type = new
@@ -223,6 +228,11 @@ private struct Reader {
             return .send(to: try target(receiver, at: path), message: message, arguments: sent)
         case .reply(let value):
             return .reply(try self.value(value, at: path))
+        case .reject(let reason):
+            guard !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw BehaviorError("\(path) rejects the message without saying why.")
+            }
+            return .reject(reason)
         }
     }
 

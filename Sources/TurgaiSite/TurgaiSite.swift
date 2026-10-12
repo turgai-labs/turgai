@@ -20,17 +20,17 @@ struct LandingPage: HTMLDocument {
         for tag in PageTag.all { tag }
         link(.init(name: "rel", value: "canonical"), .href(PageTag.origin + "/"))
         link(.href("favicon.png"), .rel(.icon), .init(name: "type", value: "image/png"), .init(name: "sizes", value: "96x96"))
-        link(.href("skylark.svg"), .rel(.icon), .init(name: "type", value: "image/svg+xml"))
+        link(.href(SitePath.skylark), .rel(.icon), .init(name: "type", value: "image/svg+xml"))
         link(.href("apple-touch-icon.png"), .init(name: "rel", value: "apple-touch-icon"), .init(name: "sizes", value: "180x180"))
         HTMLRaw("<script type=\"application/ld+json\">\(structuredData)</script>")
-        HTMLRaw("<style>\n\(styles)\n\(angles.css)\n\(Self.timelines)\n\(Arrow.css)\n</style>")
+        HTMLRaw("<style>\n\(styles)\n\(angles.css)\n\(Self.timelines)\n\(Arrow.css)\n\(field.css)\n</style>")
     }
 
     /// Each chapter's section and the closing page name a view timeline; the field's layers follow them.
     static var timelines: String {
         let names = (["--intro"] + Layer.all.map(\.timeline)).joined(separator: ", ")
         return "body { timeline-scope: \(names); }\n"
-            + Layer.all.map { ".s-\($0.name) { animation-timeline: \($0.timeline); }\n.s-\($0.name) .joins { animation-timeline: \($0.timeline); }" }.joined(separator: "\n")
+            + Layer.all.map { ".s-\($0.name) { animation-timeline: \($0.timeline); }\n.s-\($0.name) .joins, .s-\($0.name) .joins-fade { animation-timeline: \($0.timeline); }" }.joined(separator: "\n")
             + "\n.dust { animation-timeline: \(Chapter.allCases.first?.timeline ?? Layer.constellation.timeline); }"
     }
 
@@ -40,11 +40,7 @@ struct LandingPage: HTMLDocument {
 
         // the web app's header and wordmark, from the shared brand stylesheet
         header(.class("page-header bar")) {
-            nav(.class("app-nav-links"), .init(name: "aria-label", value: "Main")) {
-                a(.class("nav-link hide-narrow"), .href("#\(Departure.headline.next.id)")) { "The idea" }
-                // the code isn't public yet: GitHub shows, greyed out, and goes nowhere
-                span(.class("nav-link off"), .init(name: "aria-disabled", value: "true"), .title("Coming soon")) { "GitHub" }
-            }
+            SiteNav(current: .idea)
         }
         a(.href("#\(Stop.sky.id)"), .class("wordmark mark"), .init(name: "aria-label", value: "Turgai home")) {
             HTMLRaw("<svg class=\"mark-bird\" viewBox=\"0 0 1024 1024\" aria-hidden=\"true\"><path fill-rule=\"evenodd\" d=\"\(skylarkPath)\"/></svg>")
@@ -78,7 +74,8 @@ struct LandingPage: HTMLDocument {
                     ComingSoon()
                     p(.class("big")) { "Small bird. "; span(.class("flag")) { "Big possibilities." } }
                     div(.class("close")) {
-                        p { "Have something your product should do? Turgai is open source and in early alpha. Tell us what you’re building." }
+                        p(.class("belief")) { "Being independent should never mean settling for less." }
+                        p { "Turgai is in early alpha. Tell us what you’re building." }
                         div(.class("cta")) {
                             span(.class("button button-accent off"), .init(name: "aria-disabled", value: "true"), .title("Coming soon")) { "See it on GitHub" }
                             a(.class("button button-secondary"), .href("mailto:hello@turg.ai")) { "Write to us" }
@@ -99,6 +96,62 @@ struct ComingSoon: HTML {
     var body: some HTML {
         span(.class("soon")) { "Coming soon" }
     }
+}
+
+/// The site's pages, as the top bar lists them.
+enum SitePage: CaseIterable {
+    case idea, tech
+
+    var label: String {
+        switch self {
+        case .idea: "The idea"
+        case .tech: "How it works"
+        }
+    }
+
+    /// How to reach this page from another one. The idea links to the story's start, past the sky.
+    func link(from page: SitePage) -> String {
+        let root = page == .tech ? "../" : ""
+        return switch self {
+        case .idea: page == .idea ? "#\(Departure.headline.next.id)" : root + "#\(Departure.headline.next.id)"
+        case .tech: root + TechPage.path
+        }
+    }
+}
+
+/// The top bar's links: the current page marked, and GitHub as a small tilted sticker with its mark.
+/// The code isn't public yet, so the sticker says "soon" and goes nowhere.
+struct SiteNav: HTML {
+    let current: SitePage
+
+    var body: some HTML {
+        nav(.class("app-nav-links"), .init(name: "aria-label", value: "Main")) {
+            for page in SitePage.allCases {
+                if page == current {
+                    a(.class("nav-link nav-link-active"), .href(page.link(from: current)), .init(name: "aria-current", value: "page")) { page.label }
+                } else {
+                    a(.class("nav-link"), .href(page.link(from: current))) { page.label }
+                }
+            }
+            span(.class("github"), .init(name: "aria-disabled", value: "true"), .init(name: "aria-label", value: "GitHub, coming soon"), .title("Coming soon")) {
+                HTMLRaw("<svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z\"/></svg>")
+                span(.class("github-label")) { "GitHub" }
+                span(.class("github-soon")) { "soon" }
+            }
+        }
+    }
+}
+
+/// Where generated files live, relative to the site root. Pages, and the files crawlers, browsers and Cloudflare
+/// expect at the root (robots.txt, sitemap.xml, _headers, the icons), sit at the root; media goes under assets/.
+enum SitePath {
+    static let assets = "assets/"
+    static let video = assets + "video/"
+    static let skylark = assets + "skylark.svg"
+    /// A NeXTcube, on the tech page. Simon Claessen, CC BY-SA 2.0, resized.
+    static let nextcube = assets + "nextcube.jpg"
+    /// The same photo as AVIF, about a tenth of the size; browsers that can't show it fall back to the JPEG.
+    static let nextcubeAVIF = assets + "nextcube.avif"
 }
 
 /// What search engines and link previews read about the page.
@@ -158,7 +211,8 @@ struct ChapterSection: HTML {
     var body: some HTML {
         section(.class("beat beat-\(chapter.rawValue)"), .id(Stop.chapter(chapter).id), .init(name: "style", value: "view-timeline-name: \(chapter.timeline)")) {
             div(.class("copy")) {
-                h2 { chapter.title }
+                if let tag = chapter.tag { span(.class("chapter-tag")) { tag } }
+                h2 { chapter.heading }
                 chapter.claim
             }
             if let proof = chapter.proof {
@@ -178,8 +232,24 @@ extension Chapter {
         case .inside: "Plug agents into what you already run."
         case .grows: "Every new idea becomes a new part."
         case .trust: "Your product holds, whatever fails."
-        case .yours: "Your model, your choice."
+        case .yours: "The product is yours."
         case .why: "Every part is an object."
+        }
+    }
+
+    /// A sticker above the title naming the chapter's idea; only independence gets one, in place of the plain bar.
+    var tag: String? {
+        switch self {
+        case .yours: "Independent"
+        case .inside, .grows, .trust, .why: nil
+        }
+    }
+
+    /// The title as shown: the independence chapter flags its promise, the way the hero flags "your product."
+    @HTMLBuilder var heading: some HTML {
+        switch self {
+        case .yours: "The product "; span(.class("flag")) { "is yours." }
+        case .inside, .grows, .trust, .why: title
         }
     }
 
@@ -193,11 +263,11 @@ extension Chapter {
         case .trust:
             p { "A supplier that stops answering, a model that’s down or wrong: no part loses what it knew, and none breaks your rules. "; strong { "Your rules are kept by Turgai, not left to the model." } }
         case .yours:
-            p { "Run as many agents as you need, and set each one up: its model, how it speaks, what it’s told to do. Apple’s on‑device model, Ollama, or any OpenAI‑compatible API. Run it on your own Mac, your own server or in the cloud, on one machine or spread across many. A local model costs nothing to run." }
-            p { strong { "Swap a model, and the product stays." } }
+            p { "Turgai runs on your machines or a cloud you choose and keeps everything in your own storage. Each agent can move to any model, local or cloud, and keeps its name, its history and its rules; try a new model before you rely on it." }
+            p { strong { "You set the rules, they hold below the model, and the journal shows everything it did." } }
         case .why:
-            p { "Each part, from a supplier to a rule to every agent, runs on its own, keeps its own data, and talks to the others by messages, like programs on an operating system, on one machine or across many." }
-            p { strong { "That’s why your product can keep growing without starting over." } }
+            p { "Everything in Turgai, from a supplier to a rule to an agent, is an object that keeps its own data and talks to the others by messages, on one machine or across many. That’s why a new part joins without touching the rest, and a part that fails comes back with what it knew." }
+            p { a(.class("more"), .href(TechPage.path)) { "How it works →" } }
         }
     }
 
@@ -210,13 +280,13 @@ extension Chapter {
                 text: "Imagine Dopline, a small travel agency run by Anna. Her developer plugs two agents into its app, and now travellers just write.",
                 exhibit: .chat(Chat(
                     title: "Dopline · Telegram", ask: "10 days in Japan in April. Two kids, my mother can’t walk much, we love food.",
-                    reply: "Here’s a first plan: step-free hotels, short walks, a food tour in Osaka. It comes to €9,200, so Anna will confirm it today."
+                    reply: "Here’s a first plan: step-free hotels, short walks, a food tour in Osaka. It comes to €9,200. Shall I hold it for you?"
                 ))
             )
         case .grows:
             Proof(
                 label: "At Dopline",
-                text: "Anna, who runs Dopline, said “Trips over €8,000 need my approval.” Dopline’s planner agent wrote this trip desk, and Turgai checked it before it ran. Later she asked for group tours the same way.",
+                text: "Anna said “Trips over €8,000 need my approval.” The planner wrote this trip desk, Anna read it and switched it on, and from then on Turgai runs it, not the model. Later she asked for group tours the same way.",
                 exhibit: .code(Code(label: "The trip desk, written by the planner", source: Code.yamlSample))
             )
         case .trust:
@@ -228,7 +298,7 @@ extension Chapter {
         case .yours:
             Proof(
                 label: "At Dopline",
-                text: "Two agents, each set up for its job: a small local model talks to travellers, a bigger one plans the trips.",
+                text: "The concierge runs on a local model on Dopline’s own server, so travellers’ messages are read there, not by a cloud provider. The planner works from the trip plan and uses a bigger cloud model.",
                 exhibit: .agents([
                     AgentCard(name: "concierge", model: "Local · Ollama",
                               instructions: "Answer travellers. Pass trip plans to the planner."),
@@ -376,7 +446,7 @@ struct SkyVideo: HTML {
             .init(name: "preload", value: "auto"), .init(name: "aria-label", value: sky.label)
         ) {
             for format in VideoFormat.allCases {
-                source(.src("\(sky.file(format)).mp4"), .init(name: "type", value: format.type))
+                source(.src("\(SitePath.video)\(sky.file(format)).mp4"), .init(name: "type", value: format.type))
             }
         }
     }
@@ -495,13 +565,26 @@ struct TurgaiSite {
         )
         try page.render().write(to: output.appending(path: "index.html"), atomically: true, encoding: .utf8)
 
+        // the tech page: the same brand stylesheet, then the article's own
+        let tech = TechPage(
+            styles: try String(contentsOf: TurgaiBrandAssets.stylesheet, encoding: .utf8) + "\n"
+                + String(contentsOf: resource("tech", "css"), encoding: .utf8),
+            skylarkPath: skylark.pathData
+        )
+        let techFolder = output.appending(path: TechPage.path, directoryHint: .isDirectory)
+        try files.createDirectory(at: techFolder, withIntermediateDirectories: true)
+        try tech.render().write(to: techFolder.appending(path: "index.html"), atomically: true, encoding: .utf8)
+
+        try files.createDirectory(at: output.appending(path: SitePath.video, directoryHint: .isDirectory), withIntermediateDirectories: true)
         for sky in Sky.allCases {
             for format in VideoFormat.allCases {
                 let name = sky.file(format)
-                try files.copyItem(at: resource(name, "mp4"), to: output.appending(path: "\(name).mp4"))
+                try files.copyItem(at: resource(name, "mp4"), to: output.appending(path: "\(SitePath.video)\(name).mp4"))
             }
         }
-        try files.copyItem(at: TurgaiBrandAssets.skylark, to: output.appending(path: "skylark.svg"))
+        try files.copyItem(at: TurgaiBrandAssets.skylark, to: output.appending(path: SitePath.skylark))
+        try files.copyItem(at: resource("nextcube", "jpg"), to: output.appending(path: SitePath.nextcube))
+        try files.copyItem(at: resource("nextcube", "avif"), to: output.appending(path: SitePath.nextcubeAVIF))
         try skylark.writeIcon(size: 96, to: output.appending(path: "favicon.png"))
         try skylark.writeIcon(size: 180, to: output.appending(path: "apple-touch-icon.png"))
         try Discovery.writeFiles(to: output)

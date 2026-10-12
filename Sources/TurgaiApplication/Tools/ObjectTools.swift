@@ -255,14 +255,23 @@ public actor ObjectSession {
     /// Makes a new object: one that holds and does nothing yet, defined a step at a time, each step
     /// changing it at once; or, `like` one of yours, following its rules, shared from then on, the
     /// way an Erlang module is written once and spawned again with state of its own.
-    func make(_ name: String, like original: String? = nil) async throws -> CallReturn {
+    func make(_ name: String, like original: String? = nil, holding data: [(String, Behavior.Written.Value)] = []) async throws -> CallReturn {
         if let existing = try await madeObject(named: name) {
             link(.object(existing.handle))
             return await page("`\(existing.handle)` already exists.")
         }
         guard let original else {
-            let handle = try await create(name, spec: .written(.empty))
-            return landing("Created empty \(handle). Now add the data it needs and define the actions needed for the current task.", on: .making(handle: handle))
+            // The definition holds each field's kind, and the object its first value.
+            let spec = data.reduce(Behavior.Written.empty) { spec, field in spec.applying(.hold(field.0, start: Self.kind(of: field.1))) }
+            _ = try Self.reading { try Behavior(name: name, written: spec) }
+            let handle = try await create(name, spec: .written(spec))
+            let values = try Dictionary(data.map { field in (field.0, try Self.reading { try Behavior.Field.value(field.1, of: field.0) }) }) { _, last in last }
+            if !values.isEmpty {
+                let object = try await dynamicObject(handle)
+                try await call(handle) { _ in try await object.set(values: values) }
+            }
+            let holding = data.isEmpty ? "" : ", holding " + data.map(\.0).map { field in "\(field): \(values[field]?.inline ?? "")" }.joined(separator: ", ")
+            return landing("Created \(handle)\(holding).\n" + Self.next(for: spec, handle: handle), on: .making(handle: handle))
         }
         let handle = try await create(name, spec: .sameAs(try await dynamicObject(original)))
         return landing("Made \(handle): it does what \(original) does, and holds its own values.", on: .making(handle: handle))
@@ -281,6 +290,8 @@ public actor ObjectSession {
         let written = try await object.written
         let edit: Behavior.Written.Edit
         switch change {
+        case .edit(.hold(let field, let start)):
+            return try await hold(field, start: start, on: handle, object: object, written: written)
         case .edit(let change):
             edit = change
         case .values(let values):
@@ -304,9 +315,50 @@ public actor ObjectSession {
         try await making { try await $0.update(identity, spec: spec) }
         try await catalogue(handle)
         let current = try await currentValues(handle)
+        // A clause with the head of a saved one takes its place; the result says so.
+        let replaced: String =
+            if case .receive(let clause, _, _) = edit, written.receive.contains(where: { $0.rule == clause.rule }) {
+                "Replaced \(clause.rule).\n"
+            } else { "" }
         let changes = Self.changes(from: before, to: after)
         let state = Self.overview(of: after, handle: handle, now: current)
-        return landing("\(changes)\n\nCurrent state:\n\(state)", on: .making(handle: handle))
+        return landing("\(replaced)\(changes)\n\nCurrent state:\n\(state)", on: .making(handle: handle))
+    }
+
+    /// Data on an object being made: the definition says what it holds, and the object holds its
+    /// value. As an Erlang module has no state and a process gets its own when it's spawned, a
+    /// definition never holds a value an object could disagree with: a field's kind in the
+    /// definition, its value in the object.
+    private func hold(
+        _ field: String, start: Behavior.Written.Value, on handle: String, object: DynamicObject, written: Behavior.Written
+    ) async throws -> CallReturn {
+        let before = try Self.reading { try Behavior(name: handle, written: written) }
+        // Data is added once; after that its value changes only by handling a message, as an
+        // Erlang process's state does.
+        guard before.fields[field] == nil else {
+            throw ObjectToolError.failed("`\(handle)` already holds \(field).")
+        }
+        let spec = written.applying(.hold(field, start: Self.kind(of: start)))
+        let after = try Self.reading { try Behavior(name: handle, written: spec) }
+        let identity = try await object.identity
+        try await making { try await $0.update(identity, spec: spec) }
+        try await catalogue(handle)
+        let value = try Self.reading { try Behavior.Field.value(start, of: field) }
+        try await call(handle) { _ in try await object.set(values: [field: value]) }
+        let state = Self.overview(of: after, handle: handle, now: try await currentValues(handle))
+        return landing("holds \(field), now \(value.inline)\n\nCurrent state:\n\(state)", on: .making(handle: handle))
+    }
+
+    /// What a definition says of a value: only its kind, as the empty value of that kind. An
+    /// object it names stays named, since that's who it talks to.
+    static func kind(of value: Behavior.Written.Value) -> Behavior.Written.Value {
+        switch value {
+        case .number: .number(0)
+        case .text: .text("")
+        case .boolean: .boolean(false)
+        case .list: .list([])
+        case .object, .name: value
+        }
     }
 
     /// What a step changed: the data it now holds, and each event whose rules changed, with all
@@ -332,10 +384,10 @@ public actor ObjectSession {
     /// The one thing to do next with an object, from what it holds and does now, naming its tool.
     static func next(for spec: Behavior.Written, handle: String) -> String {
         if spec.fields.isEmpty {
-            return "Next: add the data needed for this task with \(handle)_add_data, then define its actions with \(handle)_add_event."
+            return "Next: define how it handles each message for this task, with \(handle)_on, and data it holds, with \(handle)_data."
         }
         if spec.receive.isEmpty {
-            return "Next: define the actions needed for this task with \(handle)_add_event."
+            return "Next: define how it handles each message for this task, with \(handle)_on."
         }
         return "If the task needs more data or actions, define them with the editing tools. When the required actions are defined, call \(handle) to open them."
     }
@@ -573,7 +625,7 @@ public actor ObjectSession {
         let untaken = asked.filter { asked in !spec.receive.contains { $0.on == asked.message.name } }
         guard !untaken.isEmpty else { return "" }
         return "Events other objects send:\n" + untaken.map { "- " + $0.written }.joined(separator: "\n")
-            + "\nAdd an event with \(handle)_add_event only if \(handle) needs to handle it for the current task.\n\n"
+            + "\nDefine how \(handle) handles one with \(handle)_on only if the current task needs it.\n\n"
     }
 
     /// The messages objects here ask for, from the objects given to their actions, each once,
@@ -847,7 +899,7 @@ public actor ObjectSession {
                 merged = .object(members)
             }),
             let fixed = try? text([argument: .object(mapping)])
-        else { return "\(explained), such as:\n\n    \(argument):\n      name: {…}" }
+        else { return "\(explained)." }
         return "\(explained). Yours, as a mapping:\n\n" + fixed.split(separator: "\n").map { "    \($0)" }.joined(separator: "\n")
     }
 
@@ -1067,11 +1119,13 @@ public struct MakeObjectEffect: ScopedEffect, Sendable {
     public let name = "objects.make"
     let session: ObjectSession
     let objectName: String
-    /// One of yours whose rules it follows, or `nil` for a new, empty one.
+    /// One of yours whose rules it follows, or `nil` for a new one.
     let like: String?
+    /// What a new one holds from the start, each with its first value.
+    var data: [(String, Behavior.Written.Value)] = []
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
-        let (session, name, like) = token.withConfiguration { ($0.session, $0.objectName, $0.like) }
-        return try await session.make(name, like: like)
+        let (session, name, like, data) = token.withConfiguration { ($0.session, $0.objectName, $0.like, $0.data) }
+        return try await session.make(name, like: like, holding: data)
     }
 }
 
@@ -1178,7 +1232,7 @@ public struct SearchObjectsTool: HailCore.Tool {
     let session: ObjectSession
     public let name = "search_objects"
     public let description =
-        "Find objects by their purpose or actions. Returns matching object IDs and links to open them. Includes available Mac apps, such as Reminders."
+        "Find objects by their purpose or actions. Returns matching object IDs and links to open them. Includes available Mac apps."
     public func effect(for input: Input) throws -> FindObjectsEffect { FindObjectsEffect(session: session, query: input.query) }
     public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<FindObjectsEffect>) async throws -> CallReturn {
         try await FindObjectsEffect.run(in: token)
@@ -1200,30 +1254,37 @@ public struct CreateObjectTool: HailCore.Tool {
     public typealias Input = GeneratedContent
     static let nameProperty = "name"
 
+    /// A new object and its state, as an Erlang process starts with its own.
+    @Generable(description: "A new object.")
+    struct Arguments {
+        @Guide(description: "Its name. It must not already exist.")
+        let name: String
+        @Guide(description: "The data it holds.")
+        let data: [DefineStep.DefineInput.Data]?
+    }
+
     let session: ObjectSession
     public let name = "create_object"
     public let description =
-        "Create an empty object and open its editing tools. Then add its data and define its actions. To find an existing object, use search_objects."
-    private let parameters: GenerationSchema
+        "Create an object with the data it holds, and open its editing tools. To find an existing object, use search_objects."
 
     init(session: ObjectSession) throws {
         self.session = session
-        self.parameters = try GenerationSchema(
-            root: DynamicGenerationSchema(name: "CreateObject", properties: [
-                .init(
-                    name: Self.nameProperty, description: "The name of the new object. It must not already exist.",
-                    schema: .init(type: String.self))
-            ]),
-            dependencies: [])
     }
 
-    public var schema: ToolDefinition { ToolDefinition(name: name, description: description, parameters: parameters) }
+    public var schema: ToolDefinition { ToolDefinition(name: name, description: description, parameters: Arguments.generationSchema) }
 
     public func effect(for input: Input) throws -> MakeObjectEffect {
-        guard let objectName = try input.text(Self.nameProperty) else {
-            throw ObjectToolError.missingArguments(name, missing: [Self.nameProperty], unexpected: [])
+        let arguments: Arguments
+        do {
+            arguments = try Arguments(input)
+        } catch {
+            throw ObjectToolError.failed("`\(name)` takes: name, data.")
         }
-        return MakeObjectEffect(session: session, objectName: objectName, like: nil)
+        let data = try (arguments.data ?? []).map { data in
+            (try DefineStep.oneWord(data.key, of: "data.key"), try data.kind.dataKind.start(data.start))
+        }
+        return MakeObjectEffect(session: session, objectName: arguments.name, like: nil, data: data)
     }
     public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<MakeObjectEffect>) async throws -> CallReturn {
         try await MakeObjectEffect.run(in: token)
@@ -1466,14 +1527,14 @@ public struct RemoveObjectTool: HailCore.Tool {
     }
 }
 
-/// One step that makes an object, in plain words over Erlang underneath: `<handle>_add_data`, a
-/// field of its state; `<handle>_add_rule`, one `receive` clause, an event, a condition and what it
-/// does; `<handle>_remove_rule`, taking a clause out; and `<handle>_set_value`, its own state when
-/// it follows the rules of another, as an Erlang module is spawned again with state of its own.
+/// One step that makes an object, Erlang underneath: `<handle>_on`, one `receive` clause
+/// (message, argument patterns, guard, body); `<handle>_data`, a field of its state;
+/// `<handle>_remove_event`, taking a clause out; and `<handle>_set_value`, its own state when it
+/// follows the rules of another, as an Erlang module is spawned again with state of its own.
 struct DefineStep: Sendable {
     enum Kind: String, Sendable {
-        case data = "add_data"
-        case event = "add_event"
+        case on
+        case data
         case remove = "remove_event"
         case value = "set_value"
     }
@@ -1579,48 +1640,9 @@ struct DefineStep: Sendable {
     }
 
     /// What `define_data` is called with: the data's name, what it holds, and what it starts as.
-    struct DataStep {
-        enum Property: String { case name, kind, start }
-
-        let name: String
-        let kind: DataKind
-        let start: String?
-
-        static var schema: DynamicGenerationSchema {
-            DynamicGenerationSchema(name: "DataStep", properties: [
-                .init(name: Property.name.rawValue, description: "The name of the stored value.", schema: .init(type: String.self)),
-                .init(
-                    name: Property.kind.rawValue,
-                    description: "The stored value's type. number: a count or amount. text: a single text value. boolean: true or false. list: several items you can add and remove individually.",
-                    schema: .init(type: String.self, guides: [.anyOf(DataKind.allCases.map(\.rawValue))])),
-                .init(
-                    name: Property.start.rawValue,
-                    description: "The initial value, written as text. For a list, separate items with commas. If omitted, defaults to 0, empty text, false, or an empty list, according to kind.",
-                    schema: .init(type: String.self), isOptional: true),
-            ])
-        }
-
-        init(_ content: GeneratedContent) throws {
-            name = try content.value(forProperty: Property.name.rawValue)
-            kind = try content.value(forProperty: Property.kind.rawValue)
-            start = try content.text(Property.start.rawValue)
-        }
-    }
-
     /// What an event does with one piece of its data. The changes come first.
     enum Verb: String, CaseIterable, Sendable {
         case add, subtract, append, remove, set, clear, get
-
-        /// What the event is given each time it's called, for a verb that changes its data by
-        /// something: the amount for a number, the item for a list, the new value for `set`.
-        func given(for kind: DataKind) -> Behavior.Written.Parameter? {
-            switch self {
-            case .add, .subtract: .named("amount", .number)
-            case .append, .remove: .named("item", .string)
-            case .set: .named("value", kind.type)
-            case .clear, .get: nil
-            }
-        }
 
         /// Whether a value of `type` is what this verb takes for data holding `kind`: a number to add
         /// or subtract, one item to append or remove, a value of the data's own type to set. Clearing
@@ -1640,19 +1662,6 @@ struct DefineStep: Sendable {
             case .add, .append: "\(rawValue) to \(data)"
             case .subtract, .remove: "\(rawValue) from \(data)"
             case .set, .clear, .get: "\(rawValue) \(data)"
-            }
-        }
-
-        /// What it does to `data`, which holds `kind`, with `value`, what it's given.
-        func action(on data: String, holding kind: DataKind, with value: Behavior.Written.Value?) -> Behavior.Written.Action {
-            switch self {
-            case .add: .add(value ?? .number(0), to: data)
-            case .subtract: .subtract(value ?? .number(0), from: data)
-            case .append: .append(value ?? .text(""), to: data)
-            case .remove: .remove(value ?? .text(""), from: data)
-            case .set: .set(field: data, to: value ?? kind.empty)
-            case .clear: .set(field: data, to: kind.empty)
-            case .get: .reply(.name(data))
             }
         }
     }
@@ -1712,37 +1721,70 @@ struct DefineStep: Sendable {
             }
         }
 
-        /// The operand `content` chooses: a literal, `{argument: name}`, or `{data: name}`.
-        static func read(_ content: GeneratedContent, given: [Parameter], fields: [String: DataKind]) throws -> Operand {
+        /// The operand `content` chooses: a number, true or false, or a string, which is a name
+        /// when it names one of the event's inputs or the object's data (they never share one),
+        /// and words as they are otherwise. Where a number or a yes/no is `expected`, a string
+        /// written as one is read as one: parsed at the edge, against a type that's known.
+        static func read(
+            _ content: GeneratedContent, given: [Parameter], fields: [String: DataKind], expecting expected: ValueType? = nil
+        ) throws -> Operand {
             switch content.kind {
             case .number(let number):
                 return .number(number)
-            case .string(let text):
-                return .text(text)
             case .bool(let flag):
                 return .boolean(flag)
+            case .string(let written):
+                let name = Behavior.Written.messageName(from: written)
+                if let parameter = given.first(where: { $0.name == name }) { return .given(parameter) }
+                if let kind = fields[name] { return .held(name, kind) }
+                return literal(written, expecting: expected)
             case .structure(let properties, _):
+                // The older tagged forms still read the same.
+                if let text = properties["text"] { return .text(try text.value()) }
                 if let reference = properties["argument"] {
-                    let written: String = try reference.value()
-                    let name = Behavior.Written.messageName(from: written)
+                    let name = Behavior.Written.messageName(from: try reference.value(String.self))
                     guard let parameter = given.first(where: { $0.name == name }) else {
-                        throw ObjectToolError.failed(
-                            "There is no argument `\(written)`. Choose one of: \(given.map(\.name).joined(separator: ", ")).")
+                        guard !given.isEmpty else {
+                            throw ObjectToolError.failed("`\(name)` isn't an argument: the message declares none in `args`.")
+                        }
+                        throw UnofferedChoice(given: name, offered: given.map(\.name), argument: "argument")
                     }
                     return .given(parameter)
                 }
                 if let reference = properties["data"] {
-                    let written: String = try reference.value()
-                    let name = Behavior.Written.messageName(from: written)
+                    let name = Behavior.Written.messageName(from: try reference.value(String.self))
                     guard let kind = fields[name] else {
-                        throw ObjectToolError.failed(
-                            "There is no stored value `\(written)`. Choose one of: \(fields.keys.sorted().joined(separator: ", ")).")
+                        throw UnofferedChoice(given: name, offered: fields.keys.sorted(), argument: "data")
                     }
                     return .held(name, kind)
                 }
-                throw ObjectToolError.failed("A value reference needs `argument` or `data`.")
+                throw ObjectToolError.failed("A value is a number, true or false, or a name or words.")
             default:
-                throw ObjectToolError.failed("A value is a literal, {argument: name}, or {data: name}.")
+                throw ObjectToolError.failed("A value is a number, true or false, or a name or words.")
+            }
+        }
+
+        /// Words as a literal of the `expected` type, where they're written as one.
+        static func literal(_ written: String, expecting expected: ValueType?) -> Operand {
+            let trimmed = written.trimmingCharacters(in: .whitespaces)
+            switch expected {
+            case .integer?, .number?:
+                if let number = Double(trimmed) { return .number(number) }
+            case .boolean?:
+                if let flag = Bool(trimmed.lowercased()) { return .boolean(flag) }
+            default: break
+            }
+            return .text(written)
+        }
+
+        /// A pattern's value, as the input it's matched against takes it: a number, true or
+        /// false, or text.
+        static func literal(_ content: GeneratedContent, for input: Parameter) throws -> Operand {
+            switch content.kind {
+            case .number(let number): return .number(number)
+            case .bool(let flag): return .boolean(flag)
+            case .string(let text): return literal(text, expecting: input.type)
+            default: throw ObjectToolError.failed("A pattern's value is a number, text, true or false.")
             }
         }
 
@@ -1756,147 +1798,259 @@ struct DefineStep: Sendable {
         }
     }
 
-    /// What one step of an event does, as a choice that's whole: the verb with its data, such as
-    /// `append to items`, or an answer to another object, such as `tell shop refundApproved`. Each
-    /// is one expression of an Erlang clause's body.
-    struct Doing: Sendable {
-        enum Kind: Sendable {
-            case data(Verb, String)
-            case answer(Answer)
-            /// Takes the event and changes nothing, as an Erlang clause that just loops.
-            case nothing
-        }
-
-        let label: String
-        let kind: Kind
-
-        /// Every step the object can take: its data's verbs, nothing, then the answers others
-        /// accept.
-        static func all(fields: [(String, DataKind)], answers: [Answer]) -> [Doing] {
-            fields.flatMap { field, held in
-                held.verbs.map { verb in Doing(label: verb.label(for: field), kind: .data(verb, field)) }
-            } + [Doing(label: "nothing", kind: .nothing)] + answers.map { Doing(label: $0.label, kind: .answer($0)) }
-        }
-    }
-
-    /// What `add_event` is called with: one clause, the way an Erlang `receive` clause is written:
-    /// the `event`, `if` one value `is` compared `than` another, and what it `does`, steps in
-    /// order. A value is a literal or an explicit reference to an argument or stored value, read
-    /// as an ``Operand`` at the edge.
+    /// What `add_event` is called with: the complete ordered cases for one event. Each case
+    /// matches literal arguments and/or tests one condition, then runs explicit actions in order.
+    /// The final `otherwise` makes every possible input deliberate.
+    /// What one clause is made of: its condition and its actions, as Erlang writes a clause's
+    /// guard and body.
     struct EventStep {
-        enum Property: String { case event, takes, `if`, `is`, than, does }
-        enum StepProperty: String { case `do`, value }
+        struct Condition {
+            let left: GeneratedContent
+            let comparison: Comparison
+            let right: GeneratedContent
 
-        struct Input {
-            enum Property: String { case name, type }
-            let name: String
-            let type: DataKind
-
-            static var schema: DynamicGenerationSchema {
-                DynamicGenerationSchema(name: "EventInput", properties: [
-                    .init(name: Property.name.rawValue, description: "The argument name.", schema: .init(type: String.self)),
-                    .init(
-                        name: Property.type.rawValue, description: "The argument type.",
-                        schema: .init(type: String.self, guides: [.anyOf(DataKind.allCases.map(\.rawValue))]))
-                ])
+            init(left: GeneratedContent, comparison: Comparison, right: GeneratedContent) {
+                (self.left, self.comparison, self.right) = (left, comparison, right)
             }
 
             init(_ content: GeneratedContent) throws {
-                let written: String = try content.value(forProperty: Property.name.rawValue)
-                name = Behavior.Written.messageName(from: written)
-                type = try content.value(forProperty: Property.type.rawValue)
-            }
-
-            var parameter: Parameter { .init(name: name, type: type.valueType) }
-            var written: Behavior.Written.Parameter { .named(name, type.type) }
-        }
-
-        struct Step {
-            let does: String
-            let value: GeneratedContent?
-        }
-
-        let event: String
-        let takes: [Input]
-        let `if`: GeneratedContent?
-        let `is`: Comparison?
-        let than: GeneratedContent?
-        let does: [Step]
-
-        /// A literal or an explicit reference. Known names are offered where they are available;
-        /// arguments declared in this same call are checked when the call is read.
-        static func operand(_ name: String, arguments: [String], data: [String]) -> DynamicGenerationSchema {
-            func reference(_ property: String, choices: [String]) -> DynamicGenerationSchema {
-                DynamicGenerationSchema(name: name + property.capitalized, properties: [
-                    .init(
-                        name: property,
-                        schema: choices.isEmpty
-                            ? .init(type: String.self)
-                            : .init(type: String.self, guides: [.anyOf(choices)]))
-                ])
-            }
-            return DynamicGenerationSchema(name: name, anyOf: [
-                .init(type: Double.self),
-                .init(type: String.self),
-                .init(type: Bool.self),
-                reference("argument", choices: arguments),
-                reference("data", choices: data),
-            ])
-        }
-
-        static func schema(does: [String], arguments: [String], data: [String]) -> DynamicGenerationSchema {
-            let step = DynamicGenerationSchema(name: "Step", properties: [
-                .init(name: StepProperty.do.rawValue, description: "What this step does.", schema: .init(type: String.self, guides: [.anyOf(does)])),
-                .init(
-                    name: StepProperty.value.rawValue,
-                    description: "A literal, {argument: name}, or {data: name}. Steps get and clear need no value.",
-                    schema: operand("Value", arguments: arguments, data: data), isOptional: true),
-            ])
-            var properties: [DynamicGenerationSchema.Property] = [
-                .init(
-                    name: Property.event.rawValue, description: "The action name to define, or the exact name of an event sent by another object.",
-                    schema: .init(type: String.self)),
-                .init(
-                    name: Property.takes.rawValue,
-                    description: "Arguments this event receives. Omit when it receives none or another object's event already declares them.",
-                    schema: .init(arrayOf: Input.schema), isOptional: true),
-            ]
-            if !arguments.isEmpty || !data.isEmpty {
-                properties += [
-                    .init(
-                        name: Property.if.rawValue, description: "The value to test. Supply is and than too.",
-                        schema: operand("ConditionValue", arguments: arguments, data: data), isOptional: true),
-                    .init(
-                        name: Property.is.rawValue, description: "The comparison operator for if and than.",
-                        schema: .init(type: String.self, guides: [.anyOf(Comparison.allCases.map(\.rawValue))]), isOptional: true),
-                    .init(
-                        name: Property.than.rawValue, description: "The value to compare with.",
-                        schema: operand("ComparedValue", arguments: arguments, data: data), isOptional: true),
-                ]
-            }
-            properties.append(
-                .init(
-                    name: Property.does.rawValue, description: "Steps to run in order when this event is called or received. Choose nothing to handle the event without changing data or sending a reply.",
-                    schema: .init(arrayOf: step)))
-            return DynamicGenerationSchema(name: "EventStep", properties: properties)
-        }
-
-        init(_ content: GeneratedContent) throws {
-            event = try content.value(forProperty: Property.event.rawValue)
-            let inputs: [GeneratedContent] = try content.value([GeneratedContent]?.self, forProperty: Property.takes.rawValue) ?? []
-            takes = try inputs.map(Input.init)
-            `if` = content.property(Property.if.rawValue)
-            `is` = try content.text(Property.is.rawValue).map { written in
+                left = try content.value(forProperty: "left")
+                let written: String = try content.value(forProperty: "operator")
                 guard let comparison = Comparison(rawValue: written) else {
-                    throw UnofferedChoice(given: written, offered: Comparison.allCases.map(\.rawValue), argument: Property.is.rawValue)
+                    throw UnofferedChoice(given: written, offered: Comparison.allCases.map(\.rawValue), argument: "operator")
                 }
-                return comparison
+                self.comparison = comparison
+                right = try content.value(forProperty: "right")
             }
-            than = content.property(Property.than.rawValue)
-            let steps: [GeneratedContent] = try content.value(forProperty: Property.does.rawValue)
-            does = try steps.map { step in
-                Step(does: try step.value(forProperty: StepProperty.do.rawValue), value: step.property(StepProperty.value.rawValue))
+        }
+
+        enum Action {
+            case add(GeneratedContent, to: String)
+            case subtract(GeneratedContent, from: String)
+            case append(GeneratedContent, to: String)
+            case remove(GeneratedContent, from: String)
+            case set(String, to: GeneratedContent)
+            case clear(String)
+            case reply(GeneratedContent)
+            case reject(String)
+            case send(String, to: String)
+
+            init(_ content: GeneratedContent) throws {
+                if let value = content.property("add") {
+                    self = .add(value, to: try content.value(forProperty: "to"))
+                } else if let value = content.property("subtract") {
+                    self = .subtract(value, from: try content.value(forProperty: "from"))
+                } else if let value = content.property("append") {
+                    self = .append(value, to: try content.value(forProperty: "to"))
+                } else if let value = content.property("remove") {
+                    self = .remove(value, from: try content.value(forProperty: "from"))
+                } else if let field = try content.text("set") {
+                    self = .set(field, to: try content.value(forProperty: "value"))
+                } else if let field = try content.text("clear") {
+                    self = .clear(field)
+                } else if let value = content.property("reply") {
+                    self = .reply(value)
+                } else if let reason = try content.text("reject") {
+                    self = .reject(reason)
+                } else if let message = try content.text("send") {
+                    self = .send(message, to: try content.value(forProperty: "to"))
+                } else {
+                    throw ObjectToolError.failed("Each action needs one of: add, subtract, append, remove, set, clear, reply, reject, or send.")
+                }
             }
+        }
+    }
+
+    /// What the steps are called with, as types: the schema the model writes is generated from
+    /// them, and what it writes is read back into them. An enum case is written as FM writes one,
+    /// its `type` and its fields. A value is text, a name or a literal, read by the kind it stands
+    /// for.
+    enum DefineInput {
+
+        /// A piece of an object's state, as `create_object` and `<handle>_data` take it.
+        /// Its field is `key`, not `name`: with `name` next to the object's own, FM copied the
+        /// object's name into it, spaces and all.
+        @Generable(description: "Data it holds.")
+        struct Data {
+            @Guide(description: "Its key, one word.")
+            let key: String
+            let kind: Kind
+            @Guide(description: "Its first value.")
+            let start: String?
+        }
+
+        /// One clause of how it handles a message, as an Erlang clause: the message, its
+        /// arguments (each a name, or a value it must equal), an optional guard, and a body of
+        /// actions.
+        @Generable(description: "How it handles one message.")
+        struct On {
+            @Guide(description: "The message's name, one word.")
+            let message: String
+            @Guide(description: "What the message brings.")
+            let args: [Arg]?
+            let when: When?
+            @Guide(description: "What this message does, in order.")
+            let body: [Action]
+        }
+
+        /// What a piece of data holds. Each kind is a case with its own line, which the macro
+        /// can't give cases without fields: with one shared line, FM never chose `list`.
+        enum Kind: String, CaseIterable, Sendable {
+            case number, text, boolean, list
+
+            var meaning: String {
+                switch self {
+                case .number: "A number."
+                case .text: "Words."
+                case .boolean: "True or false."
+                case .list: "Several items; messages add and remove them."
+                }
+            }
+        }
+
+        /// What an argument is: one value, so never a list.
+        enum ArgKind: String, CaseIterable, Sendable {
+            case number, text, boolean
+
+            var meaning: String {
+                switch self {
+                case .number: "A number."
+                case .text: "Words."
+                case .boolean: "True or false."
+                }
+            }
+        }
+
+        /// Its identifier is `key`, as data's is: with `name`, FM wrote titles into it.
+        @Generable(description: "An argument of the message; with equals, this clause is only for that value.")
+        struct Arg {
+            let key: String
+            let kind: ArgKind?
+            @Guide(description: "A value it must be, for this clause.")
+            let equals: String?
+        }
+
+        @Generable(description: "Only when this holds.")
+        struct When {
+            let value: Value
+            let comparison: Comparison
+            let than: Value
+        }
+
+        /// A value an action or a guard uses: its data or an argument, by name, or a number or
+        /// true or false.
+        @Generable(description: "A value.")
+        enum Value {
+            case data(key: String)
+            case argument(key: String)
+            case number(value: Double)
+            case boolean(value: Bool)
+        }
+
+        /// How much to add or subtract: a number, or an argument that brings one.
+        @Generable(description: "How much.")
+        enum Amount {
+            case number(value: Double)
+            case argument(key: String)
+        }
+
+
+        @Generable(description: "How it compares.")
+        enum Comparison {
+            case lessThan, atMost, greaterThan, atLeast, equal, notEqual
+        }
+
+        /// What a reply answers: something it holds or was given, by name. A value it answers
+        /// with is data it holds.
+        @Generable(description: "What it answers.")
+        enum Reply {
+            case data(key: String)
+            case argument(key: String)
+        }
+
+        @Generable(description: "One thing it does.")
+        enum Action {
+            case add(data: String, amount: Amount)
+            case subtract(data: String, amount: Amount)
+            case append(data: String)
+            case remove(data: String)
+            case set(data: String, value: Value)
+            case clear(data: String)
+            case send(to: String, message: String)
+            case reply(reply: Reply)
+            case reject(reason: String)
+        }
+    }
+
+    /// One `on` call, read into the steps' terms.
+    struct DefineForm {
+        struct Arg {
+            let name: String
+            let kind: DataKind?
+            let equals: GeneratedContent?
+        }
+
+        let message: String
+        let args: [Arg]
+        let when: EventStep.Condition?
+        let body: [EventStep.Action]
+
+        init(_ on: DefineInput.On) {
+            message = on.message
+            args = (on.args ?? []).map { arg in
+                Arg(
+                    name: Behavior.Written.messageName(from: arg.key), kind: arg.kind?.dataKind,
+                    equals: arg.equals.map { GeneratedContent($0) })
+            }
+            when = on.when.map { when in
+                EventStep.Condition(left: when.value.operand, comparison: when.comparison.comparison, right: when.than.operand)
+            }
+            body = on.body.map(\.step)
+        }
+
+        /// The schema of `On`, with the object's own names as choices: its data by kind, and the
+        /// answers other objects take. An action with nothing to act on is left out, and the
+        /// guard until a message has arguments to compare: FM leaves a tool's schema more often
+        /// the larger it is.
+        static func schema(owner: String, fields: [(String, DataKind)], answers: [Answer], arguments: [String]) throws -> GenerationSchema {
+            let numbers = fields.filter { $0.1 == .number }.map(\.0)
+            let lists = fields.filter { $0.1 == .list }.map(\.0)
+            let all = fields.map(\.0)
+            let choices: [String: [String: [String]]] = [
+                "Action.add": ["data": numbers], "Action.subtract": ["data": numbers],
+                "Action.append": ["data": lists], "Action.remove": ["data": lists],
+                "Action.set": ["data": all], "Action.clear": ["data": all],
+                "Action.send": ["to": Array(Set(answers.map(\.by))).sorted(), "message": answers.map(\.message.name)],
+                "Reply.data": ["key": all],
+                "Value.data": ["key": all],
+            ]
+            let descriptions: [String: [String: String]] = [
+                "Action.set": ["value": "Its new value."],
+                "Action.reject": ["reason": "Why it refuses."],
+            ]
+            let cases = [
+                "Action.add": "Adds to a number.",
+                "Action.subtract": "Subtracts from a number.",
+                "Action.append": "Adds the item the message brings to a list.",
+                "Action.remove": "Takes the item the message brings out of a list.",
+                "Action.set": "Sets data to a value.",
+                "Action.clear": "Empties data.",
+                "Action.send": "Sends a message to another object.",
+                "Action.reply": "Answers the message.",
+                "Action.reject": "Refuses the message; nothing changes.",
+                "Reply.data": "Its data.",
+                "Reply.argument": "An argument the message brings.",
+                "Value.data": "Its data.",
+                "Value.argument": "An argument the message brings.",
+                "Value.number": "A number.",
+                "Value.boolean": "True or false.",
+                "Amount.number": "A number.",
+                "Amount.argument": "An argument that brings a number.",
+            ]
+            return try DefineInput.On.generationSchema.choosing(
+                choices, describing: descriptions, cases: cases,
+                // A guard and a pattern compare arguments, so they come once a message has some.
+                leaving: arguments.isEmpty ? ["On": ["when"], "Arg": ["equals"]] : [:], naming: owner)
         }
     }
 
@@ -1947,6 +2101,8 @@ struct DefineStep: Sendable {
     let asked: [Asked]
     /// Its rules, by name, to take one out.
     let rules: [String]
+    /// Its own messages, with what each is given, from their first clauses.
+    let own: [String: [Behavior.Written.Parameter]]
     let description: String
     private let parameters: GenerationSchema
 
@@ -1961,47 +2117,47 @@ struct DefineStep: Sendable {
     ) -> [ObjectDefineTool] {
         let fields = spec.fields.map { ($0.name, DataKind(of: $0.start)) }
         func step(_ kind: Kind) -> ObjectDefineTool? {
-            (try? DefineStep(handle: handle, kind: kind, fields: fields, asked: asked, rules: spec.rules))
+            (try? DefineStep(
+                handle: handle, kind: kind, fields: fields, asked: asked, rules: spec.rules,
+                own: Dictionary(spec.receive.map { ($0.on, $0.parameters ?? []) }) { first, _ in first }))
                 .map { ObjectDefineTool(session: session, step: $0) }
         }
-        var kinds: [Kind] = fields.isEmpty ? (asked.isEmpty ? [.data] : [.data, .event]) : [.event, .data]
+        var kinds: [Kind] = [.on, .data]
         if !spec.receive.isEmpty { kinds.append(.remove) }
         if case .shared = shared, !fields.isEmpty { kinds.append(.value) }
         return kinds.compactMap(step)
     }
 
-    init(handle: String, kind: Kind, fields: [(String, DataKind)], asked: [Asked] = [], rules: [String] = []) throws {
+    init(
+        handle: String, kind: Kind, fields: [(String, DataKind)], asked: [Asked] = [], rules: [String] = [],
+        own: [String: [Behavior.Written.Parameter]] = [:]
+    ) throws {
         self.handle = handle
         self.kind = kind
         self.fields = Dictionary(fields) { first, _ in first }
         self.asked = asked
         self.rules = rules
-        let schema: DynamicGenerationSchema
+        self.own = own
+        // Its definitions are named after the object and the step, so no two tools share one.
+        let owner = (handle.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) + kind.rawValue.split(separator: "_"))
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
         switch kind {
+        case .on:
+            description =
+                "Define how \(handle) handles one message; each message on its own. Several for one message are its clauses, for different arguments: the ones with `equals` or `when` are tried first, in the order defined. This saves it; it does not run it."
+            parameters = try DefineForm.schema(
+                owner: owner, fields: fields, answers: Self.answers(of: asked),
+                arguments: own.values.flatMap { $0.map(\.name) } + asked.flatMap { $0.message.parameters.map(\.name) })
         case .data:
-            description = "Add a stored value to \(handle)."
-            schema = DataStep.schema
-        case .event:
-            description = "Define an event and its steps. This saves the event; it does not run it."
-            let values = Self.values(of: asked)
-            schema = EventStep.schema(
-                does: Doing.all(fields: fields, answers: Self.answers(of: asked)).map(\.label),
-                arguments: values, data: fields.map(\.0))
+            description = "Add data \(handle) holds."
+            parameters = try DefineInput.Data.generationSchema.choosing([:], naming: owner)
         case .remove:
             description = "Remove an event from \(handle)."
-            schema = RemoveStep.schema(rules: rules)
+            parameters = try GenerationSchema(root: RemoveStep.schema(rules: rules), dependencies: []).choosing([:], naming: owner)
         case .value:
             description = "Change a current value on \(handle)."
-            schema = ValueStep.schema(data: fields.map(\.0))
+            parameters = try GenerationSchema(root: ValueStep.schema(data: fields.map(\.0)), dependencies: []).choosing([:], naming: owner)
         }
-        self.parameters = try GenerationSchema(root: schema, dependencies: [])
-    }
-
-    /// The values of the messages other objects send, each once.
-    static func values(of asked: [Asked]) -> [String] {
-        var values: [String] = []
-        for name in asked.flatMap(\.message.parameters).map(\.name) where !values.contains(name) { values.append(name) }
-        return values
     }
 
     /// A message to send back to an object that asks for something: `tell shop refundApproved`.
@@ -2010,7 +2166,6 @@ struct DefineStep: Sendable {
         let message: Signature
         /// What `by` sends that this answers, such as `refundRequested`.
         let answering: String
-        var label: String { "tell \(by) \(message.name)" }
     }
 
     static func answers(of asked: [Asked]) -> [Answer] {
@@ -2035,66 +2190,41 @@ struct DefineStep: Sendable {
             throw ObjectToolError.missingArguments(name, missing: [property], unexpected: [])
         } catch let error as UnofferedChoice {
             throw ObjectToolError.failed(error.description)
+        } catch let error as ObjectToolError {
+            throw error
+        } catch {
+            throw ObjectToolError.failed("`\(name)` takes: \(Self.properties(of: kind).joined(separator: ", ")).")
         }
+    }
+
+    /// What a step's input is made of, to say so when a call doesn't fit it.
+    static func properties(of kind: Kind) -> [String] {
+        switch kind {
+        case .on: ["message", "args", "when", "body"]
+        case .data: ["key", "kind", "start"]
+        case .remove: [RemoveStep.property]
+        case .value: [ValueStep.Property.data.rawValue, "value"]
+        }
+    }
+
+    /// A name written as one word; a sentence is refused.
+    static func oneWord(_ written: String, of what: String) throws -> String {
+        let name = Behavior.Written.messageName(from: written)
+        guard !written.contains(" ") else {
+            throw ObjectToolError.failed("`\(what)` must be one word.")
+        }
+        return name
     }
 
     /// The change the arguments describe: data to hold, or a clause to receive with.
     func change(from input: GeneratedContent) throws -> Change {
         switch kind {
+        case .on:
+            let on = DefineForm(try read(DefineInput.On.init, input))
+            return .edit(try clause(on.message, args: on.args, when: on.when, body: on.body))
         case .data:
-            let step = try read(DataStep.init, input)
-            // A name as the spec writes one: `how many` becomes `howMany`.
-            let field = Behavior.Written.messageName(from: step.name)
-            let start = try step.kind.start(step.start)
-            return .edit(.hold(field, start: start))
-        case .event:
-            let step = try read(EventStep.init, input)
-            // A name as the spec writes one: `add cup` becomes `addCup`.
-            let event = Behavior.Written.messageName(from: step.event)
-            let sent = asked.first { $0.message.name == event }?.message
-            let doings = Doing.all(fields: fields.map { ($0.key, $0.value) }, answers: Self.answers(of: asked))
-            let chosen = try step.does.map { written in
-                guard let doing = doings.first(where: { $0.label == written.does }) else {
-                    throw UnofferedChoice(given: written.does, offered: doings.map(\.label), argument: EventStep.StepProperty.do.rawValue)
-                }
-                return (doing, written.value)
-            }
-            // `nothing` is the identity of a sequence of steps: with others, it's as if left out.
-            let steps = chosen.filter { if case .nothing = $0.0.kind { false } else { true } }
-            var actions: [Behavior.Written.Action] = []
-            if sent != nil, !step.takes.isEmpty {
-                throw ObjectToolError.failed("`\(event)` is sent by another object, which already declares its arguments. Omit `takes`.")
-            }
-            let given = sent?.parameters ?? step.takes.map(\.parameter)
-            for (doing, value) in steps {
-                switch doing.kind {
-                case .nothing:
-                    break
-                case .answer(let answer):
-                    actions.append(.telling(answer.by, try Self.forwarded(answer, from: sent, as: doing.label)))
-                case .data(let verb, let data):
-                    let held = fields[data] ?? .text
-                    // A value given to a step that takes none, such as `get` or `clear`, changes
-                    // nothing, so it's let be.
-                    if let value, verb.given(for: held) != nil {
-                        let operand = try Operand.read(value, given: given, fields: fields).forSetting(held)
-                        guard verb.takes(operand.type, holding: held) else {
-                            throw ObjectToolError.failed(Self.wrongValue(doing.label, operand, verb: verb, holding: held, sent: sent))
-                        }
-                        actions.append(verb.action(on: data, holding: held, with: operand.written))
-                    } else if verb.given(for: held) != nil {
-                        throw ObjectToolError.failed(
-                            "`\(doing.label)` needs `value`: a literal, {argument: name}, or {data: name}.")
-                    } else {
-                        actions.append(verb.action(on: data, holding: held, with: nil))
-                    }
-                }
-            }
-            let guards = try Self.guarded(step, given: given, fields: fields)
-            return .edit(
-                .receive(
-                    .on(event, taking: nil, when: guards, doing: actions),
-                    taking: sent == nil ? step.takes.map(\.written) : [], message: sent))
+            let data = try read(DefineInput.Data.init, input)
+            return .edit(.hold(try Self.oneWord(data.key, of: "key"), start: try data.kind.dataKind.start(data.start)))
         case .remove:
             let step = try read(RemoveStep.init, input)
             guard rules.contains(step.rule) else { throw UnofferedChoice(given: step.rule, offered: rules, argument: RemoveStep.property) }
@@ -2110,17 +2240,213 @@ struct DefineStep: Sendable {
     }
 }
 
-extension DefineStep {
-    /// The condition an event is written with: `if` a value `is` compared `than` another, both
-    /// read as operands, and comparable; none without `if`.
-    static func guarded(_ step: EventStep, given: [Parameter], fields: [String: DataKind]) throws -> [Behavior.Written.Guard]? {
-        guard let written = step.if else { return nil }
-        guard let comparison = step.is, let than = step.than else {
-            throw ObjectToolError.failed("A condition needs `if`, `is`, and `than`.")
+extension Behavior.Written.Kind {
+    /// The type of a value of this kind.
+    static func valueType(_ kind: Behavior.Written.Kind) -> ValueType {
+        switch kind {
+        case .string: .string
+        case .integer: .integer
+        case .number: .number
+        case .boolean: .boolean
+        case .list: .list
+        case .object: .object
         }
-        let left = try Operand.read(written, given: given, fields: fields)
-        let right = try Operand.read(than, given: given, fields: fields)
+    }
+}
+
+
+extension DefineStep {
+    /// One `on` form as one clause, the way Erlang reads a clause head and body: the message; its
+    /// arguments, fixed by its first clause or by the object that sends it, each matched to a
+    /// value or taken as given; the guard; and the body.
+    func clause(
+        _ written: String, args: [DefineForm.Arg], when: EventStep.Condition?, body: [EventStep.Action]
+    ) throws -> Behavior.Written.Edit {
+        let message = try Self.oneWord(written, of: "message")
+        let sent = asked.first { $0.message.name == message }?.message
+        let declared = (own[message] ?? []).map { Parameter(name: $0.name, type: Behavior.Written.Kind.valueType($0.type)) }
+        // What it's given: as the sender has it, as its first clause has it, or, for a new
+        // message, as this one declares it.
+        var given: [Parameter]
+        var taking: [Behavior.Written.Parameter]
+        if let sent {
+            given = sent.parameters
+            taking = []
+        } else if !declared.isEmpty || own[message] != nil {
+            given = declared
+            taking = []
+        } else {
+            given = try args.map { arg in
+                guard let kind = arg.kind else {
+                    throw ObjectToolError.failed("`\(message)` is new, so each argument needs its `kind`: `\(arg.name)` has none.")
+                }
+                return Parameter(name: arg.name, type: kind.valueType)
+            }
+            taking = try args.map { arg in .named(arg.name, (arg.kind ?? .text).type) }
+        }
+        // A list action takes the item the message brings, as Clojure's `%`: its one text value, or
+        // `item` for a new message that brings nothing yet.
+        var body = body
+        if body.contains(where: \.takesBroughtItem) {
+            let item: String
+            let texts = given.filter { $0.type == .string }
+            if texts.count == 1 {
+                item = texts[0].name
+            } else if given.isEmpty, sent == nil, own[message] == nil {
+                // Not a name its data has, which a name in the body would mean too.
+                item = ["item", "entry", "value"].first { fields[$0] == nil } ?? "brought"
+                given = [Parameter(name: item, type: .string)]
+                taking = [.named(item, .string)]
+            } else {
+                throw ObjectToolError.failed("`\(message)` must bring one item for a list; it brings \(given.isEmpty ? "nothing" : given.map(\.name).joined(separator: ", ")).")
+            }
+            body = body.map { $0.bringing(item) }
+        }
+        var guards: [Behavior.Written.Guard] = []
+        for arg in args {
+            guard let parameter = given.first(where: { $0.name == arg.name }) else {
+                let known = given.map { "`\($0.name)`" }.joined(separator: ", ")
+                throw ObjectToolError.failed(
+                    "`\(message)` is given \(known.isEmpty ? "nothing" : known)"
+                        + (sent != nil ? ", as the object that sends it has it" : ", as its first clause has it")
+                        + ", so it has no argument `\(arg.name)`.")
+            }
+            if let kind = arg.kind, kind.valueType != parameter.type, !(kind.valueType.isSubtype(of: parameter.type)) {
+                throw ObjectToolError.failed("`\(arg.name)` is \(parameter.type.withArticle) for `\(message)`, as its first clause has it, not \(kind.valueType.withArticle).")
+            }
+            guard let equals = arg.equals else { continue }
+            let value = try Operand.literal(equals, for: parameter)
+            guard value.type.isSubtype(of: parameter.type) || parameter.type.isSubtype(of: value.type) else {
+                throw ObjectToolError.failed("`\(arg.name)` is \(parameter.type.withArticle), so it can't equal `\(value.name)`, which is \(value.type.withArticle).")
+            }
+            guards.append(.comparing(.name(parameter.name), .equal, value.written))
+        }
+        if let when { guards.append(try Self.guardFor(when, given: given, fields: fields)) }
+        let actions = try body.map { try Self.action($0, given: given, fields: fields, answers: Self.answers(of: asked), sent: sent) }
+        let problems = Self.problems(of: actions, when: guards, declaring: taking, fields: fields)
+        guard problems.isEmpty else {
+            throw ObjectToolError.failed(problems.map(\.description).joined(separator: "\n"))
+        }
+        return .receive(.on(message, taking: nil, when: guards.isEmpty ? nil : guards, doing: actions), taking: taking, message: sent)
+    }
+
+    /// A mistake a clause makes for certain, whatever it's meant to do: an action that changes
+    /// nothing or is undone, an answer given twice, an argument named like its data. Each is
+    /// one line.
+    enum Problem: Equatable, CustomStringConvertible {
+        case emptyBody
+        case changesNothing(String)
+        case undoes(later: String, earlier: String)
+        case repliesTwice
+        case rejectsWithActions
+        case namedLikeData(String)
+        case comparesValues
+        case comparesItself(String)
+
+        var description: String {
+            switch self {
+            case .emptyBody: "`body` is empty."
+            case .changesNothing(let action): "`\(action)` changes nothing."
+            case .undoes(let later, let earlier): "`\(later)` undoes `\(earlier)` before it."
+            case .repliesTwice: "It replies twice; one reply answers a message."
+            case .rejectsWithActions: "`reject` refuses the message, so the other actions never happen."
+            case .namedLikeData(let argument): "`\(argument)` is its data; name the argument differently."
+            case .comparesValues: "`when` compares two values, so it never depends on the message."
+            case .comparesItself(let name): "`when` compares \(name) with itself."
+            }
+        }
+    }
+
+    /// The certain mistakes in a clause: its actions in order, its guards, and the arguments a
+    /// new message declares.
+    static func problems(
+        of actions: [Behavior.Written.Action], when guards: [Behavior.Written.Guard],
+        declaring parameters: [Behavior.Written.Parameter], fields: [String: DataKind]
+    ) -> [Problem] {
+        typealias Action = Behavior.Written.Action
+        func name(_ value: Behavior.Written.Value) -> String? {
+            if case .name(let name) = value { name } else { nil }
+        }
+        func reads(_ action: Action) -> Set<String> {
+            let values: [Behavior.Written.Value] =
+                switch action {
+                case .set(_, let value), .add(let value, _), .subtract(let value, _), .append(let value, _), .remove(let value, _),
+                    .reply(let value):
+                    [value]
+                case .send(_, let to, let arguments): [to] + (arguments ?? []).map(\.value)
+                case .reject: []
+                }
+            return Set(values.compactMap(name))
+        }
+        func writes(_ action: Action) -> String? {
+            switch action {
+            case .set(let field, _): field
+            case .add(_, let field), .subtract(_, let field), .append(_, let field), .remove(_, let field): field
+            case .send, .reply, .reject: nil
+            }
+        }
+        func label(_ action: Action) -> String {
+            switch action {
+            case .set(let field, _): "set \(field)"
+            case .add(_, let field): "add to \(field)"
+            case .subtract(_, let field): "subtract from \(field)"
+            case .append(_, let field): "append to \(field)"
+            case .remove(_, let field): "remove from \(field)"
+            case .send(let message, _, _): "send \(message)"
+            case .reply: "reply"
+            case .reject: "reject"
+            }
+        }
+        var problems: [Problem] = []
+        if actions.isEmpty { problems.append(.emptyBody) }
+        for (index, action) in actions.enumerated() {
+            switch action {
+            case .add(.number(0), let field): problems.append(.changesNothing("add 0 to \(field)"))
+            case .subtract(.number(0), let field): problems.append(.changesNothing("subtract 0 from \(field)"))
+            case .set(let field, .name(let value)) where field == value: problems.append(.changesNothing("set \(field) to \(field)"))
+            case .remove(let value, let field):
+                // Taking out the item just put in, with nothing reading the list between, leaves it as it was.
+                if let earlier = actions[..<index].lastIndex(where: { if case .append(value, field) = $0 { true } else { false } }),
+                    !actions[(earlier + 1)..<index].contains(where: { reads($0).contains(field) })
+                {
+                    problems.append(.undoes(later: label(action), earlier: label(actions[earlier])))
+                }
+            case .set(let field, _):
+                // An earlier change to the same data that nothing reads before this one replaces it.
+                if let earlier = actions[..<index].lastIndex(where: { writes($0) == field }),
+                    !actions[(earlier + 1)..<index].contains(where: { reads($0).contains(field) })
+                {
+                    problems.append(.undoes(later: label(action), earlier: label(actions[earlier])))
+                }
+            default: break
+            }
+        }
+        if actions.filter({ if case .reply = $0 { true } else { false } }).count > 1 { problems.append(.repliesTwice) }
+        if actions.count > 1, actions.contains(where: { if case .reject = $0 { true } else { false } }) {
+            problems.append(.rejectsWithActions)
+        }
+        // A name in the body would mean either one.
+        for parameter in parameters where fields[parameter.name] != nil {
+            problems.append(.namedLikeData(parameter.name))
+        }
+        for guarded in guards {
+            guard let right = guarded.right else { continue }
+            switch (name(guarded.left), name(right)) {
+            case (nil, nil): problems.append(.comparesValues)
+            case (let left?, let right?) where left == right: problems.append(.comparesItself(left))
+            default: break
+            }
+        }
+        return problems
+    }
+
+    /// One explicit comparison, checked before it becomes a runtime guard.
+    static func guardFor(_ condition: EventStep.Condition, given: [Parameter], fields: [String: DataKind]) throws -> Behavior.Written.Guard {
+        let comparison = condition.comparison
         let ordered = comparison != .equal && comparison != .notEqual
+        // Ordered comparisons compare numbers, so a number written as words is read as one.
+        let left = try Operand.read(condition.left, given: given, fields: fields, expecting: ordered ? .number : nil)
+        let right = try Operand.read(condition.right, given: given, fields: fields, expecting: ordered ? .number : left.type)
         let comparable =
             ordered
             ? left.type.isSubtype(of: .number) && right.type.isSubtype(of: .number)
@@ -2129,7 +2455,66 @@ extension DefineStep {
             throw ObjectToolError.failed(
                 "`\(left.name) \(comparison.rawValue) \(right.name)` compares \(left.type.withArticle) with \(right.type.withArticle)\(ordered ? ", but <, <=, > and >= compare numbers" : ", which can't be equal"). Compare it with a number, or one of its data of the same kind.")
         }
-        return [.comparing(left.written, comparison.written, right.written)]
+        return .comparing(left.written, comparison.written, right.written)
+    }
+
+    /// One model-facing action, checked against the data and messages currently available.
+    static func action(
+        _ action: EventStep.Action, given: [Parameter], fields: [String: DataKind],
+        answers: [Answer], sent: Signature?
+    ) throws -> Behavior.Written.Action {
+        func data(_ written: String, verb: Verb, value: GeneratedContent?) throws -> (String, DataKind, Operand?) {
+            let name = Behavior.Written.messageName(from: written)
+            guard let held = fields[name] else {
+                throw UnofferedChoice(given: written, offered: fields.keys.sorted(), argument: "data")
+            }
+            let expected: ValueType? =
+                switch verb {
+                case .add, .subtract: .number
+                case .set: held.valueType
+                case .append, .remove, .clear, .get: nil
+                }
+            let operand = try value.map { try Operand.read($0, given: given, fields: fields, expecting: expected).forSetting(held) }
+            if let operand, !verb.takes(operand.type, holding: held) {
+                throw ObjectToolError.failed(wrongValue(verb.label(for: name), operand, verb: verb, holding: held, sent: sent))
+            }
+            return (name, held, operand)
+        }
+        switch action {
+        case .add(let value, let field):
+            let (name, held, operand) = try data(field, verb: .add, value: value)
+            return .add(operand?.written ?? .number(0), to: name)
+        case .subtract(let value, let field):
+            let (name, held, operand) = try data(field, verb: .subtract, value: value)
+            _ = held
+            return .subtract(operand?.written ?? .number(0), from: name)
+        case .append(let value, let field):
+            let (name, _, operand) = try data(field, verb: .append, value: value)
+            return .append(operand?.written ?? .text(""), to: name)
+        case .remove(let value, let field):
+            let (name, _, operand) = try data(field, verb: .remove, value: value)
+            return .remove(operand?.written ?? .text(""), from: name)
+        case .set(let field, let value):
+            let (name, _, operand) = try data(field, verb: .set, value: value)
+            guard let operand else { throw ObjectToolError.failed("`set` needs `value`: what `\(name)` becomes.") }
+            return .set(field: name, to: operand.written)
+        case .clear(let field):
+            let name = Behavior.Written.messageName(from: field)
+            guard let held = fields[name] else {
+                throw UnofferedChoice(given: field, offered: fields.keys.sorted(), argument: "clear")
+            }
+            return .set(field: name, to: held.empty)
+        case .reply(let value):
+            return .reply(try Operand.read(value, given: given, fields: fields).written)
+        case .reject(let reason):
+            return .reject(reason)
+        case .send(let message, let receiver):
+            guard let answer = answers.first(where: { $0.by == receiver && $0.message.name == message }) else {
+                let offered = answers.map { "send \($0.message.name) to \($0.by)" }
+                throw UnofferedChoice(given: "send \(message) to \(receiver)", offered: offered, argument: "send")
+            }
+            return .telling(answer.by, try forwarded(answer, from: sent, as: "send \(message) to \(receiver)"))
+        }
     }
 
     /// A step given a value it doesn't take: what was given and what the step takes.
@@ -2142,10 +2527,12 @@ extension DefineStep {
             case .clear, .get: "nothing"
             }
         let fitting = (sent?.parameters ?? []).filter { verb.takes($0.type, holding: held) }.map(\.name)
-        guard let first = fitting.first else {
-            return "`\(label)` takes \(takes), but `\(operand.name)` is \(operand.type.withArticle). Give it \(takes) instead."
+        let fits = fitting.isEmpty ? "" : " Arguments that fit: \(fitting.joined(separator: ", "))."
+        // Words that look like a name were probably meant as one.
+        if case .text(let words) = operand, !words.contains(" ") {
+            return "`\(label)` takes \(takes); `\(words)` is neither its data nor an argument.\(fits)"
         }
-        return "`\(label)` takes \(takes), but `\(operand.name)` is \(operand.type.withArticle). Arguments that fit: \(fitting.joined(separator: ", ")). Use {argument: \"\(first)\"}."
+        return "`\(label)` takes \(takes), not \(operand.type.withArticle).\(fits)"
     }
 
     /// What `answer` passes on, from the event `sent`: each of its values, by name, of a type it
@@ -2154,7 +2541,7 @@ extension DefineStep {
         for wanted in answer.message.parameters {
             guard let own = sent?.parameters.first(where: { $0.name == wanted.name }), own.type.isSubtype(of: wanted.type) else {
                 throw ObjectToolError.failed(
-                    "`\(label)` sends back \(answer.message.written), which needs the event's \(wanted.name), but this event isn't given one. It's for the event \(answer.by) sends, such as {event: \"\(answer.answering)\", does: [{do: \"\(label)\"}]}.")
+                    "`\(label)` sends back \(answer.message.written), which needs \(wanted.name); \(answer.answering) from \(answer.by) brings it, this message doesn't.")
             }
         }
         return answer.message
@@ -2185,7 +2572,7 @@ extension DefineStep.DataKind: ConvertibleFromGeneratedContent {
     init(_ content: GeneratedContent) throws {
         let given: String = try content.value()
         guard let kind = Self(rawValue: given) else {
-            throw UnofferedChoice(given: given, offered: Self.allCases.map(\.rawValue), argument: DefineStep.DataStep.Property.kind.rawValue)
+            throw UnofferedChoice(given: given, offered: Self.allCases.map(\.rawValue), argument: "kind")
         }
         self = kind
     }
@@ -2227,4 +2614,247 @@ public struct ObjectDefineTool: HailCore.Tool {
 public struct ObjectToolsFindInput: Sendable {
     @Guide(description: "Words for what you need, in your own words.")
     public let query: String
+}
+
+extension DefineStep.DefineInput.Kind {
+    var dataKind: DefineStep.DataKind {
+        switch self {
+        case .number: .number
+        case .text: .text
+        case .boolean: .boolean
+        case .list: .list
+        }
+    }
+}
+
+extension DefineStep.DefineInput.Comparison {
+    var comparison: DefineStep.Comparison {
+        switch self {
+        case .lessThan: .lessThan
+        case .atMost: .atMost
+        case .greaterThan: .greaterThan
+        case .atLeast: .atLeast
+        case .equal: .equal
+        case .notEqual: .notEqual
+        }
+    }
+}
+
+extension DefineStep.DefineInput.Action {
+    /// The action in the steps' terms, its values as written, read later by what they act on.
+    var step: DefineStep.EventStep.Action {
+        switch self {
+        case .add(let data, let amount): .add(amount.operand, to: data)
+        case .subtract(let data, let amount): .subtract(amount.operand, from: data)
+        case .append(let data): .append(DefineStep.broughtItem, to: data)
+        case .remove(let data): .remove(DefineStep.broughtItem, from: data)
+        case .set(let data, let value): .set(data, to: value.operand)
+        case .clear(let data): .clear(data)
+        case .send(let to, let message): .send(message, to: to)
+        case .reply(let reply): .reply(reply.operand)
+        case .reject(let reason): .reject(reason)
+        }
+    }
+}
+
+/// A name tagged with what it names, as an operand is read: only that kind of name.
+private func tagged(_ tag: String, _ name: String) -> GeneratedContent {
+    GeneratedContent(kind: .structure(properties: [tag: GeneratedContent(name)], orderedKeys: [tag]))
+}
+
+extension DefineStep.DefineInput.Value {
+    var operand: GeneratedContent {
+        switch self {
+        case .data(let name): tagged("data", name)
+        case .argument(let name): tagged("argument", name)
+        case .number(let value): GeneratedContent(value)
+        case .boolean(let value): GeneratedContent(value)
+        }
+    }
+}
+
+extension DefineStep.DefineInput.Amount {
+    var operand: GeneratedContent {
+        switch self {
+        case .number(let value): GeneratedContent(value)
+        case .argument(let name): tagged("argument", name)
+        }
+    }
+}
+
+extension DefineStep.DefineInput.Reply {
+    /// The reply as an operand is read: a name tagged with what it names.
+    var operand: GeneratedContent {
+        switch self {
+        case .data(let name): tagged("data", name)
+        case .argument(let name): tagged("argument", name)
+        }
+    }
+}
+
+extension GenerationSchema {
+    /// The schema with the choices of its enums' cases filled in, by `Enum.case`: each property
+    /// given becomes a choice of those values, and a case with nothing to choose for one of them
+    /// is left out. `describing` describes a case's properties and `cases` the case itself, which
+    /// the macro can't, and
+    /// `leaving` takes properties out of cases. The cases are the
+    /// `Discriminated<Case>` definitions the `@Generable` macro writes for an enum.
+    func choosing(
+        _ choices: [String: [String: [String]]], describing descriptions: [String: [String: String]] = [:],
+        cases: [String: String] = [:], leaving: [String: [String]] = [:], naming owner: String = ""
+    ) throws -> GenerationSchema {
+        guard var root = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self)) as? [String: Any],
+            var definitions = root["$defs"] as? [String: Any]
+        else { return self }
+        func caseName(_ key: String) -> String? {
+            guard let range = key.range(of: ".Discriminated", options: .backwards) else {
+                return key.split(separator: ".").last.map(String.init)
+            }
+            let name = key[range.upperBound...]
+            let type = key[..<range.lowerBound].split(separator: ".").last.map(String.init) ?? ""
+            return type + "." + name.prefix(1).lowercased() + name.dropFirst()
+        }
+        var dropped: Set<String> = []
+        for (key, value) in definitions {
+            guard var definition = value as? [String: Any], let name = caseName(key) else { continue }
+            var properties = definition["properties"] as? [String: Any] ?? [:]
+            var required = definition["required"] as? [String] ?? []
+            if let offered = choices[name] {
+                guard !offered.values.contains(where: \.isEmpty) else {
+                    dropped.insert(key)
+                    continue
+                }
+                for (property, values) in offered { properties[property] = ["type": "string", "enum": values] }
+            }
+            definition["description"] = cases[name] ?? definition["description"]
+            for (property, description) in descriptions[name] ?? [:] {
+                guard var schema = properties[property] as? [String: Any] else { continue }
+                schema["description"] = description
+                properties[property] = schema
+            }
+            for property in leaving[name] ?? [] {
+                properties[property] = nil
+                required.removeAll { $0 == property }
+            }
+            definition["properties"] = properties
+            definition["required"] = required
+            definitions[key] = definition
+        }
+        for key in dropped { definitions[key] = nil }
+        for (key, value) in definitions {
+            guard var definition = value as? [String: Any], let choices = definition["anyOf"] as? [[String: Any]] else { continue }
+            definition["anyOf"] = choices.filter { choice in
+                !dropped.contains(((choice["$ref"] as? String) ?? "").replacingOccurrences(of: "#/$defs/", with: ""))
+            }
+            // A choice with no cases left is left out too; nothing refers to it then.
+            definitions[key] = (definition["anyOf"] as? [Any])?.isEmpty == true ? nil : definition
+        }
+        root["$defs"] = definitions
+        return try JSONDecoder().decode(GenerationSchema.self, from: JSONSerialization.data(withJSONObject: owner.isEmpty ? root : Self.naming(root, by: owner)))
+    }
+
+    /// The schema with each definition named after `owner` too, such as `ShoppingListAction`:
+    /// Foundation Models confuses two tools' definitions of the same name, which reads one
+    /// tool's call with the other's choices.
+    private static func naming(_ root: [String: Any], by owner: String) -> [String: Any] {
+        // A case keeps its enum's name, as `ValueArgument`: several enums have an `argument`.
+        func renamed(_ key: String) -> String {
+            let parts = key.split(separator: ".").map(String.init)
+            guard let last = parts.last else { return owner + key }
+            guard last.hasPrefix("Discriminated"), parts.count > 1 else { return owner + last }
+            return owner + parts[parts.count - 2] + last.dropFirst("Discriminated".count)
+        }
+        func rewrite(_ value: Any) -> Any {
+            switch value {
+            case let object as [String: Any]:
+                var result: [String: Any] = [:]
+                for (key, inner) in object {
+                    if key == "$ref", let reference = inner as? String {
+                        result[key] = "#/$defs/" + renamed(reference.replacingOccurrences(of: "#/$defs/", with: ""))
+                    } else if key == "$defs", let definitions = inner as? [String: Any] {
+                        result[key] = Dictionary(uniqueKeysWithValues: definitions.map { (renamed($0.key), rewrite($0.value)) })
+                    } else {
+                        result[key] = rewrite(inner)
+                    }
+                }
+                return result
+            case let array as [Any]:
+                return array.map(rewrite)
+            default:
+                return value
+            }
+        }
+        return rewrite(root) as? [String: Any] ?? root
+    }
+}
+
+/// An enum whose cases carry no fields, written as FM writes an enum case, `{"type": "list"}`,
+/// each with its own line: the macro can't describe such cases one by one.
+protocol DescribedCases: Generable, CaseIterable, RawRepresentable<String> {
+    static var title: String { get }
+    var meaning: String { get }
+}
+
+extension DescribedCases {
+    static var generationSchema: GenerationSchema {
+        let cases = Self.allCases.map { kind in
+            DynamicGenerationSchema(
+                name: title + kind.rawValue.prefix(1).uppercased() + kind.rawValue.dropFirst(), description: kind.meaning,
+                properties: [.init(name: "type", schema: .init(type: String.self, guides: [.anyOf([kind.rawValue])]))])
+        }
+        // A fixed schema, valid as written: it names nothing outside itself.
+        return try! GenerationSchema(root: DynamicGenerationSchema(name: title, anyOf: cases), dependencies: [])
+    }
+
+    init(_ content: GeneratedContent) throws {
+        let written: String = try content.value(String.self, forProperty: "type")
+        guard let kind = Self(rawValue: written) else {
+            throw UnofferedChoice(given: written, offered: Self.allCases.map(\.rawValue), argument: "kind")
+        }
+        self = kind
+    }
+
+    var generatedContent: GeneratedContent {
+        GeneratedContent(kind: .structure(properties: ["type": GeneratedContent(rawValue)], orderedKeys: ["type"]))
+    }
+}
+
+extension DefineStep.DefineInput.Kind: DescribedCases {
+    static let title = "Kind"
+}
+
+extension DefineStep.DefineInput.ArgKind: DescribedCases {
+    static let title = "ArgKind"
+
+    var dataKind: DefineStep.DataKind {
+        switch self {
+        case .number: .number
+        case .text: .text
+        case .boolean: .boolean
+        }
+    }
+}
+
+extension DefineStep {
+    /// Where a list action takes the item the message brings, until the clause names it.
+    static let broughtItem = GeneratedContent(kind: .structure(properties: ["brought": GeneratedContent(true)], orderedKeys: ["brought"]))
+}
+
+extension DefineStep.EventStep.Action {
+    var takesBroughtItem: Bool {
+        switch self {
+        case .append(let item, _), .remove(let item, _): item == DefineStep.broughtItem
+        default: false
+        }
+    }
+
+    /// The action with the item the message brings named: `item`, or its own one text value.
+    func bringing(_ item: String) -> Self {
+        let argument = GeneratedContent(kind: .structure(properties: ["argument": GeneratedContent(item)], orderedKeys: ["argument"]))
+        switch self {
+        case .append(let brought, let data) where brought == DefineStep.broughtItem: return .append(argument, to: data)
+        case .remove(let brought, let data) where brought == DefineStep.broughtItem: return .remove(argument, from: data)
+        default: return self
+        }
+    }
 }

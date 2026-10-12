@@ -33,6 +33,7 @@ body {
   font-size: 1.125rem; line-height: 1.6;
   -webkit-font-smoothing: antialiased;
 }
+.app-nav-links .nav-link { white-space: nowrap; }
 a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; border-radius: 2px; }
 .page { position: relative; z-index: 1; margin: 0; }
 
@@ -94,10 +95,11 @@ h1 { font: 900 clamp(2.8rem, 7vw, 6.4rem)/.92 var(--font-ui); letter-spacing: -.
 /* the arrow to the next page: one per page, stacked; scroll shows the current one */
 .go {
   position: fixed; z-index: 5; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 18px); translate: -50% 0;
-  display: grid; place-items: center; width: 48px; height: 48px; color: var(--ink);
+  /* coral, not ink: it never reads as part of the text it floats over, and it shows on dark code blocks */
+  display: grid; place-items: center; width: 48px; height: 48px; color: var(--signal-coral);
   opacity: 0; visibility: hidden; animation: linear both;
 }
-.go-top { color: #fff; opacity: 1; visibility: visible; }
+.go-sky { color: #fff; opacity: 1; visibility: visible; }
 .go svg { width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; animation: bob 2.4s ease-in-out infinite; }
 .go:hover svg { stroke-width: 3; }
 .beat { position: relative; }
@@ -132,6 +134,19 @@ h2::before {
 .beat:nth-of-type(3n+1) h2 { --c: var(--signal-yellow); }
 .beat:nth-of-type(3n+2) h2 { --c: var(--signal-blue); }
 .beat:nth-of-type(3n+3) h2::before { transform: rotate(var(--ga2)); }
+/* the way from the story into the tech page */
+.copy .more {
+  display: inline-block; padding-bottom: .15rem; border-bottom: 3px solid var(--signal-coral);
+  font-weight: 700; color: var(--ink); text-decoration: none;
+}
+.copy .more:hover { border-bottom-color: var(--ink); }
+/* a chapter with a sticker shows it in place of the bar */
+.chapter-tag {
+  justify-self: start; display: inline-block; padding: .32rem .6rem;
+  font: 700 .72rem/1 var(--font-code); letter-spacing: .12em; text-transform: uppercase;
+  color: #fff; background: var(--ink); transform: rotate(var(--ga3));
+}
+.copy:has(.chapter-tag) h2::before { display: none; }
 p { color: var(--muted); text-wrap: pretty; }
 p strong { color: var(--ink); font-weight: 650; }
 .code {
@@ -218,6 +233,8 @@ p strong { color: var(--ink); font-weight: 650; }
 .big .flag::before { background: var(--signal-coral); transform: rotate(var(--ga2)); }
 .close { display: grid; gap: 1.2rem; max-width: 42rem; }
 .close p { margin: 0; }
+/* the brand's belief, said once on the page, under the finale's slab */
+.close .belief { font-size: clamp(1.2rem, 2vw, 1.5rem); font-weight: 700; line-height: 1.3; letter-spacing: -.01em; color: var(--ink); }
 .cta { display: flex; flex-wrap: wrap; gap: 12px; }
 /* the shared buttons, poster-sized */
 .cta .button { min-height: 3rem; padding: .9rem 1.4rem; font-size: 1rem; font-weight: 700; }
@@ -243,7 +260,24 @@ footer {
 rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-width: 0; }
 .glow { opacity: .16; }
 .link { fill: none; stroke: var(--line-strong); stroke-width: 3; }
-.pulse { fill: var(--message); }
+/* a scene's drawing fills its layer; its pulses sit over it as HTML dots */
+.layer > .art { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+/* a pulse: a full-size box the GPU slides along keyframes in percentages of the picture, its dot at the corner */
+.pulse-way, .pulse { position: absolute; inset: 0; pointer-events: none; }
+.pulse { animation-duration: 1.7s; animation-timing-function: linear; animation-iteration-count: infinite; will-change: translate; }
+.pulse::before { content: ""; position: absolute; left: 0; top: 0; width: 1.25%; height: 1.25%; border-radius: 50%; background: var(--message); translate: -50% -50%; }
+/* the dust: star layers, each moved whole */
+.dust .motion { will-change: transform, opacity; }
+.dust-twinkle-a { animation: dust-twinkle 7s ease-in-out infinite; }
+.dust-twinkle-b { animation: dust-twinkle 11s ease-in-out -5s infinite; }
+.dust-drift-a { animation: dust-drift-a 28s ease-in-out infinite alternate; }
+.dust-drift-b { animation: dust-drift-b 36s ease-in-out infinite alternate; }
+.dust-orbit-a { animation: dust-orbit 140s linear infinite; }
+.dust-orbit-b { animation: dust-orbit 200s linear infinite reverse; }
+@keyframes dust-twinkle { 0%, 100% { opacity: 1; } 50% { opacity: .15; } }
+@keyframes dust-drift-a { to { translate: 2.5% 1.8%; } }
+@keyframes dust-drift-b { to { translate: -2% 2.4%; } }
+@keyframes dust-orbit { to { rotate: 360deg; } }
 .label { fill: var(--ink); font-size: 27px; font-weight: 600; }
 .note { fill: var(--muted); font-size: 22px; }
 .machine { fill: color-mix(in srgb, var(--message) 5%, transparent); stroke: color-mix(in srgb, var(--message) 40%, transparent); stroke-width: 2.5; stroke-dasharray: 10 10; }
@@ -288,6 +322,7 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
   /* the last page: night falls and the stars gather into the skylark */
   .night { animation: night linear both; animation-timeline: --closing; animation-range: entry 40% cover 50%; }
   .joins { animation: join linear both; animation-range: cover 26% cover 44%; transform-box: fill-box; transform-origin: center; }
+  .joins-fade { animation: fade-in linear both; animation-range: cover 26% cover 44%; }
   .star { animation: gather linear both; animation-timeline: --closing; animation-range: entry 10% cover 50%; }
   .constellation { animation: draw linear both; animation-timeline: --closing; animation-range: cover 42% cover 50%; }
 }
@@ -300,7 +335,7 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
 @keyframes logo-in { from, 51% { opacity: 0; } 56%, to { opacity: 1; } }
 @keyframes dusk { to { color: var(--night-ink); } }
 @keyframes bar-in { to { opacity: 1; } }
-@keyframes bar-night { to { --link: var(--night-ink); --link-strong: #fff; } }
+@keyframes bar-night { to { --link: var(--night-ink); --link-strong: #fff; --link-current: #fff; } }
 @keyframes reveal { from, 40% { opacity: 0; translate: 0 24px; } 80%, to { opacity: 1; translate: 0 0; } }
 @keyframes veil { from, 28% { opacity: 0; } 72%, 80% { opacity: .55; } to { opacity: 1; } }
 @keyframes settle { from { scale: 1.08; } 55%, to { scale: 1; } }
@@ -318,6 +353,7 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
   42%, to { display: block; opacity: 1; }
 }
 @keyframes night { to { opacity: 1; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes join { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: none; } }
 @keyframes gather { from { translate: var(--dx) var(--dy); opacity: .25; } to { translate: 0 0; opacity: 1; } }
 @keyframes draw { to { opacity: .35; } }
@@ -327,7 +363,7 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
   .veil { opacity: .55; }
   .bar { opacity: 1; }
   .hero-word { display: none; }
-  .go:not(.go-top) { display: none; }
+  .go:not(.go-sky) { display: none; }
   .field { display: none; }
 }
 
@@ -339,3 +375,28 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
   .motion { display: none; }
   .still { display: inline; }
 }
+
+/* the shared app stylesheet turns nav links into icon-sized buttons on narrow screens; the site's links are words */
+@media (max-width: 780px) { .app-nav-links .nav-link { width: auto; padding-inline: 0; } .app-nav-links { gap: 1rem; } }
+
+/* the current page's link is ink by day and turns white with the rest of the bar at night; the property
+   needs a starting value on the bar, or the night animation has nothing to change */
+.bar { --link-current: var(--ink); }
+.bar .nav-link-active { color: var(--link-current); }
+
+/* GitHub: one of the brand's tilted stickers, ink with a hard coral shadow, the mark and a "soon" chip */
+.github {
+  display: inline-flex; align-items: center; gap: .45rem; padding: .36rem .5rem .36rem .6rem; cursor: default; white-space: nowrap;
+  font: 700 .7rem/1 var(--font-code); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--canvas); background: var(--ink); box-shadow: 3px 3px 0 var(--signal-coral);
+  /* translateZ puts it on its own GPU layer: inside the blurred bar Safari only anti-aliases a rotated box there */
+  transform: rotate(var(--ga3, -2deg)) translateZ(0); will-change: transform;
+}
+.github svg { width: .95rem; height: .95rem; fill: currentColor; flex: none; }
+.github-soon { padding: .18rem .3rem; font-size: .58rem; color: #fff; background: var(--signal-coral); }
+/* on narrow phones the sticker keeps only the mark and "soon", so the links fit beside the logo */
+@media (max-width: 430px) { .github-label { display: none; } }
+
+/* tilted stickers: WebKit doesn't smooth the edges of a rotated box drawn in place; drawing it as its own
+   layer (backface-visibility) and padding its edge with a transparent outline makes them anti-aliased */
+.github, .soon, .chapter-tag, .cta .button-accent { -webkit-backface-visibility: hidden; backface-visibility: hidden; outline: 1px solid transparent; }

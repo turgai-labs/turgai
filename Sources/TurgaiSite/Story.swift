@@ -7,7 +7,7 @@ enum Chapter: String, CaseIterable, Comparable {
     case grows
     /// You can trust it with real work: rules hold, parts restart and pick up where they left off.
     case trust
-    /// It's your choice: any model, any number of agents, wherever you run them.
+    /// Independence: no one else holds the keys. Control is its proof: where it runs, your storage, your models, your rules.
     case yours
     /// Why it works: every part is an object.
     case why
@@ -60,10 +60,11 @@ enum Stop: Equatable {
     /// The last page, at night. It has nowhere further to go.
     case closing
 
-    /// The anchor id the page uses for this stop.
+    /// The anchor id the page uses for this stop. Arrows are named after it (`go-<id>`), so no id may read like
+    /// a "back to top" button: ad blockers' annoyance lists hide elements called `go-top` and the like.
     var id: String {
         switch self {
-        case .sky: "top"
+        case .sky: "sky"
         case .headline: "start"
         case .chapter(let chapter): chapter.rawValue
         case .closing: "end"

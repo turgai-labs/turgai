@@ -1,0 +1,418 @@
+/* The tech page: one story, set as a long read on the shared brand stylesheet. No scroll story.
+   Type system: a huge hero, heavy tight headings, each part opening with a large ink lead, body text
+   at a reading measure, and the brand's tilted punk geometry for structure. */
+:root {
+  --life: var(--signal-coral);
+  --message: var(--signal-blue);
+  --code-bg: #1b2b36;
+  --code-fg: #eef4f3;
+  --gutter: var(--layout-gutter);
+  --measure: 40rem;   /* about 65 characters of body text */
+  --rail: 9rem;
+  --gap: clamp(2rem, 5vw, 5rem);
+  /* one glass for the bar and, on phones, the text over the orbit */
+  --tech-glass: color-mix(in srgb, var(--canvas) 80%, transparent);
+  --tech-glass-filter: saturate(1.8) blur(1.25rem);
+}
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) { --life: var(--signal-yellow); --message: var(--signal-coral); --code-bg: #0e2029; }
+}
+html[data-theme="dark"] { --life: var(--signal-yellow); --message: var(--signal-coral); --code-bg: #0e2029; }
+
+html, body { overflow-x: clip; }
+body {
+  padding-inline: var(--gutter);
+  font-size: 1.125rem; line-height: 1.7;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  font-kerning: normal; font-variant-numeric: oldstyle-nums proportional-nums;
+  hanging-punctuation: first;
+}
+a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; border-radius: 2px; }
+
+/* the shared header, fixed, glass, no divider */
+/* the article's text scrolls right under the bar, so the bar's glass is more solid here than on the main page */
+.tech-bar {
+  position: fixed; z-index: 4; top: 0; left: 0; right: 0; border-bottom: 0; box-shadow: none;
+  background: var(--tech-glass); -webkit-backdrop-filter: var(--tech-glass-filter); backdrop-filter: var(--tech-glass-filter);
+}
+.tech-bar .wordmark { gap: .4375rem; }
+.mark-bird { width: 1.5rem; height: 1.5rem; fill: currentColor; flex: none; }
+.app-nav-links .nav-link { white-space: nowrap; }
+.off { cursor: default; pointer-events: none; opacity: .4; filter: grayscale(1); }
+
+/* the page: a rail for tags, a column for reading; code and figures may run wider than the text */
+.tech { max-width: calc(var(--rail) + var(--gap) + 52rem); margin: 0 auto; padding-top: clamp(7rem, 16vh, 10rem); }
+
+/* ---------- hero ---------- */
+.tech-intro { padding-bottom: clamp(4rem, 10vh, 7rem); }
+.eyebrow {
+  display: inline-block; justify-self: start; margin: 0 0 1.6rem; padding: .35rem .65rem;
+  font: 700 .74rem/1 var(--font-code); letter-spacing: .14em; text-transform: uppercase;
+  color: #fff; background: var(--ink); transform: rotate(var(--ga3, -2deg));
+}
+.tech h1 {
+  margin: 0; max-width: 16ch;
+  font: 900 clamp(3rem, 5.6vw, 6rem)/.9 var(--font-ui); letter-spacing: -.06em; color: var(--ink);
+  text-wrap: balance;
+}
+.flag { position: relative; z-index: 0; display: inline-block; }
+.nowrap { white-space: nowrap; }
+.flag::before {
+  content: ""; position: absolute; z-index: -1; inset: .18em -.14em .02em;
+  background: var(--signal-yellow); transform: rotate(var(--ga1, -2deg));
+}
+.lede {
+  margin: clamp(1.8rem, 4vh, 2.6rem) 0 0; max-width: 34rem;
+  font-size: clamp(1.25rem, 2.1vw, 1.55rem); line-height: 1.45; letter-spacing: -.01em; color: var(--ink);
+  text-wrap: pretty;
+}
+
+/* ---------- the orbit: a small core, everything else circling it; pinned on the right, built as you read ---------- */
+.tech-intro { display: grid; justify-items: start; }
+.orbit {
+  position: fixed; z-index: 0; top: 50%; right: max(1vw, calc((100vw - 92rem) / 2)); translate: 0 -50%;
+  width: min(40vw, 80svh); aspect-ratio: 1; pointer-events: none;
+}
+.orbit svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.orbit text { font-family: var(--font-code); text-anchor: middle; }
+.orbit .path { fill: none; stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 2 9; stroke-linecap: round; }
+.orbit .spoke { stroke: var(--line); stroke-width: 1.5; }
+.orbit .pulse { fill: var(--message); }
+.orbit .halo { fill: color-mix(in srgb, var(--signal-yellow) 45%, transparent); }
+.orbit .flare { fill: none; stroke: var(--signal-yellow); stroke-width: 4; }
+.orbit .core { fill: var(--ink); }
+.orbit .core-label { fill: var(--signal-yellow); font-size: 24px; font-weight: 700; letter-spacing: .08em; }
+.orbit .gate { fill: none; stroke: var(--life); stroke-width: 6; }
+.orbit .gate-label { fill: var(--life); font-size: 18px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.orbit .boundary { fill: none; stroke: var(--ink); stroke-width: 3; stroke-dasharray: 14 10; }
+.orbit .boundary-label { fill: var(--ink); font-size: 20px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+/* the rockets between planets: a white hull, coral fins, a blue window, a yellow flame */
+.orbit .rocket-body { fill: var(--surface); stroke: var(--ink); stroke-width: 2.5; stroke-linejoin: round; }
+.orbit .rocket-fin { fill: var(--life); }
+.orbit .rocket-window { fill: var(--message); }
+.orbit .rocket-flame { fill: var(--signal-yellow); }
+/* the orbit is a stack of layers; each ring is one, turned whole by the GPU */
+.orbit { container-type: inline-size; }
+.orbit-drawing { position: absolute; inset: 0; }
+.orbit .ring { position: absolute; inset: 0; transform-origin: 50% 50%; will-change: transform; }
+.orbit .ring, .orbit .upright { animation-name: orbit-turn; animation-timing-function: linear; animation-iteration-count: infinite; }
+/* a planet: a dot placed by percentage, its names below, turned back so they stay upright */
+.orbit .planet { position: absolute; width: 0; height: 0; }
+.orbit .dot { position: absolute; width: 2.78cqw; height: 2.78cqw; translate: -50% -50%; border-radius: 50%; background: var(--ink); }
+.orbit .dot.t-message { background: var(--message); }
+.orbit .dot.t-life { background: var(--life); }
+.orbit .upright { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
+.orbit .names {
+  position: absolute; top: 2cqw; left: 0; translate: -50% 0; display: grid; justify-items: center; white-space: nowrap;
+  font-family: var(--font-code); line-height: 1.15;
+}
+.orbit .names b { font-size: 2.41cqw; font-weight: 700; color: var(--ink); }
+.orbit .names i { font-size: 1.85cqw; font-style: normal; color: var(--muted); }
+@keyframes orbit-turn { to { transform: rotate(360deg); } }
+/* each piece appears once, as its part of the story comes in, and stays */
+@supports (animation-timeline: view()) {
+  .orbit .appear { animation: orbit-appear linear both; animation-range: entry 20% entry 80%; transform-box: fill-box; transform-origin: center; }
+}
+@keyframes orbit-appear { from { opacity: 0; scale: .6; } to { opacity: 1; scale: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .orbit .ring, .orbit .upright { animation: none; }
+  .orbit .motion { display: none; }
+}
+
+.window { display: none; }
+
+/* the reading column sits on the left and may run a little over the orbit */
+.tech, .tech-footer { position: relative; z-index: 1; margin-left: max(0px, calc((100vw - 92rem) / 2)); }
+.tech, .tech-footer { max-width: calc(var(--rail) + var(--gap) + 40rem); }
+
+/* ---------- the story's parts ---------- */
+.tech-topic {
+  display: grid; grid-template-columns: var(--rail) minmax(0, 1fr); column-gap: var(--gap);
+  padding-block: clamp(3.5rem, 9vh, 6rem); border-top: 6px solid var(--ink); scroll-margin-top: 4rem;
+}
+.rail { position: relative; }
+.tech-topic .kicker {
+  position: sticky; top: 6.5rem; margin: .5rem 0 0; display: inline-block; padding: .3rem .55rem;
+  font: 700 .72rem/1 var(--font-code); letter-spacing: .14em; text-transform: uppercase;
+  color: #fff; background: var(--life); transform: rotate(calc(var(--ga2, 3deg) * -1));
+}
+.topic-body { min-width: 0; }
+.topic-body > :is(h2, p, ul, .status) { max-width: var(--measure); }
+.tech-topic h2 {
+  margin: 0 0 1.6rem; max-width: 18ch;
+  font: 900 clamp(2.2rem, 4.6vw, 3.6rem)/.98 var(--font-ui); letter-spacing: -.05em; color: var(--ink);
+  text-wrap: balance;
+}
+/* a small note under a title, with an icon, for a name a reader may not know */
+/* set like a quote: a line on the left, the note beside it */
+.tech-topic .topic-note {
+  display: flex; align-items: flex-start; gap: .6rem; margin: -.4rem 0 1.6rem; max-width: var(--measure);
+  padding: .15rem 0 .15rem .9rem; border-left: 3px solid var(--line-strong);
+  font-size: .86rem; line-height: 1.45; color: var(--muted);
+}
+.topic-note svg { width: 1.25rem; height: 1.25rem; flex: none; margin-top: .05rem; }
+/* the fine print on a line of its own */
+.topic-note small { display: block; margin-top: .3rem; font-size: .78rem; opacity: .8; }
+
+/* each part opens with its bridge: the question the part answers, set large and dark */
+.tech-topic .lead {
+  margin: 0 0 1.4rem; font-size: clamp(1.25rem, 2vw, 1.5rem); line-height: 1.42; letter-spacing: -.012em;
+  color: var(--ink); font-weight: 500; text-wrap: pretty;
+}
+.tech-topic p { margin: 0 0 1.1rem; color: var(--muted); text-wrap: pretty; hyphens: auto; }
+.tech-topic strong { color: var(--ink); font-weight: 650; }
+.tech-topic ul { margin: 0 0 1.3rem; padding: 0; list-style: none; color: var(--muted); }
+.tech-topic li { position: relative; margin-bottom: .55rem; padding-left: 1.3rem; text-wrap: pretty; }
+.tech-topic li::before {
+  content: ""; position: absolute; left: 0; top: .72em; width: .6rem; height: .18rem;
+  background: var(--life); transform: rotate(var(--ga3, -3deg));
+}
+
+/* ---------- code: a dark slab, a little wider than the text, with a tilted tag ---------- */
+.code {
+  position: relative; margin: 2.2rem 0 .6rem; padding: 2.1rem 1.5rem 1.4rem; max-width: var(--measure);
+  overflow-x: auto; border-radius: 4px; border-left: 6px solid var(--life);
+  background: var(--code-bg); color: var(--code-fg);
+  font: 400 .88rem/1.65 var(--font-code); white-space: pre; tab-size: 2;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.code b { color: var(--signal-yellow); font-weight: 600; }
+.code i { color: color-mix(in srgb, var(--code-fg) 50%, transparent); font-style: normal; }
+.code::before {
+  content: attr(aria-label); position: absolute; top: .7rem; left: 1.5rem;
+  font: 700 .66rem/1 var(--font-code); letter-spacing: .14em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--code-fg) 55%, transparent);
+}
+
+/* ---------- a photo from the history, framed like a code slab: hard edge, coral offset ---------- */
+.photo { margin: 1.8rem 0 1.6rem; max-width: var(--measure); }
+.photo img { display: block; width: 100%; height: auto; border-radius: 4px; box-shadow: 6px 6px 0 var(--life); }
+.photo figcaption { margin-top: .9rem; font-size: .85rem; line-height: 1.5; color: var(--muted); }
+.photo figcaption a { color: inherit; }
+
+/* ---------- diagrams ---------- */
+.diagram { margin: 2.2rem 0 .6rem; max-width: var(--measure); }
+.diagram svg { display: block; width: 100%; height: auto; overflow: visible; }
+.diagram figcaption { margin-top: .9rem; max-width: var(--measure); font-size: .92rem; line-height: 1.5; color: var(--muted); text-wrap: pretty; }
+/* alignment is a class, not the SVG attribute: CSS would override the attribute */
+.diagram text { font-family: var(--font-code); text-anchor: middle; }
+.diagram text.d-start { text-anchor: start; }
+.diagram text.d-end { text-anchor: end; }
+.d-box rect, .d-journal rect, .d-layer rect { fill: var(--surface); stroke: var(--ink); stroke-width: 2; }
+.d-new rect { stroke: var(--life); stroke-width: 3; }
+.d-journal rect { fill: color-mix(in srgb, var(--message) 10%, var(--surface)); stroke: var(--message); }
+.d-product rect { fill: color-mix(in srgb, var(--life) 8%, var(--surface)); stroke: var(--life); stroke-width: 3; }
+.d-runtime rect { fill: var(--ink); }
+.d-runtime .d-title, .d-runtime .d-note { fill: var(--canvas); }
+.d-title { fill: var(--ink); font-size: 18px; font-weight: 700; }
+.d-note { fill: var(--muted); font-size: 13px; }
+.d-crash { fill: var(--life); font-size: 16px; font-weight: 700; }
+.d-link { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 2 7; stroke-linecap: round; }
+.d-arrow { fill: none; stroke: var(--ink); stroke-width: 2.5; }
+.d-head { fill: var(--ink); }
+.d-crash-line line { stroke: var(--life); stroke-width: 3; stroke-dasharray: 6 6; }
+.d-entry rect { fill: var(--surface); stroke: var(--message); stroke-width: 1.5; }
+.d-plug text { fill: var(--message); font-size: 12px; font-weight: 700; }
+
+/* ---------- layers: square slabs, flush, the product on top and the runtime as a solid base ---------- */
+.stack { margin: 2.2rem 0 .6rem; max-width: var(--measure); display: grid; }
+.slab {
+  display: grid; grid-template-columns: 9rem 1fr; align-items: baseline; gap: 1rem;
+  padding: 1rem 1.3rem; border: 3px solid var(--ink); margin-top: -3px; background: var(--surface);
+}
+.slab-name { font: 900 1.35rem/1.1 var(--font-ui); letter-spacing: -.03em; color: var(--ink); }
+.slab-holds { font: 500 .82rem/1.5 var(--font-code); color: var(--muted); }
+.slab-product { margin-top: 0; border-color: var(--life); background: color-mix(in srgb, var(--life) 7%, var(--surface)); }
+.slab-runtime { background: var(--ink); }
+.slab-runtime .slab-name { color: var(--canvas); }
+.slab-runtime .slab-holds { color: color-mix(in srgb, var(--canvas) 72%, transparent); }
+.plugs {
+  margin: 0 !important; padding: .55rem 0 .55rem 1.5rem; position: relative;
+  font: 700 .74rem/1.3 var(--font-code) !important; letter-spacing: .06em; text-transform: uppercase; color: var(--message) !important;
+}
+.plugs::before { content: "↓"; position: absolute; left: .4rem; font-weight: 700; }
+.stack figcaption { margin-top: .9rem; max-width: var(--measure); font-size: .92rem; line-height: 1.5; color: var(--muted); text-wrap: pretty; }
+
+/* ---------- recovery: the trip desk as a dot with its values, its journal on the right; a 13s loop ----------
+   The journal's column is 44cqw wide from 54cqw; its rows sit 2.8rem apart from 2.4rem down, centred at 3.5,
+   6.3 and 9.1rem. The dot's centre is (1.1rem, 4.9rem); pulses start there. */
+.recovery { margin: 2.4rem 0 .6rem; max-width: var(--measure); }
+.rc-stage { position: relative; container-type: inline-size; height: 12.6rem; --col: 44cqw; }
+.rc-right { left: 54cqw; }
+.rc-y0 { top: 2.4rem; } .rc-y1 { top: 5.2rem; } .rc-y2 { top: 8rem; }
+.rc-head { position: absolute; top: 0; left: 54cqw; margin: 0 !important; font: 400 .72rem/1 var(--font-code); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) !important; }
+.rc-head b { color: var(--message); font-weight: 700; }
+.rc-slot, .rc-row { position: absolute; width: var(--col); height: 2.2rem; box-sizing: border-box; }
+.rc-slot { border: 1.5px dashed var(--line); }
+.rc-row {
+  display: flex; align-items: center; gap: .5rem; padding: 0 .7rem; overflow: hidden; white-space: nowrap;
+  font: 400 .78rem/1 var(--font-code); color: var(--ink); background: var(--surface); border: 1.5px solid var(--message);
+}
+.rc-n { flex: none; color: var(--message); font-weight: 700; }
+/* on replay the whole journal is selected, and a ghost of it is dragged into the dot */
+.rc-select { position: absolute; left: 54cqw; top: 2.4rem; width: var(--col); height: 7.8rem; outline: 3px solid var(--life); outline-offset: 4px; background: color-mix(in srgb, var(--life) 10%, transparent); opacity: 0; will-change: opacity; }
+.rc-ghost {
+  position: absolute; left: 54cqw; top: 2.4rem; width: var(--col); height: 7.8rem; box-sizing: border-box;
+  display: grid; align-content: space-evenly; padding: 0 .7rem; opacity: 0; transform-origin: left center;
+  font: 400 .78rem/1 var(--font-code); color: var(--ink); background: var(--surface); border: 1.5px solid var(--message);
+  box-shadow: 6px 6px 0 color-mix(in srgb, var(--message) 30%, transparent); will-change: transform, opacity;
+}
+.rc-ghost > span { display: flex; gap: .5rem; white-space: nowrap; overflow: hidden; }
+
+/* the object: a dot, its name, and its one value beside it; each change replaces the value */
+.rc-obj, .rc-recovering, .rc-halo, .rc-broken { position: absolute; left: .3rem; top: 4.1rem; width: 1.6rem; height: 1.6rem; border-radius: 50%; will-change: transform, opacity; }
+/* the live object is the brand's warm point, a yellow dot; restarted and still empty, it is a spinning yellow ring
+   that fills back into the dot as its journal is replayed. Coral stays for the crash, blue for the journal */
+.rc-obj { background: var(--signal-yellow); }
+.rc-recovering { opacity: 0; }
+.rc-recovering span { position: absolute; inset: 0; border-radius: 50%; border: 3px dashed var(--signal-yellow); box-sizing: border-box; animation: rc-spin 1.6s linear infinite; }
+@keyframes rc-spin { to { rotate: 1turn; } }
+.rc-halo { background: var(--signal-yellow); opacity: 0; }
+.rc-broken {
+  display: grid; place-items: center; border: 2px dashed var(--muted); box-sizing: border-box; opacity: 0;
+  font: 700 .8rem/1 var(--font-code); color: var(--life);
+}
+.rc-name { position: absolute; left: 2.6rem; top: 3.4rem; font: 700 1rem/1 var(--font-code); color: var(--ink); }
+.rc-state { position: absolute; left: 2.6rem; white-space: nowrap; font-size: .9rem; line-height: 1.2; color: var(--ink); opacity: 0; }
+.rc-state { top: 4.9rem; }
+.rc-s3 { opacity: 1; }
+.rc-key { font: 400 .78rem/1 var(--font-code); color: var(--muted); }
+.rc-state b { font-weight: 700; }
+.rc-pulse { position: absolute; left: .75rem; top: 4.55rem; width: .7rem; height: .7rem; border-radius: 50%; background: var(--message); opacity: 0; will-change: transform, opacity; }
+
+.rc-status { position: absolute; left: 0; top: 10.9rem; margin: 0 !important; height: 1.2rem; font: 700 .78rem/1.2 var(--font-code); }
+.rc-status span { position: absolute; left: 0; top: 0; white-space: nowrap; opacity: 0; color: var(--muted); }
+.rc-st2 { color: var(--life) !important; } .rc-st3, .rc-st4, .rc-st5, .rc-st6 { color: var(--message) !important; }
+.rc-status .rc-st7 { opacity: 1; }
+@container (max-width: 30rem) {
+  .rc-row, .rc-ghost { gap: .35rem; padding: 0 .45rem; font-size: .66rem; }
+  .rc-state { font-size: .8rem; } .rc-key { font-size: .7rem; } .rc-name { font-size: .9rem; }
+}
+
+/* writes 2-36%, crashes 40%, restarts 55%, drags the journal back 57-67%, replays fast 67-70%, runs on, resets 96-100% */
+.recovery :is(.rc-row, .rc-select, .rc-ghost, .rc-obj, .rc-recovering, .rc-halo, .rc-broken, .rc-state, .rc-pulse, .rc-status span) {
+  animation-duration: 13s; animation-iteration-count: infinite; animation-timing-function: ease-in-out;
+}
+.rc-obj { animation-name: rc-obj; } .rc-recovering { animation-name: rc-recovering; }
+@keyframes rc-recovering { 0%, 55% { opacity: 0; scale: .2; } 56%, 70.6% { opacity: 1; scale: 1; } 71.5%, 100% { opacity: 0; scale: 1; } }
+ .rc-broken { animation-name: rc-broken; } .rc-halo { animation-name: rc-halo; }
+@keyframes rc-obj { 0%, 39% { opacity: 1; scale: 1; } 40% { opacity: 1; scale: 1.25; } 41.5%, 66.9% { opacity: 0; scale: .2; } 67% { opacity: 1; scale: .4; } 70.6%, 100% { opacity: 1; scale: 1; } }
+@keyframes rc-broken {
+  0%, 40.5% { opacity: 0; translate: 0 0; } 41.5% { opacity: 1; translate: -3px 0; } 42% { translate: 3px 0; } 42.5% { translate: -3px 0; }
+  43% { translate: 2px 0; } 43.5%, 54% { opacity: 1; translate: 0 0; } 55%, 100% { opacity: 0; translate: 0 0; }
+}
+@keyframes rc-halo { 0%, 66.5% { opacity: 0; scale: 1; } 67.5% { opacity: .45; scale: 1; } 74%, 100% { opacity: 0; scale: 2.8; } }
+.rc-s1 { animation-name: rc-s1; } .rc-s2 { animation-name: rc-s2; } .rc-s3 { animation-name: rc-s3; }
+@keyframes rc-s1 { 0%, 2% { opacity: 0; } 3.5%, 14% { opacity: 1; } 15.5%, 66.9% { opacity: 0; } 67%, 68.7% { opacity: 1; } 68.8%, 100% { opacity: 0; } }
+@keyframes rc-s2 { 0%, 14% { opacity: 0; } 15.5%, 26% { opacity: 1; } 27.5%, 68.7% { opacity: 0; } 68.8%, 70.5% { opacity: 1; } 70.6%, 100% { opacity: 0; } }
+@keyframes rc-s3 { 0%, 26% { opacity: 0; } 27.5%, 40% { opacity: 1; } 41.5%, 70.5% { opacity: 0; } 70.6%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+/* a journal line appears as its pulse lands, and stays through the crash */
+.rc-j1 { animation-name: rc-j1; } .rc-j2 { animation-name: rc-j2; } .rc-j3 { animation-name: rc-j3; }
+@keyframes rc-j1 { 0%, 9.9% { opacity: 0; } 10%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+@keyframes rc-j2 { 0%, 21.9% { opacity: 0; } 22%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+@keyframes rc-j3 { 0%, 33.9% { opacity: 0; } 34%, 96% { opacity: 1; } 98%, 100% { opacity: 0; } }
+/* each change travels from the dot to its journal line */
+.rc-p1 { --to: calc(54cqw - 1.1rem) -1.4rem; animation-name: rc-p1; }
+.rc-p2 { --to: calc(54cqw - 1.1rem) 1.4rem; animation-name: rc-p2; }
+.rc-p3 { --to: calc(54cqw - 1.1rem) 4.2rem; animation-name: rc-p3; }
+@keyframes rc-p1 { 0%, 4.9% { opacity: 0; translate: 0 0; } 5% { opacity: 1; translate: 0 0; } 10% { opacity: 1; translate: var(--to); } 10.1%, 100% { opacity: 0; translate: var(--to); } }
+@keyframes rc-p2 { 0%, 16.9% { opacity: 0; translate: 0 0; } 17% { opacity: 1; translate: 0 0; } 22% { opacity: 1; translate: var(--to); } 22.1%, 100% { opacity: 0; translate: var(--to); } }
+@keyframes rc-p3 { 0%, 28.9% { opacity: 0; translate: 0 0; } 29% { opacity: 1; translate: 0 0; } 34% { opacity: 1; translate: var(--to); } 34.1%, 100% { opacity: 0; translate: var(--to); } }
+/* after the restart: select all, lift a ghost, drag it left and drop it into the dot */
+.rc-select { animation-name: rc-select; } .rc-ghost { animation-name: rc-ghost; }
+@keyframes rc-select { 0%, 56.5% { opacity: 0; } 57.5%, 67% { opacity: 1; } 68%, 100% { opacity: 0; } }
+@keyframes rc-ghost {
+  0%, 59.9% { opacity: 0; translate: 0 0; scale: 1; } 60% { opacity: .95; translate: 0 0; scale: 1; } 61% { opacity: .95; translate: -.4rem -.4rem; scale: 1.03; }
+  66% { opacity: .95; translate: calc(1.1rem - 54cqw) -1.4rem; scale: .12; } 67%, 100% { opacity: 0; translate: calc(1.1rem - 54cqw) -1.4rem; scale: .05; }
+}
+.rc-st1 { animation-name: rc-st1; } .rc-st2 { animation-name: rc-st2; } .rc-st3 { animation-name: rc-st3; } .rc-st4 { animation-name: rc-st4; }
+.rc-st5 { animation-name: rc-st5; } .rc-st6 { animation-name: rc-st6; } .rc-st7 { animation-name: rc-st7; }
+@keyframes rc-st1 { 0%, 39.9% { opacity: 1; } 40%, 100% { opacity: 0; } }
+@keyframes rc-st2 { 0%, 39.9% { opacity: 0; } 40%, 55.9% { opacity: 1; } 56%, 100% { opacity: 0; } }
+@keyframes rc-st3 { 0%, 55.9% { opacity: 0; } 56%, 66.9% { opacity: 1; } 67%, 100% { opacity: 0; } }
+@keyframes rc-st4 { 0%, 66.9% { opacity: 0; } 67%, 68.7% { opacity: 1; } 68.8%, 100% { opacity: 0; } }
+@keyframes rc-st5 { 0%, 68.7% { opacity: 0; } 68.8%, 70.5% { opacity: 1; } 70.6%, 100% { opacity: 0; } }
+@keyframes rc-st6 { 0%, 70.5% { opacity: 0; } 70.6%, 73.9% { opacity: 1; } 74%, 100% { opacity: 0; } }
+@keyframes rc-st7 { 0%, 73.9% { opacity: 0; } 74%, 97.9% { opacity: 1; } 98%, 100% { opacity: 0; } }
+/* without motion: after the replay, the trip desk's value beside the journal they came from */
+@media (prefers-reduced-motion: reduce) {
+  .recovery * { animation: none !important; }
+}
+
+/* ---------- built and next ---------- */
+.status { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.4rem; }
+.status > div { padding: 1.3rem 1.4rem .6rem; border: 2px solid var(--ink); background: var(--surface); }
+.status > div:last-child { border-style: dashed; }
+.status-label {
+  display: inline-block; margin: 0 0 1rem !important; padding: .3rem .55rem;
+  font: 700 .7rem/1 var(--font-code); letter-spacing: .14em; text-transform: uppercase;
+  color: #fff !important; background: var(--ink);
+}
+.status > div:last-child .status-label { background: var(--life); }
+.status ul { margin: 0; }
+.status li { font-size: 1rem; }
+
+/* ---------- the end ---------- */
+.tech-end { padding-block: clamp(4rem, 10vh, 7rem) 3rem; border-top: 6px solid var(--ink); }
+.tech-end .closing {
+  margin: 0 0 2rem; max-width: 34ch;
+  font: 800 clamp(1.7rem, 3.2vw, 2.5rem)/1.15 var(--font-ui); letter-spacing: -.03em; color: var(--ink); text-wrap: balance;
+}
+.tech-end p:not(.closing) { margin: 0 0 1.4rem; max-width: 34rem; color: var(--ink); font-size: 1.2rem; line-height: 1.5; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.cta .button { min-height: 3rem; padding: .9rem 1.4rem; font-size: 1rem; font-weight: 700; }
+.cta .button-accent { transform: rotate(calc(var(--ga3, -2deg) * .5)); }
+.tech-footer {
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px;
+  max-width: calc(var(--rail) + var(--gap) + 52rem); margin: 0 auto; padding-block: 28px;
+  border-top: 1px solid var(--line); font: 400 .8rem/1.4 var(--font-code); color: var(--muted);
+}
+
+/* ---------- phones and narrow windows: one column, the tag above the title ---------- */
+@media (max-width: 879px) {
+  .hide-narrow { display: none; }
+  .orbit { top: 4.5rem; right: 50%; translate: 50% 0; width: min(84vw, 38svh); }
+  .tech { padding-top: calc(4.5rem + min(84vw, 38svh)); margin-left: 0; }
+  .tech-footer { margin-left: 0; }
+  /* the text scrolls over the orbit on the same glass as the top bar */
+  .tech-topic, .tech-end {
+    background: var(--tech-glass); -webkit-backdrop-filter: var(--tech-glass-filter); backdrop-filter: var(--tech-glass-filter);
+  }
+  /* a small clear window before each part, where the orbit shows what the part adds */
+  .window { display: block; height: 28svh; }
+  .tech-end { margin-top: 28svh; }
+  /* gentle snapping: it settles on a window or on a part's start only when you stop near one */
+  html { scroll-snap-type: y proximity; }
+  .window { scroll-snap-align: start; scroll-margin-top: 4.5rem; }
+  .tech-topic { scroll-snap-align: start; scroll-margin-top: 4.5rem; }
+  /* the new pieces finish appearing by the time the window settles */
+  @supports (animation-timeline: view()) { .orbit .appear { animation-range: entry 0% entry 40%; } }
+  .app-nav-links { gap: .9rem; }
+  .tech-topic { grid-template-columns: 1fr; border-top-width: 4px; }
+  .tech-topic .kicker { position: static; margin: 0 0 1.2rem; }
+  .status { grid-template-columns: 1fr; }
+  .slab { grid-template-columns: 1fr; gap: .25rem; }
+  .code { margin-inline: calc(-1 * var(--gutter)); border-radius: 0; font-size: .78rem; padding-inline: 1.2rem; }
+  .code::before { left: 1.2rem; }
+  body { font-size: 1.0625rem; }
+}
+
+/* the shared app stylesheet turns nav links into icon-sized buttons on narrow screens; the site's links are words */
+@media (max-width: 780px) { .app-nav-links .nav-link { width: auto; padding-inline: 0; } .app-nav-links { gap: 1rem; } }
+
+/* GitHub: one of the brand's tilted stickers, ink with a hard coral shadow, the mark and a "soon" chip */
+.github {
+  display: inline-flex; align-items: center; gap: .45rem; padding: .36rem .5rem .36rem .6rem; cursor: default; white-space: nowrap;
+  font: 700 .7rem/1 var(--font-code); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--canvas); background: var(--ink); box-shadow: 3px 3px 0 var(--signal-coral);
+  /* translateZ puts it on its own GPU layer: inside the blurred bar Safari only anti-aliases a rotated box there */
+  transform: rotate(var(--ga3, -2deg)) translateZ(0); will-change: transform;
+}
+.github svg { width: .95rem; height: .95rem; fill: currentColor; flex: none; }
+.github-soon { padding: .18rem .3rem; font-size: .58rem; color: #fff; background: var(--signal-coral); }
+/* on narrow phones the sticker keeps only the mark and "soon", so the links fit beside the logo */
+@media (max-width: 430px) { .github-label { display: none; } }
+
+/* tilted stickers: WebKit doesn't smooth the edges of a rotated box drawn in place; drawing it as its own
+   layer (backface-visibility) and padding its edge with a transparent outline makes them anti-aliased */
+.github, .eyebrow, .tech-topic .kicker, .cta .button-accent { -webkit-backface-visibility: hidden; backface-visibility: hidden; outline: 1px solid transparent; }

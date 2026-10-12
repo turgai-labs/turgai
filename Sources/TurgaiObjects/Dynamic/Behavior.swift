@@ -81,6 +81,7 @@ public struct Behavior: Codable, Sendable, Equatable {
         case remove(Value, from: String)
         case send(to: Target, message: String, arguments: [Argument])
         case reply(Value)
+        case reject(String)
     }
 
     public struct Argument: Codable, Sendable, Equatable {
@@ -245,8 +246,8 @@ extension Behavior {
 
     /// A message's rules as Erlang reads its clauses, top to bottom: each with its condition, if
     /// it has one, and what it does in plain words, such as `if total <= limit → tells shop
-    /// refundApproved(order: the given order)`, ending `otherwise → nothing` when nothing else
-    /// takes it.
+    /// refundApproved(order: the given order)`, ending `anything else → refused` when no case
+    /// takes the rest.
     public func rules(of message: String) -> [String] {
         let clauses = source.receive.filter { $0.on == message }
         var rules = clauses.map { clause -> String in
@@ -255,7 +256,8 @@ extension Behavior {
             guard let when = clause.when, !when.isEmpty else { return (clauses.count > 1 ? "otherwise → " : "→ ") + doing }
             return "if " + when.map { Self.written($0) }.joined(separator: " and ") + " → " + doing
         }
-        if clauses.allSatisfy({ !($0.when ?? []).isEmpty }) { rules.append("otherwise → nothing") }
+        // No case for anything else: as an Erlang function with no clause matching, it's refused.
+        if clauses.allSatisfy({ !($0.when ?? []).isEmpty }) { rules.append("anything else → refused") }
         return rules
     }
 
@@ -276,6 +278,7 @@ extension Behavior {
         case .send(let message, let target, let arguments):
             "tells \(phrase(target)) \(message)(\((arguments ?? []).map { "\($0.name): \(phrase($0.value))" }.joined(separator: ", ")))"
         case .reply(let value): "gives back \(phrase(value))"
+        case .reject(let reason): "rejects it: \(reason)"
         }
     }
 

@@ -159,7 +159,7 @@ struct EvalTask: Sendable {
                 guard let page = try? await objectSession.open(PageAddress(rawValue: handle)) else { continue }
                 let hasActions = page.links.contains { link in
                     link.name.hasPrefix(handle + "_")
-                        && !["_add_data", "_add_event", "_remove_event", "_set_value"].contains(where: link.name.hasSuffix)
+                        && !["_on", "_data", "_remove_event", "_set_value"].contains(where: link.name.hasSuffix)
                 }
                 if hasActions { usableCount += 1 }
             }
@@ -170,7 +170,7 @@ struct EvalTask: Sendable {
         // `coffee-counter_howMany`: not from searching, creating, a page (named by the bare
         // handle), a draft's steps, or changing the object.
         let notReplies = ["search_objects", "create_object", "create_object_like", "edit_object", "remove_object", "use_object"]
-        let notActions = ["_add_data", "_add_event", "_remove_event", "_set_value"]
+        let notActions = ["_on", "_data", "_remove_event", "_set_value"]
         let followUpTurn = turns.dropFirst().first
         let replies = (followUpTurn?.calls ?? [])
             .filter { call in
@@ -194,7 +194,7 @@ struct EvalTask: Sendable {
         let made = setupCalls.filter {
             $0.completed && !$0.failed && ($0.name == "create_object" || $0.name == "create_object_like")
         }.count
-        let definitionSuffixes = ["_add_data", "_add_event", "_remove_event", "_set_value"]
+        let definitionSuffixes = ["_on", "_data", "_remove_event", "_set_value"]
         let pageNames = Set(calls.compactMap { call -> String? in
             guard call.completed, !call.failed, !call.name.contains("_"), call.name != "objects",
                   call.output.hasPrefix("Opened ") else { return nil }

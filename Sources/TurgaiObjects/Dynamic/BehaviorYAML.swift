@@ -290,9 +290,11 @@ extension Behavior.Written {
             return .send(message: syntax.message, to: .name(syntax.receiver), arguments: arguments.isEmpty ? nil : arguments)
         case "reply":
             return .reply(try value(try read(ValueParser()), at: path))
+        case "reject":
+            return .reject(text)
         default:
             throw BehaviorError(
-                "\(path) is `\(verb)`, but the actions are `set`, `add`, `subtract`, `append`, `remove`, `send` and `reply`.")
+                "\(path) is `\(verb)`, but the actions are `set`, `add`, `subtract`, `append`, `remove`, `send`, `reply` and `reject`.")
         }
     }
 
@@ -408,6 +410,7 @@ extension Behavior.Written {
                     let given = (arguments ?? []).map { "\($0.name): \(Self.shown($0.value))" }.joined(separator: ", ")
                     lines.append("      - send: \(Self.scalar("\(Self.shown(to)).\(message)(\(given))"))")
                 case .reply(let value): lines.append("      - reply: \(Self.shown(value))")
+                case .reject(let reason): lines.append("      - reject: \(Self.scalar(reason))")
                 }
             }
         }

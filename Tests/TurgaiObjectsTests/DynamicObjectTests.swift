@@ -291,36 +291,77 @@ struct DynamicObjectTests {
                 #expect(text(held).contains("Next: define the actions needed for this task with counter_add_event."))
                 let eventTool = agentSession.tool(named: "counter_add_event")
                 let event = try #require(eventTool)
-                #expect(event.description == "Define an event and its steps. This saves the event; it does not run it.")
+                #expect(event.description.hasPrefix("Define an event and what it does in each case."))
                 let eventSchema = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(event.schema.parameters))
-                #expect(eventSchema["$defs"]?["Step"]?["properties"]?["do"]?["enum"] == ["add to cups", "subtract from cups", "set cups", "clear cups", "get cups", "nothing", "tell shop refundApproved", "tell shop refundDenied"])
+                #expect(eventSchema["properties"]?["cases"] != nil)
 
                 // A name written as words is made one, and the result says what it does.
                 let added = try await step(
                     "counter_add_event",
                     [
                         "event": "add cup", "takes": [["name": "amount", "type": "number"]],
-                        "does": [["do": "add to cups", "value": ["argument": "amount"]]],
+                        "cases": [["does": [["add": ["argument": "amount"], "to": "cups"]]]],
                     ])
                 #expect(text(added).hasPrefix("addCup(amount: number):\n  → adds the given amount to cups"))
                 #expect(text(added).contains("When the required actions are defined, call counter to open them."))
                 // The making page stays focused on completing the definition. Opening the object
                 // afterwards exposes its finished actions on a persistent tab.
                 #expect(!offered().contains("counter_addCup"))
-                let asked = try await step("counter_add_event", ["event": "how many", "does": [["do": "get cups"]]])
+                let asked = try await step("counter_add_event", ["event": "how many", "cases": [["does": [["reply": ["data": "cups"]]]]]])
                 #expect(text(asked).hasPrefix("howMany() -> integer:\n  → gives back cups"))
                 // Clearing empties it; setting takes the new value when it's called.
                 // A value on a step that takes none changes nothing, so it's let be.
-                _ = try await step("counter_add_event", ["event": "peek", "does": [["do": "get cups", "value": 3]]])
-                let cleared = try await step("counter_add_event", ["event": "reset", "does": [["do": "clear cups"]]])
+                _ = try await step("counter_add_event", ["event": "peek", "cases": [["does": [["reply": ["data": "cups"]]]]]])
+                let cleared = try await step("counter_add_event", ["event": "reset", "cases": [["does": [["clear": "cups"]]]]])
                 #expect(text(cleared).hasPrefix("reset():\n  → sets cups to 0"))
                 let set = try await step(
                     "counter_add_event",
                     [
                         "event": "set count", "takes": [["name": "value", "type": "number"]],
-                        "does": [["do": "set cups", "value": ["argument": "value"]]],
+                        "cases": [["does": [["set": "cups", "value": ["argument": "value"]]]]],
                     ])
                 #expect(text(set).hasPrefix("setCount(value: number):\n  → sets cups to the given value"))
+                // Literal patterns are tried in order, and a fallback can reject. A failed
+                // replacement leaves the complete event already saved.
+                _ = try await step(
+                    "counter_add_event",
+                    [
+                        "event": "adjust", "takes": [["name": "mode", "type": "text"]],
+                        "cases": [
+                            ["input": "mode", "equals": "reset", "does": [["clear": "cups"]]],
+                            ["input": "mode", "equals": "bonus", "does": [["add": 10, "to": "cups"]]],
+                            ["does": [["reject": "Unknown mode"]]],
+                        ],
+                    ])
+                // Anything else is the last case: one before others would hide them.
+                let hidden = try await call(
+                    "counter_add_event",
+                    ["event": "adjust", "takes": [["name": "mode", "type": "text"]], "cases": [
+                        ["does": [["clear": "cups"]]],
+                        ["input": "mode", "equals": "reset", "does": [["clear": "cups"]]],
+                    ]])
+                #expect(text(hidden).contains("Case 1 has no input and no when, so it takes anything, and the cases after it would never run. Put it last."))
+                // Without anything else, other inputs are refused, as an Erlang function with no
+                // clause for them; a value is a plain name, or words tagged as text.
+                let only = try await step(
+                    "counter_add_event",
+                    ["event": "pick", "takes": [["name": "mode", "type": "text"], ["name": "amount", "type": "number"]], "cases": [
+                        ["input": "mode", "equals": "more", "does": [["add": "amount", "to": "cups"]]]
+                    ]])
+                #expect(text(only).contains("anything else → refused"))
+                await #expect(throws: Error.self) {
+                    try await session.invoke("counter", action: "pick", arguments: #"{"mode":"less","amount":1}"#)
+                }
+                let unknownName = try await call(
+                    "counter_add_event",
+                    ["event": "pick", "takes": [["name": "mode", "type": "text"]], "cases": [["does": [["add": "lots", "to": "cups"]]]]])
+                #expect(text(unknownName).contains("`add to cups` takes a number, but `lots` isn't one of the event's inputs or its data, and as words it isn't a number."))
+                _ = try await session.invoke("counter", action: "adjust", arguments: #"{"mode":"bonus"}"#)
+                #expect(try await session.read("counter", property: "cups") == 10)
+                await #expect(throws: Error.self) {
+                    try await session.invoke("counter", action: "adjust", arguments: #"{"mode":"other"}"#)
+                }
+                _ = try await session.invoke("counter", action: "adjust", arguments: #"{"mode":"reset"}"#)
                 // Opened, it shows what it holds now and offers what it does.
                 let opened = try await use("counter")
                 #expect(text(opened).hasPrefix("Opened counter."))
@@ -365,7 +406,7 @@ struct DynamicObjectTests {
                     "counter_add_event",
                     [
                         "event": "double", "takes": [["name": "amount", "type": "number"]],
-                        "does": [["do": "add to cups", "value": ["argument": "amount"]]],
+                        "cases": [["does": [["add": ["argument": "amount"], "to": "cups"]]]],
                     ])
                 _ = try await session.invoke("counter", action: "double", arguments: #"{"amount": 2}"#)
                 #expect(try await session.invoke("counter", action: "howMany", arguments: nil) == 4)
@@ -376,12 +417,12 @@ struct DynamicObjectTests {
                 let shoppingTool = agentSession.tool(named: "shopping_add_event")
                 let shoppingEvent = try #require(shoppingTool)
                 let shoppingSchema = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(shoppingEvent.schema.parameters))
-                #expect(shoppingSchema["$defs"]?["Step"]?["properties"]?["do"]?["enum"] == ["append to items", "remove from items", "set items", "clear items", "get items", "nothing", "tell shop refundApproved", "tell shop refundDenied"])
+                #expect(shoppingSchema["properties"]?["cases"] != nil)
                 _ = try await step(
                     "shopping_add_event",
                     [
                         "event": "addItem", "takes": [["name": "item", "type": "text"]],
-                        "does": [["do": "append to items", "value": ["argument": "item"]]],
+                        "cases": [["does": [["append": ["argument": "item"], "to": "items"]]]],
                     ])
                 _ = try await use("shopping")
                 _ = try await step("shopping_addItem", ["item": "milk"])
@@ -391,10 +432,10 @@ struct DynamicObjectTests {
                 // A step that doesn't fit is refused, and the object stays as it was.
                 _ = try await call("create_object", ["name": "Broken"])
                 _ = try await step("broken_add_data", ["name": "count", "kind": "number", "start": "0"])
-                #expect(try await call("broken_add_event", ["event": "x", "does": [["do": "add to missing"]]]).result.isError)
+                #expect(try await call("broken_add_event", ["event": "x", "cases": [["does": [["add": 1, "to": "missing"]]]]]).result.isError)
                 #expect(
-                    text(try await call("broken_add_event", ["event": "missing", "does": [["do": "add to count"]]]))
-                        .contains("`add to count` needs `value`"))
+                    text(try await call("broken_add_event", ["event": "missing", "cases": [["does": [["add": ["argument": "amount"], "to": "count"]]]]]))
+                        .contains("`add to count` takes a number, but `amount` isn't one of the event's inputs or its data"))
                 // Adding is by the amount the event is given.
                 #expect(
                     text(
@@ -402,17 +443,17 @@ struct DynamicObjectTests {
                             "broken_add_event",
                             [
                                 "event": "y", "takes": [["name": "amount", "type": "number"]],
-                                "does": [["do": "add to count", "value": ["argument": "amount"]]],
+                                "cases": [["does": [["add": ["argument": "amount"], "to": "count"]]]],
                             ])
                     ).hasPrefix("y(amount: number):\n  → adds the given amount to count"))
                 _ = try await step(
                     "broken_add_event",
                     [
                         "event": "add extra", "takes": [["name": "amount", "type": "number"]],
-                        "does": [
-                            ["do": "add to count", "value": ["argument": "amount"]],
-                            ["do": "add to count", "value": 1],
-                        ],
+                        "cases": [["does": [
+                            ["add": ["argument": "amount"], "to": "count"],
+                            ["add": 1, "to": "count"],
+                        ]]],
                     ])
                 _ = try await session.invoke("broken", action: "addExtra", arguments: #"{"amount": 2}"#)
                 #expect(try await session.read("broken", property: "count") == 3)
@@ -422,14 +463,14 @@ struct DynamicObjectTests {
                     "counter_add_event",
                     [
                         "event": "double", "takes": [["name": "amount", "type": "number"]],
-                        "does": [["do": "subtract from cups", "value": ["argument": "amount"]]],
+                        "cases": [["does": [["subtract": ["argument": "amount"], "from": "cups"]]]],
                     ])
                 #expect(text(replaced).hasPrefix("double(amount: number):\n  → subtracts the given amount from cups"))
                 // An event taken out is gone.
                 let removed = try await step("counter_remove_event", ["event": "double"])
                 #expect(text(removed).hasPrefix("double is gone"))
                 // Doing nothing is a choice too: the event is taken, and nothing changes.
-                let idle = try await step("counter_add_event", ["event": "wave", "does": [["do": "nothing"]]])
+                let idle = try await step("counter_add_event", ["event": "wave", "cases": [["does": []]]])
                 #expect(text(idle).hasPrefix("wave():\n  → nothing"))
 
                 // An object made like one of yours does what it does, shared, and holds its own
@@ -445,7 +486,7 @@ struct DynamicObjectTests {
                     "tea_add_event",
                     [
                         "event": "sip", "takes": [["name": "amount", "type": "number"]],
-                        "does": [["do": "subtract from cups", "value": ["argument": "amount"]]],
+                        "cases": [["does": [["subtract": ["argument": "amount"], "from": "cups"]]]],
                     ])
                 #expect(try await session.describe("counter")["actions"]?["sip"] != nil)
                 #expect(text(try await call("list_objects")).hasPrefix("Your objects: broken, counter, shopping, tea."))
@@ -532,36 +573,38 @@ struct DynamicObjectTests {
                 let approving = try await step(
                     "ann_add_event",
                     [
-                        "event": "refundRequested", "if": ["argument": "total"], "is": "<=", "than": ["data": "limit"],
-                        "does": [["do": "tell shop refundApproved"], ["do": "add to approved", "value": 1]],
+                        "event": "refundRequested",
+                        "cases": [
+                            [
+                                "when": ["left": ["argument": "total"], "operator": "<=", "right": ["data": "limit"]],
+                                "does": [["send": "refundApproved", "to": "shop"], ["add": 1, "to": "approved"]],
+                            ],
+                            [
+                                "when": ["left": ["argument": "total"], "operator": ">", "right": 1000],
+                                "does": [["add": 0, "to": "approved"]],
+                            ],
+                            ["does": [["append": ["argument": "order"], "to": "pending"]]],
+                        ],
                     ])
-                #expect(text(approving).hasPrefix("refundRequested(order: integer, total: number):\n  if total <= limit → tells shop refundApproved(order: the given order), then adds 1 to approved\n  otherwise → nothing"))
+                #expect(text(approving).hasPrefix("refundRequested(order: integer, total: number):\n  if total <= limit → tells shop refundApproved(order: the given order), then adds 1 to approved\n  if total > 1000 → adds 0 to approved\n  otherwise → appends the given order to pending"))
                 // Ann now takes what the shop sends a manager: her page says where she can go, and
                 // offers it.
                 #expect(text(approving).contains("You can pass ann as argument manager to shop_startShift."))
                 #expect(offered().contains("shop_startShift"))
                 // A message another object sends uses its own values: which one, `with` says.
-                #expect(try await call("ann_add_event", ["event": "refundRequested", "does": [["do": "append to pending"]]]).result.isError)
-                // Otherwise, the next clause: she keeps it.
-                let keeping = try await step(
-                    "ann_add_event",
-                    ["event": "refundRequested", "does": [["do": "append to pending", "value": ["argument": "order"]]]])
-                #expect(text(keeping).hasPrefix("refundRequested(order: integer, total: number):\n  if total <= limit → tells shop refundApproved(order: the given order), then adds 1 to approved\n  otherwise → appends the given order to pending"))
+                #expect(try await call("ann_add_event", ["event": "refundRequested", "cases": [["does": [["append": ["argument": "order"], "to": "missing"]]]]]).result.isError)
 
                 // Values are typed: a list isn't a number to add, and a name must be the event's or
                 // its data's. A number can be a number; `nothing` among other steps is left out.
                 let wrongType = try await call(
                     "ann_add_event",
-                    ["event": "refundRequested", "does": [["do": "add to approved", "value": ["data": "pending"]]]])
+                    ["event": "refundRequested", "cases": [["does": [["add": ["data": "pending"], "to": "approved"]]]]])
                 #expect(text(wrongType).contains("`add to approved` takes a number, but `pending` is a list."))
                 let unknown = try await call(
                     "ann_add_event",
-                    ["event": "refundRequested", "does": [["do": "add to approved", "value": ["argument": "amount"]]]])
-                #expect(text(unknown).contains("There is no argument `amount`. Choose one of: order, total."))
-                let counting = try await step(
-                    "ann_add_event",
-                    ["event": "refundRequested", "if": ["argument": "total"], "is": ">", "than": 1000, "does": [["do": "nothing"], ["do": "add to approved", "value": 0]]])
-                #expect(text(counting).contains("if total > 1000 → adds 0 to approved"))
+                    ["event": "refundRequested", "cases": [["does": [["add": ["argument": "amount"], "to": "approved"]]]]])
+                #expect(text(unknown).contains("`add to approved` takes a number, but `amount` isn't one of the event's inputs or its data, and as words it isn't a number. The event's values that fit: order, total."))
+                #expect(text(approving).contains("if total > 1000 → adds 0 to approved"))
 
                 // Bob does what Ann does, with his own limit.
                 try await root()

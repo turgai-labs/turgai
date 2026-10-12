@@ -41,16 +41,75 @@ struct Node {
     }
 }
 
+/// A message travelling along a link, drawn as its own HTML dot so the GPU moves it: the dot follows the
+/// link's curve through CSS keyframes written in percentages of the picture, so it scales with it.
+struct Pulse {
+    let from: Point
+    let to: Point
+    /// Whether the link appears in this scene, so the pulse fades in with it.
+    let joining: Bool
+
+    /// The same curve the link is drawn with.
+    var control: Point {
+        let dx = to.x - from.x, dy = to.y - from.y
+        return Point(x: (from.x + to.x) / 2 - dy * 0.18, y: (from.y + to.y) / 2 + dx * 0.18)
+    }
+
+    /// One keyframes name per distinct link, shared by every scene that draws it.
+    var name: String { "p\(Int(from.x))-\(Int(from.y))-\(Int(to.x))-\(Int(to.y))" }
+
+    /// A dozen points along the curve as keyframes; at this size the steps between them don't show.
+    var keyframes: String {
+        let steps = 12
+        let stops = (0...steps).map { step -> String in
+            let t = Double(step) / Double(steps), u = 1 - t, c = control
+            let x = u * u * from.x + 2 * u * t * c.x + t * t * to.x
+            let y = u * u * from.y + 2 * u * t * c.y + t * t * to.y
+            return String(format: "%.1f%% { translate: %.2f%% %.2f%%; }", t * 100, (x + 60) / 11.2, (y + 60) / 11.2)
+        }
+        return "@keyframes \(name) { \(stops.joined(separator: " ")) }\n.\(name) { animation-name: \(name); }"
+    }
+
+    var html: String {
+        let lead = (from.x + to.y).truncatingRemainder(dividingBy: 1.7)
+        return "<div class=\"pulse-way motion\(joining ? " joins-fade" : "")\"><div class=\"pulse \(name)\" style=\"animation-delay:-\(lead.rounded1)s\"></div></div>"
+    }
+}
+
+/// What a scene draws: its picture, and the pulses that move over it.
+private struct Drawing {
+    var art: String
+    var pulses: [Pulse] = []
+
+    static func + (lhs: Drawing, rhs: Drawing) -> Drawing {
+        Drawing(art: lhs.art + rhs.art, pulses: lhs.pulses + rhs.pulses)
+    }
+}
+
 /// The animated picture behind the story, drawn at build time.
-/// Each layer is its own `<svg>`, so fading it with scroll is a compositor-only opacity change that keeps up
-/// with fast scrolling. Looping motion inside a layer is SVG animation, so the page needs no script.
+/// Each scene is its own layer, so fading it with scroll is a compositor-only opacity change that keeps up
+/// with fast scrolling. What loops for good is on the GPU too: the pulses are HTML dots moved by CSS, and the
+/// dust is a few star layers, each faded, slid or turned whole. The page needs no script.
 struct Field {
     let birdPoints: [Point]
 
+    private static let box = "viewBox=\"-60 -60 1120 1120\""
+
     var html: String {
-        let box = "viewBox=\"-60 -60 1120 1120\""
-        let layers = Layer.all.map { "<svg class=\"layer scene s-\($0.name)\" \(box)>\(content($0))</svg>" }.joined()
-        return "<div class=\"field\" aria-hidden=\"true\"><svg class=\"layer dust\" \(box)>\(dust)</svg>\(layers)</div>"
+        let layers = Layer.all.map { layer in
+            let drawing = content(layer)
+            return "<div class=\"layer scene s-\(layer.name)\"><svg class=\"art\" \(Self.box)>\(drawing.art)</svg>"
+                + drawing.pulses.map(\.html).joined() + "</div>"
+        }.joined()
+        return "<div class=\"field\" aria-hidden=\"true\"><div class=\"layer dust\">\(dust)</div>\(layers)</div>"
+    }
+
+    /// The keyframes for every distinct pulse in the picture.
+    var css: String {
+        var seen = Set<String>()
+        return Layer.all.flatMap { content($0).pulses }
+            .filter { seen.insert($0.name).inserted }
+            .map(\.keyframes).joined(separator: "\n")
     }
 
     // MARK: - Dopline, growing
@@ -100,16 +159,16 @@ struct Field {
     /// The parts that stop and come back while the product is recovering.
     private static let restartingParts: [Part] = [.flights, .planner, .app, .tripDesk]
 
-    private func content(_ layer: Layer) -> String {
+    private func content(_ layer: Layer) -> Drawing {
         switch layer {
         case .chapter(let chapter):
             switch chapter.scene {
             case .product: product(after: chapter, restarting: [])
             case .recovering: product(after: chapter, restarting: Self.restartingParts)
             case .agents: agents
-            case .distributed: machines + product(after: chapter, restarting: [])
+            case .distributed: Drawing(art: machines) + product(after: chapter, restarting: [])
             }
-        case .constellation: constellation
+        case .constellation: Drawing(art: constellation)
         }
     }
 
@@ -129,23 +188,27 @@ struct Field {
     }
 
     /// Several agents, each changing its model on its own, and the kinds of parts around them.
-    private var agents: String {
+    private var agents: Drawing {
         let models = ["model: Apple on-device", "model: Ollama", "model: OpenAI-compatible"]
         let concierge = Node("concierge", note: "agent", at: 500, 330, radius: 24, tone: .message)
         let planner = Node("planner", note: "agent", at: 500, 640, radius: 24, tone: .message)
         let memory = Node("memory", note: "what happened", at: 170, 210, tone: .life)
-        let systems = Node("your systems", note: "what it can do", at: 830, 210)
+        let systems = Node("your systems", note: "what it can do", at: 830, 210, label: .leading)
         let rules = Node("your rules", note: "what it may do", at: 170, 780, tone: .life)
-        let people = Node("people", note: "who it talks to", at: 830, 780)
+        let people = Node("people", note: "who it talks to", at: 830, 780, label: .leading)
         let links = [(concierge, people), (concierge, memory), (concierge, planner), (planner, systems), (planner, rules), (planner, memory)]
         // the two agents start on different models and switch out of step
         func swapping(_ agent: Node, startingAt first: Int, after delay: Double) -> String {
             let order = Array(models[first...] + models[..<first])
             return cycle(order, for: agent, every: 2.4, after: delay) + switching(agent, every: 2.4, after: delay)
         }
-        return links.map { link($0.0, $0.1) }.joined() + [memory, systems, rules, people].map(node).joined()
+        // everything inside one boundary: it all runs on Dopline's own server, and only models plug in from outside
+        let server = "<rect class=\"machine\" x=\"90\" y=\"140\" width=\"820\" height=\"720\" rx=\"36\"/>"
+            + text("dopline’s server", at: Point(x: 114, y: 124), anchor: "start", style: "machine-label")
+        let art = server + links.map { link($0.0, $0.1) }.joined() + [memory, systems, rules, people].map(node).joined()
             + [concierge, planner].map { node($0, .hidden) + still(note("any model", for: $0)) }.joined()
             + motion(swapping(concierge, startingAt: 1, after: 0) + swapping(planner, startingAt: 2, after: 1.2))
+        return Drawing(art: art, pulses: links.map { Pulse(from: $0.0.at, to: $0.1.at, joining: false) })
     }
 
     /// A ring around a node each time its model is swapped, in step with `cycle`.
@@ -173,13 +236,13 @@ struct Field {
 
     /// The product as it stands after a chapter: everything from before, plus what joins in this chapter, which
     /// eases in as the section scrolls into view. Restarting parts stop one at a time and come back.
-    private func product(after chapter: Chapter, restarting restartingParts: [Part]) -> String {
+    private func product(after chapter: Chapter, restarting restartingParts: [Part]) -> Drawing {
         func eased(_ drawn: String, joining step: Chapter) -> String {
             step == chapter ? "<g class=\"joins\">\(drawn)</g>" : drawn
         }
-        let links = Self.links.filter { Self.chapter(of: $0) <= chapter }.map { link in
-            eased(self.link(link.0.node, link.1.node), joining: Self.chapter(of: link))
-        }
+        let present = Self.links.filter { Self.chapter(of: $0) <= chapter }
+        let links = present.map { link in eased(self.link(link.0.node, link.1.node), joining: Self.chapter(of: link)) }
+        let pulses = present.map { Pulse(from: $0.0.node.at, to: $0.1.node.at, joining: Self.chapter(of: $0) == chapter) }
         // parts that restart drop their usual note here, so "stopped" and "back" have the spot to themselves
         let parts = Part.allCases.filter { $0.joins <= chapter }.map { part in
             let drawn = restartingParts.contains(part)
@@ -188,7 +251,7 @@ struct Field {
             return eased(drawn, joining: part.joins)
         }
         let restarts = motion(restarting(restartingParts.map(\.node)))
-        return links.joined() + parts.joined() + restarts
+        return Drawing(art: links.joined() + parts.joined() + restarts, pulses: pulses)
     }
 
     /// One part at a time stops and comes back; the rest keep working.
@@ -219,39 +282,23 @@ struct Field {
         return "<path class=\"constellation\" d=\"\(lines)\"/>" + stars.joined()
     }
 
-    /// Faint background stars, the same in every scene. They twinkle, drift, and a third of them orbit the middle.
+    /// Faint background stars, the same in every scene: six star layers that the GPU twinkles, drifts or turns
+    /// whole, and a resting copy for visitors who prefer reduced motion.
     private var dust: String {
         var seed: UInt64 = 42
         func random() -> Double {
             seed = seed &* 6364136223846793005 &+ 1442695040888963407
             return Double(seed >> 11) / Double(1 << 53)
         }
-        func seconds(_ range: ClosedRange<Double>) -> String { (range.lowerBound + random() * (range.upperBound - range.lowerBound)).rounded1 }
-
         let stars = (0..<46).map { _ in
-            (x: random() * 1120 - 60, y: random() * 1120 - 60, r: 1.5 + random() * 2.5)
+            "<circle cx=\"\((random() * 1120 - 60).rounded1)\" cy=\"\((random() * 1120 - 60).rounded1)\" r=\"\((1.5 + random() * 2.5).rounded1)\"/>"
         }
-        let resting = stars.map { "<circle cx=\"\($0.x.rounded1)\" cy=\"\($0.y.rounded1)\" r=\"\($0.r.rounded1)\"/>" }.joined()
-
-        func moving(_ star: (x: Double, y: Double, r: Double)) -> String {
-            let dx = (random() - 0.5) * 70
-            let dy = (random() - 0.5) * 70
-            return "<circle cx=\"\(star.x.rounded1)\" cy=\"\(star.y.rounded1)\" r=\"\(star.r.rounded1)\">"
-                + "<animate attributeName=\"opacity\" values=\"0;1;1;0\" keyTimes=\"0;0.3;0.7;1\" dur=\"\(seconds(4...10))s\" begin=\"-\(seconds(0...10))s\" repeatCount=\"indefinite\"/>"
-                + "<animateTransform attributeName=\"transform\" type=\"translate\" values=\"0 0;\(dx.rounded1) \(dy.rounded1);0 0\" dur=\"\(seconds(14...30))s\" begin=\"-\(seconds(0...30))s\" repeatCount=\"indefinite\"/>"
-                + "</circle>"
-        }
-        let orbitingClockwise = stars.indices.filter { $0 % 6 == 0 }
-        let orbitingBack = stars.indices.filter { $0 % 6 == 3 }
-        let drifting = stars.indices.filter { $0 % 3 != 0 }
-        func orbit(_ indices: [Int], from: Int, to: Int, period: Int) -> String {
-            "<g>" + indices.map { moving(stars[$0]) }.joined()
-                + "<animateTransform attributeName=\"transform\" type=\"rotate\" from=\"\(from) 500 500\" to=\"\(to) 500 500\" dur=\"\(period)s\" repeatCount=\"indefinite\"/></g>"
-        }
-        let motion = drifting.map { moving(stars[$0]) }.joined()
-            + orbit(orbitingClockwise, from: 0, to: 360, period: 140)
-            + orbit(orbitingBack, from: 360, to: 0, period: 200)
-        return still(resting) + self.motion(motion)
+        let groups = ["orbit-a", "twinkle-a", "drift-a", "orbit-b", "twinkle-b", "drift-b"]
+        let moving = groups.enumerated().map { index, group in
+            "<svg class=\"art motion dust-\(group)\" \(Self.box)>"
+                + stars.indices.filter { $0 % groups.count == index }.map { stars[$0] }.joined() + "</svg>"
+        }.joined()
+        return "<svg class=\"art still\" \(Self.box)>\(stars.joined())</svg>" + moving
     }
 
     // MARK: - Shared pieces
@@ -296,9 +343,8 @@ struct Field {
         let dy = to.at.y - from.at.y
         let control = Point(x: (from.at.x + to.at.x) / 2 - dy * 0.18, y: (from.at.y + to.at.y) / 2 + dx * 0.18)
         let d = "M\(from.at.x) \(from.at.y)Q\(control.x.rounded1) \(control.y.rounded1) \(to.at.x) \(to.at.y)"
-        let lead = (from.at.x + to.at.y).truncatingRemainder(dividingBy: 1.7)
+        // its pulse is a separate HTML dot (see Pulse), so the GPU moves it
         return "<path class=\"link\" d=\"\(d)\"/>"
-            + motion("<circle class=\"pulse\" r=\"7\"><animateMotion dur=\"1.7s\" begin=\"-\(lead.rounded1)s\" repeatCount=\"indefinite\" path=\"\(d)\"/></circle>")
     }
 
     /// Where the name goes, and how it's anchored.

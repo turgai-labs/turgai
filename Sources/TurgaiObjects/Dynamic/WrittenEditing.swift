@@ -37,8 +37,8 @@ extension Behavior.Written {
     }
 
     /// Receiving with `clause` too, the way an Erlang `receive` tries its clauses: it replaces a
-    /// clause for the same message with the same guard; otherwise it's a clause of its own, first
-    /// among those for the message when it has a guard, last when it hasn't. A
+    /// clause for the same message with the same guard; otherwise it's a clause of its own, after
+    /// the message's other specific clauses when it has a guard, last when it hasn't. A
     /// clause written without parameters takes the message's, from a clause it has for it or
     /// `message`, what another object sends.
     public func receiving(_ clause: Clause, as message: Signature? = nil) -> Behavior.Written {
@@ -51,10 +51,10 @@ extension Behavior.Written {
         if let index = receive.firstIndex(where: { $0.on == clause.on && $0.when == clause.when }) {
             // Written again, a clause is written anew, as Erlang has no adding to one.
             receive[index] = Clause(on: clause.on, parameters: receive[index].parameters, when: clause.when, actions: clause.actions)
-        } else if clause.when != nil, let first = receive.firstIndex(where: { $0.on == clause.on }) {
-            // The newest condition first: one added later refines what's there, as an Erlang
-            // programmer puts the more specific clause first.
-            receive.insert(clause, at: first)
+        } else if clause.when != nil, let general = receive.firstIndex(where: { $0.on == clause.on && $0.when == nil }) {
+            // Specific clauses keep the order they're defined in, as Erlang's source order, and
+            // all come before the general one, which would otherwise take every message first.
+            receive.insert(clause, at: general)
         } else {
             receive.append(clause)
         }
@@ -142,7 +142,7 @@ extension Behavior.Written {
 
 extension Behavior.Written.Clause {
     /// `refundRequested if total <= limit`, or `addCup`.
-    var rule: String {
+    public var rule: String {
         guard let when, !when.isEmpty else { return on }
         return on + " if " + when.map { Behavior.written($0) }.joined(separator: " and ")
     }
@@ -158,6 +158,8 @@ extension Behavior.Written {
         /// of its own is given, added to every clause for it; `message` is what another object
         /// sends, for a clause written on its name alone.
         case receive(Clause, taking: [Parameter], message: Signature?)
+        /// All the clauses for one event, in the order given. Replaces that event at once.
+        case replaceEvent(String, clauses: [Clause], taking: [Parameter], message: Signature?)
         /// Without the rule of that name.
         case remove(rule: String)
     }
@@ -176,6 +178,18 @@ extension Behavior.Written {
             }
             // An event of its own already handled takes what the new clause is given, in each clause.
             return taking.reduce(self) { $0.taking($1, in: clause.on) }.receiving(clause, as: message)
+        case .replaceEvent(let event, let clauses, let taking, let message):
+            let parameters =
+                message.map { $0.parameters.map { Parameter(name: $0.name, type: Kind($0.type), like: nil) } }
+                ?? taking
+            let replacements = clauses.map {
+                Clause(on: event, parameters: parameters, when: $0.when, actions: $0.actions)
+            }
+            var result = receive
+            let insertion = result.firstIndex { $0.on == event } ?? result.endIndex
+            result.removeAll { $0.on == event }
+            result.insert(contentsOf: replacements, at: min(insertion, result.endIndex))
+            return Behavior.Written(fields: fields, receive: result)
         }
     }
 }

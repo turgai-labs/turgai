@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// The image link previews show (Telegram, Slack, iMessage, LinkedIn): a frame of the day sky with the wordmark,
 /// drawn at build time so it always matches the site.
 enum Preview {
-    static let file = "preview.jpg"
+    static let file = SitePath.assets + "preview.jpg"
     static let size = CGSize(width: 1200, height: 630)
 
     enum Failure: Error {
