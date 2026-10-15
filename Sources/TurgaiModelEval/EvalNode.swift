@@ -49,17 +49,23 @@ struct EvalNode: Sendable {
                 AgentDefinition(role: config.agentID.role, behavior: .init(systemPrompt: instructions))
             },
             turnToolsProvider: { context, actorSystem in
-                let session = ObjectSession(actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: [.shared])
-                return TurnTools(tools: [ObjectTools.link], pages: EvalPages(base: session, introduction: objectsPageDescription))
+                // An object's Swift is written by the same model, in a session of its own.
+                let writing = try await endpoints.endpoint(model: model, configuration: configuration, temperature: runtime.temperature)
+                let session = ObjectSession(
+                    actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: [.shared],
+                    writer: ObjectWriter(endpoint: writing, report: { FileHandle.standardError.write(Data($0.written.utf8)) }),
+                    request: context.input.text)
+                let tools = try await ObjectTools(session: session).tools().filter { $0.name != "use_object" }
+                    + session.objectTools()
+                return TurnTools(tools: tools, pages: EvalPages(base: session, introduction: objectsPageDescription))
             },
             authorityProvider: { _, _ in
                 CompositeAuthority()
                     .grantingAll(for: FindObjectsEffect.self)
                     .grantingAll(for: ListObjectsEffect.self)
                     .grantingAll(for: MakeObjectEffect.self)
-                    .grantingAll(for: PageEffect.self)
+                    .grantingAll(for: ToolPageEffect.self)
                     .grantingAll(for: EditObjectEffect.self)
-                    .grantingAll(for: DefineObjectEffect.self)
                     .grantingAll(for: UseObjectEffect.self)
                     .grantingAll(for: RemoveObjectEffect.self)
                     .grantingAll(for: InvokeObjectEffect.self)
@@ -85,7 +91,7 @@ struct EvalNode: Sendable {
     }
 
     /// The provider settings the app's profiles use for this model.
-    private static func configuration(for model: AgentModel) throws -> AgentProviderConfiguration {
+    static func configuration(for model: AgentModel) throws -> AgentProviderConfiguration {
         switch model.provider {
         case .ollama: .ollama(baseURL: URL(string: "http://127.0.0.1:11434")!, contextWindow: 16_384)
         case .system: .appleSystem
@@ -127,7 +133,28 @@ private struct EvalDumpEndpoint: ModelEndpoint {
         let entries = (try? encoder.encode(request.entries)).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
         let schemas = (try? encoder.encode(tools.map(\.schema))).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
         FileHandle.standardError.write(Data("\n=== EVAL REQUEST: TRANSCRIPT ===\n\(entries)\n=== EVAL REQUEST: TOOLS ===\n\(schemas)\n=== END EVAL REQUEST ===\n".utf8))
-        return base.stream(request: request, tools: tools, authority: authority, generating: generating, purpose: purpose)
+        // What the model generates, as it streams: its activity and tool calls as they come, and
+        // what it had generated when it ended or failed, in full.
+        let events = base.stream(request: request, tools: tools, authority: authority, generating: generating, purpose: purpose)
+        return AsyncStream { continuation in
+            let task = Task {
+                var last = ""
+                func write(_ text: String) { FileHandle.standardError.write(Data(text.utf8)) }
+                for await event in events {
+                    switch event {
+                    case .activity(let activity): write("=== EVAL ACTIVITY: \(activity)\n")
+                    case .toolCall(let call): write("=== EVAL TOOL CALL: \(call)\n")
+                    case .partialUpdated(let partial): last = String(describing: partial)
+                    case .generated(let output): write("=== EVAL GENERATED ===\n\(output)\n=== END EVAL GENERATED ===\n")
+                    case .failed(let error): write("=== EVAL FAILED: \(error)\n=== LAST PARTIAL ===\n\(last)\n=== END LAST PARTIAL ===\n")
+                    case .usage, .contextUsage: break
+                    }
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
     }
 }
 

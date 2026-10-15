@@ -121,27 +121,4 @@ struct ConversationTests {
         #expect(record.participantLinks == [link])
         #expect(record.isLinked(to: participantID))
     }
-
-    @Test
-    func timeAnchorUsesForcedTimezoneByDefault() {
-        // 2026-09-11T12:11:00Z, a Friday.
-        let instant = Date(timeIntervalSince1970: 1_789_128_660)
-
-        #expect(
-            Conversation.timeAnchor(at: instant)
-                == "2026-09-11 14:11 Friday (Europe/Berlin, UTC+02:00)"
-        )
-
-        let berlin = TimeZone(identifier: "Europe/Berlin")!
-        #expect(
-            Conversation.timeAnchor(at: instant, timeZone: berlin)
-                == "2026-09-11 14:11 Friday (Europe/Berlin, UTC+02:00)"
-        )
-
-        let newYork = TimeZone(identifier: "America/New_York")!
-        #expect(
-            Conversation.timeAnchor(at: instant, timeZone: newYork)
-                == "2026-09-11 08:11 Friday (America/New_York, UTC-04:00)"
-        )
-    }
 }

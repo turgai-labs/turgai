@@ -92,10 +92,10 @@ public final class FileClient: Sendable {
     }
 
     /// Lazily pulled lines of a file, or nil when it does not exist.
-    public func lines(at path: String) throws -> AsyncLineSequence<FileHandle.AsyncBytes>? {
+    public func lines(at path: String) throws -> FileLines? {
         let url = url(for: path)
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try FileHandle(forReadingFrom: url).bytes.lines
+        return FileLines(url: url)
     }
 
     private func url(for path: String) -> URL {
@@ -137,5 +137,63 @@ extension FileClient {
 
     public func saveSecret(_ secret: String, at path: String) throws {
         try write(Data(secret.utf8), at: path)
+    }
+}
+
+/// The lines of a file, pulled a chunk at a time with plain reads of the file itself.
+///
+/// Not `FileHandle.bytes`: its reads in a process share one reader, so a read that waits,
+/// on a pipe that has nothing to say yet, holds up every other, and replaying a journal
+/// would wait on it.
+public struct FileLines: AsyncSequence, Sendable {
+    public typealias Element = String
+
+    let url: URL
+
+    public func makeAsyncIterator() -> Iterator {
+        Iterator(url: url)
+    }
+
+    public final class Iterator: AsyncIteratorProtocol {
+        private let url: URL
+        private var handle: FileHandle?
+        private var buffer = Data()
+        private var ended = false
+
+        /// How much of the file one read takes.
+        private static let chunk = 64 * 1024
+
+        init(url: URL) {
+            self.url = url
+        }
+
+        deinit {
+            try? handle?.close()
+        }
+
+        public func next() async throws -> String? {
+            while true {
+                if let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                    let line = String(decoding: buffer[buffer.startIndex..<newline], as: UTF8.self)
+                    buffer = Data(buffer[buffer.index(after: newline)...])
+                    return line
+                }
+                if ended {
+                    guard !buffer.isEmpty else { return nil }
+                    defer { buffer = Data() }
+                    return String(decoding: buffer, as: UTF8.self)
+                }
+                let file = try handle ?? FileHandle(forReadingFrom: url)
+                handle = file
+                let read = try file.read(upToCount: Self.chunk) ?? Data()
+                if read.isEmpty {
+                    ended = true
+                    try file.close()
+                    handle = nil
+                } else {
+                    buffer.append(read)
+                }
+            }
+        }
     }
 }

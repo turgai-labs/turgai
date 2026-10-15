@@ -21,6 +21,9 @@ let package = Package(
         .package(path: "../hail"),
         .package(path: "../discoverable-distributed-actors", traits: ["ClusterSystem"]),
         .package(path: "../cluster-durable-workflows"),
+        // Objects are Swift actors, run by the interpreter core of this SwiftScript fork.
+        .package(path: "../SwiftScript"),
+        .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
             path: "../AnyLanguageModel",
             traits: ["AsyncHTTPClient", "Llama"]
@@ -135,6 +138,19 @@ let package = Package(
                 .product(name: "Yams", package: "Yams"),
                 .product(name: "Parsing", package: "swift-parsing"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+                .product(name: "SwiftScriptInterpreter", package: "SwiftScript"),
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
+                // The runtime's macros, expanded in-process before a script is checked and run.
+                .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
+                .product(name: "SwiftSyntaxMacroExpansion", package: "swift-syntax"),
+                .product(name: "SwiftDiagnostics", package: "swift-syntax"),
+                .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "Elementary", package: "elementary"),
+                .product(name: "ElementaryHTMX", package: "elementary-htmx"),
+                .product(name: "ElementaryHTMXSSE", package: "elementary-htmx"),
             ]
         ),
         .executableTarget(
@@ -322,3 +338,9 @@ let package = Package(
     ],
     swiftLanguageModes: [.v6]
 )
+
+// Every async function runs on its caller's executor unless it says otherwise, as Swift 6.2's
+// approachable concurrency has it: what an actor owns stays on that actor.
+for target in package.targets where target.type != .binary {
+    target.swiftSettings = (target.swiftSettings ?? []) + [.enableUpcomingFeature("NonisolatedNonsendingByDefault")]
+}

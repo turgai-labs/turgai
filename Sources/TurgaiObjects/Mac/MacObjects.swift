@@ -7,15 +7,18 @@ public struct MacObjects: Sendable {
     public let reminders: Reminders
     public let calendar: Calendar
     public let contacts: Contacts
-    public let music: Music
+    public let media: MediaControl
+    public let website: Website
 
     /// Creates the objects, which check themselves in. Calendar and Contacts ask for
-    /// access on first use; Music requests access when its actions are used.
-    public init(actorSystem system: ClusterSystem) async throws {
+    /// access on first use; MediaControl asks to press media keys the first time it's used. The
+    /// website serves on `websitePort`.
+    public init(actorSystem system: ClusterSystem, websitePort: Int) async throws {
         self.mac = try await Mac(actorSystem: system)
         self.reminders = try await Reminders(actorSystem: system, client: .live)
         self.calendar = try await Calendar(actorSystem: system, client: .live)
         self.contacts = try await Contacts(actorSystem: system, client: .live)
-        self.music = try await Music(actorSystem: system, client: .live)
+        self.media = try await MediaControl(actorSystem: system)
+        self.website = try await Website(actorSystem: system, port: websitePort)
     }
 }

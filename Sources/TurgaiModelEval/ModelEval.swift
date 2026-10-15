@@ -31,7 +31,21 @@ struct ModelEval: AsyncParsableCommand {
     @Option(help: "Replace only the objects page introduction with text from this file, for controlled evaluations.")
     var objectsPageDescription: String?
 
+    @Flag(help: "Only probe what the object writer writes for an object that follows another's events.")
+    var writerProbe = false
+
+    @Flag(help: "Only probe what FM makes of a page, generated as the website's Page.")
+    var pageProbe = false
+
     func run() async throws {
+        if pageProbe {
+            try await PageProbe.run(model: try AgentModel(model), runs: runs, temperature: temperature)
+            return
+        }
+        if writerProbe {
+            try await WriterProbe.run(model: try AgentModel(model), runs: runs, temperature: temperature)
+            return
+        }
         let tasks = task.isEmpty
             ? EvalTask.all : EvalTask.all.filter { request in task.contains { request.request.localizedCaseInsensitiveContains($0) } }
         let service = ModelEvalService(
@@ -60,22 +74,13 @@ struct ModelEvalService: Service {
 
     func run() async throws {
         try await cancelWhenGracefulShutdown {
-            if model.provider == .system {
-                let node = try await EvalNode.start(model: model, temperature: temperature, instructions: instructions)
-                defer { node.stop() }
-                try await ToolTokens.report(on: node)
-            }
             var written = ""
             var passed = 0
-            var stageTotals = Array(repeating: 0, count: EvalTask.Stages.names.count)
             for task in tasks {
                 for run in 1...runs {
                     let result = await task.run(with: model, temperature: temperature, instructions: instructions, objectsPageDescription: objectsPageDescription)
                     try Task.checkCancellation()
                     if result.passed { passed += 1 }
-                    for (index, stage) in result.stages.values.enumerated() where stage {
-                        stageTotals[index] += 1
-                    }
                     print(result.line)
                     fflush(stdout)
                     written += "\n##### \(task.request) (run \(run))\n" + result.transcript
@@ -83,10 +88,8 @@ struct ModelEvalService: Service {
                 }
             }
             let total = runs * tasks.count
-            let stageSummary = "Stages: " + zip(EvalTask.Stages.names, stageTotals).map { name, count in "\(name) \(count)/\(total)" }.joined(separator: "  ")
-            print("\n" + stageSummary)
-            print("\(passed)/\(total) passed")
-            written += "\n##### Summary\n\(stageSummary)\nOutcome: \(passed)/\(total)\n"
+            print("\n\(passed)/\(total) passed")
+            written += "\n##### Summary\n\(passed)/\(total) passed\n"
             try written.write(to: log, atomically: true, encoding: .utf8)
         }
     }

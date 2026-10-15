@@ -111,7 +111,7 @@ actor MacObjectsService: Service {
             while objects == nil {
                 do {
                     try await system.cluster.joined(within: .seconds(8))
-                    objects = try await MacObjects(actorSystem: system)
+                    objects = try await MacObjects(actorSystem: system, websitePort: LocalWebsite.port)
                     #if DEBUG
                         demo = try await DemoObjects(actorSystem: system)
                     #endif

@@ -12,9 +12,6 @@ public struct ObjectEntry: Codable, Sendable {
     public let actions: [String]
     /// What the object announces, such as `RefundRequested`.
     public let events: [String]
-    /// What its actions want of the objects given to them, by action, then by parameter: the
-    /// shop's `startShift` wants a manager taking `refundRequested(number, total)`.
-    public let wants: [String: [String: Want]]
 
     public init(
         object: DiscoverableObject,
@@ -22,8 +19,7 @@ public struct ObjectEntry: Codable, Sendable {
         description: String?,
         scope: ObjectScope,
         actions: [String],
-        events: [String] = [],
-        wants: [String: [String: Want]] = [:]
+        events: [String] = []
     ) {
         self.object = object
         self.title = title
@@ -31,7 +27,6 @@ public struct ObjectEntry: Codable, Sendable {
         self.scope = scope
         self.actions = actions
         self.events = events
-        self.wants = wants
     }
 }
 
@@ -47,7 +42,6 @@ public distributed actor ObjectCatalog: LifecycleWatch {
         public let description: String?
         public let actions: [String]
         public let events: [String]
-        public let wants: [String: [String: Want]]
     }
 
     private var records: [ObjectScope: [ClusterSystem.ActorID: Record]] = [:]
@@ -99,18 +93,12 @@ public distributed actor ObjectCatalog: LifecycleWatch {
     public distributed func record(_ object: DiscoverableObject, in scope: ObjectScope) async {
         do {
             let description = try await object.describe()
-            var wants: [String: [String: Want]] = [:]
-            for (action, affordance) in description.actions {
-                let wanted = try Want.wants(in: affordance.input)
-                if !wanted.isEmpty { wants[action] = wanted }
-            }
             self.records[scope, default: [:]][object.id] = Record(
                 id: object.id,
                 title: description.title,
                 description: description.description,
                 actions: description.actions.map { Self.signature($0.key, input: $0.value.input) }.sorted(),
-                events: description.events.keys.sorted(),
-                wants: wants
+                events: description.events.keys.sorted()
             )
             self.watchTermination(of: object)
             self.notifyObservers()
@@ -130,8 +118,14 @@ public distributed actor ObjectCatalog: LifecycleWatch {
             if case .array(let names)? = input?["required"] {
                 names.compactMap { if case .string(let name) = $0 { name } else { nil } }
             } else { [] }
-        let optional = properties.keys.filter { !required.contains($0) }.sorted().map { "\($0)?" }
-        return "\(name)(\((required + optional).joined(separator: ", ")))"
+        // As Swift declares it, with its label, when its schema keeps it.
+        func declared(_ name: String, _ schema: JSONValue) -> String {
+            guard case .string(let label)? = schema[ObjectShape.Message.labelKey], label != name else { return "\(name): \(schema.swiftType)" }
+            return "\(label) \(name): \(schema.swiftType)"
+        }
+        let written = required.compactMap { name in properties[name].map { declared(name, $0) } }
+            + properties.keys.filter { !required.contains($0) }.sorted().map { "\($0): \(properties[$0]!.swiftType)?" }
+        return "\(name)(\(written.joined(separator: ", ")))"
     }
 
     public distributed func entries(in scopes: [ObjectScope]) -> [ObjectEntry] {
@@ -148,8 +142,7 @@ public distributed actor ObjectCatalog: LifecycleWatch {
                         description: record.description,
                         scope: scope,
                         actions: record.actions,
-                        events: record.events,
-                        wants: record.wants
+                        events: record.events
                     ))
             }
         }

@@ -303,12 +303,9 @@ public distributed actor User {
         }
     }
 
-    public distributed func memoryInstruction(for text: String) -> String? {
-        let facts = MemoryRetrieval.facts(
-            from: state.memory,
-            matching: MemoryQuery(text: text)
-        )
-        return MemoryRetrieval.systemInstruction(for: facts)
+    /// What's remembered about `topic`, as a recall answers it.
+    public distributed func recall(_ topic: String) -> String {
+        MemoryRetrieval.recalled(MemoryRetrieval.facts(from: state.memory, matching: MemoryQuery(text: topic)))
     }
 
     /// Returns a bounded view for explicit user inspection. The journal and

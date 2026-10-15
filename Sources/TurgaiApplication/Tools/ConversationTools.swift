@@ -24,6 +24,7 @@ public enum ConversationTools {
         approval: any ToolApproval = DenyAllApproval(),
         actorSystem: ClusterSystem? = nil,
         objectCatalog: ObjectCatalog? = nil,
+        writer: ObjectWriter? = nil,
         includeConversationTools: Bool = true
     ) async throws -> TurnTools {
         guard includeConversationTools else { return TurnTools() }
@@ -40,16 +41,22 @@ public enum ConversationTools {
         // their link, and the page says the rest.
         let groups: [ToolGroup] = [WeatherTools().group]
 
-        var pages: any Pages = NoPages()
+        var pages: any ToolPages = NoToolPages()
         if let actorSystem {
             let owner = ConversationID(stableKey: context.agentID.contextID.rawValue)?.participantUserID
             let session = ObjectSession(
                 actorSystem: actorSystem,
                 objectCatalog: objectCatalog,
-                scopes: owner.map(ObjectScope.visible(to:)) ?? [.shared]
+                scopes: owner.map(ObjectScope.visible(to:)) ?? [.shared],
+                writer: writer,
+                request: context.input.text
             )
-            tools.append(ObjectTools.link)
+            // What objects can be: found, listed, made, changed and removed, at the root; and the
+            // objects themselves, each a tool to read it.
+            tools += try await ObjectTools(session: session).tools().filter { $0.name != "use_object" }
+            tools += await session.objectTools()
             pages = session
+            if let owner { tools.append(RecallTool(actorSystem: actorSystem, person: owner)) }
         }
 
         if let userTools {

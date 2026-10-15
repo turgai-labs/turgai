@@ -9,7 +9,7 @@ public distributed actor Shop {
 
     private var placed: [ShopOrder] = []
     /// Managers on duty, in the order they started their shift.
-    private var managersOnDuty: [(identity: ObjectIdentity, manager: ObjectRef<RefundManager>)] = []
+    private var managersOnDuty: [(identity: ObjectIdentity, manager: DynamicObject)] = []
     private var nextManager = 0
     /// Refunds waiting for a manager's decision, by order number.
     private var openRefunds: [Int: OpenRefund] = [:]
@@ -24,7 +24,7 @@ public distributed actor Shop {
     public distributed var orders: [ShopOrder] { placed }
 
     /// The managers on duty, who decide on refunds.
-    public distributed var managers: [DynamicObject] { managersOnDuty.map(\.manager.object) }
+    public distributed var managers: [DynamicObject] { managersOnDuty.map(\.manager) }
 
     /// Take an order.
     /// - Parameters:
@@ -39,11 +39,11 @@ public distributed actor Shop {
 
     /// A manager starts their shift: refund requests go to the managers on duty, in turn,
     /// starting with any that were waiting for one.
-    /// - Parameter manager: The manager: it takes ``RefundManager``'s messages, and may answer the
-    ///   shop with ``RefundDesk``'s.
-    public distributed func startShift(manager: Wanted<RefundManager, RefundDesk>) async throws {
-        let manager = try await manager.checked()
-        let identity = try await manager.object.identity
+    /// - Parameter manager: The manager: the shop sends it refundRequested(order: Int, total: Double)
+    ///   for each refund it's to decide, and it answers the shop with refundApproved(order:) or
+    ///   refundDenied(order:).
+    public distributed func startShift(manager: DynamicObject) async throws {
+        let identity = try await manager.identity
         guard !managersOnDuty.contains(where: { $0.identity == identity }) else { return }
         managersOnDuty.append((identity, manager))
         for number in openRefunds.filter({ $0.value.handler == .waitingForAManager }).keys.sorted() {
@@ -118,10 +118,10 @@ public distributed actor Shop {
 
     /// Passes a refund request to a manager, without waiting for the decision. Like any
     /// message, it can't fail the request: if the manager can't be reached, that's logged.
-    private func send(_ order: ShopOrder, to manager: ObjectRef<RefundManager>) async {
+    private func send(_ order: ShopOrder, to manager: DynamicObject) async {
         do {
             let total = NSDecimalNumber(decimal: order.amount).doubleValue
-            try await manager.send(.refundRequested(order: order.number, total: total))
+            try await manager.send(RefundManager.refundRequested(order: order.number, total: total))
         } catch {
             actorSystem.log.warning(
                 "Couldn't pass a refund request to a manager",
@@ -143,15 +143,6 @@ public distributed actor Shop {
 public enum RefundManager: Messages {
     /// A customer asked for their money back for `order`, by its number, which cost `total`.
     case refundRequested(order: Int, total: Double)
-}
-
-/// How a manager may answer the shop about a refund.
-@Describable
-public enum RefundDesk: Messages {
-    /// The refund is approved: it's paid out.
-    case refundApproved(order: Int)
-    /// The refund is refused: the order stands.
-    case refundDenied(order: Int)
 }
 
 /// What the shop tells a customer about their refund.

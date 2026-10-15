@@ -8,10 +8,10 @@ import TurgaiObjects
 /// Something to ask for, and how to tell it was done.
 struct EvalTask: Sendable {
     let request: String
+    /// Requests that follow it, one turn each, before the check: what a person asks for one
+    /// object at a time.
+    var then: [String] = []
     let check: Check
-    /// How many distinct objects the request asks the model to make usable.
-    let expectedObjects: Int
-    let expectedUsableObjects: Int
 
     enum Check: Sendable {
         /// A second turn asks this, and an object's reply must answer it.
@@ -24,30 +24,26 @@ struct EvalTask: Sendable {
     }
 
     init(
-        request: String, followUp: String, stateAddress: String? = nil, stateAddresses: [String] = [],
-        expectedObjects: Int = 1, expectedUsableObjects: Int = 1,
+        request: String, then: [String] = [], followUp: String, stateAddress: String? = nil, stateAddresses: [String] = [],
         stateMatches: @escaping @Sendable (String) -> Bool = { _ in false },
         answered: @escaping @Sendable (String) -> Bool
     ) {
         self.request = request
+        self.then = then
         self.check = .followUp(
             followUp, stateAddresses: stateAddresses + (stateAddress.map { [$0] } ?? []),
             answered: answered, stateMatches: stateMatches)
-        self.expectedObjects = expectedObjects
-        self.expectedUsableObjects = expectedUsableObjects
     }
 
-    init(request: String, expectedObjects: Int, expectedUsableObjects: Int, check: Check) {
+    init(request: String, check: Check) {
         self.request = request
         self.check = check
-        self.expectedObjects = expectedObjects
-        self.expectedUsableObjects = expectedUsableObjects
     }
 
     static let all = [
         EvalTask(
             request: "Make a counter for my coffee cups: I can add a cup, ask how many I had, and reset it.",
-            followUp: "I had two cups just now. How many have I had?", stateAddress: "coffee-cup-counter",
+            followUp: "Add two cups and check how many there are.", stateAddress: "coffee-cup-counter",
             stateMatches: { $0.range(of: #"(?m)^\w+:\s*2(?:\.0)?$"#, options: .regularExpression) != nil },
             answered: has("2")),
         EvalTask(
@@ -55,25 +51,34 @@ struct EvalTask: Sendable {
             followUp: "Put milk and eggs on it, then cross off milk. What's still on it?",
             stateAddress: "shopping-list",
             stateMatches: { Self.bulletItems(in: $0) == ["eggs"] },
-            answered: { $0.lowercased().contains("egg") && !$0.lowercased().contains("milk") }),
+            // What's on it is checked in its state; the answer says what's on it.
+            answered: { $0.lowercased().contains("egg") }),
         EvalTask(
             request: "Make two counters, one for coffee and one for tea, that work the same way.",
             followUp: "Count one coffee and two teas. How many teas so far?", stateAddresses: ["coffee-counter", "tea-counter"],
-            expectedObjects: 2, expectedUsableObjects: 2,
+            // The data's names are the code's own: one holds 1, the other 2.
             stateMatches: { text in
-                let lines = text.lowercased().components(separatedBy: .newlines)
-                return lines.contains { $0.contains("count:") && $0.hasSuffix("1") }
-                    && lines.contains { $0.contains("count:") && $0.hasSuffix("2") }
+                let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+                return lines.contains { $0.range(of: #"^\w+:\s*1(?:\.0)?$"#, options: .regularExpression) != nil }
+                    && lines.contains { $0.range(of: #"^\w+:\s*2(?:\.0)?$"#, options: .regularExpression) != nil }
             }, answered: has("2")),
         EvalTask(
             request:
-                "Make a manager, Ann, with a budget of 1000, and a worker, Bob, earning 3000. Bob can ask Ann for a raise, and she approves it while her budget lasts.",
-            followUp: "Bob asks Ann for a raise of 200. What does Bob earn now?", stateAddresses: ["ann", "bob"],
-            expectedObjects: 2, expectedUsableObjects: 2,
-            stateMatches: { $0.range(of: #"(?m)^\w+:\s*3200(?:\.0)?$"#, options: .regularExpression) != nil },
+                "Make a manager, Ann, with a budget of 1000. When she's asked for a raise of some amount, she approves it if her budget covers it, and the amount is taken out of her budget.",
+            then: [
+                "Make a worker, Bob, earning 3000. He asks Ann for a raise by giving her the amount he wants; when she approves, that amount is added to his pay.",
+                "Bob asks Ann for a raise of 200.",
+            ],
+            followUp: "What does Bob earn now?", stateAddresses: ["ann", "bob"],
+            // Bob earns 3200, and Ann paid it: her budget is down to 800.
+            stateMatches: { state in
+                [3200, 800].allSatisfy { amount in
+                    state.range(of: #"(?m)^\s*\w+:\s*"# + "\(amount)" + #"(?:\.0)?$"#, options: .regularExpression) != nil
+                }
+            },
             answered: has("3200")),
         EvalTask(
-            request: ShopTurn.all[0].prompt, expectedObjects: 2, expectedUsableObjects: 2,
+            request: ShopTurn.all[0].prompt,
             check: .shop(ShopTurn.all)),
     ]
 
@@ -83,26 +88,8 @@ struct EvalTask: Sendable {
 
     struct Result {
         let passed: Bool
-        let stages: Stages
         let line: String
         let transcript: String
-    }
-
-    struct Stages: Sendable {
-        let root: Bool
-        let made: Bool
-        let usable: Bool
-        let opened: Bool
-        let attempted: Bool
-        let acted: Bool
-        let state: Bool
-        let outcome: Bool
-
-        static let names = ["root", "made", "usable", "opened", "attempted", "acted", "state", "outcome"]
-        var values: [Bool] { [root, made, usable, opened, attempted, acted, state, outcome] }
-        var marks: String {
-            zip(Self.names, values).map { name, value in "\(name):\(value ? "✓" : "✗")" }.joined(separator: " ")
-        }
     }
 
     /// Asks a fresh agent on a fresh node, then the follow-up, and checks the objects' replies.
@@ -112,26 +99,31 @@ struct EvalTask: Sendable {
         var failure: String?
         var turnChecks: [String?] = []
         var stateText = ""
-        var usableCount = 0
         do {
             let node = try await EvalNode.start(model: model, temperature: temperature, instructions: instructions, objectsPageDescription: objectsPageDescription)
             defer { node.stop() }
             switch check {
             case .followUp(let followUp, let stateAddresses, _, _):
                 let agent = try await node.freshAgent()
-                turns.append(await RecordedTurn.send(request, to: agent, on: node.system))
+                for asked in [request] + then {
+                    turns.append(await RecordedTurn.send(asked, to: agent, on: node.system))
+                }
                 turns.append(await RecordedTurn.send(followUp, to: agent, on: node.system))
                 // Successful object actions return a page landing with null tool output. Read the
                 // object's actual state after the turn, so the eval measures what changed rather
                 // than whether the action's output happened to contain the answer.
-                if !stateAddresses.isEmpty {
+                // An object is named after the actor its code declares, so its state is read from
+                // the objects the request created, whatever they're called.
+                let created = Array(NSOrderedSet(array: turns.flatMap(\.calls).compactMap(Self.createdHandle(from:)))) as? [String] ?? []
+                let addresses = created.isEmpty ? stateAddresses : created
+                if !addresses.isEmpty {
                     let session = ObjectSession(actorSystem: node.system, objectCatalog: node.objectCatalog, scopes: [.shared])
-                    for address in stateAddresses {
-                        let page: Page
+                    for address in addresses {
+                        let page: ToolPage
                         do {
-                            page = try await session.open(PageAddress(rawValue: address))
+                            page = try await session.open(ToolPageAddress(rawValue: address))
                         } catch {
-                            let created = (turns.first?.calls ?? []).compactMap(Self.createdHandle(from:))
+                            let created = turns.flatMap(\.calls).compactMap(Self.createdHandle(from:))
                             stateText += "\(address): MISSING (created: \(created.isEmpty ? "none" : created.joined(separator: ", "))).\n"
                             failure = failure ?? "Expected object `\(address)` is missing; created: \(created.isEmpty ? "none" : created.joined(separator: ", ")). Page lookup failed: \(error)"
                             continue
@@ -153,16 +145,6 @@ struct EvalTask: Sendable {
                     turnChecks.append(try await turn.check(floor))
                 }
             }
-            let createdHandles = (turns.first?.calls ?? []).compactMap(Self.createdHandle(from:))
-            let objectSession = ObjectSession(actorSystem: node.system, objectCatalog: node.objectCatalog, scopes: [.shared])
-            for handle in Set(createdHandles) {
-                guard let page = try? await objectSession.open(PageAddress(rawValue: handle)) else { continue }
-                let hasActions = page.links.contains { link in
-                    link.name.hasPrefix(handle + "_")
-                        && !["_on", "_data", "_remove_event", "_set_value"].contains(where: link.name.hasSuffix)
-                }
-                if hasActions { usableCount += 1 }
-            }
         } catch {
             failure = String(describing: error)
         }
@@ -170,8 +152,8 @@ struct EvalTask: Sendable {
         // `coffee-counter_howMany`: not from searching, creating, a page (named by the bare
         // handle), a draft's steps, or changing the object.
         let notReplies = ["search_objects", "create_object", "create_object_like", "edit_object", "remove_object", "use_object"]
-        let notActions = ["_on", "_data", "_remove_event", "_set_value"]
-        let followUpTurn = turns.dropFirst().first
+        let notActions = [String]()
+        let followUpTurn = turns.dropFirst(1 + then.count).first
         let replies = (followUpTurn?.calls ?? [])
             .filter { call in
                 call.completed && !call.failed && call.name.contains("_") && !notReplies.contains(call.name)
@@ -189,46 +171,22 @@ struct EvalTask: Sendable {
                 failure == nil && replies.contains(where: answered) && stateMatches(stateText)
             case .shop: failure == nil
             }
-        let calls = turns.flatMap(\.calls)
-        let setupCalls = turns.first?.calls ?? []
-        let made = setupCalls.filter {
-            $0.completed && !$0.failed && ($0.name == "create_object" || $0.name == "create_object_like")
-        }.count
-        let definitionSuffixes = ["_on", "_data", "_remove_event", "_set_value"]
-        let pageNames = Set(calls.compactMap { call -> String? in
-            guard call.completed, !call.failed, !call.name.contains("_"), call.name != "objects",
-                  call.output.hasPrefix("Opened ") else { return nil }
-            return call.name
-        })
-        let actionCalls = turns.dropFirst().flatMap(\.calls).filter { call in
-            call.completed && !call.failed && call.name.contains("_") && !notReplies.contains(call.name)
-                && !definitionSuffixes.contains(where: call.name.hasSuffix)
-        }
-        let attemptedAction = turns.dropFirst().flatMap(\.calls).contains { call in
-            call.name.contains("_") && !notReplies.contains(call.name)
-                && !definitionSuffixes.contains(where: call.name.hasSuffix)
-        }
-        let stateOK: Bool = switch check {
-        case .followUp(_, _, _, let stateMatches): stateMatches(stateText)
-        case .shop: !turnChecks.isEmpty && turnChecks.allSatisfy { $0 == nil }
-        }
-        let stages = Stages(
-            root: calls.contains { $0.completed && !$0.failed && $0.name == "objects" },
-            made: made >= expectedObjects,
-            usable: usableCount >= expectedUsableObjects,
-            opened: !pageNames.isEmpty,
-            attempted: attemptedAction,
-            acted: !actionCalls.isEmpty,
-            state: stateOK,
-            outcome: passed)
         let marks = turnChecks.isEmpty ? "" : "turns " + turnChecks.map { $0 == nil ? "✓" : "✗" }.joined() + "  "
-        let note = failure.map { "  (\($0.prefix(160)))" } ?? ""
+        // Why it failed, in a line: the error, or the state the objects ended in and the reply.
+        var why = failure
+        if why == nil, !passed, case .followUp(_, _, let answered, let stateMatches) = check {
+            let state = stateText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.joined(separator: " ")
+            let reply = (followUpTurn?.answer ?? "").replacingOccurrences(of: "\n", with: " ")
+            var parts: [String] = []
+            if !stateMatches(stateText) { parts.append("state: \(state.prefix(100))") }
+            if !replies.contains(where: answered) { parts.append("reply: \(reply.prefix(80))") }
+            why = parts.joined(separator: "; ")
+        }
+        let note = why.map { "  (\($0.prefix(200)))" } ?? ""
         return Result(
             passed: passed,
-            stages: stages,
-            line:
-                "\(passed ? "PASS" : "FAIL")  \(stages.marks)  \(marks)calls \(calls.count)  errors \(calls.filter(\.failed).count)  pending \(calls.filter { !$0.completed }.count)  context \(turns.map { $0.context.map { "\($0.usedTokens)" } ?? "?" }.joined(separator: "/"))  \(Int(Date().timeIntervalSince(started)))s  \(request.prefix(50))\(note)",
-            transcript: "stages: \(stages.marks)\n" + (failure.map { "failed: \($0)\n" } ?? "")
+            line: "\(passed ? "PASS" : "FAIL")  \(Int(Date().timeIntervalSince(started)))s  \(marks)\(request.prefix(45))\(note)",
+            transcript: (failure.map { "failed: \($0)\n" } ?? "")
                 + turns.enumerated().map { index, turn in
                     "=== turn \(index + 1)\n" + turn.transcript
                         + (turnChecks.indices.contains(index) ? "=== check: \(turnChecks[index] ?? "PASS")\n" : "")
@@ -248,8 +206,7 @@ struct EvalTask: Sendable {
         guard call.completed, !call.failed else { return nil }
         let marker: String
         switch call.name {
-        case "create_object": marker = "Created empty "
-        case "create_object_like": marker = "Made "
+        case "create_object": marker = "Saved "
         default: return nil
         }
         guard let range = call.output.range(of: marker),

@@ -125,7 +125,7 @@ struct ChatView: View {
         switch state.connection {
         case .connected: "Connected"
         case .connecting: "Connecting…"
-        case .disconnected: "Reconnecting…"
+        case .disconnected(let why): "Reconnecting… \(why)"
         }
     }
 

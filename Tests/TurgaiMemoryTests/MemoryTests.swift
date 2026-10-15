@@ -647,7 +647,8 @@ struct MemoryTests {
             now: Date(timeIntervalSince1970: 2)
         )
         #expect(facts == [berlin])
-        #expect(MemoryRetrieval.systemInstruction(for: facts)?.contains("untrusted") == true)
+        #expect(MemoryRetrieval.recalled(facts).contains("may be out of date"))
+        #expect(MemoryRetrieval.recalled([]) == "Nothing is remembered about that.")
     }
 
     @Test

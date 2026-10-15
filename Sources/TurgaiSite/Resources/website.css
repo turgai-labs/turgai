@@ -52,27 +52,35 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
 @media (max-width: 1100px) { :root { --hero-size: 140px; --shrink: calc(20 / 140); } }
 @media (max-width: 600px) { :root { --hero-size: 72px; --shrink: calc(20 / 72); } }
 .mark {
-  position: fixed; z-index: 6; top: calc(env(safe-area-inset-top, 0px) + 1.45rem); left: var(--gutter);
+  position: absolute; top: calc(env(safe-area-inset-top, 0px) + 1.45rem); left: var(--gutter);
   gap: .4375rem; line-height: 1.2; white-space: nowrap;
 }
 .mark-bird { width: 1.5rem; height: 1.5rem; fill: currentColor; flex: none; }
-/* drawn at full size and only ever scaled down, so it stays sharp */
+/* at rest it sits on the logo, small and clear; the intro animates it from the middle of the sky. It moves by
+   position and size and fades by colour, not transform and opacity: see "the intro hands over" below */
 .hero-word {
   position: fixed; z-index: 6; left: var(--logo-x); top: var(--logo-y); pointer-events: none; white-space: nowrap;
-  font: 700 var(--hero-size)/1 var(--font-ui); letter-spacing: -.025em; color: #fff; text-shadow: 0 2px 30px rgba(9, 21, 30, .25);
-  transform-origin: 0 0; transform: scale(var(--shrink)); opacity: 0; will-change: transform, opacity;
-  --hx: calc(50vw - var(--logo-x) - 1.3em); --hy: calc(42svh - var(--logo-y) - .5em);
+  font: 700 calc(var(--hero-size) * var(--shrink))/1 var(--font-ui); letter-spacing: -.025em; color: transparent;
+  --hx: calc(50vw - var(--logo-x) - 1.3 * var(--hero-size)); --hy: calc(42svh - var(--logo-y) - .5 * var(--hero-size));
 }
 .hero-in { display: block; animation: arrive 2.2s cubic-bezier(.25, .1, .25, 1) both; }
-/* the web app's header, fixed over the story; it appears once the intro hands the wordmark over */
+/* the web app's header, fixed over the whole page, in one look. Its glass is on ::before, so the logo can land
+   first and the glass and links arrive after it, each on the intro's timeline alone */
 .bar {
   position: fixed; z-index: 4; top: 0; left: 0; right: 0;
   height: calc(env(safe-area-inset-top, 0px) + 4.5rem); padding-top: env(safe-area-inset-top, 0px);
-  justify-content: flex-end; opacity: 0;
+  justify-content: flex-end; isolation: isolate;
+  background: none; -webkit-backdrop-filter: none; backdrop-filter: none;
   border-bottom: 0; box-shadow: none;  /* the site's bar has no divider or shadow; the web app's keeps them */
 }
-/* night's version of the bar, faded in over it */
-.bar::before { content: ""; position: absolute; inset: 0; z-index: -1; background: color-mix(in srgb, var(--night) 70%, transparent); opacity: 0; }
+.bar::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; background: var(--glass-surface);
+  -webkit-backdrop-filter: saturate(1.8) blur(1.25rem); backdrop-filter: saturate(1.8) blur(1.25rem);
+}
+/* the night over the glass, clear by day; the last page tints it in */
+.bar::after { content: ""; position: absolute; inset: 0; z-index: -1; background-color: transparent; pointer-events: none; }
+/* the words' colours, which the last page switches to the night's */
+.bar { --mark-ink: var(--ink); }
 @keyframes arrive { from { opacity: 0; scale: .97; } }
 
 /* ---------- intro: the sky ---------- */
@@ -307,9 +315,17 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
 @supports (animation-timeline: view()) {
   /* intro: the big word moves and shrinks into the logo, which takes over as it lands */
   .hero-word { animation: hero linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
-  .mark { animation: logo-in linear both, dusk linear both; animation-timeline: --intro, --closing; animation-range: contain 0% contain 100%, entry 40% cover 50%; }
-  .bar { animation: bar-in linear both, bar-night linear both; animation-timeline: --intro, --closing; animation-range: contain 85% contain 100%, entry 40% cover 50%; }
-  .bar::before { animation: night linear both; animation-timeline: --closing; animation-range: entry 40% cover 50%; }
+  /* the intro hands over: the logo lands as the big word reaches it, then the glass and links arrive. One timeline
+     each; where the timeline can't run, nothing applies and the bar simply shows.
+     None of these animate opacity or transform. Safari draws scroll-driven opacity and transform animations on a
+     fast path that, after a reload, starts from the wrong scroll position and never catches up: the page then shows
+     the sky's white word and no bar on any section, while its computed values are right. Colour, position, size and
+     visibility are drawn from the page itself, so they always match where you are. */
+  .bar .mark { animation: logo-in linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
+  .bar::before, .bar .app-nav-links { animation: bar-in linear both; animation-timeline: --intro; animation-range: contain 85% contain 100%; }
+  /* the last page: its night tints the glass in and turns the words white, each on the last page's timeline alone */
+  .bar::after { animation: bar-dusk linear both; animation-timeline: --closing; animation-range: entry 40% cover 50%; }
+  .bar { animation: bar-night linear both; animation-timeline: --closing; animation-range: entry 40% cover 50%; }
   .sky-copy { animation: reveal linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
   .veil { animation: veil linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
   .sky { animation: settle linear both; animation-timeline: --intro; animation-range: contain 0% contain 100%; }
@@ -328,14 +344,15 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
 }
 
 @keyframes hero {
-  from, 12% { transform: translate(var(--hx), var(--hy)) scale(1); opacity: 1; }
-  52% { transform: translate(0, 0) scale(var(--shrink)); opacity: 1; }
-  56%, to { transform: translate(0, 0) scale(var(--shrink)); opacity: 0; }
+  from, 12% { left: calc(var(--logo-x) + var(--hx)); top: calc(var(--logo-y) + var(--hy)); font-size: var(--hero-size); color: #fff; text-shadow: 0 2px 30px rgba(9, 21, 30, .25); }
+  52% { left: var(--logo-x); top: var(--logo-y); font-size: calc(var(--hero-size) * var(--shrink)); color: #fff; text-shadow: 0 2px 30px rgba(9, 21, 30, .25); }
+  56%, to { left: var(--logo-x); top: var(--logo-y); font-size: calc(var(--hero-size) * var(--shrink)); color: transparent; text-shadow: none; }
 }
-@keyframes logo-in { from, 51% { opacity: 0; } 56%, to { opacity: 1; } }
-@keyframes dusk { to { color: var(--night-ink); } }
-@keyframes bar-in { to { opacity: 1; } }
-@keyframes bar-night { to { --link: var(--night-ink); --link-strong: #fff; --link-current: #fff; } }
+@keyframes logo-in { from, 51% { color: transparent; } 56%, to { color: var(--mark-ink); } }
+@keyframes bar-dusk { to { background-color: color-mix(in srgb, var(--night) 70%, transparent); } }
+/* custom properties change at one point, not by degrees, so a word is never half day, half night */
+@keyframes bar-night { to { --mark-ink: var(--night-ink); --link: var(--night-ink); --link-strong: #fff; --link-current: #fff; } }
+@keyframes bar-in { from { visibility: hidden; } to { visibility: visible; } }
 @keyframes reveal { from, 40% { opacity: 0; translate: 0 24px; } 80%, to { opacity: 1; translate: 0 0; } }
 @keyframes veil { from, 28% { opacity: 0; } 72%, 80% { opacity: .55; } to { opacity: 1; } }
 @keyframes settle { from { scale: 1.08; } 55%, to { scale: 1; } }
@@ -361,7 +378,6 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
 /* no scroll-driven animations: the wordmark sits in the corner, the headline shows, the field rests */
 @supports not (animation-timeline: view()) {
   .veil { opacity: .55; }
-  .bar { opacity: 1; }
   .hero-word { display: none; }
   .go:not(.go-sky) { display: none; }
   .field { display: none; }
@@ -379,8 +395,7 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
 /* the shared app stylesheet turns nav links into icon-sized buttons on narrow screens; the site's links are words */
 @media (max-width: 780px) { .app-nav-links .nav-link { width: auto; padding-inline: 0; } .app-nav-links { gap: 1rem; } }
 
-/* the current page's link is ink by day and turns white with the rest of the bar at night; the property
-   needs a starting value on the bar, or the night animation has nothing to change */
+/* the current page's link */
 .bar { --link-current: var(--ink); }
 .bar .nav-link-active { color: var(--link-current); }
 

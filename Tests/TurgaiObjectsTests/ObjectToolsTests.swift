@@ -422,16 +422,6 @@ func actionSignaturesNameTheirArguments() {
     #expect(ObjectCatalog.signature("pause", input: nil) == "pause()")
 }
 
-@Test
-func booleanEventValuesAcceptZeroAndOne() throws {
-    #expect(try DefineStep.DataKind.boolean.start("1") == .boolean(true))
-    #expect(try DefineStep.DataKind.boolean.start("0") == .boolean(false))
-    #expect(DefineStep.Operand.number(1).forSetting(.boolean) == .boolean(true))
-    #expect(DefineStep.Operand.number(0).forSetting(.boolean) == .boolean(false))
-    #expect(DefineStep.Operand.number(2).forSetting(.boolean) == .number(2))
-    #expect(DefineStep.Operand.number(1).forSetting(.number) == .number(1))
-}
-
 /// What comes after a call: its links, or the tools of the page it landed on, opened now.
 private func next(_ returned: CallReturn, in session: ObjectSession) async throws -> [any HailCore.Tool] {
     switch returned.next {

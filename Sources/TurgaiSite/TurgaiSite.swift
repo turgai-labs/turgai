@@ -38,17 +38,10 @@ struct LandingPage: HTMLDocument {
         div(.class("night"), .init(name: "aria-hidden", value: "true")) {}
         HTMLRaw(field.html)
 
-        // the web app's header and wordmark, from the shared brand stylesheet
-        header(.class("page-header bar")) {
-            SiteNav(current: .idea)
-        }
-        a(.href("#\(Stop.sky.id)"), .class("wordmark mark"), .init(name: "aria-label", value: "Turgai home")) {
-            HTMLRaw("<svg class=\"mark-bird\" viewBox=\"0 0 1024 1024\" aria-hidden=\"true\"><path fill-rule=\"evenodd\" d=\"\(skylarkPath)\"/></svg>")
-            span(.class("wordmark-text")) { "turgai" }
-        }
         // the big word in the sky only moves and shrinks into the logo, so it stays on the compositor
         span(.class("hero-word"), .init(name: "aria-hidden", value: "true")) { span(.class("hero-in")) { "turgai" } }
         for arrow in Arrow.all { arrow }
+        SiteBar(skylarkPath: skylarkPath)
 
         main(.class("page")) {
             section(.class("intro"), .id(Stop.sky.id)) {
@@ -72,7 +65,7 @@ struct LandingPage: HTMLDocument {
             section(.class("finale"), .id(Stop.closing.id), .init(name: "style", value: "view-timeline-name: \(Layer.constellation.timeline)")) {
                 div(.class("finale-main")) {
                     ComingSoon()
-                    p(.class("big")) { "Small bird. "; span(.class("flag")) { "Big possibilities." } }
+                    p(.class("big")) { "Small bird."; br(); span(.class("flag")) { "Big possibilities." } }
                     div(.class("close")) {
                         p(.class("belief")) { "Being independent should never mean settling for less." }
                         p { "Turgai is in early alpha. Tell us what you’re building." }
@@ -87,6 +80,21 @@ struct LandingPage: HTMLDocument {
                     span { "Turgai means skylark. Video: Pexels." }
                 }
             }
+        }
+    }
+}
+
+/// The landing page's top bar: the wordmark, then the page links. One look for the whole page.
+struct SiteBar: HTML {
+    let skylarkPath: String
+
+    var body: some HTML {
+        header(.class("page-header bar")) {
+            a(.href("#\(Stop.sky.id)"), .class("wordmark mark"), .init(name: "aria-label", value: "Turgai home")) {
+                HTMLRaw("<svg class=\"mark-bird\" viewBox=\"0 0 1024 1024\" aria-hidden=\"true\"><path fill-rule=\"evenodd\" d=\"\(skylarkPath)\"/></svg>")
+                span(.class("wordmark-text")) { "turgai" }
+            }
+            SiteNav(current: .idea)
         }
     }
 }
@@ -554,13 +562,15 @@ struct TurgaiSite {
         try files.createDirectory(at: output, withIntermediateDirectories: true)
 
         let skylark = try Skylark(svg: String(contentsOf: TurgaiBrandAssets.skylark, encoding: .utf8))
+        // one set of tilts for the whole site, so both pages lean their stickers and flags the same way
+        let angles = GeometryAngles.random
         let page = LandingPage(
             // the shared brand stylesheet first, then what only the landing page needs
             styles: try String(contentsOf: TurgaiBrandAssets.stylesheet, encoding: .utf8) + "\n"
                 + String(contentsOf: resource("website", "css"), encoding: .utf8),
             field: Field(birdPoints: skylark.points(atLeast: 130)),
             skylarkPath: skylark.pathData,
-            angles: .random,
+            angles: angles,
             structuredData: try Discovery.structuredData()
         )
         try page.render().write(to: output.appending(path: "index.html"), atomically: true, encoding: .utf8)
@@ -569,7 +579,8 @@ struct TurgaiSite {
         let tech = TechPage(
             styles: try String(contentsOf: TurgaiBrandAssets.stylesheet, encoding: .utf8) + "\n"
                 + String(contentsOf: resource("tech", "css"), encoding: .utf8),
-            skylarkPath: skylark.pathData
+            skylarkPath: skylark.pathData,
+            angles: angles
         )
         let techFolder = output.appending(path: TechPage.path, directoryHint: .isDirectory)
         try files.createDirectory(at: techFolder, withIntermediateDirectories: true)

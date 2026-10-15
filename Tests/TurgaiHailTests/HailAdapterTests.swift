@@ -185,7 +185,7 @@ struct HailAdapterTests {
             externalAddress: ExternalConversationAddress("chat")
         )
         let peer = HailConversationPeer(
-            run: { request, _ in
+            run: { request in
                 guard let response = HailResponse(content: request.message.text) else {
                     throw HailAdapterError.emptyResponse
                 }

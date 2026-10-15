@@ -1035,18 +1035,10 @@ public distributed actor Conversation {
                 )
             },
             operation: {
-                var turnContext = ["Current date and time: \(Self.timeAnchor())"]
-                turnContext.append(
-                    contentsOf: await Self.memoryContext(
-                        for: request,
-                        actorSystem: actorSystem,
-                        conversationID: conversationID
-                    )
-                )
                 // What the agent does meanwhile reaches the room through its activity; this
                 // only asks, and waits for the reply.
                 await conversation.whenLocal { $0.followActivity() }
-                let response = try await peer.run(to: request, turnContext: turnContext)
+                let response = try await peer.run(to: request)
                 let text = request.message.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !text.isEmpty,
                     let extractionConfiguration,
@@ -1257,82 +1249,6 @@ public distributed actor Conversation {
         }
     }
 
-    /// Retrieves memory immediately before a primary model turn. Memory is
-    /// best-effort, both here and when the turn's observation is recorded:
-    /// it is useful context, but it must not make the conversation
-    /// unavailable while the separate User actor is recovering.
-    ///
-    /// Returns only the retrieved facts — per-turn data that lives in the
-    /// request's tail context. The static capability guidance is part of the
-    /// agent's system prompt, so it stays inside the reusable prompt prefix.
-    private static func memoryContext(
-        for request: ConversationTurnRequest,
-        actorSystem: ClusterSystem,
-        conversationID: ConversationID
-    ) async -> [String] {
-        let message = request.message
-        guard !message.text.isEmpty else {
-            return []
-        }
-        let userID = message.userID
-
-        do {
-            let user = try await User.resolve(on: actorSystem, userID: userID)
-            if let instruction = try await user.memoryInstruction(for: message.text) {
-                return [instruction]
-            }
-            return []
-        } catch {
-            actorSystem.log.warning(
-                "Could not retrieve user memory for turn",
-                metadata: [
-                    "conversationID": .string(conversationID.stableKey),
-                    "error": .string(String(describing: error)),
-                ]
-            )
-            return []
-        }
-    }
-
-    /// One stable time anchor per turn. The prompt carries no message
-    /// timestamps, so without this anchor a long-idle conversation drifts to
-    /// whatever time the most recent tool output happened to mention.
-    ///
-    /// The default is deliberately fixed so the host's timezone cannot alter
-    /// the assistant's operating timezone.
-    static func timeAnchor(
-        at date: Date = Date(),
-        timeZone: TimeZone = TimeZone(identifier: "Europe/Berlin")!
-    ) -> String {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        let components = calendar.dateComponents(
-            [.year, .month, .day, .hour, .minute, .weekday],
-            from: date
-        )
-        let weekdays = [
-            "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
-        ]
-        let weekday =
-            components.weekday
-            .flatMap { (0..<7).contains($0 - 1) ? weekdays[$0 - 1] : nil } ?? ""
-        let offset = timeZone.secondsFromGMT(for: date)
-        let sign = offset < 0 ? "-" : "+"
-        let absolute = abs(offset)
-        return String(
-            format: "%04d-%02d-%02d %02d:%02d %@ (%@, UTC%@%02d:%02d)",
-            components.year ?? 0,
-            components.month ?? 0,
-            components.day ?? 0,
-            components.hour ?? 0,
-            components.minute ?? 0,
-            weekday,
-            timeZone.identifier,
-            sign,
-            absolute / 3600,
-            (absolute % 3600) / 60
-        )
-    }
 
     private func action(for event: ConversationModelEvent) -> ConversationAction {
         switch event {

@@ -25,6 +25,11 @@ enum LocalServer {
     static let sessionCookieName = "turgai_auth"
 }
 
+/// Where the Website object serves its page, on this machine.
+enum LocalWebsite {
+    static let port = 3334
+}
+
 extension TurgaiServerClient: DependencyKey {
     static let liveValue: TurgaiServerClient = {
         let baseURL = LocalServer.baseURL

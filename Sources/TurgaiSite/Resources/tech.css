@@ -13,6 +13,9 @@
   /* one glass for the bar and, on phones, the text over the orbit */
   --tech-glass: color-mix(in srgb, var(--canvas) 80%, transparent);
   --tech-glass-filter: saturate(1.8) blur(1.25rem);
+  /* the idea page's night, for the last part */
+  --night: #142c4f;
+  --night-ink: #f2f6fb;
 }
 @media (prefers-color-scheme: dark) {
   html:not([data-theme]) { --life: var(--signal-yellow); --message: var(--signal-coral); --code-bg: #0e2029; }
@@ -36,6 +39,18 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
   background: var(--tech-glass); -webkit-backdrop-filter: var(--tech-glass-filter); backdrop-filter: var(--tech-glass-filter);
 }
 .tech-bar .wordmark { gap: .4375rem; }
+/* at night the bar is tinted and its words turn white, as the last part reaches it. The tint is a colour, the words
+   flip at one point, and each follows the night's timeline alone (opacity and transform would hit Safari's stale
+   drawing after a reload) */
+.tech-bar { --mark-ink: var(--ink); }
+.tech-bar .wordmark, .tech-bar .nav-link-active { color: var(--mark-ink); }
+.tech-bar::after { content: ""; position: absolute; inset: 0; z-index: -1; background-color: transparent; pointer-events: none; }
+@supports (animation-timeline: view()) {
+  .tech-bar::after { animation: tech-dusk linear both; animation-timeline: --t-night; animation-range: cover 40% cover 50%; }
+  .tech-bar { animation: tech-night linear both; animation-timeline: --t-night; animation-range: cover 40% cover 50%; }
+}
+@keyframes tech-dusk { to { background-color: color-mix(in srgb, var(--night) 85%, transparent); } }
+@keyframes tech-night { to { --mark-ink: var(--night-ink); --link: var(--night-ink); --link-strong: #fff; } }
 .mark-bird { width: 1.5rem; height: 1.5rem; fill: currentColor; flex: none; }
 .app-nav-links .nav-link { white-space: nowrap; }
 .off { cursor: default; pointer-events: none; opacity: .4; filter: grayscale(1); }
@@ -72,11 +87,13 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
 .orbit {
   position: fixed; z-index: 0; top: 50%; right: max(1vw, calc((100vw - 92rem) / 2)); translate: 0 -50%;
   width: min(40vw, 80svh); aspect-ratio: 1; pointer-events: none;
+  /* the orbit's own colours: the page's by day; the last part's night switches them (see "the night") */
+  --o-ink: var(--ink); --o-muted: var(--muted); --o-line: var(--line); --o-line-strong: var(--line-strong);
 }
 .orbit svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .orbit text { font-family: var(--font-code); text-anchor: middle; }
-.orbit .path { fill: none; stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 2 9; stroke-linecap: round; }
-.orbit .spoke { stroke: var(--line); stroke-width: 1.5; }
+.orbit .path { fill: none; stroke: var(--o-line-strong); stroke-width: 1.5; stroke-dasharray: 2 9; stroke-linecap: round; }
+.orbit .spoke { stroke: var(--o-line); stroke-width: 1.5; }
 .orbit .pulse { fill: var(--message); }
 .orbit .halo { fill: color-mix(in srgb, var(--signal-yellow) 45%, transparent); }
 .orbit .flare { fill: none; stroke: var(--signal-yellow); stroke-width: 4; }
@@ -84,10 +101,10 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
 .orbit .core-label { fill: var(--signal-yellow); font-size: 24px; font-weight: 700; letter-spacing: .08em; }
 .orbit .gate { fill: none; stroke: var(--life); stroke-width: 6; }
 .orbit .gate-label { fill: var(--life); font-size: 18px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
-.orbit .boundary { fill: none; stroke: var(--ink); stroke-width: 3; stroke-dasharray: 14 10; }
-.orbit .boundary-label { fill: var(--ink); font-size: 20px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.orbit .boundary { fill: none; stroke: var(--o-ink); stroke-width: 3; stroke-dasharray: 14 10; }
+.orbit .boundary-label { fill: var(--o-ink); font-size: 20px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
 /* the rockets between planets: a white hull, coral fins, a blue window, a yellow flame */
-.orbit .rocket-body { fill: var(--surface); stroke: var(--ink); stroke-width: 2.5; stroke-linejoin: round; }
+.orbit .rocket-body { fill: var(--surface); stroke: var(--o-ink); stroke-width: 2.5; stroke-linejoin: round; }
 .orbit .rocket-fin { fill: var(--life); }
 .orbit .rocket-window { fill: var(--message); }
 .orbit .rocket-flame { fill: var(--signal-yellow); }
@@ -98,7 +115,7 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
 .orbit .ring, .orbit .upright { animation-name: orbit-turn; animation-timing-function: linear; animation-iteration-count: infinite; }
 /* a planet: a dot placed by percentage, its names below, turned back so they stay upright */
 .orbit .planet { position: absolute; width: 0; height: 0; }
-.orbit .dot { position: absolute; width: 2.78cqw; height: 2.78cqw; translate: -50% -50%; border-radius: 50%; background: var(--ink); }
+.orbit .dot { position: absolute; width: 2.78cqw; height: 2.78cqw; translate: -50% -50%; border-radius: 50%; background: var(--o-ink); }
 .orbit .dot.t-message { background: var(--message); }
 .orbit .dot.t-life { background: var(--life); }
 .orbit .upright { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
@@ -106,14 +123,22 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
   position: absolute; top: 2cqw; left: 0; translate: -50% 0; display: grid; justify-items: center; white-space: nowrap;
   font-family: var(--font-code); line-height: 1.15;
 }
-.orbit .names b { font-size: 2.41cqw; font-weight: 700; color: var(--ink); }
-.orbit .names i { font-size: 1.85cqw; font-style: normal; color: var(--muted); }
+.orbit .names b { font-size: 2.41cqw; font-weight: 700; color: var(--o-ink); }
+.orbit .names i { font-size: 1.85cqw; font-style: normal; color: var(--o-muted); }
 @keyframes orbit-turn { to { transform: rotate(360deg); } }
 /* each piece appears once, as its part of the story comes in, and stays */
 @supports (animation-timeline: view()) {
   .orbit .appear { animation: orbit-appear linear both; animation-range: entry 20% entry 80%; transform-box: fill-box; transform-origin: center; }
 }
 @keyframes orbit-appear { from { opacity: 0; scale: .6; } to { opacity: 1; scale: 1; } }
+/* the night: as the last part's night rises past the orbit's middle, the orbit's ink, labels and lines turn light.
+   The colours switch at one point (custom properties don't fade), on the night's timeline alone; colours are drawn
+   from the page, so Safari's stale drawing after a reload can't hold an old one. The core stays dark, so its yellow
+   word still reads, and the coloured dots keep their colours */
+@supports (animation-timeline: view()) {
+  .orbit { animation: orbit-night linear both; animation-timeline: --t-night; animation-range: entry 0% entry 100%; }
+}
+@keyframes orbit-night { to { --o-ink: var(--night-ink); --o-muted: #b6c6dc; --o-line: #3d5a85; --o-line-strong: #5d7aa5; } }
 @media (prefers-reduced-motion: reduce) {
   .orbit .ring, .orbit .upright { animation: none; }
   .orbit .motion { display: none; }
@@ -353,12 +378,34 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
 .status li { font-size: 1rem; }
 
 /* ---------- the end ---------- */
-.tech-end { padding-block: clamp(4rem, 10vh, 7rem) 3rem; border-top: 6px solid var(--ink); }
-.tech-end .closing {
-  margin: 0 0 2rem; max-width: 34ch;
-  font: 800 clamp(1.7rem, 3.2vw, 2.5rem)/1.15 var(--font-ui); letter-spacing: -.03em; color: var(--ink); text-wrap: balance;
+/* the last part is night, like the idea page's last page: a full-width block at least a screen tall. It isn't
+   positioned, so its background paints under the fixed orbit, which the night slides in beneath; its text is
+   positioned and stays above the orbit. Nothing about it is animated; it simply scrolls in */
+.tech-night > * { position: relative; z-index: 1; }
+.tech-night {
+  min-height: 100svh; display: flex; flex-direction: column;
+  margin-inline: calc(-1 * var(--gutter)); padding-inline: var(--gutter);
+  background: var(--night); view-timeline-name: --t-night;
+  --ink: var(--night-ink); --muted: #b6c6dc; --line: #2a4670;
 }
-.tech-end p:not(.closing) { margin: 0 0 1.4rem; max-width: 34rem; color: var(--ink); font-size: 1.2rem; line-height: 1.5; }
+/* the footer spans the night from gutter to gutter, like the idea page's */
+.tech-night .tech-footer { width: 100%; max-width: none; box-sizing: border-box; margin: 0; }
+.tech-end {
+  flex: 1; display: flex; flex-direction: column; justify-content: center; padding-block: clamp(4rem, 10vh, 7rem) 3rem;
+  margin-left: max(0px, calc((100vw - 92rem) / 2)); max-width: calc(var(--rail) + var(--gap) + 40rem);
+}
+/* the same pieces as the idea page's last page: a tilted coral sticker, the big line with a coral flag, the
+   meaning in bold, then the invitation */
+.tech-end { gap: 1.8rem; }
+.tech-end > .soon {
+  align-self: flex-start; padding: .4rem .75rem; border-radius: 6px; transform: rotate(var(--ga3));
+  font: 700 .8rem/1 var(--font-code); letter-spacing: .1em; text-transform: uppercase; color: #fff; background: var(--signal-coral);
+}
+.tech-end .big { margin: 0; max-width: min(60rem, 100%); font: 900 clamp(2.8rem, 8vw, 7.4rem)/.92 var(--font-ui); letter-spacing: -.055em; color: var(--ink); }
+.tech-end .big .flag::before { background: var(--signal-coral); transform: rotate(var(--ga2)); }
+.tech-end .close { display: grid; gap: 1.2rem; max-width: 42rem; }
+.tech-end .close p { margin: 0; color: var(--ink); font-size: 1.2rem; line-height: 1.5; }
+.tech-end .close .belief { font-size: clamp(1.2rem, 2vw, 1.5rem); font-weight: 700; line-height: 1.3; letter-spacing: -.01em; }
 .cta { display: flex; flex-wrap: wrap; gap: 12px; }
 .cta .button { min-height: 3rem; padding: .9rem 1.4rem; font-size: 1rem; font-weight: 700; }
 .cta .button-accent { transform: rotate(calc(var(--ga3, -2deg) * .5)); }
@@ -375,12 +422,13 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
   .tech { padding-top: calc(4.5rem + min(84vw, 38svh)); margin-left: 0; }
   .tech-footer { margin-left: 0; }
   /* the text scrolls over the orbit on the same glass as the top bar */
-  .tech-topic, .tech-end {
+  .tech-topic {
     background: var(--tech-glass); -webkit-backdrop-filter: var(--tech-glass-filter); backdrop-filter: var(--tech-glass-filter);
   }
   /* a small clear window before each part, where the orbit shows what the part adds */
   .window { display: block; height: 28svh; }
-  .tech-end { margin-top: 28svh; }
+  .tech-night { margin-top: 28svh; }
+  .tech-end { margin-left: 0; }
   /* gentle snapping: it settles on a window or on a part's start only when you stop near one */
   html { scroll-snap-type: y proximity; }
   .window { scroll-snap-align: start; scroll-margin-top: 4.5rem; }

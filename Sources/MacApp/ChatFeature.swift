@@ -8,8 +8,8 @@ struct ChatFeature {
     enum Connection: Equatable, Sendable {
         case connecting
         case connected(botID: BotID)
-        /// The socket closed; the feature reconnects shortly.
-        case disconnected
+        /// The socket closed, and why; the feature reconnects shortly.
+        case disconnected(why: String)
     }
 
     /// What the bot is doing in the current turn.
@@ -41,7 +41,7 @@ struct ChatFeature {
         case connect(Session)
         case disconnect
         case received(ChatEvent)
-        case closed
+        case closed(why: String)
         case sendTapped
         case sendFailed(SendMessageRequest)
         case approvalAnswered(Approval.ID, ApprovalDecision)
@@ -64,14 +64,18 @@ struct ChatFeature {
             case .connect(let session):
                 state.connection = .connecting
                 return .run { send in
+                    let why: String
                     do {
                         for try await event in await chat.connect(session) {
                             await send(.received(event))
                         }
-                    } catch {}
+                        why = "The server closed the connection."
+                    } catch {
+                        why = error.localizedDescription
+                    }
+                    await send(.closed(why: why))
                     // Reconnect after a pause, unless cancelled by `.disconnect`.
                     try await clock.sleep(for: .seconds(2))
-                    await send(.closed)
                     await send(.connect(session))
                 }
                 .cancellable(id: CancelID.socket, cancelInFlight: true)
@@ -83,8 +87,8 @@ struct ChatFeature {
                     .run { _ in await chat.disconnect() }
                 )
 
-            case .closed:
-                state.connection = .disconnected
+            case .closed(let why):
+                state.connection = .disconnected(why: why)
                 state.turn = nil
                 // The conversation asks again when the socket reconnects.
                 state.approvals = []

@@ -7,6 +7,7 @@ import Foundation
 struct TechPage: HTMLDocument {
     let styles: String
     let skylarkPath: String
+    let angles: GeometryAngles
 
     static let path = "tech/"
     static let title = "How Turgai works — objects, actors, Swift"
@@ -26,7 +27,7 @@ struct TechPage: HTMLDocument {
         link(.href("../" + SitePath.skylark), .rel(.icon))
         link(.href("../favicon.png"), .rel(.icon), .init(name: "type", value: "image/png"), .init(name: "sizes", value: "96x96"))
         link(.href("../apple-touch-icon.png"), .init(name: "rel", value: "apple-touch-icon"), .init(name: "sizes", value: "180x180"))
-        HTMLRaw("<style>\n\(styles)\n\(Orbit.css)\n</style>")
+        HTMLRaw("<style>\n\(styles)\n\(angles.css)\n\(Orbit.css)\n</style>")
     }
 
     var body: some HTML {
@@ -49,19 +50,26 @@ struct TechPage: HTMLDocument {
             }
 
             for topic in TechTopic.allCases { TechSection(topic: topic) }
-
+        }
+        // the last part, at night like the idea page's last page: a block that covers the orbit as it scrolls in
+        section(.class("tech-night")) {
+            // built like the idea page's last page: the sticker, the big line, then what it means and the way in
             div(.class("tech-end")) {
-                p(.class("closing")) { "Because the core only runs objects, an agent, a rule and a part of your product are built and changed in the same way, and new ones join while the rest keeps running." }
-                p { "Turgai is in early alpha. If you’d like to know more or see it running, write to us." }
-                div(.class("cta")) {
-                    a(.class("button button-accent"), .href("mailto:hello@turg.ai")) { "Write to us" }
-                    a(.class("button button-secondary"), .href("../")) { "Back to the idea" }
+                ComingSoon()
+                p(.class("big")) { "Start small."; br(); span(.class("flag")) { "Keep adding." } }
+                div(.class("close")) {
+                    p(.class("belief")) { "An agent, a rule and a part of your product are built and changed in the same way, and new ones join while the rest keeps running." }
+                    p { "Turgai is in early alpha. If you’d like to know more or see it running, write to us." }
+                    div(.class("cta")) {
+                        a(.class("button button-accent"), .href("mailto:hello@turg.ai")) { "Write to us" }
+                        a(.class("button button-secondary"), .href("../")) { "Back to the idea" }
+                    }
                 }
             }
-        }
-        footer(.class("tech-footer")) {
-            span { "Turgai · Apache 2.0 · early development" }
-            span { "Turgai means skylark." }
+            footer(.class("tech-footer")) {
+                span { "Turgai · Apache 2.0 · early development" }
+                span { "Turgai means skylark." }
+            }
         }
     }
 }
@@ -216,13 +224,13 @@ enum TechTopic: String, CaseIterable {
         }
         """
 
+    /// How one agent asks another, as Hail's agent tool does: find it by its id (wherever it runs, woken if
+    /// idle), say who is asking, and call it.
     static let respond = """
-        <b>let</b> reply: String = <b>try await</b> agent.respond(
-          input,
-          message: input.chatMessage(),
-          referenceEntries: input.referenceEntries(),
-          inputID: input.inputID
-        )
+        <b>let</b> planner: Agent = <b>try await</b> actorSystem.agent(plannerID)
+        <b>let</b> received = AgentHistory.Input(
+          from: .agent(conciergeID), content: GeneratedContent(request), at: Date())
+        <b>let</b> plan: String = <b>try await</b> planner.respond(request, received: received)
         """
 
     static let profile = """
@@ -482,7 +490,8 @@ struct Orbit: HTML {
     /// Each part of the story names a scroll timeline; everything the orbit adds for it follows that timeline.
     /// The selectors outrank `.orbit .appear`, whose `animation` shorthand would otherwise reset the timeline.
     static var css: String {
-        let names = TechTopic.allCases.map { "--t-\($0.rawValue)" }.joined(separator: ", ")
+        // the parts' timelines, and the night's, which the top bar follows
+        let names = (TechTopic.allCases.map { "--t-\($0.rawValue)" } + ["--t-night"]).joined(separator: ", ")
         return "body { timeline-scope: \(names); }\n"
             + TechTopic.allCases.map { ".orbit .appear.a-\($0.rawValue) { animation-timeline: --t-\($0.rawValue); }" }.joined(separator: "\n")
     }

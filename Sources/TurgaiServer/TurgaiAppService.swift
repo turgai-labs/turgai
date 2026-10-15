@@ -333,6 +333,33 @@ struct TurgaiAppService: Service, Sendable {
                 },
                 turnToolsProvider: { context, actorSystem in
                     let objectCatalog = try await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog
+                    // An object's Swift is written by the agent's own model, in a session of its own.
+                    let writer: ObjectWriter? =
+                        if let profile = await agentProfiles.profile(id: context.agentID.role.rawValue) {
+                            ObjectWriter(
+                                endpoint: try await endpointFactory.endpoint(
+                                    for: profile,
+                                    temperature: runtimeConfiguration.temperature,
+                                    ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive
+                                ),
+                                report: { event in
+                                    let logger = Logger(label: "turgai.objectwriter")
+                                    // How big what it's asked is, and which objects it's shown: the
+                                    // prompt itself follows, in full.
+                                    if case .asked(let prompt) = event {
+                                        let objects = prompt.split(separator: "\n").filter { $0.hasPrefix("- ") && $0.contains(": ") && !$0.hasPrefix("- The ") }
+                                        logger.info(
+                                            "Object writer asked",
+                                            metadata: [
+                                                "characters": "\(prompt.count)",
+                                                "objects": "\(objects.map { $0.dropFirst(2).prefix { $0 != ":" } }.joined(separator: ", "))",
+                                            ])
+                                    }
+                                    logger.info("\(event.written)")
+                                })
+                        } else {
+                            nil
+                        }
                     var tools = try await ConversationTools.make(
                         context: context,
                         attachmentResolver: attachmentResolver,
@@ -344,6 +371,7 @@ struct TurgaiAppService: Service, Sendable {
                             actorSystem: actorSystem, agentRole: context.agentID.role.rawValue),
                         actorSystem: actorSystem,
                         objectCatalog: objectCatalog,
+                        writer: writer,
                         includeConversationTools: context.agentID.role.rawValue != "user-tool"
                     )
                     // Hail's files and agent messaging, for the agents granted them.
@@ -390,12 +418,12 @@ struct TurgaiAppService: Service, Sendable {
                         .grantingAll(for: FindObjectsEffect.self)
                         .grantingAll(for: ListObjectsEffect.self)
                         .grantingAll(for: MakeObjectEffect.self)
-                        .grantingAll(for: PageEffect.self)
+                        .grantingAll(for: ToolPageEffect.self)
                         .grantingAll(for: EditObjectEffect.self)
-                        .grantingAll(for: DefineObjectEffect.self)
                         .grantingAll(for: UseObjectEffect.self)
                         .grantingAll(for: RemoveObjectEffect.self)
                         .grantingAll(for: InvokeObjectEffect.self)
+                        .grantingAll(for: RecallEffect.self)
                 }
             )
             // The plugin is the stores' long-term owner: it receives the
