@@ -4,7 +4,6 @@ import EventSourcing
 import Foundation
 import Hail
 import struct AnyLanguageModel.GeneratedContent
-import SwiftScriptInterpreter
 import Testing
 import VirtualActors
 @testable import TurgaiApplication
@@ -38,7 +37,11 @@ struct DynamicObjectTests {
                 let counter = "actor CoffeeCounter {\n    var count = 0\n\n    @Event\n    func cupAdded(count: Int)\n\n    func addCup() {\n        count += 1\n        cupAdded(count: count)\n    }\n}"
                 let logger = "actor CupLogger {\n    @Subscribed var counter: CoffeeCounter\n    var lastCount = 0\n\n    func onCupAdded(count: Int) {\n        lastCount = count\n    }\n}"
                 let counterID = try await objects.create(name: "CoffeeCounter", spec: .new(try Script(code: counter, type: "CoffeeCounter")))
-                let loggerID = try await objects.create(name: "CupLogger", spec: .new(try Script(code: logger, type: "CupLogger")))
+                // The logger is written against the counter's spec, as Turgai gives it the kinds there are.
+                let counterSpec = Uses(
+                    interface: ModuleInterface(name: Uses.module, source: "actor CoffeeCounter {\n    func addCup() async throws\n    @Event func cupAdded(count: Int)\n}"),
+                    names: [:])
+                let loggerID = try await objects.create(name: "CupLogger", spec: .new(try Script(code: logger, type: "CupLogger", uses: counterSpec)))
                 let coffee = try await DynamicObject.resolve(on: node, identity: counterID)
                 let log = try await DynamicObject.resolve(on: node, identity: loggerID)
 
@@ -104,7 +107,10 @@ struct DynamicObjectTests {
                 // property does.
                 let unawaited = code.replacingOccurrences(of: "try await player.playing", with: "player.playing")
                 let refused = await ScriptInstance.problems(in: try Script(code: unawaited, type: "Bridge", uses: others.uses))
-                #expect(refused.map { $0.written(in: unawaited) } == ["`player.playing` needs try await"])
+                #expect(refused.map { $0.written(in: unawaited) } == [
+                    "`player.playing` in `let now = player.playing`: expression is 'async' but is not marked with 'await'",
+                    "`player.playing` in `let now = player.playing`: property access can throw, but it is not marked with 'try' and the error is not handled",
+                ])
                 let script = try Script(code: code, type: "Bridge", uses: others.uses)
                 #expect(await ScriptInstance.problems(in: script).isEmpty)
 
@@ -222,16 +228,17 @@ struct DynamicObjectTests {
         }
     }
 
-    /// A call to a function of its own is held to what the function declares, as Swift holds it:
-    /// awaited when it's async, tried when it throws, in a function that throws or catches it.
+    /// A call to a function of its own is held to what the function declares, as Swift holds it,
+    /// in Swift's words: awaited when it's async, tried when it throws, in a function that throws
+    /// or catches it.
     @Test
     func ownFunctionsAreCalledAsTheyreDeclared() async throws {
         for (code, refusals) in [
             ("actor Shop {\n    var total = 0\n    func pay(_ amount: Int) {\n        charge(amount)\n    }\n    private func charge(_ amount: Int) throws {\n        total += amount\n    }\n}",
-             ["`func pay(_ amount: Int)` needs throws", "`charge(amount)` needs try"]),
+             ["`charge(amount)`: call can throw, but it is not marked with 'try' and the error is not handled"]),
             ("actor Shop {\n    var total = 0\n    func pay(_ amount: Int) {\n        do {\n            try charge(amount)\n        } catch {}\n    }\n    private func charge(_ amount: Int) throws {\n        total += amount\n    }\n}", []),
             ("actor Shop {\n    func pay() {\n        settle()\n    }\n    private func settle() async {}\n}",
-             ["`func pay()` needs async", "`settle()` needs await"]),
+             ["`settle()`: 'async' call in a function that does not support concurrency"]),
         ] {
             let problems = await ScriptInstance.problems(in: try Script(code: code, type: "Shop"))
             #expect(problems.map { $0.written(in: code) } == refusals)
@@ -330,7 +337,10 @@ struct DynamicObjectTests {
                 // What's kept is still another object: unwrapped, it's called as one.
                 let unawaited = bob.replacingOccurrences(of: "try await manager.approve", with: "manager.approve")
                 let refused = await ScriptInstance.problems(in: try Script(code: unawaited, type: "Bob", uses: others.uses))
-                #expect(refused.map { $0.written(in: unawaited) } == ["`manager.approve(amount: amount)` needs try await"])
+                #expect(refused.map { $0.written(in: unawaited) } == [
+                    "`manager.approve(amount: amount)` in `return manager.approve(amount: amount)`: expression is 'async' but is not marked with 'await'",
+                    "`manager.approve(amount: amount)` in `return manager.approve(amount: amount)`: call can throw, but it is not marked with 'try' and the error is not handled",
+                ])
                 let bobScript = try Script(code: bob, type: "Bob", uses: others.uses)
                 #expect(await ScriptInstance.problems(in: bobScript).isEmpty)
                 let bobID = try await objects.create(name: "Bob", spec: .new(bobScript))
@@ -350,7 +360,7 @@ struct DynamicObjectTests {
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
                 let objects = try await DynamicObjects.resolve(on: node, scope: .shared)
-                let code = "actor Ann {\n    func loop() async -> Int {\n        return await ann.loop()\n    }\n}"
+                let code = "actor Ann {\n    func loop() async throws -> Int {\n        return try await ann.loop()\n    }\n}"
                 let identity = try await objects.create(name: "Ann", spec: .new(try Script(code: code, type: "Ann")))
                 let ann = try await DynamicObject.resolve(on: node, identity: identity)
 
@@ -359,7 +369,7 @@ struct DynamicObjectTests {
                     Issue.record("Ann's health isn't failing")
                     return
                 }
-                #expect(failure.problem.hasPrefix("calls between objects went 65 deep: Ann → Ann → "))
+                #expect(failure.problem.hasPrefix("calls between objects went 65 deep: Ann → Ann → "), "\(failure.problem)")
             }
         }
     }

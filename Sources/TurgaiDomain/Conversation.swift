@@ -818,12 +818,15 @@ public struct ConversationTurn: Hashable, Codable, Sendable {
         case interrupted(at: Date)
     }
 
+    /// The turn's own ID, as its turn events carry it: two turns for one message are two turns.
+    public let id: TurnID
     public let message: String
     public let startedAt: Date
     public var steps: [ReplyStep]
     public var outcome: Outcome
 
-    public init(message: String, startedAt: Date, steps: [ReplyStep] = [], outcome: Outcome = .running) {
+    public init(id: TurnID, message: String, startedAt: Date, steps: [ReplyStep] = [], outcome: Outcome = .running) {
+        self.id = id
         self.message = message
         self.startedAt = startedAt
         self.steps = steps
@@ -837,6 +840,8 @@ public enum ReplyStep: Hashable, Codable, Sendable {
     case toolCalled(name: String, arguments: String, at: Date)
     /// A tool call's result; `failure` says why it failed, when it did.
     case toolFinished(name: String, output: String, failure: String?, at: Date)
+    /// What the runtime told the model in the turn, in the words it was told.
+    case noticed(words: String, at: Date)
 }
 
 public struct OutboundAction: Hashable, Codable, Sendable {
@@ -1021,6 +1026,8 @@ public func reduce(
 
         next.status = .failed(failure)
         next.activeMessage = nil
+        // A message already waiting is the person's next word: it starts now, as after a reply.
+        effects += startNextTurn(&next)
 
     case .reset:
         if let turnID = activeTurnID(in: next.status) {

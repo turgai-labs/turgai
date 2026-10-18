@@ -425,8 +425,10 @@ public struct HailAgentAdapter: Sendable {
             switch runtimeError {
             case .modelUnavailable:
                 return "I’m having trouble reaching my main systems right now. Please try again in a moment."
-            case .modelMisbehavior:
-                return "I couldn’t complete that request. Please try again."
+            case .modelThoughtPastAnswer:
+                return "The model thought for the whole length of an answer without answering, so there's no reply. Ask again, perhaps in a smaller step."
+            case .modelMisbehavior(let reason):
+                return "The model's answer couldn't be used: \(HailErrorFormatter.sanitizedModelOutput(reason))"
             default:
                 break
             }

@@ -15,6 +15,18 @@ extension TurgaiMainWebApp {
         let auth = dependencies.auth
         let agentProfiles = dependencies.agentProfiles
         let agentCredentials = dependencies.agentCredentials
+        let requestLimits = dependencies.requestLimits
+        /// The limit of `profile`'s provider account, if it has one.
+        @Sendable func requestLimit(of profile: TurgaiAgentProfile) async -> Int? {
+            guard let account = profile.providerConfiguration.account(for: profile.model) else { return nil }
+            return await requestLimits.limit(for: account)
+        }
+        /// Sets the limit the form gives for `profile`'s provider account: empty lifts it.
+        @Sendable func saveRequestLimit(from form: [String: [String]], for profile: TurgaiAgentProfile) async throws {
+            guard let account = profile.providerConfiguration.account(for: profile.model) else { return }
+            let written = (form["requestLimit"]?.first ?? "").trimmingCharacters(in: .whitespaces)
+            try await requestLimits.setLimit(Int(written), for: account)
+        }
         let runtimeSnapshots = dependencies.runtimeSnapshots
         router.get("/chat") { request, context in
             guard let profile = await agentProfiles.defaultProfile() else {
@@ -72,13 +84,15 @@ extension TurgaiMainWebApp {
             let runtime = await runtimeSnapshots().filter { $0.profileID == profile.id }
             let placement: AgentDetailPage.Placement =
                 await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
+            let limit = await requestLimit(of: profile)
             return HTMLResponse {
                 AgentDetailPage(
                     user: user,
                     profile: profile,
                     modelCatalog: modelCatalog,
                     runtime: runtime,
-                    placement: placement
+                    placement: placement,
+                    requestLimit: limit
                 )
             }.response(from: request, context: context)
         }
@@ -114,6 +128,7 @@ extension TurgaiMainWebApp {
                 profile.persona = values.persona
                 profile.instructions = values.instructions
                 try await agentProfiles.update(profile)
+                try await saveRequestLimit(from: form, for: profile)
                 pendingCredential = nil
                 if let oldReference = existingProfile.providerConfiguration.credentialReference,
                     oldReference != submission.configuration.credentialReference
@@ -180,6 +195,7 @@ extension TurgaiMainWebApp {
                     persona: values.persona,
                     instructions: values.instructions
                 )
+                try await saveRequestLimit(from: form, for: profile)
                 pendingCredential = nil
                 return TurgaiWebSupport.redirect(to: "/agents/\(profile.id)")
             } catch {

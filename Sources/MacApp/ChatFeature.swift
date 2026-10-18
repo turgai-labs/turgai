@@ -143,7 +143,7 @@ struct ChatFeature {
         case .turnStarted(_, let turnID):
             state.turn = Turn()
             let message = state.messages.last { $0.role == .user }?.text ?? ""
-            state.turns.updateOrAppend(TurnRecord(id: turnID.rawValue.uuidString, message: message, startedAt: now))
+            state.turns.updateOrAppend(TurnRecord(id: turnID, message: message, startedAt: now))
         case .turnPhase(_, _, let phase):
             state.turn = Turn(phase: phase, activity: state.turn?.activity, partial: state.turn?.partial)
         case .turnStatus(_, _, let activity):
@@ -153,15 +153,15 @@ struct ChatFeature {
         case .turnCompleted(_, let turnID, let message):
             state.turn = nil
             append(message, to: &state)
-            state.turns[id: turnID.rawValue.uuidString]?.outcome = .replied(message.text, at: now)
+            state.turns[id: turnID]?.outcome = .replied(message.text, at: now)
         case .turnFailed(_, let turnID, let error):
             state.turn = nil
             state.error = error
-            if let turnID { state.turns[id: turnID.rawValue.uuidString]?.outcome = .failed(error.message, at: now) }
+            if let turnID { state.turns[id: turnID]?.outcome = .failed(error.message, at: now) }
         case .turns(_, let turns):
             state.turns = IdentifiedArray(uniqueElements: turns)
         case .turnStep(_, let turnID, let step):
-            state.turns[id: turnID.rawValue.uuidString]?.steps.append(step)
+            state.turns[id: turnID]?.steps.append(step)
         case .approvalRequested(_, _, let approval):
             state.approvals.updateOrAppend(approval)
         case .approvalResolved(_, let id, _):

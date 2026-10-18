@@ -138,6 +138,7 @@ let package = Package(
                 .product(name: "Yams", package: "Yams"),
                 .product(name: "Parsing", package: "swift-parsing"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+                .product(name: "SwiftScriptSema", package: "SwiftScript"),
                 .product(name: "SwiftScriptInterpreter", package: "SwiftScript"),
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftParser", package: "swift-syntax"),
@@ -149,8 +150,6 @@ let package = Package(
                 .product(name: "SwiftDiagnostics", package: "swift-syntax"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "Elementary", package: "elementary"),
-                .product(name: "ElementaryHTMX", package: "elementary-htmx"),
-                .product(name: "ElementaryHTMXSSE", package: "elementary-htmx"),
             ]
         ),
         .executableTarget(
@@ -294,12 +293,22 @@ let package = Package(
             name: "TurgaiObjectsTests",
             dependencies: [
                 "TurgaiObjects",
+                .product(name: "SwiftScriptSema", package: "SwiftScript"),
                 "TurgaiApplication",
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
             ]
+        ),
+        // The Swift module Turgai gives an object's code compiles, for every object written so far.
+        .testTarget(
+            name: "ObjectModuleTests",
+            dependencies: [
+                "TurgaiObjects",
+                .product(name: "SwiftCompilerCheck", package: "SwiftScript"),
+            ],
+            resources: [.copy("Corpus")]
         ),
         .testTarget(
             name: "MacAppTests",

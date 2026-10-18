@@ -25,6 +25,7 @@ struct AgentDetailPage: HTMLDocument, Sendable {
     let modelCatalog: TurgaiModelCatalog
     let runtime: [TurgaiAgentRuntimeSnapshot]
     let placement: Placement
+    let requestLimit: Int?
     let error: String?
 
     init(
@@ -33,6 +34,7 @@ struct AgentDetailPage: HTMLDocument, Sendable {
         modelCatalog: TurgaiModelCatalog,
         runtime: [TurgaiAgentRuntimeSnapshot] = [],
         placement: Placement,
+        requestLimit: Int? = nil,
         error: String? = nil
     ) {
         self.user = user
@@ -40,6 +42,7 @@ struct AgentDetailPage: HTMLDocument, Sendable {
         self.modelCatalog = modelCatalog
         self.runtime = runtime
         self.placement = placement
+        self.requestLimit = requestLimit
         self.error = error
     }
 
@@ -95,7 +98,8 @@ struct AgentDetailPage: HTMLDocument, Sendable {
                                 action: "/agents/update",
                                 profile: profile,
                                 modelCatalog: modelCatalog,
-                                submitLabel: "Save changes"
+                                submitLabel: "Save changes",
+                                requestLimit: requestLimit
                             )
                             if case .additional = placement {
                                 form(.method(.post), .action("/agents/delete"), .class("delete-form")) {

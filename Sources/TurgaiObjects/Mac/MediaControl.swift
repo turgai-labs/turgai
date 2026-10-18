@@ -86,6 +86,9 @@ public struct NowPlaying: Codable, Sendable, Equatable {
     public var title: String?
     public var artist: String?
     public var album: String?
+    /// Where its artwork is on the web, at an http or https address, or null when the app playing
+    /// it doesn't say.
+    public var artworkURL: String?
     /// Whether it's playing now, or paused.
     public var isPlaying: Bool
 }

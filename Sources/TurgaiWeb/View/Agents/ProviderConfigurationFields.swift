@@ -7,6 +7,8 @@ import TurgaiHail
 /// so the fields it shares with others, such as `apiKey`, submit only its values.
 struct ProviderConfigurationFields: HTML, Sendable {
     let profile: TurgaiAgentProfile?
+    /// How many requests the saved profile's provider account takes at once, if it's limited.
+    var requestLimit: Int? = nil
 
     private var selectedProvider: AgentModelProvider {
         profile?.model.provider ?? .ollama
@@ -51,6 +53,11 @@ struct ProviderConfigurationFields: HTML, Sendable {
         }
     }
 
+    /// The saved limit when this provider is the saved one.
+    private func requestLimit(for provider: AgentModelProvider) -> Int? {
+        profile?.model.provider == provider ? requestLimit : nil
+    }
+
     /// The saved window when this provider is the saved one, otherwise the default.
     private func contextWindow(for provider: AgentModelProvider) -> Int {
         guard let profile, profile.model.provider == provider else {
@@ -78,18 +85,22 @@ struct ProviderConfigurationFields: HTML, Sendable {
                     )
                 }
                 ContextWindowField(tokens: contextWindow(for: .ollama))
+                RequestLimitField(limit: requestLimit(for: .ollama))
             }
             section(.openAI) {
                 APIKeyField(hasSavedKey: hasCredential(for: .openAI))
                 ContextWindowField(tokens: contextWindow(for: .openAI))
+                RequestLimitField(limit: requestLimit(for: .openAI))
             }
             section(.anthropic) {
                 APIKeyField(hasSavedKey: hasCredential(for: .anthropic))
                 ContextWindowField(tokens: contextWindow(for: .anthropic))
+                RequestLimitField(limit: requestLimit(for: .anthropic))
             }
             section(.gemini) {
                 APIKeyField(hasSavedKey: hasCredential(for: .gemini))
                 ContextWindowField(tokens: contextWindow(for: .gemini))
+                RequestLimitField(limit: requestLimit(for: .gemini))
             }
             section(.openAICompatible) {
                 label(.class("form-field")) {
@@ -119,6 +130,7 @@ struct ProviderConfigurationFields: HTML, Sendable {
                     )
                 }
                 ContextWindowField(tokens: contextWindow(for: .openAICompatible))
+                RequestLimitField(limit: requestLimit(for: .openAICompatible))
             }
             section(.system) {
                 div(.class("form-field")) {
@@ -172,6 +184,26 @@ private struct APIKeyField: HTML {
             )
         }
         p(.class("hint")) { "The key is stored as a secret and never shown again." }
+    }
+}
+
+/// How many requests the provider account takes at once: every bot on the same account shares it.
+private struct RequestLimitField: HTML {
+    let limit: Int?
+
+    var body: some HTML {
+        label(.class("form-field")) {
+            span(.class("field-label")) { "Requests at once" }
+            input(
+                .type(.number), .name("requestLimit"),
+                .init(name: "min", value: "1"),
+                .value(limit.map(String.init) ?? ""),
+                .placeholder("No limit")
+            )
+            p(.class("hint")) {
+                "How many requests this provider account takes at the same time, as its plan allows. Every bot on the same account shares it; the rest wait their turn. Leave empty for no limit."
+            }
+        }
     }
 }
 

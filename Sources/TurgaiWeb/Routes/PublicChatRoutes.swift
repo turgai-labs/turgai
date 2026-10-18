@@ -1102,12 +1102,14 @@ extension TurnStep {
             self.init(at: at, kind: .toolCalled(name: name, arguments: arguments))
         case .toolFinished(let name, let output, let failure, let at):
             self.init(at: at, kind: .toolFinished(name: name, output: output, failure: failure))
+        case .noticed(let words, let at):
+            self.init(at: at, kind: .noticed(words: words))
         }
     }
 }
 
 extension TurnRecord {
-    /// A past turn, as the chat protocol sends it, identified by when it started.
+    /// A past turn, as the chat protocol sends it, identified as its live turn events identify it.
     init(_ turn: ConversationTurn) {
         let outcome: TurnOutcome =
             switch turn.outcome {
@@ -1118,7 +1120,7 @@ extension TurnRecord {
             case .interrupted(let at): .interrupted(at: at)
             }
         self.init(
-            id: "\(turn.startedAt.timeIntervalSince1970)", message: turn.message, startedAt: turn.startedAt,
+            id: TurnID(rawValue: turn.id.rawValue), message: turn.message, startedAt: turn.startedAt,
             steps: turn.steps.map(TurnStep.init), outcome: outcome)
     }
 }

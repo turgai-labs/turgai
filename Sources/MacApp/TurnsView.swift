@@ -92,6 +92,7 @@ private struct StepRow: View {
         case .toolCalled(let name, _): name
         case .toolFinished(let name, _, let failure?): "\(name) failed (\(failure))"
         case .toolFinished(let name, _, nil): "\(name) answered"
+        case .noticed: "Turgai told the model"
         }
     }
 
@@ -99,6 +100,7 @@ private struct StepRow: View {
         switch step.kind {
         case .toolCalled(_, let arguments): arguments
         case .toolFinished(_, let output, _): output
+        case .noticed(let words): words
         }
     }
 
@@ -107,6 +109,7 @@ private struct StepRow: View {
         case .toolCalled: "arrow.right.circle"
         case .toolFinished(_, _, .some): "exclamationmark.triangle"
         case .toolFinished(_, _, nil): "checkmark.circle"
+        case .noticed: "info.circle"
         }
     }
 

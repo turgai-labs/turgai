@@ -89,10 +89,6 @@ final class Runtime {
 /// swift-distributed-actors#1243).
 actor MacObjectsService: Service {
     private var objects: MacObjects?
-    #if DEBUG
-        /// The demo shop and warehouse, in debug builds only.
-        private var demo: DemoObjects?
-    #endif
 
     func run() async throws {
         let system = await ClusterSystem("turgai-mac-objects") { settings in
@@ -112,9 +108,6 @@ actor MacObjectsService: Service {
                 do {
                     try await system.cluster.joined(within: .seconds(8))
                     objects = try await MacObjects(actorSystem: system, websitePort: LocalWebsite.port)
-                    #if DEBUG
-                        demo = try await DemoObjects(actorSystem: system)
-                    #endif
                     system.log.info("Mac objects joined the Turgai cluster")
                 } catch {
                     guard !system.isTerminated else { break }

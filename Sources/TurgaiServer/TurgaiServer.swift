@@ -34,6 +34,7 @@ public struct TurgaiServer: Sendable {
         let fileClient = try FileClient(directory: directory)
         let agentProfiles = try TurgaiAgentProfileStore(files: fileClient)
         let agentCredentials = AgentCredentialStore(files: fileClient)
+        let requestLimits = try RequestLimitStore(files: fileClient)
         let channelSecrets = ChannelSecretStore(files: fileClient)
         let setup = try TurgaiSetupStore(directory: directory)
         let webChatBridge = TurgaiWebChatBridge()
@@ -44,6 +45,7 @@ public struct TurgaiServer: Sendable {
             directory: directory,
             agentProfiles: agentProfiles,
             agentCredentials: agentCredentials,
+            requestLimits: requestLimits,
             setup: setup,
             channelSecrets: channelSecrets
         )
@@ -52,6 +54,7 @@ public struct TurgaiServer: Sendable {
             directory: directory,
             agentProfiles: agentProfiles,
             agentCredentials: agentCredentials,
+            requestLimits: requestLimits,
             channelSecrets: channelSecrets,
             runtimeSnapshots: { await runtimeSnapshotSource.snapshots() },
             setup: setup,
@@ -75,6 +78,7 @@ public struct TurgaiServer: Sendable {
             turgaiDirectory: directory,
             agentProfiles: agentProfiles,
             agentCredentials: agentCredentials,
+            requestLimits: requestLimits,
             channelSecrets: channelSecrets,
             runtimeSnapshotSource: runtimeSnapshotSource,
             objectCatalogSource: objects,

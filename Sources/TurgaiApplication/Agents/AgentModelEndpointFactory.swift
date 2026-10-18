@@ -4,9 +4,12 @@ import Hail
 public actor AgentModelEndpointFactory {
     private let credentials: AgentCredentialStore
     private let llamaCache = LlamaCPPEndpointCache()
+    /// How models send their requests: each in its provider account's limit, if it has one.
+    private let transports: ModelTransports
 
-    public init(credentials: AgentCredentialStore) {
+    public init(credentials: AgentCredentialStore, transports: ModelTransports = ModelTransports()) {
         self.credentials = credentials
+        self.transports = transports
     }
 
     public func endpoint(
@@ -33,6 +36,8 @@ public actor AgentModelEndpointFactory {
     ) async throws -> any ModelEndpoint {
         let model = agentModel.id.rawValue
         let contextWindow = configuration.contextWindow
+        let session: any HTTPTransport =
+            configuration.account(for: agentModel).map { transports.transport(for: $0) } ?? makeDefaultSession()
         switch configuration {
         case .ollama(let baseURL, _):
             let think: Bool?
@@ -55,49 +60,56 @@ public actor AgentModelEndpointFactory {
                 temperature: temperature,
                 contextWindow: contextWindow,
                 keepAlive: ollamaKeepAlive,
-                think: think
+                think: think,
+                session: session
             )
         case .openAI(let reference, _):
             let apiKey = try await credential(reference)
             return AnyLanguageModelEndpoint(
                 languageModel: OpenAILanguageModel(
                     apiKey: apiKey,
-                    model: model
+                    model: model,
+                session: session
                 ),
                 modelIdentifier: model,
                 temperature: temperature,
                 effectiveContextWindow: contextWindow,
                 generationOptions: try ModelRouter.generationOptions(
                     provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
-                )
+                ),
+                failures: .openAI
             )
         case .anthropic(let reference, _):
             let apiKey = try await credential(reference)
             return AnyLanguageModelEndpoint(
                 languageModel: AnthropicLanguageModel(
                     apiKey: apiKey,
-                    model: model
+                    model: model,
+                session: session
                 ),
                 modelIdentifier: model,
                 temperature: temperature,
                 effectiveContextWindow: contextWindow,
                 generationOptions: try ModelRouter.generationOptions(
                     provider: .anthropic, model: model, temperature: temperature, reasoning: reasoning
-                )
+                ),
+                failures: .anthropic
             )
         case .gemini(let reference, _):
             let apiKey = try await credential(reference)
             return AnyLanguageModelEndpoint(
                 languageModel: GeminiLanguageModel(
                     apiKey: apiKey,
-                    model: model
+                    model: model,
+                session: session
                 ),
                 modelIdentifier: model,
                 temperature: temperature,
                 effectiveContextWindow: contextWindow,
                 generationOptions: try ModelRouter.geminiGenerationOptions(
                     model: model, temperature: temperature, reasoning: reasoning
-                )
+                ),
+                failures: .gemini
             )
         case .openAICompatible(let baseURL, let reference, let api, _):
             let key = try await credential(reference)
@@ -107,14 +119,16 @@ public actor AgentModelEndpointFactory {
                     languageModel: OpenAILanguageModel(
                         baseURL: baseURL,
                         apiKey: key,
-                        model: model
+                        model: model,
+                    session: session
                     ),
                     modelIdentifier: model,
                     temperature: temperature,
                     effectiveContextWindow: contextWindow,
                     generationOptions: try ModelRouter.generationOptions(
                         provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
-                    )
+                    ),
+                    failures: .openAICompatible
                 )
             case .responses:
                 try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
@@ -122,21 +136,22 @@ public actor AgentModelEndpointFactory {
                     languageModel: OpenResponsesLanguageModel(
                         baseURL: baseURL,
                         apiKey: key,
-                        model: model
+                        model: model,
+                    session: session
                     ),
                     modelIdentifier: model,
                     temperature: temperature,
-                    effectiveContextWindow: contextWindow
+                    effectiveContextWindow: contextWindow,
+                    failures: .openAICompatible
                 )
             }
         case .appleSystem:
             try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
             #if canImport(FoundationModels)
-                return AnyLanguageModelEndpoint(
-                    languageModel: SystemLanguageModel.default,
-                    modelIdentifier: model,
+                return AnyLanguageModelEndpoint.system(
+                    model: model,
                     temperature: temperature,
-                    effectiveContextWindow: contextWindow
+                    contextWindow: contextWindow
                 )
             #else
                 throw AgentModelEndpointFactoryError.unavailable(.system)

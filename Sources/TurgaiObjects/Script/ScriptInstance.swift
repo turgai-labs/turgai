@@ -1,8 +1,7 @@
 import DiscoverableActors
 import Foundation
-import SwiftParser
+import SwiftScriptSema
 import SwiftScriptInterpreter
-import SwiftSyntax
 import Synchronization
 
 /// An object's Swift, running: an instance of its actor, live in an interpreter of its own, as an
@@ -28,14 +27,14 @@ public final class ScriptInstance {
 
     public let source: Script
     let shape: ObjectShape
-    private let interpreter: Interpreter
-    private let instance: Value
+    private let object: ScriptObject
+    private let host: Host
 
-    private init(source: Script, shape: ObjectShape, interpreter: Interpreter, instance: Value) {
+    private init(source: Script, shape: ObjectShape, object: ScriptObject, host: Host) {
         self.source = source
         self.shape = shape
-        self.interpreter = interpreter
-        self.instance = instance
+        self.object = object
+        self.host = host
     }
 
     /// An instance of `source`'s actor, holding `fields` where they're given and its starting
@@ -48,110 +47,35 @@ public final class ScriptInstance {
         schedules: @escaping @Sendable (Int) -> Void, cancels: @escaping @Sendable (Int) -> Void
     ) async throws(CodeProblem) -> ScriptInstance {
         let shape = try ObjectShape(source)
-        let interpreter = Interpreter(
-            output: { text in Run.current?.print(text) },
-            error: { _ in })
-        interpreter.schedulesTask = schedules
-        interpreter.cancelsTask = cancels
-        // What crosses to other objects is as `Codable` writes it, and what comes back is read as
-        // the type its object declares it.
-        let bridge = ValueBridge(interpreter: interpreter)
-        // Another object, asked: a call or a read goes to it as a message, and its answer is read
-        // as its type declares it, or as it reads when its type isn't known here.
-        let reach: (Value, DynamicAccess) async throws -> Value = { receiver, access in
-            guard case .opaque(let type, let recipient as ObjectReference) = receiver else { return .void }
-            let member: String
-            let answer: JSONValue
-            switch access {
-            case .call(let message, let labels, let values):
-                var arguments: [String: JSONValue] = [:]
-                for (index, (label, value)) in zip(labels, values).enumerated() {
-                    arguments[label ?? "_\(index)"] = try bridge.json(of: value)
-                }
-                member = message
-                answer = try await reaches(recipient, .call(message, arguments: .object(arguments)))
-            case .read(let name):
-                member = name
-                answer = try await reaches(recipient, .read(name))
-            }
-            guard let declared = interpreter.importedActor(type)?.answers[member] else { return value(of: answer) }
-            do {
-                return try bridge.value(of: answer, as: declared)
-            } catch {
-                throw CodeProblem("`\(member)` answered `\(answer.inline)`, which isn't a `\(declared.trimmedDescription)`: \(error)")
-            }
-        }
-        // An object whose type isn't declared here, such as one its code makes on its first call:
-        // asked by name, its answers read as they are.
-        interpreter.registerDynamicType("Object", handler: reach)
-        // What an `@Event` method's body calls: the event, with its values, announced by the
-        // message or task running now.
-        interpreter.rootScope.bind(
-            RuntimeMacros.announce,
-            value: .function(Function(name: RuntimeMacros.announce, parameters: [], kind: .builtin { arguments in
-                guard arguments.count == 2, case .string(let event) = arguments[0] else { return .void }
-                let values = try bridge.json(of: arguments[1])
-                Run.current?.announce(Announcement(event: event, values: values))
-                return .void
-            })),
-            mutable: false)
+        let host = Host(reaches: reaches, schedules: schedules, cancels: cancels)
         do {
-            // The other objects and their values, as the module its code imports.
-            try await interpreter.import(source.uses.interface, events: [RuntimeMacros.event], host: reach)
-            // The objects its code reaches by name, each as its type, when it's declared: those it
-            // was written against, wherever the code names them, and those it calls that weren't.
-            for name in Set(source.uses.names.keys).union(source.namedObjects) {
-                let type = source.uses.names[name].flatMap { interpreter.importedActor($0)?.name } ?? "Object"
-                interpreter.rootScope.bind(name, value: .opaque(typeName: type, value: ObjectReference.named(name)), mutable: false)
-            }
-            // Another object's type, made with `Type()`: the object whose id is the type's name, made
-            // when it's first called if there's none yet.
-            for type in source.madeTypes {
-                let declared = interpreter.importedActor(type) != nil
-                // A type of the interpreter's own isn't another object.
-                if !declared, await interpreter.provides(type) { continue }
-                // Its object's id is the type's name: the one way code makes an object, for now.
-                let reference = ObjectReference.virtual(id: type, type: type)
-                let typed = declared ? type : "Object"
-                interpreter.rootScope.bind(
-                    type,
-                    value: .function(Function(name: type, parameters: [], kind: .builtin { _ in .opaque(typeName: typed, value: reference) })),
-                    mutable: false)
-            }
-            // What runs is the code with the runtime's macros expanded.
-            try await interpreter.eval(source.expanded)
-            let instance = try await interpreter.make(source.type)
-            // What's journaled is as `Codable` writes it: each value reads back as its field's
-            // type, as `Codable` decodes a property, the type written or its starting value's.
+            let object = try await ScriptObject(type: source.type, in: ObjectModule.objectFile, of: Self.files(source), module: Uses.module, host: host)
+            // What's journaled is as `Codable` writes it: each value reads back as its field's type.
             for field in shape.fields where !field.constant {
                 guard let held = fields[field.name] else { continue }
-                let starting = try await interpreter.property(field.name, of: instance)
-                if let type = field.type.map({ TypeSyntax(stringLiteral: $0) }) ?? Self.type(of: starting) {
-                    try await interpreter.set(field.name, of: instance, to: try bridge.value(of: held, as: type))
-                } else {
-                    try await interpreter.set(field.name, of: instance, to: bridge.typed(value(of: held, as: field.kind ?? Self.kind(of: starting))))
-                }
+                try object.set(field.name, to: host.portable(held))
             }
-            let started = ScriptInstance(source: source, shape: shape, interpreter: interpreter, instance: instance)
+            let started = ScriptInstance(source: source, shape: shape, object: object, host: host)
             try await started.check()
             return started
         } catch {
-            throw problem(error, interpreter)
+            throw problem(error)
         }
+    }
+
+    /// The module `source` is: what it's given, and its own code, as plain Swift.
+    static func files(_ source: Script) -> [SwiftCheck.File] {
+        ObjectModule(source).files.map { SwiftCheck.File(name: $0.name, code: $0.code) }
     }
 
     /// What the Swift compiler would refuse in `source` before it runs, every one at its line, as
     /// it lists them, against the module it imports.
     public static func problems(in source: Script) async -> [CodeProblem] {
-        let interpreter = Interpreter(output: { _ in }, error: { _ in })
-        let diagnostics = await interpreter.check(
-            source.code, importing: [source.uses.interface], names: source.uses.names, handler: DynamicObject.handler(for:),
-            bodiesFrom: [RuntimeMacros.event], followedBy: [RuntimeMacros.subscribed])
-        return diagnostics.map { diagnostic in
-            CodeProblem(
-                line: diagnostic.line, span: diagnostic.code, diagnostic.message,
-                phrasing: diagnostic.phrasing == .statement ? .statement : .reason)
+        let swift = SwiftCheck.problems(in: ObjectModule.objectFile, of: files(source)).map { diagnostic in
+            CodeProblem(line: diagnostic.line, span: diagnostic.code, diagnostic.message)
         }
+        // And how it uses the runtime's macros, which are Turgai's, as Turgai has them.
+        return (swift + RuntimeMacros.problems(in: source)).sorted { ($0.line ?? 0) < ($1.line ?? 0) }
     }
 
     /// What an object of `source` holds when it's made: each field's starting value, with its
@@ -175,26 +99,23 @@ public final class ScriptInstance {
     public func runTask(_ id: Int) async throws(CodeProblem) -> [Announcement] {
         let run = Run()
         do {
-            try await Run.$current.withValue(run) { try await interpreter.runTask(id) }
+            try await Run.$current.withValue(run) { try await object.runTask(id) }
             try await check()
             return run.announced
         } catch {
-            throw Self.problem(error, interpreter)
+            throw Self.problem(error)
         }
     }
 
     /// What it holds now.
     public func fields() async throws(CodeProblem) -> [String: JSONValue] {
-        var fields: [String: JSONValue] = [:]
         do {
-            for field in shape.fields {
-                let value = try await interpreter.property(field.name, of: instance)
-                fields[field.name] = try ValueBridge(interpreter: interpreter).json(of: value)
-            }
+            var fields: [String: JSONValue] = [:]
+            for (name, value) in try object.fields() { fields[name] = try host.json(value) }
+            return fields
         } catch {
-            throw Self.problem(error, interpreter)
+            throw Self.problem(error)
         }
-        return fields
     }
 
     /// Handles `message` with `arguments`, by parameter name, label or position: its method runs
@@ -207,7 +128,7 @@ public final class ScriptInstance {
             throw CodeProblem("It takes no `\(name)`; it takes \(takes.isEmpty ? "nothing yet" : takes).")
         }
         let given = arguments.objectValue ?? [:]
-        var values: [Value] = []
+        var values: [(label: String?, value: Portable)] = []
         for (index, parameter) in message.parameters.enumerated() {
             guard let argument = given[parameter.name] ?? parameter.label.flatMap({ given[$0] }) ?? given["_\(index)"], argument != .null else {
                 throw CodeProblem("`\(message.name)` needs `\(parameter.name)`. It's \(message.written).")
@@ -215,32 +136,24 @@ public final class ScriptInstance {
             guard Self.accepts(parameter.kind, argument) else {
                 throw CodeProblem("`\(parameter.name)` is `\(argument.inline)`, but `\(message.name)` takes \(parameter.kind.written) there.")
             }
-            // Read as the type it's declared, as `Codable` reads it.
-            do {
-                values.append(try ValueBridge(interpreter: interpreter).value(of: argument, as: TypeSyntax(stringLiteral: parameter.type)))
-            } catch {
-                throw CodeProblem("`\(parameter.name)` is `\(argument.inline)`, which isn't a `\(parameter.type)`: \(error)")
-            }
+            values.append((parameter.label, host.portable(argument)))
         }
         let run = Run()
         do {
-            let reply = try await Run.$current.withValue(run) {
-                try await interpreter.call(message.name, on: instance, arguments: values)
-            }
+            let reply = try await Run.$current.withValue(run) { try await object.call(message.name, arguments: values) }
             try await check()
             return ObjectReply(
-                reply: message.reply == nil ? .null : try written(reply, "its reply"), printed: run.printed, announced: run.announced)
+                reply: message.reply == nil ? .null : try host.json(reply), printed: run.printed, announced: run.announced)
         } catch {
-            throw Self.problem(error, interpreter)
+            throw Self.problem(error)
         }
     }
 
-    // MARK: The interpreter
+    // MARK: Running
 
     /// What a message's code, or a task's, did besides its reply: what it printed, line by line,
-    /// the object's own account of what it did, and the events it announced. Each has its own,
-    /// even while another waits.
-    private final class Run: Sendable {
+    /// and the events it announced. Each has its own, even while another waits.
+    fileprivate final class Run: Sendable {
         @TaskLocal static var current: Run?
         private let written = Mutex<[String]>([])
         private let announcements = Mutex<[Announcement]>([])
@@ -260,25 +173,120 @@ public final class ScriptInstance {
     /// Its checks, after it's made and after each message.
     private func check() async throws {
         guard shape.checks else { return }
-        if case .string(let failed) = try await interpreter.call("_check", on: instance, arguments: []), !failed.isEmpty {
+        if case .string(let failed) = try await object.call("_check", arguments: []), !failed.isEmpty {
             throw CodeProblem("It would break `\(failed)`.")
         }
     }
 
-    private static func problem(_ error: Error, _ interpreter: Interpreter) -> CodeProblem {
-        if let problem = error as? CodeProblem { return problem }
-        if let parse = error as? ParseError, let first = parse.diagnostics.first {
-            return CodeProblem(line: first.line, first.message)
+    private static func problem(_ error: any Error) -> CodeProblem {
+        switch error {
+        case let problem as CodeProblem: return problem
+        case let problems as ScriptObject.Problems:
+            let first = problems.diagnostics.first
+            return CodeProblem(line: first?.line, first?.message ?? "\(problems)")
+        case let trap as Trap: return CodeProblem(line: trap.line, trap.message)
+        case let thrown as Thrown: return CodeProblem("It threw `\(thrown.type)`: \(thrown.value)")
+        default: return CodeProblem("\(error)")
         }
-        let rendered = interpreter.renderRuntimeError(error)
-        let first = rendered.split(separator: "\n").first.map(String.init) ?? "\(error)"
-        // The interpreter's `<input>:22:13: error: …`, read as the line it's at and what's wrong.
-        let parts = first.split(separator: ":", maxSplits: 4, omittingEmptySubsequences: false)
-        if parts.count == 5, parts[0] == "<input>", let line = Int(parts[1]), parts[3].trimmingCharacters(in: .whitespaces) == "error" {
-            return CodeProblem(line: line, parts[4].trimmingCharacters(in: .whitespaces))
+    }
+
+    /// What the code reaches outside itself, as Turgai has it: other objects by message, made
+    /// ones as virtual actors, named ones by name, and the runtime's announcing.
+    private final class Host: ScriptHost {
+        let itself = ObjectHandle("itself")
+        private let reaches: Reaches
+        private let schedules: @Sendable (Int) -> Void
+        private let cancels: @Sendable (Int) -> Void
+        /// The objects the code holds, by the handle it holds each as.
+        private var references: [(handle: ObjectHandle, reference: ObjectReference)] = []
+
+        init(reaches: @escaping Reaches, schedules: @escaping @Sendable (Int) -> Void, cancels: @escaping @Sendable (Int) -> Void) {
+            self.reaches = reaches
+            self.schedules = schedules
+            self.cancels = cancels
         }
-        // An error its code caught and rethrew, as the interpreter writes it: `error: …`.
-        return CodeProblem(first.hasPrefix("error: ") ? String(first.dropFirst("error: ".count)) : first)
+
+        func send(_ message: String, to object: ObjectHandle, arguments: [(label: String?, value: Portable)]) async throws -> Portable {
+            var members: [String: JSONValue] = [:]
+            for (index, argument) in arguments.enumerated() { members[argument.label ?? "_\(index)"] = try json(argument.value) }
+            return portable(try await reaches(try reference(object), .call(message, arguments: .object(members))))
+        }
+
+        func read(_ property: String, of object: ObjectHandle) async throws -> Portable {
+            portable(try await reaches(try reference(object), .read(property)))
+        }
+
+        /// Another object's type, made with `Type()`: the object whose id is the type's name, made
+        /// when it's first called if there's none yet.
+        func make(_ type: String) async throws -> ObjectHandle {
+            handle(for: .virtual(id: type, type: type))
+        }
+
+        /// The objects the code reaches by name.
+        func global(_ name: String) async throws -> Portable {
+            .reference(handle(for: .named(name)))
+        }
+
+        func call(_ function: String, arguments: [(label: String?, value: Portable)]) async throws -> Portable {
+            guard function == RuntimeMacros.announce, arguments.count == 2, case .string(let event) = arguments[0].value else {
+                throw CodeProblem("`\(function)` isn't the runtime's.")
+            }
+            Run.current?.announce(Announcement(event: event, values: try json(arguments[1].value)))
+            return .null
+        }
+
+        func schedule(task id: Int) { schedules(id) }
+        func cancel(task id: Int) { cancels(id) }
+        func print(_ text: String) { Run.current?.print(text) }
+
+        // MARK: Values
+
+        func handle(for reference: ObjectReference) -> ObjectHandle {
+            if reference == .itself { return itself }
+            if let known = references.first(where: { $0.reference == reference }) { return known.handle }
+            let handle = ObjectHandle("\(references.count + 1)")
+            references.append((handle, reference))
+            return handle
+        }
+
+        func reference(_ handle: ObjectHandle) throws -> ObjectReference {
+            if handle == itself { return .itself }
+            guard let reference = references.first(where: { $0.handle == handle })?.reference else {
+                throw CodeProblem("An object the code holds isn't known.")
+            }
+            return reference
+        }
+
+        /// JSON as it crosses into the code, an object's reference as the object.
+        func portable(_ json: JSONValue) -> Portable {
+            if let reference = ObjectReference(json) { return .reference(handle(for: reference)) }
+            switch json {
+            case .null: return .null
+            case .bool(let flag): return .bool(flag)
+            case .integer(let number): return .int(Int(number))
+            case .unsignedInteger(let number): return .int(Int(number))
+            case .number(let number): return .double(number)
+            case .string(let text): return .string(text)
+            case .array(let items): return .array(items.map(portable))
+            case .object(let members): return .object(members.sorted { $0.key < $1.key }.map { ($0.key, portable($0.value)) })
+            }
+        }
+
+        func json(_ portable: Portable) throws -> JSONValue {
+            switch portable {
+            case .null: return .null
+            case .bool(let flag): return .bool(flag)
+            case .int(let number): return .integer(Int64(number))
+            case .double(let number): return .number(number)
+            case .string(let text): return .string(text)
+            case .array(let items): return .array(try items.map(json))
+            case .object(let members):
+                var object: [String: JSONValue] = [:]
+                for (key, value) in members { object[key] = try json(value) }
+                return .object(object)
+            case .reference(let handle): return try reference(handle).json
+            }
+        }
     }
 
     // MARK: Values
@@ -296,111 +304,6 @@ public final class ScriptInstance {
         case (.object, _): ObjectReference(value) != nil
         case (.other, _): true
         default: false
-        }
-    }
-
-    /// `value` as `Codable` writes it, for another object or the journal.
-    private func written(_ value: Value, _ name: String) throws(CodeProblem) -> JSONValue {
-        try ValueBridge(interpreter: interpreter).json(of: value)
-    }
-
-    /// Why `value` can't go to another object: it isn't data.
-    static func notData(_ value: Value, _ name: String) -> CodeProblem {
-        CodeProblem("\(name) is a \(SwiftScriptInterpreter.typeName(value)), which can't go to another object: data is numbers, text, true or false, objects, and the lists, dictionaries, structs and enums of them.")
-    }
-
-    /// Plain data the interpreter made, and objects, as JSON: numbers, text, true or false, and
-    /// the lists and dictionaries of them, with each object its reference. Structs and enums are
-    /// written by ``ValueBridge``, as `Codable` writes them.
-    static func json(_ value: Value, _ name: String) throws(CodeProblem) -> JSONValue {
-        func convert(_ value: Value) throws(CodeProblem) -> JSONValue? {
-            switch value {
-            case .int(let int): return .integer(Int64(int))
-            case .double(let double): return .number(double)
-            case .string(let string): return .string(string)
-            case .bool(let bool): return .bool(bool)
-            case .void, .optional(.none): return .null
-            case .optional(.some(let inner)): return try convert(inner)
-            case .array(let items), .set(let items):
-                var converted: [JSONValue] = []
-                for item in items {
-                    guard let written = try convert(item) else { return nil }
-                    converted.append(written)
-                }
-                return .array(converted)
-            case .dict(let entries):
-                var members: [String: JSONValue] = [:]
-                for entry in entries {
-                    guard let key = try convert(entry.key), let value = try convert(entry.value) else { return nil }
-                    members[key.inline] = value
-                }
-                return .object(members)
-            // Another object, of any type, or itself passed on: its reference.
-            case .opaque(_, let reference as ObjectReference): return try written(reference)
-            case .classInstance: return try written(.itself)
-            default: return nil
-            }
-        }
-        guard let converted = try convert(value) else { throw notData(value, name) }
-        return converted
-    }
-
-    /// An object's reference, as it's written.
-    private static func written(_ reference: ObjectReference) throws(CodeProblem) -> JSONValue {
-        do {
-            return try reference.json
-        } catch {
-            throw CodeProblem("An object's reference can't be written: \(error)")
-        }
-    }
-
-    /// The type of a value the interpreter made, as Swift infers a property's from its starting
-    /// value: `nil` where it can't tell, such as an empty array's.
-    static func type(of value: Value) -> TypeSyntax? {
-        switch value {
-        case .int: "Int"
-        case .double: "Double"
-        case .string: "String"
-        case .bool: "Bool"
-        case .structValue(let type, _), .enumValue(let type, _, _): TypeSyntax(stringLiteral: type)
-        case .array(let items): items.first.flatMap(type(of:)).map { "[\($0)]" }
-        default: nil
-        }
-    }
-
-    /// The kind of a value the interpreter made, as far as it tells: a field's starting value,
-    /// when its type isn't written.
-    static func kind(of value: Value) -> ValueKind? {
-        switch value {
-        case .int: .int
-        case .double: .double
-        case .string: .string
-        case .bool: .bool
-        case .optional(let wrapped?): kind(of: wrapped)
-        case .array(let items): items.first.flatMap(kind(of:)).map(ValueKind.list)
-        case .opaque("Object", _): .object
-        default: nil
-        }
-    }
-
-    /// A journaled value as the interpreter holds it, as `kind` when that's known.
-    static func value(of json: JSONValue, as kind: ValueKind? = nil) -> Value {
-        if let reference = ObjectReference(json) { return .opaque(typeName: "Object", value: reference) }
-        switch (json, kind) {
-        case (.null, _): return .optional(nil)
-        case (.bool(let bool), _): return .bool(bool)
-        case (.integer(let integer), .double?): return .double(Double(integer))
-        case (.unsignedInteger(let integer), .double?): return .double(Double(integer))
-        case (.number(let number), .int?): return .int(Int(number))
-        case (.integer(let integer), _): return .int(Int(integer))
-        case (.unsignedInteger(let integer), _): return .int(Int(integer))
-        case (.number(let number), _): return .double(number)
-        case (.string(let string), _): return .string(string)
-        case (.array(let items), .list(let element)?): return .array(items.map { value(of: $0, as: element) })
-        case (.array(let items), _): return .array(items.map { value(of: $0) })
-        case (.object(let members), _):
-            let element: ValueKind? = if case .map(let element)? = kind { element } else { nil }
-            return .dict(members.sorted { $0.key < $1.key }.map { DictEntry(key: .string($0.key), value: value(of: $0.value, as: element)) })
         }
     }
 }

@@ -3,7 +3,6 @@ import DiscoverableActors
 import DistributedCluster
 import Hail
 import TurgaiDomain
-import SwiftScriptInterpreter
 import TurgaiObjects
 import Yams
 
@@ -302,13 +301,9 @@ public actor ObjectSession {
         }
         // What went wrong with the code stays with its writer: what's said here is what can be
         // done about it, which is asking again.
-        switch outcome {
-        case .saved: break
-        case .failed: throw ObjectToolError.failed("\(name) wasn't made: its code couldn't be written from this description.")
-        // What it's asked to do has no answer its writer could find: that's for whoever asked.
-        case .ranOut: throw ObjectToolError.failed("\(name) wasn't made: its writer found no way to do what it's asked.")
+        guard case .saved = outcome, let handle else {
+            throw ObjectToolError.failed("\(name) wasn't made: its code couldn't be written from this description.")
         }
-        guard let handle else { throw ObjectToolError.failed("\(name) wasn't made: its code couldn't be written from this description.") }
         let shape = try? ObjectShape(try await dynamicObject(handle).source)
         return landing("Saved \(handle): \(Self.contents(of: shape, now: try await currentValues(handle))).", on: .object(handle: handle))
     }
@@ -338,13 +333,11 @@ public actor ObjectSession {
                 return Self.problem(error)
             }
         }
-        switch outcome {
-        case .saved: break
-        case .failed: throw ObjectToolError.failed("\(handle) wasn't changed: the code for this change couldn't be written.")
-        case .ranOut: throw ObjectToolError.failed("\(handle) wasn't changed: its writer found no way to make this change.")
-        }
-        let after = try? ObjectShape(try await object.source)
-        return landing("Saved \(handle): \(Self.changes(from: before, to: after, now: try await currentValues(handle))).", on: .object(handle: handle))
+        if case .failed = outcome { throw ObjectToolError.failed("\(handle) wasn't changed: the code for this change couldn't be written.") }
+        let changed = try await object.source
+        let after = try? ObjectShape(changed)
+        let said = Self.changes(from: before, to: after, now: try await currentValues(handle))
+        return landing("Saved \(handle): \(said).\(Self.codeChanges(from: current.code, to: changed.code))", on: .object(handle: handle))
     }
 
     /// The objects that exist here but `type`, as code written here meets them: one spec, read
@@ -416,10 +409,10 @@ public actor ObjectSession {
     }
 
     /// A method as Swift declares it: `show(page: Page)`, `approve(_ amount: Int) -> Bool`.
-    static func written(_ name: String, _ method: CheckedMethod) -> String {
+    static func written(_ name: String, _ method: DeclaredActor.Method) -> String {
         let parameters = method.parameters.map { parameter in
             let called = parameter.label == parameter.name ? parameter.name : "\(parameter.label ?? "_") \(parameter.name)"
-            return "\(called): \(parameter.type ?? "Any")"
+            return "\(called): \(parameter.type)"
         }
         return "\(name)(\(parameters.joined(separator: ", ")))" + (method.effects.map { " \($0)" } ?? "")
             + (method.returns.map { " -> \($0)" } ?? "")
@@ -453,7 +446,23 @@ public actor ObjectSession {
         if !holds.isEmpty { parts.append("it now holds " + holds.joined(separator: ", ")) }
         let dropped = (before?.fields.map(\.name) ?? []).filter { !newData.contains($0) }
         if !dropped.isEmpty { parts.append("it no longer holds " + dropped.joined(separator: ", ")) }
-        return parts.isEmpty ? "what it holds and takes didn't change" : parts.joined(separator: "; ")
+        return parts.isEmpty ? "what it holds and takes is the same" : parts.joined(separator: "; ")
+    }
+
+    /// How an edit changed the code, line by line, so that a change inside a method, which what
+    /// the object holds and takes doesn't show, is seen too: the lines gone, then those added.
+    static func codeChanges(from before: String, to after: String, limit: Int = 12) -> String {
+        let difference = after.split(separator: "\n", omittingEmptySubsequences: false)
+            .difference(from: before.split(separator: "\n", omittingEmptySubsequences: false))
+        let lines = difference.compactMap { change -> String? in
+            switch change {
+            case .remove(_, let line, _): line.trimmingCharacters(in: .whitespaces).isEmpty ? nil : "- " + line.trimmingCharacters(in: .whitespaces)
+            case .insert(_, let line, _): line.trimmingCharacters(in: .whitespaces).isEmpty ? nil : "+ " + line.trimmingCharacters(in: .whitespaces)
+            }
+        }
+        guard !lines.isEmpty else { return "\nIts code is the same as before." }
+        let shown = lines.prefix(limit).joined(separator: "\n")
+        return "\nIts code changed:\n" + shown + (lines.count > limit ? "\n(\(lines.count - limit) more lines changed)" : "")
     }
 
     /// What an object is, in a line, as an edit's changes are said: the data it holds, with its

@@ -20,6 +20,7 @@ struct TurgaiRouteDependencies: Sendable {
     let setup: TurgaiSetupStore
     let agentProfiles: TurgaiAgentProfileStore
     let agentCredentials: AgentCredentialStore
+    let requestLimits: RequestLimitStore
     let channelSecrets: ChannelSecretStore
     let defaultFileDirectory: URL
     let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
@@ -35,6 +36,7 @@ extension TurgaiMainWebApp {
             setup: setup,
             agentProfiles: agentProfiles,
             agentCredentials: agentCredentials,
+            requestLimits: requestLimits,
             channelSecrets: channelSecrets,
             defaultFileDirectory: directory,
             runtimeSnapshots: runtimeSnapshots,

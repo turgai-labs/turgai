@@ -19,6 +19,8 @@ struct AgentConfigurationForm: HTML, Sendable {
     let profile: TurgaiAgentProfile?
     let modelCatalog: TurgaiModelCatalog
     let submitLabel: String
+    /// The saved profile's provider account limit, if it has one.
+    var requestLimit: Int? = nil
 
     private var selectedModel: AgentModel? { profile?.model }
 
@@ -37,7 +39,7 @@ struct AgentConfigurationForm: HTML, Sendable {
             section(.class("config-group")) {
                 h3 { "Model" }
                 ModelPicker(catalog: modelCatalog, selectedModel: selectedModel)
-                ProviderConfigurationFields(profile: profile)
+                ProviderConfigurationFields(profile: profile, requestLimit: requestLimit)
                 label(.class("form-field")) {
                     span(.class("field-label")) { "Reasoning effort" }
                     select(.name("reasoningEffort")) {

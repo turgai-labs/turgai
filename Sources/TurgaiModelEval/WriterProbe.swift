@@ -2,7 +2,6 @@ import AnyLanguageModel
 import Foundation
 import Hail
 import TurgaiApplication
-import SwiftScriptInterpreter
 import TurgaiObjects
 import TurgaiPersistence
 
@@ -36,7 +35,8 @@ enum WriterProbe {
     static func run(model: AgentModel, runs: Int, temperature: Double) async throws {
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("turgai-probe-\(UUID().uuidString)")
         let endpoints = AgentModelEndpointFactory(
-            credentials: AgentCredentialStore(files: try FileClient(directory: workspace.appendingPathComponent("credentials"))))
+            credentials: AgentCredentialStore(files: try FileClient(directory: workspace.appendingPathComponent("credentials"))),
+            transports: ModelTransports(limits: RequestLimitStore.defaultLimits))
         let endpoint = try await endpoints.endpoint(
             model: model, configuration: try EvalNode.configuration(for: model), temperature: temperature)
         // Saved as the app saves: refused, with what's wrong at its code, until it's right.
@@ -123,7 +123,8 @@ enum PageProbe {
     static func run(model: AgentModel, runs: Int, temperature: Double) async throws {
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("turgai-probe-\(UUID().uuidString)")
         let endpoints = AgentModelEndpointFactory(
-            credentials: AgentCredentialStore(files: try FileClient(directory: workspace.appendingPathComponent("credentials"))))
+            credentials: AgentCredentialStore(files: try FileClient(directory: workspace.appendingPathComponent("credentials"))),
+            transports: ModelTransports(limits: RequestLimitStore.defaultLimits))
         let endpoint = try await endpoints.endpoint(
             model: model, configuration: try EvalNode.configuration(for: model), temperature: temperature)
         for ask in asks {

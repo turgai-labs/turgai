@@ -20,12 +20,10 @@ public struct ObjectWriter: Sendable {
         self.report = report
     }
 
-    /// What writing ended with: the code saved, the last problem with the last code, or an answer
-    /// that thought its whole length without code, which asking again wouldn't change.
+    /// What writing ended with: the code saved, or the last problem with the last code.
     public enum Outcome: Sendable {
         case saved
         case failed(String)
-        case ranOut
     }
 
     /// How the runtime runs an object's code, one fact to a line: what the writer has to know to
@@ -54,11 +52,11 @@ public struct ObjectWriter: Sendable {
         var parts: [String] = []
         if current == nil {
             parts.append(
-                (["Write one Swift actor, `actor \(type)`."] + (request.map { ["The request: \($0)"] } ?? []) + ["Its part: \(task)"])
+                (["Write one Swift actor, `actor \(type)`, with only the standard library."] + (request.map { ["The request: \($0)"] } ?? []) + ["Its part: \(task)"])
                     .joined(separator: "\n"))
         } else {
             parts.append(
-                (["Change the Swift actor `actor \(type)`."] + (request.map { ["The request: \($0)"] } ?? []) + ["The change: \(task)"]
+                (["Change the Swift actor `actor \(type)`, with only the standard library."] + (request.map { ["The request: \($0)"] } ?? []) + ["The change: \(task)"]
                     + (failure.map { ["It last failed: \($0)"] } ?? []))
                     .joined(separator: "\n"))
         }
@@ -81,12 +79,6 @@ public struct ObjectWriter: Sendable {
         var problem = "It wrote no code."
         for _ in 0..<attempts {
             let answer = try await respond(entries)
-            // An answer with no code at all spent its whole length thinking: asking again goes
-            // round the same thoughts, so the object isn't made, and whoever asked hears why.
-            guard !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                report?(.answered(answer, .refused("It thought past an answer's length without writing code.")))
-                return .ranOut
-            }
             let wrong = await save(Self.unfenced(answer))
             report?(.answered(answer, wrong.map(Answer.refused) ?? .saved))
             guard let wrong else { return .saved }
@@ -101,14 +93,10 @@ public struct ObjectWriter: Sendable {
         return .failed(problem)
     }
 
-    /// The most an answer takes, thinking included: room for one actor's code, and an end to an
-    /// answer that never ends.
-    static let answerTokens = 16384
-
     private func respond(_ entries: [Transcript.Entry]) async throws -> String {
         let stream = endpoint.stream(
             request: ModelRequest(input: entries, entries: entries), tools: [], authority: FullAuthority(),
-            generating: String.self, purpose: .writing(maxOutputTokens: Self.answerTokens))
+            generating: String.self, purpose: .generation)
         for await event in stream {
             switch event {
             case .generated(let text): return text

@@ -467,7 +467,7 @@ public distributed actor Conversation {
 
     /// The agent's past turns, step by step.
     public distributed func turns() async throws -> [ConversationTurn] {
-        ConversationTurns.turns(of: try await peer.history())
+        try ConversationTurns.turns(of: try await peer.history())
     }
 
     public distributed func addConnection(_ connection: ConversationConnection) async {
@@ -1292,7 +1292,10 @@ public distributed actor Conversation {
         if let previousTurnID = previous.activeTurnID,
             previousTurnID != next.activeTurnID
         {
-            if case .failed(let failure) = next.status {
+            // A turn failed by its failure, even when the next turn starts right after it.
+            let failure: ConversationFailure? =
+                if case .modelFailed(_, let failure) = action { failure } else if case .failed(let failure) = next.status { failure } else { nil }
+            if let failure {
                 events.append(.turnFailed(previousTurnID, failure))
             } else {
                 events.append(.turnCompleted(previousTurnID))

@@ -3,13 +3,13 @@ import Foundation
 /// One turn of the agent, as the turns window shows it: the message that started it, each step,
 /// and how it ended.
 public struct TurnRecord: Codable, Equatable, Sendable, Identifiable {
-    public let id: String
+    public let id: TurnID
     public let message: String
     public let startedAt: Date
     public var steps: [TurnStep]
     public var outcome: TurnOutcome
 
-    public init(id: String, message: String, startedAt: Date, steps: [TurnStep] = [], outcome: TurnOutcome = .running) {
+    public init(id: TurnID, message: String, startedAt: Date, steps: [TurnStep] = [], outcome: TurnOutcome = .running) {
         self.id = id
         self.message = message
         self.startedAt = startedAt
@@ -25,6 +25,8 @@ public struct TurnStep: Codable, Equatable, Sendable {
         case toolCalled(name: String, arguments: String)
         /// A tool call's result; `failure` says why it failed, when it did.
         case toolFinished(name: String, output: String, failure: String?)
+        /// What the runtime told the model in the turn, in the words it was told.
+        case noticed(words: String)
     }
 
     public let at: Date

@@ -73,7 +73,7 @@ public struct HailRuntimeConfiguration: Sendable {
         modelContextWindows: [AgentModel: Int] = [:],
         contextWindowProvider: (@Sendable (AgentModel, AgentID) async -> Int?)? = nil,
         compactionMaxOutputTokens: Int = 8_192,
-        maxToolRounds: Int = 16,
+        maxToolRounds: Int = 64,
         ollamaKeepAlive: String? = "10m"
     ) {
         self.temperature = temperature

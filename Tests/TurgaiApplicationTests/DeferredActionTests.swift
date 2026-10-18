@@ -67,17 +67,17 @@ struct DeferredActionTests {
     }
 
     @Test func timerCreateAfterMarksAmountAndUnitRequired() throws {
-        // Required in the schema, so the provider grammar enforces presence.
-        // Decode itself is lenient about missing scalars (they default to 0);
-        // a zero delay is rejected at execution with a descriptive error.
+        // Required in the schema, so the provider grammar enforces presence,
+        // and decoding throws when it's missing anyway.
         let required = try requiredFields(of: TimerToolsCreateAfterInput.generationSchema)
         #expect(required.contains("amount"))
         #expect(required.contains("unit"))
 
-        let input = try TimerToolsCreateAfterInput(
-            GeneratedContent(json: #"{"action":"deliverPreparedMessage","unit":"minutes"}"#)
-        )
-        #expect(input.amount == 0)
+        #expect(throws: GeneratedContentError.propertyNotFound("amount")) {
+            try TimerToolsCreateAfterInput(
+                GeneratedContent(json: #"{"action":"deliverPreparedMessage","unit":"minutes"}"#)
+            )
+        }
     }
 
     @Test func timerCreateAfterRejectsNegativeAmount() throws {

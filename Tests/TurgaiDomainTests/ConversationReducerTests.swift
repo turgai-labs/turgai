@@ -334,54 +334,35 @@ struct ConversationReducerTests {
         #expect(effects.isEmpty)
     }
 
+    /// A message waiting when a turn fails is the person's next word: it starts right away, as
+    /// after a reply. With nothing waiting, the failure stays until it's cleared.
     @Test
-    func modelFailureCanBeClearedAndQueuedWorkContinues() {
+    func aFailedTurnLetsTheNextQueuedMessageStart() {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = reduce(
             state,
             .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), agentRole: "test")
         )
-        guard case .running(let turnID) = running.status else {
-            Issue.record("Expected a running turn")
-            return
-        }
         let (queued, _) = reduce(
             running,
             .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
         )
         let failure = ConversationFailure(kind: .model, message: "Ollama unavailable")
-        let (failed, failureEffects) = reduce(
-            queued,
-            .modelFailed(turnID: turnID, failure: failure)
-        )
+        let (next, effects) = reduce(queued, .modelFailed(turnID: makeTurnID(1), failure: failure))
 
+        #expect(next.status == .running(makeTurnID(2)))
+        #expect(next.pendingMessages.isEmpty)
+        #expect(
+            effects.contains(where: { effect in
+                if case .runReply = effect { return true }
+                return false
+            }))
+
+        let (failed, failureEffects) = reduce(next, .modelFailed(turnID: makeTurnID(2), failure: failure))
         #expect(failed.status == .failed(failure))
-        #expect(failed.pendingMessages.count == 1)
         #expect(failureEffects.isEmpty)
-
-        let (recovered, recoveryEffects) = reduce(failed, .resume)
-        guard case .running = recovered.status else {
-            Issue.record("Expected queued work to recover")
-            return
-        }
-        #expect(recovered.pendingMessages.isEmpty)
-        #expect(
-            recoveryEffects.contains(where: { effect in
-                if case .runReply = effect { return true }
-                return false
-            }))
-
-        let (resumed, resumeEffects) = reduce(failed, .clearFailure)
-        guard case .running = resumed.status else {
-            Issue.record("Expected queued work to resume")
-            return
-        }
-        #expect(resumed.pendingMessages.isEmpty)
-        #expect(
-            resumeEffects.contains(where: { effect in
-                if case .runReply = effect { return true }
-                return false
-            }))
+        let (cleared, _) = reduce(failed, .clearFailure)
+        #expect(cleared.status == .idle)
     }
 
     @Test

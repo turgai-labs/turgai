@@ -83,11 +83,21 @@ enum NowPlayingWatcher {
         let title: String?
         let artist: String?
         let album: String?
+        let artwork: String?
 
         /// Nothing plays when no app does.
         var nowPlaying: NowPlaying? {
             guard let app else { return nil }
-            return NowPlaying(app: Self.name(of: app), title: title, artist: artist, album: album, isPlaying: playing)
+            return NowPlaying(app: Self.name(of: app), title: title, artist: artist, album: album, artworkURL: Self.webAddress(artwork), isPlaying: playing)
+        }
+
+        /// The artwork's identifier when it's a web address: Apple Music gives one, other apps may
+        /// give something else.
+        private static func webAddress(_ identifier: String?) -> String? {
+            guard let identifier, let url = URL(string: identifier), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                url.host != nil
+            else { return nil }
+            return identifier
         }
 
         /// An app's name, from its bundle identifier.
@@ -111,7 +121,9 @@ enum NowPlayingWatcher {
         function text(value) { return value.isNil() ? null : value.js; }
 
         function print() {
-          const info = Request.localNowPlayingItem.nowPlayingInfo;
+          const item = Request.localNowPlayingItem;
+          const info = item.nowPlayingInfo;
+          const metadata = item.metadata;
           const field = (key) => info.isNil() ? null : text(info.valueForKey(key));
           const line = JSON.stringify({
             app: text(Request.localNowPlayingPlayerPath.client.bundleIdentifier),
@@ -119,6 +131,7 @@ enum NowPlayingWatcher {
             title: field('kMRMediaRemoteNowPlayingInfoTitle'),
             artist: field('kMRMediaRemoteNowPlayingInfoArtist'),
             album: field('kMRMediaRemoteNowPlayingInfoAlbum'),
+            artwork: metadata.isNil() ? null : text(metadata.artworkIdentifier),
           });
           output.writeData($(line + '\n').dataUsingEncoding($.NSUTF8StringEncoding));
         }

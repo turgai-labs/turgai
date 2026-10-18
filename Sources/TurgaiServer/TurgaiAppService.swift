@@ -55,6 +55,7 @@ struct TurgaiAppService: Service, Sendable {
     private let turgaiDirectory: URL
     private let agentProfiles: TurgaiAgentProfileStore
     private let agentCredentials: AgentCredentialStore
+    private let requestLimits: RequestLimitStore
     private let channelSecrets: ChannelSecretStore
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let objectCatalogSource: TurgaiObjectCatalogSource
@@ -66,6 +67,7 @@ struct TurgaiAppService: Service, Sendable {
         turgaiDirectory: URL,
         agentProfiles: TurgaiAgentProfileStore,
         agentCredentials: AgentCredentialStore,
+        requestLimits: RequestLimitStore,
         channelSecrets: ChannelSecretStore,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
@@ -76,6 +78,7 @@ struct TurgaiAppService: Service, Sendable {
         self.turgaiDirectory = turgaiDirectory
         self.agentProfiles = agentProfiles
         self.agentCredentials = agentCredentials
+        self.requestLimits = requestLimits
         self.channelSecrets = channelSecrets
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
@@ -110,7 +113,7 @@ struct TurgaiAppService: Service, Sendable {
                 return profile.contextWindow
             }
         )
-        let endpointFactory = AgentModelEndpointFactory(credentials: agentCredentials)
+        let endpointFactory = AgentModelEndpointFactory(credentials: agentCredentials, transports: requestLimits.transports)
         let modelEndpointProvider: ModelEndpointProvider = { request in
             guard let model = try? AgentModel(request.model) else {
                 return nil

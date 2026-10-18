@@ -1,7 +1,6 @@
 import DiscoverableActors
 import Foundation
 import SwiftParser
-import SwiftScriptInterpreter
 import SwiftSyntax
 
 /// What an object's code was written against: the other objects around it and the values they
@@ -177,6 +176,13 @@ extension Uses {
     /// The Swift declarations of the types `schemas` name, and of the types those name in turn,
     /// each once, as Swift declares them: a structure's fields in the order they're declared, an
     /// enumeration's cases with their raw values or their associated values.
+    /// What a value is when code leaves it out, as its declaration says: its default, or `nil` for
+    /// one that may be left out.
+    static func swiftDefault(of field: JSONValue, required: Bool) -> String {
+        if case .string(let value)? = field[Discovery.swiftDefaultKey] { return " = \(value)" }
+        return required ? "" : " = nil"
+    }
+
     static func declarations(of schemas: [JSONValue]) -> String {
         var named: [(name: String, schema: JSONValue)] = []
         func collect(_ schema: JSONValue) {
@@ -200,6 +206,7 @@ extension Uses {
                 lines += documented(values["description"], indent: "    ")
                 let associated = ordered(values).map { label, field in
                     (label.hasPrefix("_") ? "" : "\(label): ") + field.declaredType(optional: !required(values).contains(label))
+                        + Self.swiftDefault(of: field, required: required(values).contains(label))
                 }
                 lines.append("    case \(caseName)" + (associated.isEmpty ? "" : "(\(associated.joined(separator: ", ")))"))
             }
@@ -231,7 +238,9 @@ extension Uses {
         lines.append("struct \(name) {")
         for (field, fieldSchema) in ordered(schema) {
             lines += documented(fieldSchema["description"], indent: "    ")
-            lines.append("    var \(field): \(fieldSchema.declaredType(optional: !required(schema).contains(field)))")
+            lines.append(
+                "    var \(field): \(fieldSchema.declaredType(optional: !required(schema).contains(field)))"
+                    + Self.swiftDefault(of: fieldSchema, required: true))
         }
         lines.append("}")
         return lines.joined(separator: "\n")
