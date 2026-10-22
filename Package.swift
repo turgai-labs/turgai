@@ -18,11 +18,11 @@ let package = Package(
         .library(name: "MacApp", targets: ["MacApp"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/akbashev/hail.git", branch: "main"),
+        .package(url: "https://github.com/akbashev/hail.git", branch: "turgai-integration"),
         .package(
-            url: "https://github.com/akbashev/discoverable-distributed-actors.git", branch: "main",
+            url: "https://github.com/akbashev/discoverable-distributed-actors.git", branch: "turgai-integration",
             traits: ["ClusterSystem"]),
-        .package(url: "https://github.com/akbashev/cluster-durable-workflows.git", branch: "main"),
+        .package(url: "https://github.com/akbashev/cluster-durable-workflows.git", branch: "turgai-integration"),
         // Objects are Swift actors, checked as Swift checks them and run by Doppel.
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
@@ -43,13 +43,15 @@ let package = Package(
             url: "https://github.com/swift-server/async-http-client.git",
             from: "1.21.0"
         ),
-        // Local branches: stable virtual actor references (stable-references) and
-        // plugin-intercepted references (plugin-actor-references). Back to URLs once merged.
-        .package(path: "../cluster-virtual-actors"),
-        .package(path: "../swift-distributed-actors"),
+        // Not merged upstream yet: stable virtual actor references, and our
+        // swift-distributed-actors fixes joined on one branch.
+        .package(url: "https://github.com/akbashev/cluster-virtual-actors.git", branch: "stable-references"),
+        .package(
+            url: "https://github.com/turgai-labs/swift-distributed-actors.git", branch: "turgai-integration"
+        ),
         .package(
             url: "https://github.com/akbashev/cluster-event-sourcing.git",
-            branch: "main"
+            branch: "turgai-integration"
         ),
         .package(
             url: "https://github.com/swift-server/swift-service-lifecycle.git",
@@ -61,7 +63,7 @@ let package = Package(
         ),
         .package(
             url: "https://github.com/akbashev/postgres-event-store.git",
-            branch: "main"
+            branch: "turgai-integration"
         ),
         .package(
             url: "https://github.com/vapor/postgres-nio.git",
