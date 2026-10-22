@@ -1,5 +1,5 @@
 {
-  "originHash" : "b3d18a267015185ac080836b1884cb3f12a3471f3c70d2f31fbf9a5fd9257efd",
+  "originHash" : "73d66f9a3ba63671e87cb197085366429d90655780ef4bdcf49614416d634fba",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -61,7 +61,7 @@
       "location" : "https://github.com/turgai-labs/doppel.git",
       "state" : {
         "branch" : "main",
-        "revision" : "7a8382c47212a7005a5863acf574d5319fa3e47c"
+        "revision" : "81823db0aee45579bb18054e7e1a9b1bc2de2b0b"
       }
     },
     {

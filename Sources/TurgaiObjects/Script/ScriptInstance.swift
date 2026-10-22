@@ -32,10 +32,10 @@ public final class ScriptInstance {
 
     public let source: Script
     let shape: ObjectShape
-    private let object: ScriptObject
+    private let object: LiveActor
     private let host: Host
 
-    private init(source: Script, shape: ObjectShape, object: ScriptObject, host: Host) {
+    private init(source: Script, shape: ObjectShape, object: LiveActor, host: Host) {
         self.source = source
         self.shape = shape
         self.object = object
@@ -58,7 +58,7 @@ public final class ScriptInstance {
         let host = Host(source, reaches: reaches, makes: makes, schedules: schedules, cancels: cancels)
         do {
             // Made as every object is, with its id.
-            let object = try await ScriptObject(
+            let object = try await LiveActor(
                 type: source.type, in: ObjectModule.objectFile, of: Self.files(source), module: Uses.module,
                 arguments: [(ObjectModule.idLabel, .string(identity.rawValue))], host: host)
             host.built()
@@ -212,7 +212,7 @@ public final class ScriptInstance {
     private static func problem(_ error: any Error) -> CodeProblem {
         switch error {
         case let problem as CodeProblem: return problem
-        case let problems as ScriptObject.Problems:
+        case let problems as LiveActor.Problems:
             let first = problems.diagnostics.first
             return CodeProblem(line: first?.line, first?.message ?? "\(problems)")
         case let trap as Trap: return CodeProblem(line: trap.line, trap.message)
@@ -223,7 +223,7 @@ public final class ScriptInstance {
 
     /// What the code reaches outside itself, as Turgai has it: other objects by message, made
     /// ones as virtual actors, and the runtime's announcing.
-    private final class Host: ScriptHost {
+    private final class Host: ActorHost {
         /// The object itself, of its own type.
         let itself: ObjectHandle
         private let reaches: Reaches
