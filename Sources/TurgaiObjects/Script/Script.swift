@@ -1,7 +1,7 @@
 import DiscoverableActors
+import Doppel
 import SwiftParser
 import SwiftParserDiagnostics
-import Doppel
 import SwiftSyntax
 
 /// An object's code as it's kept: its Swift, as it was written, and the actor in it that's the

@@ -1,5 +1,5 @@
-import Foundation
 import Doppel
+import Foundation
 import Testing
 
 @testable import TurgaiObjects

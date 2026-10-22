@@ -1,5 +1,5 @@
-import Foundation
 import DoppelCompilerCheck
+import Foundation
 import Testing
 
 @testable import TurgaiObjects
