@@ -1,5 +1,5 @@
 import DiscoverableActors
-import SwiftScriptSema
+import Doppel
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

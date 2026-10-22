@@ -1,5 +1,5 @@
 {
-  "originHash" : "f98c876493761bdc0ec215f62fdad81f5c73ce1e4fe03559e00e773cfac9bf8f",
+  "originHash" : "b3d18a267015185ac080836b1884cb3f12a3471f3c70d2f31fbf9a5fd9257efd",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "f95c908967e98c68c5ce3fd61a7974e7e869e303",
         "version" : "1.36.1"
+      }
+    },
+    {
+      "identity" : "cluster-durable-workflows",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/akbashev/cluster-durable-workflows.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "2050599faae404bc53d39a2da269be160a53d50a"
       }
     },
     {
@@ -35,6 +44,24 @@
       "state" : {
         "revision" : "e1caa19077dda4b00441142ef57da3db02acd466",
         "version" : "1.4.2"
+      }
+    },
+    {
+      "identity" : "discoverable-distributed-actors",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/akbashev/discoverable-distributed-actors.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "db63423494f22f6e53d1795fbaaed088908bf77b"
+      }
+    },
+    {
+      "identity" : "doppel",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/turgai-labs/doppel.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "7a8382c47212a7005a5863acf574d5319fa3e47c"
       }
     },
     {

@@ -19,10 +19,10 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../hail"),
-        .package(path: "../discoverable-distributed-actors", traits: ["ClusterSystem"]),
-        .package(path: "../cluster-durable-workflows"),
-        // Objects are Swift actors, run by the interpreter core of this SwiftScript fork.
-        .package(path: "../SwiftScript"),
+        .package(url: "https://github.com/akbashev/discoverable-distributed-actors.git", branch: "main", traits: ["ClusterSystem"]),
+        .package(url: "https://github.com/akbashev/cluster-durable-workflows.git", branch: "main"),
+        // Objects are Swift actors, checked as Swift checks them and run by Doppel.
+        .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
             path: "../AnyLanguageModel",
@@ -138,8 +138,8 @@ let package = Package(
                 .product(name: "Yams", package: "Yams"),
                 .product(name: "Parsing", package: "swift-parsing"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
-                .product(name: "SwiftScriptSema", package: "SwiftScript"),
-                .product(name: "SwiftScriptInterpreter", package: "SwiftScript"),
+                .product(name: "Doppel", package: "doppel"),
+                .product(name: "DoppelRuntime", package: "doppel"),
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftParser", package: "swift-syntax"),
                 .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
@@ -293,7 +293,7 @@ let package = Package(
             name: "TurgaiObjectsTests",
             dependencies: [
                 "TurgaiObjects",
-                .product(name: "SwiftScriptSema", package: "SwiftScript"),
+                .product(name: "Doppel", package: "doppel"),
                 "TurgaiApplication",
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
@@ -306,7 +306,7 @@ let package = Package(
             name: "ObjectModuleTests",
             dependencies: [
                 "TurgaiObjects",
-                .product(name: "SwiftCompilerCheck", package: "SwiftScript"),
+                .product(name: "DoppelCompilerCheck", package: "doppel"),
             ],
             resources: [.copy("Corpus")]
         ),

@@ -1,5 +1,5 @@
 import Foundation
-import SwiftCompilerCheck
+import DoppelCompilerCheck
 import Testing
 
 @testable import TurgaiObjects
@@ -8,7 +8,7 @@ import Testing
 /// imports and its runtime compile, so Swift checks the code itself against them.
 ///
 /// With `SWIFT_CORPUS_EXPORT` set to a directory, each object's module is written there as plain
-/// Swift files, for SwiftScript to hold its own checking to Swift's.
+/// Swift files, for Doppel to hold its own checking to Swift's.
 @Suite("The Swift module Turgai gives code")
 struct ObjectModuleTests {
     @Test func whatTheCodeIsGivenCompiles() throws {

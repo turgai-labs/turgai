@@ -1,7 +1,7 @@
 import DiscoverableActors
 import Foundation
-import SwiftScriptInterpreter
-import SwiftScriptSema
+import DoppelRuntime
+import Doppel
 import Synchronization
 
 /// An object's Swift, running: an instance of its actor, live in an interpreter of its own, as an

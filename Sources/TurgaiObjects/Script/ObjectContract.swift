@@ -1,5 +1,5 @@
 import DiscoverableActors
-import SwiftScriptSema
+import Doppel
 
 /// What an object of a type takes, as code meets it: its methods, and the protocols it declares
 /// for others to conform to, each with its requirements, every type as Swift resolves it. One for

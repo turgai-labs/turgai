@@ -1,5 +1,5 @@
 import SwiftParser
-import SwiftScriptSema
+import Doppel
 import SwiftSyntax
 
 /// The runtime's rule for values: what an object takes, gives back, announces or holds is sent and
