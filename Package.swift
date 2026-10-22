@@ -19,7 +19,9 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../hail"),
-        .package(url: "https://github.com/akbashev/discoverable-distributed-actors.git", branch: "main", traits: ["ClusterSystem"]),
+        .package(
+            url: "https://github.com/akbashev/discoverable-distributed-actors.git", branch: "main",
+            traits: ["ClusterSystem"]),
         .package(url: "https://github.com/akbashev/cluster-durable-workflows.git", branch: "main"),
         // Objects are Swift actors, checked as Swift checks them and run by Doppel.
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
