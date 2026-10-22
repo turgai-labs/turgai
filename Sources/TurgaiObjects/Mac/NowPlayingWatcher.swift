@@ -88,13 +88,16 @@ enum NowPlayingWatcher {
         /// Nothing plays when no app does.
         var nowPlaying: NowPlaying? {
             guard let app else { return nil }
-            return NowPlaying(app: Self.name(of: app), title: title, artist: artist, album: album, artworkURL: Self.webAddress(artwork), isPlaying: playing)
+            return NowPlaying(
+                app: Self.name(of: app), title: title, artist: artist, album: album,
+                artworkURL: Self.webAddress(artwork), isPlaying: playing)
         }
 
         /// The artwork's identifier when it's a web address: Apple Music gives one, other apps may
         /// give something else.
         private static func webAddress(_ identifier: String?) -> String? {
-            guard let identifier, let url = URL(string: identifier), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+            guard let identifier, let url = URL(string: identifier),
+                ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
                 url.host != nil
             else { return nil }
             return identifier

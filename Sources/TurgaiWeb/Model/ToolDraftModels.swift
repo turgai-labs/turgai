@@ -154,36 +154,6 @@ struct TurgaiToolDraft: Sendable {
     var wasmModule: String
     var promptInstruction: String
 
-    init(
-        fileName: String,
-        kind: ToolDraftKind,
-        name: String,
-        description: String,
-        approval: String,
-        bodyKind: TurgaiToolBodyKind,
-        arguments: [TurgaiToolArgumentDraft],
-        workflowSteps: [TurgaiWorkflowStepDraft],
-        processExecutable: String,
-        processArguments: String,
-        processEnvironment: String,
-        wasmModule: String,
-        promptInstruction: String
-    ) {
-        self.fileName = fileName
-        self.kind = kind
-        self.name = name
-        self.description = description
-        self.approval = approval
-        self.bodyKind = bodyKind
-        self.arguments = arguments
-        self.workflowSteps = workflowSteps
-        self.processExecutable = processExecutable
-        self.processArguments = processArguments
-        self.processEnvironment = processEnvironment
-        self.wasmModule = wasmModule
-        self.promptInstruction = promptInstruction
-    }
-
     static func new(fileName: String) -> Self {
         var draft = Self(
             fileName: fileName,

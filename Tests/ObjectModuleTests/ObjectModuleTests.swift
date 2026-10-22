@@ -1,6 +1,7 @@
 import Foundation
 import SwiftCompilerCheck
 import Testing
+
 @testable import TurgaiObjects
 
 /// What Turgai gives an object's code, as Swift: for every object written so far, the module it
@@ -24,18 +25,21 @@ struct ObjectModuleTests {
                 let directory = URL(fileURLWithPath: export).appendingPathComponent(name)
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 for file in module.files {
-                    try file.code.write(to: directory.appendingPathComponent(file.name), atomically: true, encoding: .utf8)
+                    try file.code.write(
+                        to: directory.appendingPathComponent(file.name), atomically: true, encoding: .utf8)
                 }
             }
         }
     }
 
-    @Test("an @Event function announces, and a @Subscribed property holds its object, on the lines they're written")
+    @Test("an @Event function announces, and a @Subscribed property stays as written, on the lines they're written")
     func macrosExpandOnTheirLines() {
-        let code = "actor Counter {\n    @Subscribed var shop: Shop\n    @Event func added(count: Int)\n}"
+        let code =
+            "actor Counter {\n    @Subscribed var shop = Shop(id: \"shop\")\n    @Event func added(count: Int)\n}"
         #expect(
             ObjectModule.expanded(code)
-                == "actor Counter {\n     var shop = Shop()\n     func added(count: Int) { __announce(\"added\", [\"count\": count]) }\n}")
+                == "actor Counter {\n     var shop = Shop(id: \"shop\")\n     func added(count: Int) { __announce(\"added\", [\"count\": count]) }\n}"
+        )
     }
 
     /// The written objects, each with what it was written against.
@@ -44,6 +48,11 @@ struct ObjectModuleTests {
         return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-            .map { ($0.deletingPathExtension().lastPathComponent, try JSONDecoder().decode(Script.self, from: Data(contentsOf: $0))) }
+            .map {
+                (
+                    $0.deletingPathExtension().lastPathComponent,
+                    try JSONDecoder().decode(Script.self, from: Data(contentsOf: $0))
+                )
+            }
     }
 }

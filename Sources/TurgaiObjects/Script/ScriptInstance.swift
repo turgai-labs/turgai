@@ -1,7 +1,7 @@
 import DiscoverableActors
 import Foundation
-import SwiftScriptSema
 import SwiftScriptInterpreter
+import SwiftScriptSema
 import Synchronization
 
 /// An object's Swift, running: an instance of its actor, live in an interpreter of its own, as an
@@ -18,10 +18,15 @@ public final class ScriptInstance {
     /// what it publishes.
     public typealias Reaches = (_ recipient: ObjectReference, _ request: ObjectRequest) async throws -> JSONValue
 
+    /// The object of `type` with `id`, which the code named with `Type(id:)`: the reference to
+    /// it, which is made if it isn't there yet.
+    public typealias Makes = (_ type: ObjectTypeName, _ id: ObjectIdentity) async throws -> ObjectReference
+
     /// What code asks of another object: to take a message, with its arguments by label (`_0`, `_1`
-    /// for unlabeled ones), or what it publishes, by name.
+    /// for unlabeled ones), through the type the code holds it as (`nil` for any object), or what
+    /// it publishes, by name.
     public enum ObjectRequest: Sendable {
-        case call(String, arguments: JSONValue)
+        case call(String, arguments: JSONValue, through: String?)
         case read(String)
     }
 
@@ -38,21 +43,31 @@ public final class ScriptInstance {
     }
 
     /// An instance of `source`'s actor, holding `fields` where they're given and its starting
-    /// values elsewhere, with its checks holding.
+    /// values elsewhere, with its checks holding. It's made with its `init()`, as a Swift actor is
+    /// each time it starts; building it makes no object, since what it holds is its object's: what
+    /// its `init()` makes is `unmade` until its object makes it. From then on, `makes` makes them.
     /// - Parameters:
     ///   - schedules: Told the id of each `Task { … }` its code starts, which its object runs with
     ///     ``runTask(_:)``; `cancels`, of each it cancels.
     public static func start(
-        _ source: Script, holding fields: [String: JSONValue] = [:], reaches: @escaping Reaches,
-        schedules: @escaping @Sendable (Int) -> Void, cancels: @escaping @Sendable (Int) -> Void
+        _ source: Script, as identity: ObjectIdentity, holding fields: [String: JSONValue] = [:],
+        reaches: @escaping Reaches,
+        makes: @escaping Makes, schedules: @escaping @Sendable (Int) -> Void, cancels: @escaping @Sendable (Int) -> Void
     ) async throws(CodeProblem) -> ScriptInstance {
         let shape = try ObjectShape(source)
-        let host = Host(reaches: reaches, schedules: schedules, cancels: cancels)
+        let host = Host(source, reaches: reaches, makes: makes, schedules: schedules, cancels: cancels)
         do {
-            let object = try await ScriptObject(type: source.type, in: ObjectModule.objectFile, of: Self.files(source), module: Uses.module, host: host)
+            // Made as every object is, with its id.
+            let object = try await ScriptObject(
+                type: source.type, in: ObjectModule.objectFile, of: Self.files(source), module: Uses.module,
+                arguments: [(ObjectModule.idLabel, .string(identity.rawValue))], host: host)
+            host.built()
             // What's journaled is as `Codable` writes it: each value reads back as its field's type.
-            for field in shape.fields where !field.constant {
-                guard let held = fields[field.name] else { continue }
+            // A constant is its `init()`'s, except an object it holds, which is its object's.
+            for field in shape.fields {
+                guard let held = fields[field.name], !field.constant || !ObjectReference.all(in: held).isEmpty else {
+                    continue
+                }
                 try object.set(field.name, to: host.portable(held))
             }
             let started = ScriptInstance(source: source, shape: shape, object: object, host: host)
@@ -71,26 +86,42 @@ public final class ScriptInstance {
     /// What the Swift compiler would refuse in `source` before it runs, every one at its line, as
     /// it lists them, against the module it imports.
     public static func problems(in source: Script) async -> [CodeProblem] {
+        // How its stored properties get their values comes first: the rest of its Swift is
+        // checked as an object made with its id.
+        let starting = StartingValues.problems(in: source.code, type: source.type)
+        guard starting.isEmpty else { return starting.sorted { ($0.line ?? 0) < ($1.line ?? 0) } }
         let swift = SwiftCheck.problems(in: ObjectModule.objectFile, of: files(source)).map { diagnostic in
             CodeProblem(line: diagnostic.line, span: diagnostic.code, diagnostic.message)
         }
-        // And how it uses the runtime's macros, which are Turgai's, as Turgai has them.
-        return (swift + RuntimeMacros.problems(in: source)).sorted { ($0.line ?? 0) < ($1.line ?? 0) }
+        // And how it uses the runtime's macros, which are Turgai's, as Turgai has them, and what
+        // it sends and keeps, which the runtime keeps as data.
+        var problems = swift + RuntimeMacros.problems(in: source)
+        if swift.isEmpty,
+            let declarations = SwiftCheck.declarations(of: source.type, in: ObjectModule.objectFile, of: files(source))
+                .declarations
+        {
+            problems += CodableValues.problems(in: source.code, type: source.type, declarations: declarations)
+        }
+        return problems.sorted { ($0.line ?? 0) < ($1.line ?? 0) }
     }
 
-    /// What an object of `source` holds when it's made: each field's starting value, with its
-    /// checks holding. It calls no other object to start.
-    public static func starts(_ source: Script) async throws(CodeProblem) -> [String: JSONValue] {
-        // Its copy is thrown away once it's checked, so a `Task` it starts as it's made never runs:
-        // its object runs its own when it lives.
+    /// What an object of `source` holds when it starts: each field's starting value, with its
+    /// checks holding. It calls no other object to start, and the objects its `init()` makes are
+    /// `unmade`: its copy is thrown away once it's checked.
+    public static func starts(_ source: Script, as identity: ObjectIdentity) async throws(CodeProblem) -> [String:
+        JSONValue]
+    {
+        // A `Task` it starts as it's made never runs: its object runs its own when it lives.
         try await start(
-            source,
+            source, as: identity,
             reaches: { _, request in
                 switch request {
-                case .call(let message, _): throw CodeProblem("An object calls no other object as it's made: `\(message)`.")
+                case .call(let message, _, _):
+                    throw CodeProblem("An object calls no other object as it's made: `\(message)`.")
                 case .read(let name): throw CodeProblem("An object reads no other object as it's made: `\(name)`.")
                 }
             },
+            makes: { type, _ in throw CodeProblem("An object reaches no `\(type)` before it starts.") },
             schedules: { _ in }, cancels: { _ in }
         ).fields()
     }
@@ -119,9 +150,9 @@ public final class ScriptInstance {
     }
 
     /// Handles `message` with `arguments`, by parameter name, label or position: its method runs
-    /// on the instance, and its reply comes back with what it printed. Its arguments are checked
-    /// against its own typing first, as it's this object that takes them. A message that fails
-    /// leaves the instance as it failed: its object starts it again from the journal.
+    /// on the instance, and its reply comes back with what it printed. Its arguments are read as
+    /// their types, and what isn't of its type is refused with where it is in the value. A message
+    /// that fails leaves the instance as it failed: its object starts it again from the journal.
     public func handle(_ name: String, arguments: JSONValue) async throws(CodeProblem) -> ObjectReply {
         guard let message = shape.messages.first(where: { $0.name == name }) else {
             let takes = shape.messages.map(\.written).joined(separator: ", ")
@@ -130,11 +161,10 @@ public final class ScriptInstance {
         let given = arguments.objectValue ?? [:]
         var values: [(label: String?, value: Portable)] = []
         for (index, parameter) in message.parameters.enumerated() {
-            guard let argument = given[parameter.name] ?? parameter.label.flatMap({ given[$0] }) ?? given["_\(index)"], argument != .null else {
+            guard let argument = given[parameter.name] ?? parameter.label.flatMap({ given[$0] }) ?? given["_\(index)"],
+                argument != .null
+            else {
                 throw CodeProblem("`\(message.name)` needs `\(parameter.name)`. It's \(message.written).")
-            }
-            guard Self.accepts(parameter.kind, argument) else {
-                throw CodeProblem("`\(parameter.name)` is `\(argument.inline)`, but `\(message.name)` takes \(parameter.kind.written) there.")
             }
             values.append((parameter.label, host.portable(argument)))
         }
@@ -143,7 +173,8 @@ public final class ScriptInstance {
             let reply = try await Run.$current.withValue(run) { try await object.call(message.name, arguments: values) }
             try await check()
             return ObjectReply(
-                reply: message.reply == nil ? .null : try host.json(reply), printed: run.printed, announced: run.announced)
+                reply: message.replyType == nil ? .null : try host.json(reply), printed: run.printed,
+                announced: run.announced)
         } catch {
             throw Self.problem(error)
         }
@@ -191,44 +222,68 @@ public final class ScriptInstance {
     }
 
     /// What the code reaches outside itself, as Turgai has it: other objects by message, made
-    /// ones as virtual actors, named ones by name, and the runtime's announcing.
+    /// ones as virtual actors, and the runtime's announcing.
     private final class Host: ScriptHost {
-        let itself = ObjectHandle("itself")
+        /// The object itself, of its own type.
+        let itself: ObjectHandle
         private let reaches: Reaches
+        private let makes: Makes
+        /// Whether its `init()` is running: what it makes then is its object's to make.
+        private var building = true
         private let schedules: @Sendable (Int) -> Void
         private let cancels: @Sendable (Int) -> Void
         /// The objects the code holds, by the handle it holds each as.
         private var references: [(handle: ObjectHandle, reference: ObjectReference)] = []
 
-        init(reaches: @escaping Reaches, schedules: @escaping @Sendable (Int) -> Void, cancels: @escaping @Sendable (Int) -> Void) {
+        init(
+            _ source: Script, reaches: @escaping Reaches, makes: @escaping Makes,
+            schedules: @escaping @Sendable (Int) -> Void, cancels: @escaping @Sendable (Int) -> Void
+        ) {
+            itself = ObjectHandle("itself", type: source.type)
             self.reaches = reaches
+            self.makes = makes
             self.schedules = schedules
             self.cancels = cancels
         }
 
-        func send(_ message: String, to object: ObjectHandle, arguments: [(label: String?, value: Portable)]) async throws -> Portable {
+        func send(
+            _ message: String, to object: ObjectHandle, through type: String?,
+            arguments: [(label: String?, value: Portable)]
+        ) async throws -> Portable {
             var members: [String: JSONValue] = [:]
-            for (index, argument) in arguments.enumerated() { members[argument.label ?? "_\(index)"] = try json(argument.value) }
-            return portable(try await reaches(try reference(object), .call(message, arguments: .object(members))))
+            for (index, argument) in arguments.enumerated() {
+                members[argument.label ?? "_\(index)"] = try json(argument.value)
+            }
+            return portable(
+                try await reaches(try reference(object), .call(message, arguments: .object(members), through: type)))
         }
 
         func read(_ property: String, of object: ObjectHandle) async throws -> Portable {
             portable(try await reaches(try reference(object), .read(property)))
         }
 
-        /// Another object's type, made with `Type()`: the object whose id is the type's name, made
-        /// when it's first called if there's none yet.
-        func make(_ type: String) async throws -> ObjectHandle {
-            handle(for: .virtual(id: type, type: type))
+        /// The object of another object's type with `id`, named with `Type(id:)`: `unmade` while
+        /// it's built.
+        func make(_ type: String, arguments: [(label: String?, value: Portable)]) async throws -> ObjectHandle {
+            guard let given = arguments.first(where: { $0.label == ObjectModule.idLabel }),
+                case .string(let written) = given.value
+            else {
+                throw CodeProblem("`\(type)` is named by its id: `\(type)(id:)`.")
+            }
+            // As code writes them, crossing into the runtime: the type's name, and the id as ids are kept.
+            let made = ObjectTypeName(rawValue: type)
+            let id = ObjectIdentity(rawValue: ObjectNames.handle(for: written))
+            return handle(for: building ? .unmade(type: made, id: id) : try await makes(made, id))
         }
 
-        /// The objects the code reaches by name.
-        func global(_ name: String) async throws -> Portable {
-            .reference(handle(for: .named(name)))
+        /// Its `init()` has run: what it makes from now on, it makes.
+        func built() {
+            building = false
         }
 
         func call(_ function: String, arguments: [(label: String?, value: Portable)]) async throws -> Portable {
-            guard function == RuntimeMacros.announce, arguments.count == 2, case .string(let event) = arguments[0].value else {
+            guard function == RuntimeMacros.announce, arguments.count == 2, case .string(let event) = arguments[0].value
+            else {
                 throw CodeProblem("`\(function)` isn't the runtime's.")
             }
             Run.current?.announce(Announcement(event: event, values: try json(arguments[1].value)))
@@ -244,7 +299,9 @@ public final class ScriptInstance {
         func handle(for reference: ObjectReference) -> ObjectHandle {
             if reference == .itself { return itself }
             if let known = references.first(where: { $0.reference == reference }) { return known.handle }
-            let handle = ObjectHandle("\(references.count + 1)")
+            // It goes into the code with its type, which is checked wherever the code takes an
+            // object of a type.
+            let handle = ObjectHandle("\(references.count + 1)", type: reference.type)
             references.append((handle, reference))
             return handle
         }
@@ -268,7 +325,8 @@ public final class ScriptInstance {
             case .number(let number): return .double(number)
             case .string(let text): return .string(text)
             case .array(let items): return .array(items.map(portable))
-            case .object(let members): return .object(members.sorted { $0.key < $1.key }.map { ($0.key, portable($0.value)) })
+            case .object(let members):
+                return .object(members.sorted { $0.key < $1.key }.map { ($0.key, portable($0.value)) })
             }
         }
 
@@ -286,24 +344,6 @@ public final class ScriptInstance {
                 return .object(object)
             case .reference(let handle): return try reference(handle).json
             }
-        }
-    }
-
-    // MARK: Values
-
-    /// Whether a value given for a parameter is of its kind: checked on every message, by the
-    /// object taking it.
-    static func accepts(_ kind: ValueKind, _ value: JSONValue) -> Bool {
-        switch (kind, value) {
-        case (.int, .integer), (.int, .unsignedInteger), (.double, .number), (.double, .integer), (.double, .unsignedInteger),
-            (.string, .string), (.bool, .bool):
-            true
-        case (.int, .number(let number)): number.rounded() == number
-        case (.list(let element), .array(let items)): items.allSatisfy { accepts(element, $0) }
-        case (.map(let element), .object(let members)) where ObjectReference(value) == nil: members.values.allSatisfy { accepts(element, $0) }
-        case (.object, _): ObjectReference(value) != nil
-        case (.other, _): true
-        default: false
         }
     }
 }

@@ -23,7 +23,8 @@ public enum YAMLExplanation {
         let shown = "I couldn't read line \(mark.line):\n\n" + snippet(line, number: mark.line, column: mark.column)
 
         if problem.contains("mapping values are not allowed") {
-            let advice = "This value has a second \": \" in it. YAML reads \": \" as the start of a key, so text that contains one has to be in quotes"
+            let advice =
+                "This value has a second \": \" in it. YAML reads \": \" as the start of a key, so text that contains one has to be in quotes"
             guard let quoted = quotingValue(of: line) else { return "\(shown)\n\n\(advice)." }
             return "\(shown)\n\n\(advice):\n\n    \(quoted)"
         }
@@ -31,20 +32,26 @@ public enum YAMLExplanation {
             return "\(shown)\n\nThis line is indented with a tab. YAML only allows spaces for indentation."
         }
         if problem.contains("cannot start any token") {
-            return "\(shown)\n\nThis value starts with a character YAML keeps for itself, such as `@` or a backtick. Put the value in quotes."
+            return
+                "\(shown)\n\nThis value starts with a character YAML keeps for itself, such as `@` or a backtick. Put the value in quotes."
         }
         if problem.contains("did not find expected key") || problem.contains("did not find expected '-' indicator") {
-            return "\(shown)\n\nThis line isn't indented like the lines around it. In YAML, the keys of one mapping, and the items of one list, all start in the same column."
+            return
+                "\(shown)\n\nThis line isn't indented like the lines around it. In YAML, the keys of one mapping, and the items of one list, all start in the same column."
         }
         if problem.contains("could not find expected ':'") {
-            return "\(shown)\n\nThis line has a key without a \":\" after it. Write `key: value`, with a space after the colon."
+            return
+                "\(shown)\n\nThis line has a key without a \":\" after it. Write `key: value`, with a space after the colon."
         }
-        if problem.contains("did not find expected ',' or '}'") || problem.contains("did not find expected ',' or ']'") {
+        if problem.contains("did not find expected ',' or '}'") || problem.contains("did not find expected ',' or ']'")
+        {
             let start = opened.map { " opened on line \($0.line)" } ?? ""
-            return "\(shown)\n\nThe bracket\(start) isn't closed where YAML expected. Check the brackets, or write it as indented lines instead, one key per line."
+            return
+                "\(shown)\n\nThe bracket\(start) isn't closed where YAML expected. Check the brackets, or write it as indented lines instead, one key per line."
         }
         if problem.contains("expected <document start>") {
-            return "\(shown)\n\nThe YAML ends before this, so whatever is here is one too many: often an extra `}` or `]`. Remove it."
+            return
+                "\(shown)\n\nThe YAML ends before this, so whatever is here is one too many: often an extra `}` or `]`. Remove it."
         }
         if problem.contains("end of stream"), let opened {
             return "\(shown)\n\nSomething opened on line \(opened.line), a quote or a bracket, is never closed."

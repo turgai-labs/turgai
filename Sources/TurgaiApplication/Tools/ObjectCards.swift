@@ -12,9 +12,9 @@ extension ObjectSession {
     /// The card a person reads for `handle`. While it works, it's what the object is, as YAML:
     /// its data now, and, for an object made here, its code's view. While it's failing, it's why,
     /// with its Swift, which is where the failure is.
-    public func card(_ handle: String) async throws -> Card {
+    public func card(_ handle: ObjectID) async throws -> Card {
         let description = try await described(handle)
-        var parts = ["# \(description.title)"]
+        var parts = ["# \(description.type)"]
         if let summary = description.description, !summary.isEmpty { parts.append(summary) }
         let made = try await madeObject(handle)
         if let made, case .failing(let failure) = try await made.health {
@@ -27,11 +27,11 @@ extension ObjectSession {
         if let made {
             // An object made here: its code's view, which says what it takes and how.
             let source = try await made.source
-            if let yaml = try? ObjectSource(swift: source.code, type: source.type).yaml {
+            if let yaml = try? ObjectSource(source).yaml {
                 parts.append("```yaml\n\(yaml)\n```")
             }
-        } else if let yaml = try Self.spec(of: Uses.Object(type: Self.typeName(of: handle), description: description, publishes: true)) {
-            // Another kind of object: its spec, what it takes, publishes and announces.
+        } else if let yaml = try Self.spec(of: Uses.Object(description: description, publishes: true)) {
+            // A built-in object: its spec, what it takes, publishes and announces.
             parts.append("```yaml\n\(yaml)\n```")
         }
         return .markdown(parts.joined(separator: "\n\n"))
@@ -46,7 +46,9 @@ extension ObjectSession {
         var root: [(Node, Node)] = []
         let takes = actor.methods.sorted { $0.key < $1.key }.map { Node(written($0.key, $0.value)) }
         if !takes.isEmpty { root.append((Node("takes"), Node(takes))) }
-        let publishes = actor.properties.sorted { $0.key < $1.key }.map { Node("\($0.key): \($0.value) { get async throws }") }
+        let publishes = actor.properties.sorted { $0.key < $1.key }.map {
+            Node("\($0.key): \($0.value) { get async throws }")
+        }
         if !publishes.isEmpty { root.append((Node("publishes"), Node(publishes))) }
         let announces = actor.events.sorted { $0.key < $1.key }.map { Node(written($0.key, $0.value)) }
         if !announces.isEmpty { root.append((Node("announces"), Node(announces))) }
@@ -70,7 +72,9 @@ extension Delivery {
     /// The message as it was sent: `askForRaise(amount: 200)`.
     var written: String {
         guard case .object(let arguments) = arguments else { return "\(message)()" }
-        return "\(message)(" + arguments.sorted { $0.key < $1.key }.map { "\($0.key): \(Self.argument($0.value))" }.joined(separator: ", ") + ")"
+        return "\(message)("
+            + arguments.sorted { $0.key < $1.key }.map { "\($0.key): \(Self.argument($0.value))" }.joined(
+                separator: ", ") + ")"
     }
 
     /// An argument as it reads: an object as one, never its address.

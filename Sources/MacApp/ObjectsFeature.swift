@@ -57,7 +57,7 @@ extension ObjectRow {
         let endpoint = entry.object.id.node.endpoint
         self.init(
             id: entry.object.id.description,
-            title: entry.title,
+            title: entry.id.description,
             summary: entry.description,
             actions: entry.actions,
             events: entry.events,

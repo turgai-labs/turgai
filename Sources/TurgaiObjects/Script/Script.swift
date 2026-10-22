@@ -1,9 +1,10 @@
 import DiscoverableActors
 import SwiftParser
 import SwiftParserDiagnostics
+import SwiftScriptSema
 import SwiftSyntax
 
-/// An object's kind as it's kept: its Swift, as it was written, and the actor in it that's the
+/// An object's code as it's kept: its Swift, as it was written, and the actor in it that's the
 /// object. Everything else about it is read from the code: its shape, the states it's in, and its
 /// YAML, which ``ObjectSource`` shows next to it.
 public struct Script: Codable, Sendable, Equatable {
@@ -15,7 +16,7 @@ public struct Script: Codable, Sendable, Equatable {
     /// imports, and the names objects are reached by.
     public let uses: Uses
 
-    /// `code` as the kind whose object is the actor `type`. It's refused, with where, when it
+    /// `code`, whose object is the actor `type`. It's refused, with where, when it
     /// isn't Swift, or declares no such actor, as the Swift compiler refuses a file.
     public init(code: String, type: String, uses: Uses = .nothing) throws(CodeProblem) {
         let file = Parser.parse(source: code)
@@ -23,8 +24,12 @@ public struct Script: Codable, Sendable, Equatable {
             throw CodeProblem("The answer isn't Swift code.")
         }
         let lines = SourceLocationConverter(fileName: "", tree: file)
-        func line(_ node: some SyntaxProtocol) -> Int { lines.location(for: node.positionAfterSkippingLeadingTrivia).line }
-        if let error = ParseDiagnosticsGenerator.diagnostics(for: file).first(where: { $0.diagMessage.severity == .error }) {
+        func line(_ node: some SyntaxProtocol) -> Int {
+            lines.location(for: node.positionAfterSkippingLeadingTrivia).line
+        }
+        if let error = ParseDiagnosticsGenerator.diagnostics(for: file).first(where: {
+            $0.diagMessage.severity == .error
+        }) {
             throw CodeProblem(line: lines.location(for: error.position).line, error.message)
         }
         var actor: ActorDeclSyntax?
@@ -41,17 +46,22 @@ public struct Script: Codable, Sendable, Equatable {
             guard let declaration = statement.item.as(DeclSyntax.self) else { throw outside(statement) }
             // Values and functions of their own, outside the actor: what the object keeps and
             // does is the actor's.
-            if declaration.is(VariableDeclSyntax.self) || declaration.is(FunctionDeclSyntax.self) { throw outside(declaration) }
+            if declaration.is(VariableDeclSyntax.self) || declaration.is(FunctionDeclSyntax.self) {
+                throw outside(declaration)
+            }
             let named: (kind: String, name: String)? =
-                if let decl = declaration.as(ActorDeclSyntax.self) { ("actor", decl.name.text) }
-                else if let decl = declaration.as(ClassDeclSyntax.self) { ("class", decl.name.text) }
-                else if let decl = declaration.as(StructDeclSyntax.self) { ("struct", decl.name.text) }
-                else if let decl = declaration.as(EnumDeclSyntax.self) { ("enum", decl.name.text) }
-                else { nil }
+                if let decl = declaration.as(ActorDeclSyntax.self) {
+                    ("actor", decl.name.text)
+                } else if let decl = declaration.as(ClassDeclSyntax.self) {
+                    ("class", decl.name.text)
+                } else if let decl = declaration.as(StructDeclSyntax.self) {
+                    ("struct", decl.name.text)
+                } else if let decl = declaration.as(EnumDeclSyntax.self) { ("enum", decl.name.text) } else { nil }
             guard let named, named.name == type else { continue }
             guard actor == nil else { throw CodeProblem(line: line(declaration), "invalid redeclaration of '\(type)'") }
             guard let decl = declaration.as(ActorDeclSyntax.self) else {
-                throw CodeProblem(line: line(declaration), "`\(type)` is a \(named.kind): the object is `actor \(type)`.")
+                throw CodeProblem(
+                    line: line(declaration), "`\(type)` is a \(named.kind): the object is `actor \(type)`.")
             }
             actor = decl
         }
@@ -67,53 +77,7 @@ public struct Script: Codable, Sendable, Equatable {
     /// Whether, in the state named `state`, it takes `message`, as its YAML view reads its states:
     /// code it can't read as states takes every message.
     public func takes(_ message: String, in state: String?) -> Bool {
-        (try? ObjectSource(swift: code, type: type))?.takes(message, in: state) ?? true
-    }
-
-    /// The objects its code talks to by name: what it calls a method on that it doesn't declare,
-    /// such as `bookings` in `bookings.confirm(trip: trip)`. Each is found by that name when it's
-    /// called.
-    public var namedObjects: [String] {
-        final class Names: SyntaxVisitor {
-            var declared: Set<String> = ["self", "super"]
-            var called: [String] = []
-
-            override func visit(_ node: IdentifierPatternSyntax) -> SyntaxVisitorContinueKind {
-                declared.insert(node.identifier.text)
-                return .visitChildren
-            }
-
-            override func visit(_ node: FunctionParameterSyntax) -> SyntaxVisitorContinueKind {
-                declared.insert((node.secondName ?? node.firstName).text)
-                return .visitChildren
-            }
-
-            override func visit(_ node: ClosureShorthandParameterSyntax) -> SyntaxVisitorContinueKind {
-                declared.insert(node.name.text)
-                return .visitChildren
-            }
-
-            override func visit(_ node: ClosureParameterSyntax) -> SyntaxVisitorContinueKind {
-                declared.insert((node.secondName ?? node.firstName).text)
-                return .visitChildren
-            }
-
-            override func visit(_ call: FunctionCallExprSyntax) -> SyntaxVisitorContinueKind {
-                if let member = call.calledExpression.as(MemberAccessExprSyntax.self),
-                    let base = member.base?.as(DeclReferenceExprSyntax.self),
-                    let first = base.baseName.text.first, first.isLowercase
-                {
-                    called.append(base.baseName.text)
-                }
-                return .visitChildren
-            }
-
-            init() { super.init(viewMode: .sourceAccurate) }
-        }
-        let names = Names()
-        names.walk(Parser.parse(source: code))
-        var seen: Set<String> = []
-        return names.called.filter { !names.declared.contains($0) && seen.insert($0).inserted }
+        (try? ObjectSource(self))?.takes(message, in: state) ?? true
     }
 
     /// The types its code makes with `Type()` that it doesn't declare: other objects' types, each
@@ -123,13 +87,27 @@ public struct Script: Codable, Sendable, Equatable {
             var declared: Set<String> = []
             var made: [String] = []
 
-            override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind { declared.insert(node.name.text); return .visitChildren }
-            override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind { declared.insert(node.name.text); return .visitChildren }
-            override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { declared.insert(node.name.text); return .visitChildren }
-            override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind { declared.insert(node.name.text); return .visitChildren }
+            override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
+                declared.insert(node.name.text)
+                return .visitChildren
+            }
+            override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+                declared.insert(node.name.text)
+                return .visitChildren
+            }
+            override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
+                declared.insert(node.name.text)
+                return .visitChildren
+            }
+            override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
+                declared.insert(node.name.text)
+                return .visitChildren
+            }
 
             override func visit(_ call: FunctionCallExprSyntax) -> SyntaxVisitorContinueKind {
-                if let name = call.calledExpression.as(DeclReferenceExprSyntax.self)?.baseName.text, name.first?.isUppercase == true {
+                if let name = call.calledExpression.as(DeclReferenceExprSyntax.self)?.baseName.text,
+                    name.first?.isUppercase == true
+                {
                     made.append(name)
                 }
                 return .visitChildren
@@ -180,15 +158,34 @@ public struct Script: Codable, Sendable, Equatable {
 }
 
 extension Script {
+    /// The key of a property's schema saying it's `private`: no other object's code reads it.
+    public static let privateKey = "x-private"
+
     /// Its object's spec, read from its code: what it takes, what it announces, and what it
-    /// holds, `holding` these values, when it has any. A kind is described the same with an
+    /// holds, `holding` these values, when it has any. Its type is described the same with an
     /// object or without one.
-    public func spec(title: String, description: String?, holding values: [String: JSONValue] = [:]) throws(CodeProblem) -> ObjectDescription {
+    public func spec(description: String?, holding values: [String: JSONValue] = [:]) throws(CodeProblem)
+        -> ObjectDescription
+    {
         let shape = try ObjectShape(self)
+        let declarations = SwiftCheck.declarations(
+            of: type, in: ObjectModule.objectFile, of: ScriptInstance.files(self)
+        ).declarations
         var properties: [String: JSONValue] = [:]
         for field in shape.fields {
-            var schema = DynamicObject.schema(of: values[field.name] ?? .null)
+            // Its Swift type, when the checker resolved it, or else what it holds now.
+            var schema: [String: JSONValue]
+            if field.resolved != .unresolved, let declarations, let written = SwiftTypeSchema.written(field.resolved),
+                case .object(let typed) = SwiftTypeSchema.schema(of: field.resolved, in: declarations)
+            {
+                schema = typed
+                schema[ObjectShape.Message.swiftTypeKey] = .string(written)
+            } else {
+                schema = DynamicObject.schema(of: values[field.name] ?? .null)
+            }
             schema["readOnly"] = true
+            // A `private` one is its own: shown to whoever uses it, never to other objects' code.
+            if !field.published { schema[Self.privateKey] = true }
             properties[field.name] = .object(schema)
         }
         var actions: [String: ObjectAction] = [:]
@@ -198,8 +195,32 @@ extension Script {
         }
         var events: [String: ObjectEvent] = [:]
         for event in shape.events {
-            events[event.name] = ObjectEvent(description: event.summary, data: event.input ?? ["type": "object", "properties": [:]])
+            events[event.name] = ObjectEvent(
+                description: event.summary, data: event.input ?? ["type": "object", "properties": [:]])
         }
-        return ObjectDescription(title: title, description: description, properties: properties, actions: actions, events: events)
+        // The protocols it declares within it, each requirement described as an action is.
+        var protocols: [String: ObjectProtocol] = [:]
+        for (name, declaration) in declarations?.types ?? [:] where name.hasPrefix("\(type).") {
+            guard case .protocol(let requirements, let documentation) = declaration, let declarations else { continue }
+            var described: [String: ObjectAction] = [:]
+            for requirement in requirements {
+                let parameters = requirement.parameters.map { parameter in
+                    ObjectShape.Parameter(
+                        label: parameter.label, name: parameter.name,
+                        type: SwiftTypeSchema.written(parameter.type) ?? "Object")
+                }
+                var message = ObjectShape.Message(name: requirement.name, parameters: parameters)
+                if requirement.result != .void { message.replyType = SwiftTypeSchema.written(requirement.result) }
+                message = ObjectShape.typed(message, by: [requirement], in: declarations)
+                described[requirement.name] = ObjectAction(
+                    description: requirement.documentation, input: message.input, output: message.output,
+                    effects: [requirement.effects.async ? .async : nil, requirement.effects.throwing ? .throws : nil]
+                        .compactMap { $0 })
+            }
+            protocols[name] = ObjectProtocol(description: documentation, requirements: described)
+        }
+        return ObjectDescription(
+            type: type, description: description, properties: properties, actions: actions, events: events,
+            protocols: protocols)
     }
 }

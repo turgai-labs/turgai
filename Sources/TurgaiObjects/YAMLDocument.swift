@@ -32,7 +32,9 @@ public enum YAMLDocument {
         case .mapping(let mapping):
             var members: [String: JSONValue] = [:]
             for (key, value) in mapping {
-                guard let name = key.string else { throw UnreadableYAML(explanation: "A key must be text, such as `title`.") }
+                guard let name = key.string else {
+                    throw UnreadableYAML(explanation: "A key must be text, such as `title`.")
+                }
                 members[name] = try json(from: value)
             }
             return .object(members)
@@ -41,7 +43,8 @@ public enum YAMLDocument {
             for item in sequence { items.append(try json(from: item)) }
             return .array(items)
         case .alias:
-            throw UnreadableYAML(explanation: "This uses a YAML alias (`*name`). Write the value out where it's used instead.")
+            throw UnreadableYAML(
+                explanation: "This uses a YAML alias (`*name`). Write the value out where it's used instead.")
         }
     }
 }

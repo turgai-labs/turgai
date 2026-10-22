@@ -6,27 +6,28 @@ import Foundation
 import VirtualActors
 
 /// An object that runs Swift a model wrote, its ``Script``, the way an Erlang process runs a
-/// module: a name, the kind it runs, and its own fields. Its code runs as a live instance of its
+/// module: a name, the code it runs, and its own fields. Its code runs as a live instance of its
 /// actor, on this actor: it handles one message at a time, and messages interleave only where one
 /// waits on another object, as Swift actors do. To other objects and to models, it's an object
-/// like any other: each message its kind takes is one of its actions.
+/// like any other: each message its code takes is one of its actions.
 ///
-/// It's a virtual actor keyed by its ``ObjectIdentity``: whoever has the identity can always
-/// reach it, and it starts on demand, on any node. What happens to it is journaled, so it comes
-/// back after a restart with the same fields. ``DynamicObjects`` creates, upgrades and removes
-/// them.
+/// It's a virtual actor keyed by its ``ObjectIdentity``: whoever has a reference to it can always
+/// reach it, and it starts on demand, on any node. Its code and what it holds are its own,
+/// journaled, so it comes back after a restart as it was: a restart only restores, and makes
+/// nothing. The objects it holds are its own too: a new version of a type's code reaches them
+/// through it, as down a tree.
 @EventSourced
 @VirtualActor
 public distributed actor DynamicObject: DiscoverableActor {
     public typealias ActorSystem = ClusterSystem
-    public typealias Dependency = ObjectIdentity
+    public typealias Dependency = ObjectNature
     public typealias Event = DynamicObjectEvent
     public typealias State = DynamicObjectState
 
-    public var state = DynamicObjectState.unmade
-    private let ownIdentity: ObjectIdentity
+    public var state = DynamicObjectState.new
+    private let nature: ObjectNature
     /// Its code: stopped, or running as an instance started from what's journaled. It stops when
-    /// its kind changes or a message fails, as an Erlang process restarts from its last state.
+    /// its code changes or a message fails, as an Erlang process restarts from its last state.
     private var process = Process.stopped(generation: 0)
     /// Its subscribers, to the events the code it runs announces: replaced with each new code, so
     /// subscribers find theirs ended, and subscribe again.
@@ -58,32 +59,51 @@ public distributed actor DynamicObject: DiscoverableActor {
         for follower in followers.values { follower.task.cancel() }
     }
 
-    public init(actorSystem: ClusterSystem, dependency identity: ObjectIdentity) async throws {
+    public init(actorSystem: ClusterSystem, dependency nature: ObjectNature) async throws {
         self.actorSystem = actorSystem
-        self.ownIdentity = identity
-        try await actorSystem.journal.register(actor: self, with: Self.persistenceID(for: identity))
-        if case .live(let object) = state {
-            try await checkIn(object.scope)
-            try rehub()
-            refollow()
-        }
+        self.nature = nature
+        try await actorSystem.journal.register(actor: self, with: Self.persistenceID(for: nature))
+        rehub()
+        refollow()
     }
 
-    /// The object with `identity`, started if it isn't running.
-    public static func resolve(on system: ClusterSystem, identity: ObjectIdentity) async throws -> DynamicObject {
-        try await system.virtualActors.getActor(identifiedBy: actorID(for: identity), dependency: identity)
+    /// The object `nature` says, a reference that reaches it wherever and whenever it runs.
+    public static func resolve(on system: ClusterSystem, nature: ObjectNature) async throws -> DynamicObject {
+        try await system.virtualActors.getActor(identifiedBy: actorID(for: nature), dependency: nature)
     }
 
-    static func actorID(for identity: ObjectIdentity) -> VirtualActorID {
-        VirtualActorID(rawValue: "dynamic-object:\(identity.rawValue)")
+    /// Its virtual actor's id: its scope's and its own, so the same identity in two scopes is two
+    /// objects.
+    static func actorID(for nature: ObjectNature) -> VirtualActorID {
+        VirtualActorID(rawValue: "\(actorIDPrefix)\(nature.scope.name)/\(nature.identity.rawValue)")
     }
 
-    static func persistenceID(for identity: ObjectIdentity) -> String {
-        "turgai-object-\(identity.rawValue)"
+    private static let actorIDPrefix = "dynamic-object:"
+
+    /// The identity of the object a reference with `id` is to: `nil` for a reference to another
+    /// kind of actor. A reference kept from before a restart, or made on another node, is another
+    /// ID with the same identity.
+    public static func identity(of id: ClusterSystem.ActorID) -> ObjectIdentity? {
+        guard let virtual = id.virtualActorID?.rawValue, virtual.hasPrefix(actorIDPrefix),
+            let slash = virtual.dropFirst(actorIDPrefix.count).firstIndex(of: "/")
+        else { return nil }
+        return ObjectIdentity(rawValue: String(virtual[virtual.index(after: slash)...]))
+    }
+
+    /// The identity of the object of `scope` a reference with `id` is to: `nil` for one of another
+    /// scope, or another kind of actor.
+    public static func identity(of id: ClusterSystem.ActorID, in scope: ObjectScope) -> ObjectIdentity? {
+        let prefix = "\(actorIDPrefix)\(scope.name)/"
+        guard let virtual = id.virtualActorID?.rawValue, virtual.hasPrefix(prefix) else { return nil }
+        return ObjectIdentity(rawValue: String(virtual.dropFirst(prefix.count)))
+    }
+
+    static func persistenceID(for nature: ObjectNature) -> String {
+        "turgai-object-\(nature.scope.name)/\(nature.identity.rawValue)"
     }
 
     /// Which object this is: its own, kept across restarts, unlike its actor ID.
-    public distributed var identity: ObjectIdentity { ownIdentity }
+    public distributed var identity: ObjectIdentity { nature.identity }
 
     public func handleEvent(_ event: DynamicObjectEvent) {
         state = state.applying(event)
@@ -91,28 +111,78 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     // MARK: Lifecycle
 
-    /// Makes this object `name`, running `kind`, holding `start`. An object is created once.
-    distributed func create(
-        name: String, description: String?, kind: Script, id: BehaviorID, start: [String: JSONValue], scope: ObjectScope
-    ) async throws {
-        let birth = Birth(name: name, description: description, kind: kind, id: id, scope: scope, start: start, at: Date())
-        try await emit(event: try state.creating(birth))
-        try await checkIn(scope)
-        try rehub()
-        refollow()
+    /// The object of `scope` with `id`, of the type whose actor is `type`, as code names it with
+    /// `Type(id:)`: the one there is, a built-in one checked in under it, or one made now running
+    /// its type's code. The same id is the
+    /// same object, whoever names it; one of another type is refused.
+    static func make(
+        _ type: ObjectTypeName, id identity: ObjectIdentity, in scope: ObjectScope, on system: ClusterSystem
+    ) async throws
+        -> ActorReference
+    {
+        let object = try await resolve(on: system, nature: ObjectNature(identity: identity, scope: scope))
+        if let existing = try? await object.source {
+            guard existing.type == type.rawValue else {
+                throw CodeProblem("`\(identity)` is a `\(existing.type)`, not a `\(type)`.")
+            }
+        } else if let builtIn = await ObjectNames.object(
+            named: identity.rawValue, in: scopes(around: scope), using: system)
+        {
+            // A built-in object, the one of its kind, is reached as it checked in.
+            guard builtIn.description.type == type.rawValue else {
+                throw CodeProblem("`\(identity)` is a `\(builtIn.description.type)`, not a `\(type)`.")
+            }
+            return try ActorReference(builtIn.object)
+        } else {
+            let declared = try await DynamicObjects.resolve(on: system, scope: scope).type(declaring: type)
+            try await object.adopt(declared.id, code: declared.code)
+        }
+        return try ActorReference(object)
     }
 
-    /// Runs a new version of the kind it shares, from its next message on, once it isn't handling
-    /// one: the way a new module reaches an Erlang process. Data new to it starts as `starts` has
-    /// it; what it holds stays its own.
-    distributed func adopt(_ kind: Script, starts: [String: JSONValue]) async throws {
-        try await emit(event: try state.live.adopting(kind, starts: starts))
+    /// Runs `code` of the type `type` from its next message on, once it isn't handling one: the
+    /// way a new module reaches an Erlang process. What it holds stays its own; data new to it
+    /// starts as the code has it, and the objects its `init()` makes there are made now.
+    distributed func adopt(_ type: BehaviorID, code: Script) async throws {
+        let live = try state.live
+        var starts = try await ScriptInstance.starts(code, as: nature.identity)
+        for (field, value) in starts where live.fields[field] == nil {
+            starts[field] = try await Self.making(value, in: nature.scope, on: actorSystem)
+        }
+        try await emit(event: live.adopting(type, code, starts: starts))
         stop()
-        try rehub()
+        rehub()
         refollow()
     }
 
-    /// Sets values of its own data, for it alone: objects sharing its kind keep theirs.
+    /// The new version `code` of the type `type`: it runs it, if it's of that type, and passes it
+    /// on to the objects it holds, which pass it on to theirs. `reached` are the objects it has
+    /// reached already, so objects holding each other each take it once.
+    distributed func typeChanged(_ type: BehaviorID, code: Script, reached: Set<ObjectIdentity>) async throws -> Set<
+        ObjectIdentity
+    > {
+        var reached = reached
+        guard reached.insert(nature.identity).inserted, case .live(let live) = state else { return reached }
+        if live.type == type { try await adopt(type, code: code) }
+        for value in try state.live.fields.values {
+            for held in ObjectReference.all(in: value) {
+                guard case .actor(let reference, _) = held,
+                    let identity = Self.identity(of: try reference.actorID(using: actorSystem)),
+                    !reached.contains(identity)
+                else { continue }
+                reached = try await Self.resolve(id: try reference.actorID(using: actorSystem), using: actorSystem)
+                    .typeChanged(type, code: code, reached: reached)
+            }
+        }
+        return reached
+    }
+
+    /// Gives it its name and what it was made for, once: what an object made by name has.
+    distributed func describe(name: String, description: String?) async throws {
+        try await emit(event: try state.live.describing(name: name, description: description))
+    }
+
+    /// Sets values of its own data, for it alone: other objects of its type keep theirs.
     public distributed func set(values: [String: JSONValue]) async throws {
         try await emit(event: try state.live.setting(values))
         stop()
@@ -120,10 +190,10 @@ public distributed actor DynamicObject: DiscoverableActor {
     }
 
     /// Starts it if it isn't running: being called is what starts a virtual actor, and starting
-    /// checks it in, so it's findable.
+    /// follows what it subscribes to again.
     distributed func start() {}
 
-    /// It runs while it's living, so it stays findable.
+    /// It runs while it's living, so what it follows keeps reaching it.
     public func shouldDeactivate() async -> Bool {
         if case .live = state { false } else { true }
     }
@@ -137,24 +207,36 @@ public distributed actor DynamicObject: DiscoverableActor {
         refollow()
     }
 
-    /// Checks in under its stable reference, the one ``resolve(on:identity:)`` returns, which
-    /// keeps reaching it after it restarts.
-    private func checkIn(_ scope: ObjectScope) async throws {
-        let reference = try await reference()
-        let object = try DiscoverableObject.resolve(id: reference.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
-        await actorSystem.receptionist.checkIn(reference, with: scope.madeObjectsKey)
-    }
-
-    /// The reference it checks in under: the one to know it by.
+    /// Its stable reference: the one to know it by.
     public distributed var stableReference: DynamicObject {
         get async throws { try await reference() }
     }
 
-    /// Its own reference, which keeps reaching it after it restarts: what it checks in under, and
-    /// passes on as `self`. Resolving its identity gives the same reference each time.
+    /// Its own reference, which keeps reaching it after it restarts: what it passes on as `self`.
     private func reference() async throws -> DynamicObject {
-        try await Self.resolve(on: actorSystem, identity: ownIdentity)
+        try await Self.resolve(on: actorSystem, nature: nature)
+    }
+
+    /// `value` with each object its code's `init()` makes, not made yet, made now.
+    private static func making(_ value: JSONValue, in scope: ObjectScope, on system: ClusterSystem) async throws
+        -> JSONValue
+    {
+        if case .unmade(let type, let id)? = ObjectReference(value) {
+            return try ObjectReference.actor(try await make(type, id: id, in: scope, on: system), type: type.rawValue)
+                .json
+        }
+        switch value {
+        case .object(let members):
+            var made: [String: JSONValue] = [:]
+            for (key, member) in members { made[key] = try await making(member, in: scope, on: system) }
+            return .object(made)
+        case .array(let items):
+            var made: [JSONValue] = []
+            for item in items { made.append(try await making(item, in: scope, on: system)) }
+            return .array(made)
+        default:
+            return value
+        }
     }
 
     // MARK: DiscoverableActor
@@ -162,9 +244,19 @@ public distributed actor DynamicObject: DiscoverableActor {
     // Every requirement is implemented `async`: a sync implementation can be bypassed by the
     // library's async `invoke` overloads (https://github.com/swiftlang/swift/issues/92795).
 
-    /// Its kind, as it's kept, for changing it.
+    /// Its code, for changing it.
     public distributed var source: Script {
-        get throws { try state.live.kind }
+        get throws { try state.live.running }
+    }
+
+    /// The type it runs.
+    public distributed var type: BehaviorID? {
+        get throws { try state.live.type }
+    }
+
+    /// What it's called, when it was made by name.
+    public distributed var name: String? {
+        get throws { try state.live.name }
     }
 
     /// Whether its code is working, and why not when it isn't.
@@ -179,7 +271,8 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     public distributed func describe() async throws -> ObjectDescription {
         let object = try state.live
-        return try object.kind.spec(title: object.name, description: object.description, holding: object.fields)
+        let code = try object.running
+        return try code.spec(description: object.description, holding: object.fields)
     }
 
     static func schema(of value: JSONValue) -> [String: JSONValue] {
@@ -216,18 +309,23 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     /// A hub for the events its code announces now, after its code changed: none for an object
     /// that isn't living.
-    private func rehub() throws {
-        let events: Set<String> = if case .live(let object) = state { try object.announces() } else { [] }
-        hub = _DiscoveryEventHub(events: events)
+    private func rehub() {
+        let announced: Set<String> =
+            if case .live(let object) = state, let code = object.code, let shape = try? ObjectShape(code) {
+                Set(shape.events.map(\.name))
+            } else { [] }
+        hub = _DiscoveryEventHub(events: announced)
     }
 
     // MARK: Messages
 
-    /// Handles a message the way its kind says: its method runs on its instance, what it holds
+    /// Handles a message the way its code says: its method runs on its instance, what it holds
     /// that changed is journaled, and its reply comes back.
     @discardableResult
-    public distributed func invoke(_ action: String, arguments: JSONValue) async throws -> JSONValue {
-        try await respond(action, arguments: arguments).reply
+    public distributed func invoke(_ action: String, arguments: JSONValue, through type: String?) async throws
+        -> JSONValue
+    {
+        try await respond(action, arguments: arguments, chain: .start, through: type).reply
     }
 
     /// Handles a message as ``invoke(_:arguments:)`` does, with what its code printed.
@@ -238,20 +336,34 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// Handles a message another object's code sent, in the chain of calls it came through. A
     /// message that fails is journaled with why, and stops its code, to start again from what's
     /// journaled.
-    public distributed func respond(_ action: String, arguments: JSONValue, chain: CallChain) async throws -> ObjectReply {
-        try await handling(action, arguments: arguments, origin: .message(Delivery(message: action, arguments: arguments, at: Date())), chain: chain)
+    /// It runs only as its type: a call made through another type isn't for it. One made through a
+    /// protocol, `any Shop.RefundManager`, is for any object taking the message.
+    public distributed func respond(
+        _ action: String, arguments: JSONValue, chain: CallChain, through type: String? = nil
+    ) async throws -> ObjectReply {
+        let code = try state.live.running
+        if let type, !type.hasPrefix("any "), type != code.type {
+            throw DynamicObjectError.notA(type, isA: code.type)
+        }
+        return try await handling(
+            action, arguments: arguments, origin: .message(Delivery(message: action, arguments: arguments, at: Date())),
+            chain: chain)
     }
 
     /// Handles `action` with `arguments`, run by `origin`: a message, or an event of an object it
     /// follows. What it changed is journaled, then what it announced, which its subscribers get.
-    private func handling(_ action: String, arguments: JSONValue, origin: Origin, chain: CallChain) async throws -> ObjectReply {
+    private func handling(_ action: String, arguments: JSONValue, origin: Origin, chain: CallChain) async throws
+        -> ObjectReply
+    {
         try state.live.taking(action)
         let instance: ScriptInstance
         let reply: ObjectReply
         let after: [String: JSONValue]
         do {
             instance = try await running()
-            reply = try await CallChain.$current.withValue(chain) { try await instance.handle(action, arguments: arguments) }
+            reply = try await CallChain.$current.withValue(chain) {
+                try await instance.handle(action, arguments: arguments)
+            }
             after = try await instance.fields()
         } catch {
             stop()
@@ -261,7 +373,10 @@ public distributed actor DynamicObject: DiscoverableActor {
         if let event = try state.live.handling(origin, holding: after) { try await emit(event: event) }
         try await announce(reply.announced)
         refollow()
-        return ObjectReply(reply: try Self.replacingSelf(in: reply.reply, with: try await me()), printed: reply.printed, announced: reply.announced)
+        return ObjectReply(
+            reply: try Self.replacingSelf(in: reply.reply, with: try await me(), as: try state.live.running.type),
+            printed: reply.printed,
+            announced: reply.announced)
     }
 
     /// Journals each event it announced, then hands it to its subscribers.
@@ -279,27 +394,39 @@ public distributed actor DynamicObject: DiscoverableActor {
     private func running() async throws -> ScriptInstance {
         if case .running(let instance, _, _) = process { return instance }
         let object = try state.live
+        let code = try object.running
         let me = try await me()
-        let scopes = Self.scopes(around: object.scope)
+        let nature = nature
+        let scopes = Self.scopes(around: nature.scope)
         let system = actorSystem
         let generation = process.generation + 1
+        let caller = object.name ?? code.type
         let started = try await ScriptInstance.start(
-            object.kind, holding: object.fields,
+            code, as: nature.identity, holding: object.fields,
             reaches: { recipient, request in
-                let callee = try await Self.recipient(recipient, me: me, scopes: scopes, home: object.scope, using: system)
+                let callee = try await Self.recipient(recipient, me: me, scopes: scopes, using: system)
                 switch (request, callee) {
-                case (.call(let message, let arguments), .made(let callee)):
+                case (.call(let message, let arguments, let type), .made(let callee)):
                     // A call continues the chain of the message it's made in.
-                    let chain = try CallChain.current.continuing(from: object.name)
-                    return try await callee.respond(message, arguments: try Self.replacingSelf(in: arguments, with: me), chain: chain).reply
-                case (.call(let message, let arguments), .other(let callee)):
-                    return try await callee.invoke(message, arguments: try Self.replacingSelf(in: arguments, with: me))
-                // What another kind of object publishes; an object made here only answers messages.
+                    let chain = try CallChain.current.continuing(from: caller)
+                    return try await callee.respond(
+                        message, arguments: try Self.replacingSelf(in: arguments, with: me, as: code.type),
+                        chain: chain, through: type
+                    ).reply
+                case (.call(let message, let arguments, let type), .other(let callee)):
+                    return try await callee.invoke(
+                        message, arguments: try Self.replacingSelf(in: arguments, with: me, as: code.type),
+                        through: type)
+                // What a built-in object publishes; an object made here only answers messages.
                 case (.read(let name), .other(let callee)):
                     return try await callee.read(property: name)
-                case (.read(let name), .made):
-                    throw DynamicObjectError.notPublished(name)
+                case (.read(let name), .made(let callee)):
+                    return try await callee.read(property: name)
                 }
+            },
+            // An object its code names by id is the one of its scope with that id.
+            makes: { type, id in
+                .actor(try await DynamicObject.make(type, id: id, in: nature.scope, on: system), type: type.rawValue)
             },
             schedules: { [self] id in Task { await self.whenLocal { $0.startTask(id, of: generation) } } },
             cancels: { [self] id in Task { await self.whenLocal { $0.cancelTask(id, of: generation) } } })
@@ -312,7 +439,9 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// Stops its code: the next message starts it again from what's journaled, and the tasks it
     /// started are gone with it.
     private func stop() {
-        if case .running(_, _, let tasks) = process { tasks.values.forEach { $0.cancel() } }
+        if case .running(_, _, let tasks) = process {
+            for task in tasks.values { task.cancel() }
+        }
         process = .stopped(generation: process.generation)
     }
 
@@ -357,7 +486,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// Follows the objects its `@Subscribed` fields hold now: a field holding another object than
     /// before follows that one instead, and one that's gone, or a removed object, follows nothing.
     private func refollow() {
-        guard case .live(let object) = state, let shape = try? ObjectShape(object.kind) else {
+        guard case .live(let object) = state, let code = object.code, let shape = try? ObjectShape(code) else {
             for follower in followers.values { follower.task.cancel() }
             followers = [:]
             return
@@ -374,13 +503,18 @@ public distributed actor DynamicObject: DiscoverableActor {
         for (field, source) in wanted where followers[field] == nil {
             // It follows for as long as the object lives and its node runs: the task holds it only
             // while following, so the object can go, and the task with it.
-            followers[field] = Follower(source: source, task: Task { [weak self] in
-                while !Task.isCancelled {
-                    guard let self, !self.actorSystem.isTerminated else { return }
-                    guard await self.whenLocal({ await $0.follow(field, holding: source, handlers: handlers) }) == true else { return }
-                    try? await Task.sleep(for: .seconds(1))
-                }
-            })
+            followers[field] = Follower(
+                source: source,
+                task: Task { [weak self] in
+                    while !Task.isCancelled {
+                        guard let self, !self.actorSystem.isTerminated else { return }
+                        guard
+                            await self.whenLocal({ await $0.follow(field, holding: source, handlers: handlers) })
+                                == true
+                        else { return }
+                        try? await Task.sleep(for: .seconds(1))
+                    }
+                })
         }
     }
 
@@ -389,9 +523,9 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// there yet, should be.
     private func follow(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
         do {
-            let object = try state.live
+            _ = try state.live
             let source = try await Self.discoverable(
-                reference, me: try await me(), scopes: Self.scopes(around: object.scope), home: object.scope, using: actorSystem)
+                reference, me: try await me(), scopes: Self.scopes(around: nature.scope), using: actorSystem)
             let events = try await source.describe().events.keys.filter { handlers.contains(Self.handler(for: $0)) }
             guard !events.isEmpty else { return false }
             let pulls = events.map { event in Task { await pull(event, from: source, into: field) } }
@@ -401,7 +535,9 @@ public distributed actor DynamicObject: DiscoverableActor {
                 for pull in pulls { pull.cancel() }
             }
         } catch {
-            actorSystem.log.warning("A dynamic object can't follow an object", metadata: ["object": "\(ownIdentity)", "field": "\(field)", "error": "\(error)"])
+            actorSystem.log.warning(
+                "A dynamic object can't follow an object",
+                metadata: ["object": "\(nature.identity)", "field": "\(field)", "error": "\(error)"])
         }
         return true
     }
@@ -420,7 +556,9 @@ public distributed actor DynamicObject: DiscoverableActor {
             }
             try await source._unsubscribe(subscriber)
         } catch {
-            actorSystem.log.warning("A dynamic object's subscription ended", metadata: ["object": "\(ownIdentity)", "event": "\(event)", "error": "\(error)"])
+            actorSystem.log.warning(
+                "A dynamic object's subscription ended",
+                metadata: ["object": "\(nature.identity)", "event": "\(event)", "error": "\(error)"])
         }
     }
 
@@ -449,57 +587,52 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     // MARK: Calling other objects
 
-    /// An object a call goes to: one made here, which takes the chain of calls along, or another
-    /// kind of object, which doesn't.
+    /// An object a call goes to: one made here, which takes the chain of calls along, or a built-in
+    /// object, which doesn't.
     private enum Callee {
         case made(DynamicObject)
         case other(DiscoverableObject)
     }
 
-    /// Who a call goes to: a living actor, an object by its name, a virtual one by its id and
-    /// type, or itself.
+    /// Who a call goes to: a living actor, an object by its name, or itself.
     private static func recipient(
-        _ recipient: ObjectReference, me: ActorReference, scopes: [ObjectScope], home: ObjectScope, using system: ClusterSystem
+        _ recipient: ObjectReference, me: ActorReference, scopes: [ObjectScope], using system: ClusterSystem
     ) async throws -> Callee {
         switch recipient {
-        case .actor(let reference):
-            return await callee(try reference.resolve(using: system), scopes: scopes, using: system)
+        case .actor(let reference, _):
+            return try callee(try reference.resolve(using: system), using: system)
         case .itself:
-            return await callee(try me.resolve(using: system), scopes: scopes, using: system)
-        case .named(let name):
+            return try callee(try me.resolve(using: system), using: system)
+        case .unmade(let type, _):
+            throw DynamicObjectError.noReference("a `\(type)` not made yet")
+        case .named(let name, _):
+            // One its scopes hold by that name, or else one that checked in under it.
+            for scope in scopes {
+                if let nature = try await DynamicObjects.resolve(on: system, scope: scope).object(named: name) {
+                    return .made(try await DynamicObject.resolve(on: system, nature: nature))
+                }
+            }
             guard let found = await ObjectNames.object(named: name, in: scopes, using: system) else {
                 throw DynamicObjectError.noObjectNamed(name)
             }
-            return await callee(found.object, scopes: scopes, using: system)
-        case .virtual(let id, let type):
-            // The object with that id, which may be one the machine has, or else one activated in
-            // this object's scope as its type.
-            if let found = await ObjectNames.object(named: id, in: scopes, using: system) {
-                return await callee(found.object, scopes: scopes, using: system)
-            }
-            let identity = try await DynamicObjects.resolve(on: system, scope: home).object(id: id, type: type)
-            return .made(try await DynamicObject.resolve(on: system, identity: identity))
+            return .other(found.object)
         }
     }
 
     /// The object a reference is to, as any object is reached: to describe, and to subscribe to.
     private static func discoverable(
-        _ reference: ObjectReference, me: ActorReference, scopes: [ObjectScope], home: ObjectScope, using system: ClusterSystem
+        _ reference: ObjectReference, me: ActorReference, scopes: [ObjectScope], using system: ClusterSystem
     ) async throws -> DiscoverableObject {
-        switch try await recipient(reference, me: me, scopes: scopes, home: home, using: system) {
+        switch try await recipient(reference, me: me, scopes: scopes, using: system) {
         case .made(let object): try DiscoverableObject.resolve(id: object.id, using: system)
         case .other(let object): object
         }
     }
 
-    /// `object` as a callee: one made here, when it's checked in as what it is.
-    private static func callee(_ object: DiscoverableObject, scopes: [ObjectScope], using system: ClusterSystem) async -> Callee {
-        for scope in scopes {
-            for made in await system.receptionist.lookup(scope.madeObjectsKey) where made.id == object.id {
-                return .made(made)
-            }
-        }
-        return .other(object)
+    /// `object` as a callee: a dynamic object, as its reference says, or any other.
+    private static func callee(_ object: DiscoverableObject, using system: ClusterSystem) throws -> Callee {
+        guard identity(of: object.id) != nil else { return .other(object) }
+        return .made(try DynamicObject.resolve(id: object.id, using: system))
     }
 
     /// The scopes an object of `scope` can name objects in: its own, and the machine's.
@@ -511,11 +644,14 @@ public distributed actor DynamicObject: DiscoverableActor {
     }
 
     /// Itself, passed on in a value, is this object's own reference, to pass on as a reply-to.
-    private static func replacingSelf(in value: JSONValue, with me: ActorReference) throws -> JSONValue {
-        if ObjectReference(value) == .itself { return try ObjectReference.actor(me).json }
+    /// `value` with the code's own object, passing itself on, as a reference to `me`, of `type`.
+    private static func replacingSelf(in value: JSONValue, with me: ActorReference, as type: String) throws -> JSONValue
+    {
+        if ObjectReference(value) == .itself { return try ObjectReference.actor(me, type: type).json }
         switch value {
-        case .object(let members): return .object(try members.mapValues { try replacingSelf(in: $0, with: me) })
-        case .array(let items): return .array(try items.map { try replacingSelf(in: $0, with: me) })
+        case .object(let members):
+            return .object(try members.mapValues { try replacingSelf(in: $0, with: me, as: type) })
+        case .array(let items): return .array(try items.map { try replacingSelf(in: $0, with: me, as: type) })
         default: return value
         }
     }
@@ -543,7 +679,31 @@ public struct BehaviorID: RawRepresentable, Hashable, Codable, Sendable {
 }
 
 /// A dynamic object's own identity, given when it's created and kept across restarts.
-public struct ObjectIdentity: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
+/// The name of a protocol an object's type declares, as code writes it: `Shop.RefundManager`.
+public struct ObjectProtocolName: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+}
+
+/// The name of an object's type, as its code declares its actor: `Counter`.
+public struct ObjectTypeName: RawRepresentable, Hashable, Codable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+}
+
+public struct ObjectIdentity: RawRepresentable, Hashable, Codable, CodingKeyRepresentable, Sendable,
+    CustomStringConvertible
+{
     public let rawValue: String
 
     public init(rawValue: String) {

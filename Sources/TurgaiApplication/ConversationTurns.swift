@@ -1,5 +1,5 @@
-import Foundation
 import AnyLanguageModel
+import Foundation
 import Hail
 import TurgaiDomain
 
@@ -28,13 +28,15 @@ public enum ConversationTurns {
 
     private static func closed(_ turn: AgentHistory.ClosedTurn) throws(ForeignTurn) -> ConversationTurn {
         ConversationTurn(
-            id: try id(of: turn.id), message: text(turn.input.content), startedAt: turn.input.at, steps: turn.steps.map(step),
+            id: try id(of: turn.id), message: text(turn.input.content), startedAt: turn.input.at,
+            steps: turn.steps.map(step),
             outcome: outcome(turn.outcome))
     }
 
     private static func open(_ turn: AgentHistory.OpenTurn) throws(ForeignTurn) -> ConversationTurn {
         ConversationTurn(
-            id: try id(of: turn.id), message: text(turn.input.content), startedAt: turn.input.at, steps: turn.steps.map(step),
+            id: try id(of: turn.id), message: text(turn.input.content), startedAt: turn.input.at,
+            steps: turn.steps.map(step),
             outcome: .running)
     }
 
@@ -44,7 +46,8 @@ public enum ConversationTurns {
             .toolCalled(name: call.name, arguments: call.arguments.jsonString, at: at)
         case .resulted(let result, let at):
             .toolFinished(
-                name: result.name, output: result.output.textRepresentation, failure: result.failureKind?.rawValue, at: at)
+                name: result.name, output: result.output.textRepresentation, failure: result.failureKind?.rawValue,
+                at: at)
         case .noticed(let notice, let at):
             .noticed(words: notice.words, at: at)
         }

@@ -16,7 +16,8 @@ extension AgentProviderConfiguration {
         case .openAI: return ModelAccount(rawValue: "openai")
         case .anthropic: return ModelAccount(rawValue: "anthropic")
         case .gemini: return ModelAccount(rawValue: "gemini")
-        case .openAICompatible(let baseURL, _, _, _): return ModelAccount(rawValue: baseURL.host() ?? baseURL.absoluteString)
+        case .openAICompatible(let baseURL, _, _, _):
+            return ModelAccount(rawValue: baseURL.host() ?? baseURL.absoluteString)
         case .appleSystem, .llamaCPP: return nil
         }
     }
@@ -39,7 +40,9 @@ public actor RequestLimitStore {
     public init(files: FileClient) throws {
         self.files = files
         let stored: [String: Int]? = try files.loadDocument(at: Self.statePath)
-        let limits = stored.map { Dictionary(uniqueKeysWithValues: $0.map { (ModelAccount(rawValue: $0.key), $0.value) }) } ?? Self.defaultLimits
+        let limits =
+            stored.map { Dictionary(uniqueKeysWithValues: $0.map { (ModelAccount(rawValue: $0.key), $0.value) }) }
+            ?? Self.defaultLimits
         self.limits = limits
         self.transports = ModelTransports(limits: limits)
     }
@@ -53,7 +56,8 @@ public actor RequestLimitStore {
     public func setLimit(_ limit: Int?, for account: ModelAccount) async throws {
         let limit = limit.map { max(1, $0) }
         limits[account] = limit
-        try files.saveDocument(Dictionary(uniqueKeysWithValues: limits.map { ($0.key.rawValue, $0.value) }), at: Self.statePath)
+        try files.saveDocument(
+            Dictionary(uniqueKeysWithValues: limits.map { ($0.key.rawValue, $0.value) }), at: Self.statePath)
         await transports.setLimit(limit, for: account)
     }
 }

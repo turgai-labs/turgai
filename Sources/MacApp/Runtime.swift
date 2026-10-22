@@ -5,10 +5,10 @@ import HailAgentRuntime
 import Logging
 import Observation
 import ServiceLifecycle
-import VirtualActors
 import TurgaiObjects
 import TurgaiServer
 import TurgaiWeb
+import VirtualActors
 
 /// Runs the whole Turgai server and the Mac's objects in this process, as one
 /// `ServiceGroup`, from launch until the user quits.

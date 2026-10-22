@@ -1,6 +1,7 @@
 import Foundation
-import Testing
 import SwiftScriptSema
+import Testing
+
 @testable import TurgaiObjects
 
 /// A page shown after another animates from it: each thing named by its place, the same thing in
@@ -11,7 +12,9 @@ struct PageViewTests {
     func thingsAreKeptByWhatTheyAre() {
         let layout = Layout.column([
             .text(id: "now playing", "Song", style: .title), .text("from Music"),
-            .image(URL(string: "https://example.com/cover.jpg")!, description: "The album's cover", aspectRatio: .square, fit: .fill, width: 120),
+            .image(
+                URL(string: "https://example.com/cover.jpg")!, description: "The album's cover", aspectRatio: .square,
+                fit: .fill, width: 120),
             .row([.button("Play", kind: .prominent), .button("Next")], alignment: .top, spacing: 6),
         ])
         let html = PageDocument(layout: layout, version: 1).render()
@@ -23,10 +26,12 @@ struct PageViewTests {
         // Only an id given makes it slide, by the edges its box lines it up by; the rest fade.
         #expect(html.components(separatedBy: "data-anchor=").count == 2)
         #expect(html.contains(#"id="id-now_20_playing" class="title primary" data-anchor="center top""#), "\(html)")
-        let lined = LayoutView(layout: .column([
-            .column([.text(id: "left", "Left")], alignment: .leading),
-            .row([.button(id: "low", "Low")], alignment: .bottom),
-        ]), version: 1).render()
+        let lined = LayoutView(
+            layout: .column([
+                .column([.text(id: "left", "Left")], alignment: .leading),
+                .row([.button(id: "low", "Low")], alignment: .bottom),
+            ]), version: 1
+        ).render()
         #expect(lined.contains(#"id="id-left" class="body primary" data-anchor="leading top""#), "\(lined)")
         #expect(lined.contains(#"data-anchor="leading bottom""#), "\(lined)")
         #expect(html.contains(#"data-press="/press?label=Play&amp;page=1""#), "\(html)")
@@ -34,7 +39,10 @@ struct PageViewTests {
         #expect(html.contains(#"class="prominent""#))
         #expect(html.contains(#"class="normal""#))
         #expect(html.contains(#"class="row top" style="gap: 6px"#))
-        #expect(html.contains(#"src="https://example.com/cover.jpg" alt="The album's cover" loading="lazy" class="image fill" style="aspect-ratio: 1 / 1; width: 120px; "#), "\(html)")
+        #expect(
+            html.contains(
+                #"src="https://example.com/cover.jpg" alt="The album's cover" loading="lazy" class="image fill" style="aspect-ratio: 1 / 1; width: 120px; "#
+            ), "\(html)")
         #expect(html.contains(#"class="column center" style="gap: 12px"#))
     }
 }
@@ -46,13 +54,20 @@ struct PageStyleSpecTests {
     @Test("the spec declares the styles, and code with them and without them is Swift")
     func stylesAreDeclaredAndOptional() {
         let spec = Uses.declarations(of: [Page.jsonSchema])
-        #expect(spec.contains("case text(id: String? = nil, words: String, style: TextStyle = .body, color: TextColor = .primary)"), "\(spec)")
+        #expect(
+            spec.contains(
+                "case text(id: String? = nil, words: String, style: TextStyle = .body, color: TextColor = .primary)"),
+            "\(spec)")
         #expect(spec.contains("case button(id: String? = nil, label: String, kind: ButtonKind = .normal)"))
-        #expect(spec.contains("case column(id: String? = nil, items: [Inner], alignment: ColumnAlignment = .center, spacing: Double = 12)"))
+        #expect(
+            spec.contains(
+                "case column(id: String? = nil, items: [Inner], alignment: ColumnAlignment = .center, spacing: Double = 12)"
+            ))
         #expect(spec.contains("enum TextStyle"))
         #expect(
             spec.contains(
-                "case image(id: String? = nil, url: String, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit, width: Double? = nil)"),
+                "case image(id: String? = nil, url: String, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit, width: Double? = nil)"
+            ),
             "\(spec)")
         let code = """
             actor Shown {
@@ -67,7 +82,8 @@ struct PageStyleSpecTests {
                 }
             }
             """
-        let problems = SwiftCheck.problems(in: "Object.swift", of: [.init(name: "Objects.swift", code: spec), .init(name: "Object.swift", code: code)])
+        let problems = SwiftCheck.problems(
+            in: "Object.swift", of: [.init(name: "Objects.swift", code: spec), .init(name: "Object.swift", code: code)])
         #expect(problems.isEmpty, "\(problems)")
     }
 }
@@ -82,11 +98,13 @@ extension PageStyleSpecTests {
 }
 
 extension PageStyleSpecTests {
-    @Test("a picture is from the web, and says what it shows", arguments: [
-        ("file:///Users/me/secret.png", "a cover", PageProblem.notAWebAddress("file:///Users/me/secret.png")),
-        ("cover.jpg", "a cover", .notAWebAddress("cover.jpg")),
-        ("https://example.com/cover.jpg", " ", .noDescription),
-    ])
+    @Test(
+        "a picture is from the web, and says what it shows",
+        arguments: [
+            ("file:///Users/me/secret.png", "a cover", PageProblem.notAWebAddress("file:///Users/me/secret.png")),
+            ("cover.jpg", "a cover", .notAWebAddress("cover.jpg")),
+            ("https://example.com/cover.jpg", " ", .noDescription),
+        ])
     func picturesAreFromTheWeb(url: String, description: String, problem: PageProblem) {
         #expect(throws: problem) { try Layout(Page(items: [.image(url: url, description: description)])) }
     }

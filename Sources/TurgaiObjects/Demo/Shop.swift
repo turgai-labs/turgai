@@ -226,7 +226,8 @@ public enum ShopError: Error, Codable, Equatable, Sendable, CustomStringConverti
     public var description: String {
         switch self {
         case .unknownOrder(let number): "There's no order \(number)."
-        case .notRefundable(let number, let status): "Order \(number) is \(status.rawValue), so that refund step doesn't apply."
+        case .notRefundable(let number, let status):
+            "Order \(number) is \(status.rawValue), so that refund step doesn't apply."
         }
     }
 }

@@ -113,7 +113,8 @@ struct TurgaiAppService: Service, Sendable {
                 return profile.contextWindow
             }
         )
-        let endpointFactory = AgentModelEndpointFactory(credentials: agentCredentials, transports: requestLimits.transports)
+        let endpointFactory = AgentModelEndpointFactory(
+            credentials: agentCredentials, transports: requestLimits.transports)
         let modelEndpointProvider: ModelEndpointProvider = { request in
             guard let model = try? AgentModel(request.model) else {
                 return nil
@@ -350,12 +351,15 @@ struct TurgaiAppService: Service, Sendable {
                                     // How big what it's asked is, and which objects it's shown: the
                                     // prompt itself follows, in full.
                                     if case .asked(let prompt) = event {
-                                        let objects = prompt.split(separator: "\n").filter { $0.hasPrefix("- ") && $0.contains(": ") && !$0.hasPrefix("- The ") }
+                                        let objects = prompt.split(separator: "\n").filter {
+                                            $0.hasPrefix("- ") && $0.contains(": ") && !$0.hasPrefix("- The ")
+                                        }
                                         logger.info(
                                             "Object writer asked",
                                             metadata: [
                                                 "characters": "\(prompt.count)",
-                                                "objects": "\(objects.map { $0.dropFirst(2).prefix { $0 != ":" } }.joined(separator: ", "))",
+                                                "objects":
+                                                    "\(objects.map { $0.dropFirst(2).prefix { $0 != ":" } }.joined(separator: ", "))",
                                             ])
                                     }
                                     logger.info("\(event.written)")
@@ -379,7 +383,8 @@ struct TurgaiAppService: Service, Sendable {
                     )
                     // Hail's files and agent messaging, for the agents granted them.
                     if context.agentID.role.rawValue != "user-tool" {
-                        tools.tools = try await actorSystem.agentRuntime.agentTools(for: context, actorSystem: actorSystem)
+                        tools.tools =
+                            try await actorSystem.agentRuntime.agentTools(for: context, actorSystem: actorSystem)
                             + tools.tools
                     }
                     return tools

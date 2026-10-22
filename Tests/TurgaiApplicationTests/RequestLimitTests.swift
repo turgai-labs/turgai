@@ -8,13 +8,23 @@ import TurgaiPersistence
 @Suite("Request limits")
 struct RequestLimitTests {
     @Test func eachProviderAccountIsItsOwn() throws {
-        let local = AgentProviderConfiguration.ollama(baseURL: URL(string: "http://127.0.0.1:11434")!, contextWindow: 16_384)
-        #expect(local.account(for: try AgentModel(provider: .ollama, id: "deepseek-v4.1-flash:cloud")) == ModelAccount(rawValue: "ollama-cloud"))
-        #expect(local.account(for: try AgentModel(provider: .ollama, id: "qwen3.5:9b")) == ModelAccount(rawValue: "ollama@127.0.0.1"))
+        let local = AgentProviderConfiguration.ollama(
+            baseURL: URL(string: "http://127.0.0.1:11434")!, contextWindow: 16_384)
+        #expect(
+            local.account(for: try AgentModel(provider: .ollama, id: "deepseek-v4.1-flash:cloud"))
+                == ModelAccount(rawValue: "ollama-cloud"))
+        #expect(
+            local.account(for: try AgentModel(provider: .ollama, id: "qwen3.5:9b"))
+                == ModelAccount(rawValue: "ollama@127.0.0.1"))
         let compatible = AgentProviderConfiguration.openAICompatible(
-            baseURL: URL(string: "https://api.deepseek.com/v1")!, credential: .new(), api: .chatCompletions, contextWindow: 65_536)
-        #expect(compatible.account(for: try AgentModel(provider: .openAICompatible, id: "deepseek-chat")) == ModelAccount(rawValue: "api.deepseek.com"))
-        #expect(AgentProviderConfiguration.appleSystem.account(for: try AgentModel(provider: .system, id: "default")) == nil)
+            baseURL: URL(string: "https://api.deepseek.com/v1")!, credential: .new(), api: .chatCompletions,
+            contextWindow: 65_536)
+        #expect(
+            compatible.account(for: try AgentModel(provider: .openAICompatible, id: "deepseek-chat"))
+                == ModelAccount(rawValue: "api.deepseek.com"))
+        #expect(
+            AgentProviderConfiguration.appleSystem.account(for: try AgentModel(provider: .system, id: "default")) == nil
+        )
     }
 
     @Test func aLimitIsKeptAcrossRestarts() async throws {
@@ -28,6 +38,9 @@ struct RequestLimitTests {
         let second = try RequestLimitStore(files: try FileClient(directory: directory))
         #expect(await second.limit(for: ModelAccount(rawValue: "ollama-cloud")) == 3)
         #expect(await second.limit(for: ModelAccount(rawValue: "anthropic")) == 4)
-        #expect(await second.transports.limits == [ModelAccount(rawValue: "ollama-cloud"): 3, ModelAccount(rawValue: "anthropic"): 4])
+        #expect(
+            await second.transports.limits == [
+                ModelAccount(rawValue: "ollama-cloud"): 3, ModelAccount(rawValue: "anthropic"): 4,
+            ])
     }
 }

@@ -3,6 +3,7 @@ import DistributedCluster
 import Foundation
 import Testing
 import TurgaiDomain
+
 @testable import TurgaiApplication
 @testable import TurgaiObjects
 
@@ -43,7 +44,8 @@ struct DemoObjectsTests {
             // The customer is an object the model sees too, to name as who the shop replies to.
             let customer = Customer(actorSystem: sessionNode)
             await sessionNode.receptionist.checkIn(
-                try DiscoverableObject.resolve(id: customer.id, using: sessionNode), with: ObjectScope.shared.receptionistKey)
+                try DiscoverableObject.resolve(id: customer.id, using: sessionNode),
+                with: ObjectScope.shared.receptionistKey)
             let catalog = await ObjectCatalog(actorSystem: sessionNode)
             let session = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog, scopes: [.shared])
 
@@ -52,16 +54,17 @@ struct DemoObjectsTests {
                 Issue.record("Expected roots, got \(roots)")
                 return
             }
-            #expect(Set(entries.compactMap { $0["handle"] }) == ["customer", "shop", "warehouse"])
+            #expect(Set(entries.compactMap { $0["object_id"] }) == ["customer", "shop", "warehouse"])
 
             // Today the model carries the story; step 2 lets the objects do it themselves.
-            let order = try await session.invoke("shop", action: "placeOrder", arguments: #"{"item": "Lamp", "amount": 40}"#)
+            let order = try await session.invoke(
+                .named("shop"), action: "placeOrder", arguments: #"{"item": "Lamp", "amount": 40}"#)
             #expect(order["status"] == "placed")
             let request = #"{"number": 1, "replyTo": "customer"}"#
-            let requested = try await session.invoke("shop", action: "requestRefund", arguments: request)
+            let requested = try await session.invoke(.named("shop"), action: "requestRefund", arguments: request)
             #expect(requested["status"] == "refundRequested")
             _ = try await session.invoke(
-                "warehouse", action: "refundApproved",
+                .named("warehouse"), action: "refundApproved",
                 arguments: try ObjectSession.text(["order": requested]))
 
             let notes = try await warehouse.notes
@@ -69,7 +72,7 @@ struct DemoObjectsTests {
             #expect(notes.map(\.instruction) == [.expectReturn])
 
             await #expect(throws: ObjectToolError.failed(ShopError.notRefundable(1, .refundRequested).description)) {
-                try await session.invoke("shop", action: "requestRefund", arguments: request)
+                try await session.invoke(.named("shop"), action: "requestRefund", arguments: request)
             }
             _ = (shop, catalog)
         }
@@ -92,11 +95,12 @@ struct DemoObjectsTests {
             // The objects page lists it, with what it announces.
             let page = try await session.open(ObjectAddress.objects.address)
             let lines = (page.output.textValue ?? "").split(separator: "\n").map(String.init)
-            #expect(lines.contains {
-                $0.hasPrefix("- id: `shop`; name: `Shop`; purpose: ")
-                    && $0.contains("; actions:")
-                    && $0.hasSuffix("; events: OrderPlaced, RefundRequested")
-            })
+            #expect(
+                lines.contains {
+                    $0.hasPrefix("- id: `shop`; type: `Shop` — ")
+                        && $0.contains(". Takes ")
+                        && $0.hasSuffix("; events: OrderPlaced, RefundRequested")
+                }, "\(lines)")
             _ = shop
         }
     }
@@ -111,7 +115,8 @@ struct DemoObjectsTests {
             _ = try await shop.placeOrder(item: "Lamp", amount: 40)
             _ = try await shop.placeOrder(item: "Chair", amount: 90)
             let customer = Customer(actorSystem: sessionNode)
-            _ = try await shop.requestRefund(number: 2, replyTo: try DiscoverableObject.resolve(id: customer.id, using: objectsNode))
+            _ = try await shop.requestRefund(
+                number: 2, replyTo: try DiscoverableObject.resolve(id: customer.id, using: objectsNode))
 
             for try await request in requests {
                 #expect(request.order.number == 2)

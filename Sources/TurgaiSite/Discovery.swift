@@ -4,30 +4,31 @@ import Foundation
 enum Discovery {
     static func structuredData() throws -> String {
         let root = PageTag.origin + "/"
-        let data = try JSONSerialization.data(withJSONObject: [
-            "@context": "https://schema.org",
-            "@graph": [
-                [
-                    "@type": "WebSite",
-                    "@id": root + "#website",
-                    "url": root,
-                    "name": "Turgai",
-                    "description": PageTag.description,
-                    "inLanguage": "en",
-                    "about": ["@id": root + "#software"],
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "@context": "https://schema.org",
+                "@graph": [
+                    [
+                        "@type": "WebSite",
+                        "@id": root + "#website",
+                        "url": root,
+                        "name": "Turgai",
+                        "description": PageTag.description,
+                        "inLanguage": "en",
+                        "about": ["@id": root + "#software"],
+                    ],
+                    [
+                        "@type": "SoftwareApplication",
+                        "@id": root + "#software",
+                        "url": root,
+                        "name": "Turgai",
+                        "description": PageTag.description,
+                        "applicationCategory": "DeveloperApplication",
+                        "image": root + Preview.file,
+                        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+                    ],
                 ],
-                [
-                    "@type": "SoftwareApplication",
-                    "@id": root + "#software",
-                    "url": root,
-                    "name": "Turgai",
-                    "description": PageTag.description,
-                    "applicationCategory": "DeveloperApplication",
-                    "image": root + Preview.file,
-                    "license": "https://www.apache.org/licenses/LICENSE-2.0",
-                ],
-            ],
-        ], options: [.sortedKeys, .withoutEscapingSlashes])
+            ], options: [.sortedKeys, .withoutEscapingSlashes])
         // JSON-LD is a data block, not executable JavaScript. Escape HTML delimiters nonetheless.
         return String(decoding: data, as: UTF8.self).replacingOccurrences(of: "<", with: "\\u003c")
     }

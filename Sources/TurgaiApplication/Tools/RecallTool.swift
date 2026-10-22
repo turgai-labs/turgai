@@ -15,13 +15,16 @@ public struct RecallTool: HailCore.Tool {
     let actorSystem: ClusterSystem
     let person: TurgaiDomain.UserID
     public let name = "recall"
-    public let description = "Recall what you remember about the person you're talking with, on a topic, from earlier conversations."
+    public let description =
+        "Recall what you remember about the person you're talking with, on a topic, from earlier conversations."
 
     public func effect(for input: Input) throws -> RecallEffect {
         RecallEffect(actorSystem: actorSystem, person: person, topic: input.topic)
     }
 
-    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<RecallEffect>) async throws -> CallReturn {
+    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<RecallEffect>)
+        async throws -> CallReturn
+    {
         try await RecallEffect.run(in: token)
     }
 }

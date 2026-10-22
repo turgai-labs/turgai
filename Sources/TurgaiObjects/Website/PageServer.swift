@@ -119,6 +119,7 @@ enum PageServer {
 
     /// One server-sent event: every line of `data` a `data:` line of its own.
     static func event(_ name: String, _ data: String) -> String {
-        "event: \(name)\n" + data.split(separator: "\n", omittingEmptySubsequences: false).map { "data: \($0)\n" }.joined() + "\n"
+        "event: \(name)\n"
+            + data.split(separator: "\n", omittingEmptySubsequences: false).map { "data: \($0)\n" }.joined() + "\n"
     }
 }

@@ -4,15 +4,16 @@ import DistributedCluster
 import EventSourcing
 import VirtualActors
 
-/// One owner's kinds and objects, the way an Erlang node holds its modules and a supervisor its
-/// processes. There's one per scope, reached by the scope alone.
+/// One owner's types and the objects made by name, the way an Erlang node holds its modules and a
+/// supervisor its top processes. There's one per scope, reached by the scope alone. It makes those
+/// objects, gives a type's new code to them, and starts them again after a restart: each restores
+/// itself from its own journal. An object code makes is its maker's, which holds it: a type's new
+/// code reaches it through its maker, as down a tree, and nothing here knows it.
 ///
-/// It's where a kind is checked before it runs: its Swift reads, its objects start with their
-/// checks holding, and what it sends to the objects it names is something they take now. Objects
-/// aren't typed, so nothing is checked between kinds: an object checks every message when it
-/// arrives. A kind can be shared by several objects; a new version of it reaches each of them,
-/// once it's idle, the way a new module reaches every process running it. It keeps its objects
-/// running: ``start()`` starts each one, so they stay findable after a restart.
+/// It's where a type is checked before it runs: its Swift reads against the types it uses, and
+/// its objects start with their checks holding. An object also checks every message when it
+/// arrives: that it's of the type the call was made through, and that its arguments are of their
+/// types.
 @EventSourced
 @VirtualActor
 public distributed actor DynamicObjects {
@@ -23,7 +24,7 @@ public distributed actor DynamicObjects {
 
     public var state = DynamicObjectsState()
     private let scope: ObjectScope
-    /// Stable references to its objects, resolved once each.
+    /// References to its objects, resolved once each.
     private var resolved: [ObjectIdentity: DynamicObject] = [:]
 
     public init(actorSystem: ClusterSystem, dependency scope: ObjectScope) async throws {
@@ -47,119 +48,171 @@ public distributed actor DynamicObjects {
 
     // MARK: Objects
 
-    /// Creates an object named `name`, running a new kind, a named kind, or the kind of an object
+    /// Creates an object named `name`, running a new type, a named type, or the type of an object
     /// here, shared from then on.
-    /// - Parameter start: Values it holds instead of its kind's starting ones, where given.
-    public distributed func create(name: String, description: String? = nil, spec: Spec, start: [String: JSONValue] = [:]) async throws
+    /// - Parameter start: Values it holds instead of its type's starting ones, where given.
+    public distributed func create(
+        name: String, description: String? = nil, spec: Spec, start: [String: JSONValue] = [:]
+    ) async throws
         -> ObjectIdentity
     {
-        guard !state.hasObject(named: name), state.kind(named: name) == nil else {
+        guard try await object(named: name) == nil, state.type(named: name) == nil else {
             throw DynamicObjectsError.nameTaken(name)
         }
+        // Its id is its name, as tools and code write it: stored, unique here, never another's.
+        let identity = ObjectIdentity(rawValue: ObjectNames.handle(for: name))
         let id: BehaviorID
-        let kind: Script
         switch spec {
         case .new(let source):
-            try await check(source)
-            (id, kind) = (.new(), source)
-            try await emit(event: .kindWritten(id, kind))
+            try await check(source, as: identity)
+            id = .new()
+            try await emit(event: .typeWritten(id, source))
         case .sameAs(let object):
-            let identity = try await object.identity
-            guard let entry = state.entries.first(where: { $0.identity == identity }), let shared = state.kinds[entry.kind]
-            else { throw DynamicObjectsError.unknownObject(identity) }
-            (id, kind) = (entry.kind, shared)
-        case .kind(let name):
-            guard let shared = state.kind(named: name), let found = state.kinds[shared] else {
-                throw DynamicObjectsError.unknownKind(name)
+            let shared = try await object.identity
+            guard let entry = state.entries.first(where: { $0.identity == shared }) else {
+                throw DynamicObjectsError.unknownObject(shared)
             }
-            (id, kind) = (shared, found)
+            id = entry.type
+        case .type(let name):
+            guard let shared = state.type(named: name) else { throw DynamicObjectsError.unknownType(name) }
+            id = shared
         }
-        return try await make(name: name, description: description, kind: kind, id: id, start: start)
+        guard let code = state.types[id] else { throw DynamicObjectsError.unknownType(id.rawValue) }
+        // One that's there already, made by name or named by code, is changed, not made again.
+        let existing = try await DynamicObject.resolve(
+            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        if let code = try? await existing.source {
+            throw DynamicObjectsError.exists(identity.rawValue, type: code.type)
+        }
+        guard !state.identities.contains(identity), !state.removed.contains(identity),
+            await ObjectNames.object(
+                named: identity.rawValue, in: DynamicObject.scopes(around: scope), using: actorSystem) == nil
+        else { throw DynamicObjectsError.nameTaken(name) }
+        let made = try await DynamicObject.resolve(
+            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        try await made.adopt(id, code: code)
+        try await made.describe(name: name, description: description)
+        if !start.isEmpty { try await made.set(values: start) }
+        try await emit(event: .added(identity, type: id))
+        return identity
     }
 
-    /// The object with id `id`, running the kind whose actor is `type`, made from that kind with
-    /// `init()` when there's none yet: the way code reaches an object by its type. Its id is its
-    /// name, for now.
-    public distributed func object(id: String, type: String) async throws -> ObjectIdentity {
-        if let entry = state.entry(named: id) {
-            guard state.kinds[entry.kind]?.type == type else {
-                throw DynamicObjectsError.otherKind(id, type: type)
-            }
-            return entry.identity
-        }
-        guard let kind = state.kind(ofType: type), let source = state.kinds[kind] else {
-            throw DynamicObjectsError.unknownKind(type)
-        }
-        return try await make(name: id, description: nil, kind: source, id: kind, start: [:])
-    }
-
-    /// The kinds here no object runs yet, each one's spec by the type its code declares: what an
+    /// The types here no object runs yet, each one's spec by the type its code declares: what an
     /// object made with `Type()` will be.
-    public distributed func unmadeKinds() throws -> [String: ObjectDescription] {
-        let running = Set(state.entries.map(\.kind))
+    public distributed func unmadeTypes() throws -> [String: ObjectDescription] {
+        let running = Set(state.entries.map(\.type))
         var specs: [String: ObjectDescription] = [:]
-        for (name, kind) in state.named where !running.contains(kind) {
-            guard let source = state.kinds[kind] else { continue }
-            specs[source.type] = try source.spec(title: name, description: nil)
+        for (name, type) in state.typeNames where !running.contains(type) {
+            guard let source = state.types[type] else { continue }
+            specs[source.type] = try source.spec(description: nil)
         }
         return specs
     }
 
-    /// Makes an object named `name`, running `kind`, holding its starting values, with `start` in
-    /// place of those it gives.
-    private func make(name: String, description: String?, kind: Script, id: BehaviorID, start: [String: JSONValue]) async throws
-        -> ObjectIdentity
-    {
-        let starts = try await ScriptInstance.starts(kind)
-        if let unknown = start.keys.sorted().first(where: { starts[$0] == nil }) {
-            throw CodeProblem("It holds no `\(unknown)`. It holds \(starts.keys.sorted().map { "`\($0)`" }.joined(separator: ", ")).")
+    /// The type whose actor is `type`, with its code as it is now: what an object made with
+    /// `Type()` runs.
+    public distributed func type(declaring type: ObjectTypeName) throws -> ObjectType {
+        guard let id = state.type(declaring: type), let code = state.types[id] else {
+            throw DynamicObjectsError.unknownType(type.rawValue)
         }
-        let identity = ObjectIdentity.new()
+        return ObjectType(id: id, code: code)
+    }
+
+    /// The objects made here by name, as they're listed and found: each as it describes itself.
+    public distributed func held() async throws -> [ObjectEntry] {
+        var held: [ObjectEntry] = []
+        for entry in state.entries {
+            let object = try await object(entry.identity)
+            let spec = try await object.describe()
+            held.append(
+                ObjectEntry(
+                    id: .named(entry.identity.rawValue),
+                    object: try DiscoverableObject.resolve(id: object.id, using: actorSystem), type: spec.type,
+                    description: spec.description,
+                    scope: scope,
+                    actions: spec.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }.sorted(),
+                    events: spec.events.keys.sorted()))
+        }
+        return held
+    }
+
+    /// The object made here under `name`, by its name or its handle.
+    public distributed func object(named name: String) async throws -> ObjectNature? {
+        for entry in state.entries where ObjectNames.matches(name, title: try await object(entry.identity).name ?? "") {
+            return ObjectNature(identity: entry.identity, scope: scope)
+        }
+        return nil
+    }
+
+    /// The object made here as `identity`.
+    public distributed func held(_ identity: ObjectIdentity) async throws -> DynamicObject {
         try await object(identity)
-            .create(name: name, description: description, kind: kind, id: id, start: starts.merging(start) { _, given in given }, scope: scope)
-        try await emit(event: .added(identity, name: name, kind: id))
-        return identity
     }
 
-    /// The other objects running the same kind as the object `identity`, by name.
-    public distributed func sharing(_ identity: ObjectIdentity) throws -> [String] {
+    /// Which of the objects made here the actor `id` is, if it's one of them.
+    public distributed func identity(of id: ClusterSystem.ActorID) -> ObjectIdentity? {
+        DynamicObject.identity(of: id, in: scope).flatMap { state.identities.contains($0) ? $0 : nil }
+    }
+
+    /// The other objects made here running the same type as the object `identity`, by name.
+    public distributed func sharing(_ identity: ObjectIdentity) async throws -> [String] {
         guard let entry = state.entries.first(where: { $0.identity == identity }) else {
             throw DynamicObjectsError.unknownObject(identity)
         }
-        return state.entries.filter { $0.kind == entry.kind && $0.identity != identity }.map(\.name)
+        var names: [String] = []
+        for other in state.entries where other.type == entry.type && other.identity != identity {
+            if let name = try await object(other.identity).name { names.append(name) }
+        }
+        return names
     }
 
-    /// Changes an object's kind, which changes every object sharing it.
+    /// Changes an object's type, which changes every object sharing it: an object made here by
+    /// name, or one code named by its id.
     public distributed func update(_ identity: ObjectIdentity, source: Script) async throws {
-        guard let entry = state.entries.first(where: { $0.identity == identity }) else {
-            throw DynamicObjectsError.unknownObject(identity)
+        if let entry = state.entries.first(where: { $0.identity == identity }) {
+            try await rewrite(entry.type, as: source)
+            return
         }
-        try await rewrite(entry.kind, as: source)
+        let named = try await DynamicObject.resolve(
+            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        guard let type = try? await named.type else { throw DynamicObjectsError.unknownObject(identity) }
+        try await rewrite(type, as: source)
+        // It may be held by nothing made here by name, so it's told itself too.
+        _ = try await named.typeChanged(type, code: source, reached: [])
     }
 
-    /// Defines a kind: one with a name and no object, which objects can share. Defined again, it
+    /// The object of this scope with `identity`, made here by name or named by code with its id,
+    /// if there's one.
+    public distributed func existing(_ identity: ObjectIdentity) async throws -> DynamicObject? {
+        let object = try await DynamicObject.resolve(
+            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        return (try? await object.source) == nil ? nil : object
+    }
+
+    /// Defines a type: one with a name and no object, which objects can share. Defined again, it
     /// changes, and so does every object sharing it.
-    public distributed func defineKind(_ name: String, source: Script) async throws {
-        if let id = state.kind(named: name) {
+    public distributed func defineType(_ name: String, source: Script) async throws {
+        if let id = state.type(named: name) {
             try await rewrite(id, as: source)
             return
         }
-        guard !state.hasObject(named: name) else { throw DynamicObjectsError.nameTaken(name) }
-        try await check(source)
+        guard try await object(named: name) == nil else { throw DynamicObjectsError.nameTaken(name) }
+        // No object is of it yet: its code is checked as each object adopts it.
+        try await check(source, as: nil)
         let id = BehaviorID.new()
-        try await emit(event: .kindWritten(id, source))
-        try await emit(event: .kindNamed(name, id))
+        try await emit(event: .typeWritten(id, source))
+        try await emit(event: .typeNamed(name, id))
     }
 
-    /// Gives the kind `id` a new version, checked as a new one is. Each object running it adopts
-    /// it once it's idle.
+    /// Gives the type `id` a new version, checked as a new one is: each object made here is given
+    /// it, runs it if it's of the type, and passes it on to the objects it holds, as down a tree.
     private func rewrite(_ id: BehaviorID, as source: Script) async throws {
-        guard state.kinds[id] != nil else { throw DynamicObjectsError.unknownKind(id.rawValue) }
-        try await check(source)
-        let starts = try await ScriptInstance.starts(source)
-        try await emit(event: .kindWritten(id, source))
-        for entry in state.entries where entry.kind == id {
-            try await object(entry.identity).adopt(source, starts: starts)
+        guard state.types[id] != nil else { throw DynamicObjectsError.unknownType(id.rawValue) }
+        try await check(source, as: state.entries.first { $0.type == id }?.identity)
+        try await emit(event: .typeWritten(id, source))
+        var reached: Set<ObjectIdentity> = []
+        for entry in state.entries {
+            reached = try await object(entry.identity).typeChanged(id, code: source, reached: reached)
         }
     }
 
@@ -177,15 +230,19 @@ public distributed actor DynamicObjects {
         }
     }
 
-    /// The object with `identity`: a stable reference, resolved once.
+    /// The object held here as `identity`: a reference, resolved once.
     private func object(_ identity: ObjectIdentity) async throws -> DynamicObject {
         if let object = resolved[identity] { return object }
-        let object = try await DynamicObject.resolve(on: actorSystem, identity: identity)
+        guard let entry = state.entries.first(where: { $0.identity == identity }) else {
+            throw DynamicObjectsError.unknownObject(identity)
+        }
+        let object = try await DynamicObject.resolve(
+            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
         resolved[identity] = object
         return object
     }
 
-    /// Every object here, by identity, oldest first.
+    /// Every object held here, by identity, oldest first.
     public distributed var identities: [ObjectIdentity] { state.identities }
 
     /// It keeps its objects running, so it keeps running itself.
@@ -197,111 +254,72 @@ public distributed actor DynamicObjects {
 
     // MARK: Checks
 
-    /// What's wrong with a kind's own code before it runs: its Swift reads, an object of it
+    /// What's wrong with a type's own code before it runs: its Swift reads, the object `identity`
     /// starts with its checks holding, and what it reads of itself it declares. Other objects
     /// aren't read: each checks the messages it's sent, when they arrive.
-    private func check(_ source: Script) async throws {
-        _ = try await ScriptInstance.starts(source)
+    private func check(_ source: Script, as identity: ObjectIdentity?) async throws {
+        if let identity { _ = try await ScriptInstance.starts(source, as: identity) }
         let problems = source.selfProblems
         if !problems.isEmpty { throw CodeProblem(problems.map(\.description).joined(separator: "\n")) }
     }
 }
 
-extension ObjectShape.Message {
-    /// The message as its typing: its name, and its parameters' types.
-    var signature: Signature {
-        Signature(name: name, parameters: parameters.map { Parameter(name: $0.name, type: $0.kind.valueType) }, reply: reply?.valueType)
-    }
+/// A type: which one, and its code as it is now.
+public struct ObjectType: Codable, Sendable {
+    public let id: BehaviorID
+    public let code: Script
 }
 
-extension ValueKind {
-    var valueType: ValueType {
-        switch self {
-        case .int: .integer
-        case .double: .number
-        case .string: .string
-        case .bool: .boolean
-        case .list: .list
-        case .map, .object, .other: .object
-        }
-    }
-}
-
-/// Where a new object's kind comes from.
+/// Where a new object's type comes from.
 public enum Spec: Codable, Sendable, Equatable {
-    /// A new kind, from its source.
+    /// A new type, from its source.
     case new(Script)
-    /// The kind another object runs, shared from then on.
+    /// The type another object runs, shared from then on.
     case sameAs(DynamicObject)
-    /// A named kind, shared from then on.
-    case kind(String)
+    /// A named type, shared from then on.
+    case type(String)
 }
 
-extension ValueType {
-    /// The type a JSON Schema describes, as far as ours go: anything else is `object`.
-    init(schema: JSONValue) {
-        if schema["x-actor-reference"] == .bool(true) {
-            self = .object
-            return
-        }
-        switch schema["type"] {
-        case "string": self = .string
-        case "integer": self = .integer
-        case "number": self = .number
-        case "boolean": self = .boolean
-        case "array": self = .list
-        default: self = .object
-        }
-    }
-}
-
-/// What happened to an owner's kinds and objects, as journaled.
+/// What happened to an owner's types and objects, as journaled.
 public enum DynamicObjectsEvent: Codable, Sendable {
-    /// A kind, new or changed.
-    case kindWritten(BehaviorID, Script)
-    /// A kind named, with no object of its own.
-    case kindNamed(String, BehaviorID)
-    case added(ObjectIdentity, name: String, kind: BehaviorID)
+    /// A type, new or changed.
+    case typeWritten(BehaviorID, Script)
+    /// A type named, with no object of its own.
+    case typeNamed(String, BehaviorID)
+    /// An object made by name, of a type: listed and found by the name it holds.
+    case added(ObjectIdentity, type: BehaviorID)
     case removed(ObjectIdentity)
 }
 
 public struct DynamicObjectsState: Codable, Sendable {
     public struct Entry: Codable, Sendable {
         public let identity: ObjectIdentity
-        public let name: String
-        public let kind: BehaviorID
+        public let type: BehaviorID
     }
 
-    /// Each kind as it is now.
-    public var kinds: [BehaviorID: Script] = [:]
-    /// The named kinds, with no object of their own.
-    public var named: [String: BehaviorID] = [:]
-    /// The objects here, oldest first.
+    /// Each type as it is now.
+    public var types: [BehaviorID: Script] = [:]
+    /// The named types, with no object of their own.
+    public var typeNames: [String: BehaviorID] = [:]
+    /// The objects this scope holds, made by name, oldest first: what's listed and found here. An
+    /// object that code made with `Type()` isn't one of them: it's reached through what holds it.
     public var entries: [Entry] = []
+    /// The objects removed from here: their ids are theirs for good, never given to another.
+    public var removed: Set<ObjectIdentity> = []
 
     public init() {}
 
     public var identities: [ObjectIdentity] { entries.map(\.identity) }
 
-    /// Whether an object here has this name, ignoring case and surrounding spaces.
-    func hasObject(named name: String) -> Bool {
-        entry(named: name) != nil
+    /// The type whose actor is `type`: an object's here first, then a named one.
+    func type(declaring type: ObjectTypeName) -> BehaviorID? {
+        entries.lazy.map(\.type).first { types[$0]?.type == type.rawValue }
+            ?? typeNames.values.first { types[$0]?.type == type.rawValue }
     }
 
-    /// The object here with this name, ignoring case and surrounding spaces.
-    func entry(named name: String) -> Entry? {
-        entries.first { Self.key($0.name) == Self.key(name) }
-    }
-
-    /// The kind whose actor is `type`: an object's here first, then a named one.
-    func kind(ofType type: String) -> BehaviorID? {
-        entries.lazy.map(\.kind).first { kinds[$0]?.type == type }
-            ?? named.values.first { kinds[$0]?.type == type }
-    }
-
-    /// The kind called `name`, by its name or its handle.
-    func kind(named name: String) -> BehaviorID? {
-        named.first { Self.key($0.key) == Self.key(name) || ObjectNames.handle(for: $0.key) == name }?.value
+    /// The type called `name`, by its name or its handle.
+    func type(named name: String) -> BehaviorID? {
+        typeNames.first { Self.key($0.key) == Self.key(name) || ObjectNames.handle(for: $0.key) == name }?.value
     }
 
     private static func key(_ name: String) -> String {
@@ -310,14 +328,15 @@ public struct DynamicObjectsState: Codable, Sendable {
 
     mutating func apply(_ event: DynamicObjectsEvent) {
         switch event {
-        case .kindWritten(let id, let kind):
-            kinds[id] = kind
-        case .kindNamed(let name, let id):
-            named[name] = id
-        case .added(let identity, let name, let kind):
-            entries.append(Entry(identity: identity, name: name, kind: kind))
+        case .typeWritten(let id, let code):
+            types[id] = code
+        case .typeNamed(let name, let id):
+            typeNames[name] = id
+        case .added(let identity, let type):
+            entries.append(Entry(identity: identity, type: type))
         case .removed(let identity):
             entries.removeAll { $0.identity == identity }
+            removed.insert(identity)
         }
     }
 }
@@ -325,19 +344,20 @@ public struct DynamicObjectsState: Codable, Sendable {
 public enum DynamicObjectsError: Error, Codable, Equatable, Sendable, CustomStringConvertible {
     case unknownObject(ObjectIdentity)
     case nameTaken(String)
-    case unknownKind(String)
-    case otherKind(String, type: String)
+    /// An object with this id is there already, of this type.
+    case exists(String, type: String)
+    case unknownType(String)
 
     public var description: String {
         switch self {
-        case .otherKind(let id, let type):
-            "\(id) is an object of another kind, not \(type)."
         case .unknownObject(let identity):
             "There's no object \(identity) here."
+        case .exists(let id, let type):
+            "`\(id)` already exists: it's a `\(type)`. Change it with edit_object."
         case .nameTaken(let name):
-            "An object or kind named \(name) already exists. To change it, write it with its handle, or choose another name."
-        case .unknownKind(let name):
-            "There's no object or kind \(name) here."
+            "An object or type named \(name) already exists. To change it, write it with its id, or choose another name."
+        case .unknownType(let name):
+            "There's no object or type \(name) here."
         }
     }
 }

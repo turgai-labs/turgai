@@ -18,10 +18,12 @@ struct Skylark {
 
     /// Rasterize the existing mark on an opaque white background for browsers and iOS home screens.
     func writeIcon(size: Int, to output: URL) throws {
-        guard let context = CGContext(
-            data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { throw Failure.iconRendering }
+        guard
+            let context = CGContext(
+                data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )
+        else { throw Failure.iconRendering }
         let side = CGFloat(size)
         context.setFillColor(CGColor(gray: 1, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: side, height: side))
@@ -32,7 +34,8 @@ struct Skylark {
         context.addPath(shape)
         context.drawPath(using: .eoFill)
         guard let image = context.makeImage(),
-            let destination = CGImageDestinationCreateWithURL(output as CFURL, UTType.png.identifier as CFString, 1, nil)
+            let destination = CGImageDestinationCreateWithURL(
+                output as CFURL, UTType.png.identifier as CFString, 1, nil)
         else { throw Failure.iconRendering }
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw Failure.iconRendering }

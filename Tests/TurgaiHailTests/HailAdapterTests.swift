@@ -191,7 +191,12 @@ struct HailAdapterTests {
                 }
                 return response
             },
-            activities: { AsyncStream { $0.yield(.text("partial")); $0.finish() } }
+            activities: {
+                AsyncStream {
+                    $0.yield(.text("partial"))
+                    $0.finish()
+                }
+            }
         )
         let request = ConversationTurnRequest(
             conversationID: conversationID,

@@ -18,47 +18,41 @@ public struct ObjectModule: Sendable {
     /// The file with the object's own code.
     public static let objectFile = "Object.swift"
 
+    /// The label of the id every object is made with, `Type(id:)`, as a distributed actor is with
+    /// its actor system: its own type's included, which has no other initializer.
+    public static let idLabel = "id"
+
     public let files: [File]
 
     public init(_ script: Script) {
-        let declared = Set(Self.typeNames(in: script.uses.interface.source))
-        var runtime = [
+        files =
+            Self.given(script.uses.interface) + [
+                File(name: Self.objectFile, code: Self.expanded(script.code, type: script.type))
+            ]
+    }
+
+    /// The file the objects of `interface` are declared in, as code meets them.
+    static let objectsFile = "Objects.swift"
+
+    /// The files code is given with `interface`: its objects, with bodies Swift takes, and the
+    /// runtime's own declarations.
+    static func given(_ interface: ModuleInterface) -> [File] {
+        let runtime = [
             "/// Another object, of a type this code doesn't declare: what's called on it is a message.",
-            "typealias Object = any Actor",
-            "",
-            "/// An object reached by a name whose type isn't declared.",
-            "actor Undeclared {}",
+            "typealias \(Uses.anyObject) = any Actor",
             "",
             "/// What an `@\(RuntimeMacros.event)` function's body calls: the event, announced with its values.",
             "func \(RuntimeMacros.announce)(_ event: String, _ values: [String: any Sendable]) {}",
-            "",
-            "// The objects the code reaches by name.",
         ]
-        for name in Set(script.uses.names.keys).union(script.namedObjects).sorted() {
-            if let type = script.uses.names[name], declared.contains(type) {
-                runtime.append("let \(name) = \(type)()")
-            } else {
-                runtime.append("let \(name): Object = Undeclared()")
-            }
-        }
-        files = [
-            File(name: "Objects.swift", code: Self.stubbed(script.uses.interface.source)),
+        return [
+            // Foundation's value types are the module's, as the objects' declarations use them.
+            File(name: objectsFile, code: "import Foundation\n\n" + stubbed(interface.source)),
             File(name: "Runtime.swift", code: runtime.joined(separator: "\n") + "\n"),
-            File(name: Self.objectFile, code: Self.expanded(script.code)),
         ]
     }
 
     /// The files the code is given: all but its own.
     public var given: [File] { files.filter { $0.name != Self.objectFile } }
-
-    static func typeNames(in source: String) -> [String] {
-        Parser.parse(source: source).statements.compactMap { item in
-            if let actor = item.item.as(ActorDeclSyntax.self) { return actor.name.text }
-            if let structure = item.item.as(StructDeclSyntax.self) { return structure.name.text }
-            if let enumeration = item.item.as(EnumDeclSyntax.self) { return enumeration.name.text }
-            return nil
-        }
-    }
 
     /// The spec's declarations with bodies Swift takes: each function and property without one is
     /// given one, which never runs, and its events are plain functions.
@@ -67,6 +61,23 @@ public struct ObjectModule: Sendable {
     }
 
     private final class Stubbing: SyntaxRewriter {
+        /// Another object's type is named by its id, `Type(id:)`: the only way code reaches one.
+        override func visit(_ node: ActorDeclSyntax) -> DeclSyntax {
+            guard var actor = super.visit(node).as(ActorDeclSyntax.self) else { return super.visit(node) }
+            guard !actor.memberBlock.members.contains(where: { $0.decl.is(InitializerDeclSyntax.self) }) else {
+                return DeclSyntax(actor)
+            }
+            let named = MemberBlockItemSyntax(
+                decl: DeclSyntax("\n    init(\(raw: ObjectModule.idLabel): String) { fatalError() }"))
+            actor.memberBlock.members = MemberBlockItemListSyntax([named] + Array(actor.memberBlock.members))
+            return DeclSyntax(actor)
+        }
+
+        /// A protocol's requirements are declared, never given bodies.
+        override func visit(_ node: ProtocolDeclSyntax) -> DeclSyntax {
+            DeclSyntax(node)
+        }
+
         override func visit(_ node: FunctionDeclSyntax) -> DeclSyntax {
             var function = node
             function.attributes = AttributeListSyntax(node.attributes.filter { !ObjectModule.isRuntimeMacro($0) })
@@ -74,7 +85,8 @@ public struct ObjectModule: Sendable {
             function.leadingTrivia = node.leadingTrivia
             if function.body == nil {
                 function.body = CodeBlockSyntax(
-                    leftBrace: .leftBraceToken(leadingTrivia: .space), statements: ["fatalError()"], rightBrace: .rightBraceToken())
+                    leftBrace: .leftBraceToken(leadingTrivia: .space), statements: ["fatalError()"],
+                    rightBrace: .rightBraceToken())
             }
             return DeclSyntax(function)
         }
@@ -96,15 +108,29 @@ public struct ObjectModule: Sendable {
     }
 
     /// The code with the runtime's macros expanded where they're written, keeping its lines: an
-    /// `@Event` function announces, and a `@Subscribed` property holds the object of its type.
-    static func expanded(_ code: String) -> String {
+    /// `@Event` function announces, and a `@Subscribed` property stays as it's written.
+    static func expanded(_ code: String, type: String? = nil) -> String {
         let file = Parser.parse(source: code)
         var edits: [(range: Range<Int>, text: String)] = []
+        // Its own actor is made with its id, as every object is, as a distributed actor is with its
+        // actor system: `init(id:)`, there when it writes none, which leaves it no `init()`.
+        if let actor = file.statements.lazy.compactMap({ $0.item.as(ActorDeclSyntax.self) }).first(where: {
+            $0.name.text == type
+        }),
+            !actor.memberBlock.members.contains(where: { $0.decl.is(InitializerDeclSyntax.self) })
+        {
+            let end = actor.memberBlock.leftBrace.endPositionBeforeTrailingTrivia.utf8Offset
+            edits.append((end..<end, " init(\(idLabel): String) {}"))
+        }
         for token in file.tokens(viewMode: .sourceAccurate) {
             guard token.tokenKind == .atSign, let attribute = token.parent?.as(AttributeSyntax.self),
                 isRuntimeMacro(.attribute(attribute))
             else { continue }
-            edits.append((attribute.positionAfterSkippingLeadingTrivia.utf8Offset..<attribute.endPositionBeforeTrailingTrivia.utf8Offset, ""))
+            edits.append(
+                (
+                    attribute.positionAfterSkippingLeadingTrivia
+                        .utf8Offset..<attribute.endPositionBeforeTrailingTrivia.utf8Offset, ""
+                ))
             let declaration = attribute.parent?.parent
             if let function = declaration?.as(FunctionDeclSyntax.self), function.body == nil {
                 let values = function.signature.parameterClause.parameters.map { parameter in
@@ -113,15 +139,10 @@ public struct ObjectModule: Sendable {
                 }
                 let end = function.signature.endPositionBeforeTrailingTrivia.utf8Offset
                 edits.append(
-                    (end..<end, " { \(RuntimeMacros.announce)(\"\(function.name.text)\", [\(values.isEmpty ? ":" : values.joined(separator: ", "))]) }"))
-            }
-            if let variable = declaration?.as(VariableDeclSyntax.self) {
-                for binding in variable.bindings where binding.initializer == nil {
-                    guard let annotation = binding.typeAnnotation else { continue }
-                    let type = (annotation.type.as(OptionalTypeSyntax.self)?.wrappedType ?? annotation.type).trimmedDescription
-                    let range = annotation.positionAfterSkippingLeadingTrivia.utf8Offset..<annotation.endPositionBeforeTrailingTrivia.utf8Offset
-                    edits.append((range, " = \(type)()"))
-                }
+                    (
+                        end..<end,
+                        " { \(RuntimeMacros.announce)(\"\(function.name.text)\", [\(values.isEmpty ? ":" : values.joined(separator: ", "))]) }"
+                    ))
             }
         }
         var bytes = Array(code.utf8)

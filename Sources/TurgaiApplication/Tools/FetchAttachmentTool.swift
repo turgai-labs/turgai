@@ -139,7 +139,10 @@ public struct FetchAttachmentTool {
         )
     }
 
-    public func run(_ input: FetchAttachmentToolInput, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<NetworkEffect>) async throws -> CallReturn {
+    public func run(
+        _ input: FetchAttachmentToolInput, in scope: borrowing ToolScope<Never>,
+        token: borrowing EffectToken<NetworkEffect>
+    ) async throws -> CallReturn {
         _ = token
         let data = try await resolver.resolve(
             AttachmentID(rawValue: input.attachmentID),

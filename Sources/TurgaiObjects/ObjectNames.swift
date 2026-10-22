@@ -20,6 +20,13 @@ public enum ObjectNames {
         return handle.isEmpty ? "object" : handle
     }
 
+    /// The Swift type an object named `name` is to other objects' code: `RefundManagerAnn` for
+    /// "Refund manager Ann". Its own code declares its actor with it too.
+    public static func typeName(of name: String) -> String {
+        let type = handle(for: name).split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
+        return type.first?.isLetter == true ? type : "Object" + type
+    }
+
     /// Whether `name` refers to the object titled `title`: its title, ignoring case, or its handle.
     public static func matches(_ name: String, title: String) -> Bool {
         title.lowercased() == name.lowercased() || handle(for: title) == handle(for: name)
@@ -31,7 +38,7 @@ public enum ObjectNames {
     ) async -> (object: DiscoverableObject, description: ObjectDescription)? {
         for scope in scopes {
             for object in await system.receptionist.lookup(scope.receptionistKey) {
-                guard let description = try? await object.describe(), matches(name, title: description.title) else {
+                guard let description = try? await object.describe(), matches(name, title: description.type) else {
                     continue
                 }
                 return (object, description)

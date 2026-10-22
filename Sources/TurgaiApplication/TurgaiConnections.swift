@@ -152,24 +152,11 @@ public actor TurgaiConnections: Service {
     public struct LiveSessionConnection: Sendable {
         public let output: AsyncStream<OutboundDelivery>
         let handle: UUID
-
-        init(output: AsyncStream<OutboundDelivery>, handle: UUID) {
-            self.output = output
-            self.handle = handle
-        }
     }
 
     public struct WebSession: Sendable {
         public let input: AsyncChannel<ConversationInputDelivery>
         public let output: AsyncStream<OutboundDelivery>
-
-        init(
-            input: AsyncChannel<ConversationInputDelivery>,
-            output: AsyncStream<OutboundDelivery>
-        ) {
-            self.input = input
-            self.output = output
-        }
     }
 
     enum Connection: Identifiable, Sendable {

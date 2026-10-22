@@ -4,93 +4,139 @@ import SwiftParser
 import SwiftSyntax
 
 /// What an object's code was written against: the other objects around it and the values they
-/// send and take, as the module its code imports, and the names objects are reached by. It's kept
+/// send and take, as the module its code imports, and the objects that exist. It's kept
 /// with the code, so the code runs as it was checked. Calls stay messages, by name, to whichever
 /// object is there: this is what the code expects, never a link.
 public struct Uses: Codable, Sendable, Equatable {
     /// The objects and their values, as the module the code imports declares them.
     public let interface: ModuleInterface
-    /// The objects code reaches by name, each name's type.
-    public let names: [String: String]
+    /// The objects that exist, each id's type: what `Type(id:)` reaches.
+    public let objects: [ObjectIdentity: String]
 
-    public init(interface: ModuleInterface, names: [String: String]) {
+    public init(interface: ModuleInterface, objects: [ObjectIdentity: String]) {
         self.interface = interface
-        self.names = names
+        self.objects = objects
+    }
+
+    /// The ids of the objects of `type` that exist, in order.
+    public func ids(of type: String) -> [ObjectIdentity] {
+        objects.filter { $0.value == type }.map(\.key).sorted { $0.rawValue < $1.rawValue }
     }
 
     /// Nothing from other objects.
-    public static let nothing = Uses(interface: ModuleInterface(name: Uses.module, source: ""), names: [:])
+    public static let nothing = Uses(interface: ModuleInterface(name: Uses.module, source: ""), objects: [:])
 
     /// The module objects' code imports.
     public static let module = "Objects"
+
+    /// The type of any object, as the module declares it.
+    public static let anyObject = "Object"
+
+    /// The types whose values are other objects: the actors the module declares, and any object.
+    public var objectTypes: Set<String> {
+        Set(interface.actors(events: []).map(\.name)).union([Self.anyObject])
+    }
 }
 
 // MARK: The spec, as Swift declares it
 
 extension Uses {
     /// An object, as the spec renders it: the type code reaches it as, what it is, and whether
-    /// what it publishes can be read, as another kind of object's can.
+    /// what it publishes can be read, as a built-in object's can.
     public struct Object: Sendable {
-        public let type: String
         public let description: ObjectDescription
         public let publishes: Bool
 
-        public init(type: String, description: ObjectDescription, publishes: Bool) {
-            self.type = type
+        /// The type code reaches it as: the one it says it is.
+        public var type: String { description.type }
+
+        public init(description: ObjectDescription, publishes: Bool) {
             self.description = description
             self.publishes = publishes
         }
     }
 
     /// The module `objects` make, as Swift declares it: each object an actor, with its methods,
-    /// what it publishes and its events, and the structs and enums their values are.
-    public static func interface(of objects: [Object]) -> ModuleInterface {
+    /// what it publishes and its events, and the structs and enums their values are. The types of
+    /// `own`, the object whose code imports it, are left out: its code declares them.
+    public static func interface(of objects: [Object], except own: String? = nil) -> ModuleInterface {
         var schemas: [JSONValue] = []
         var actors: [String] = []
         for object in objects {
             var lines = documented(object.description.description.map(JSONValue.string), indent: "")
             lines.append("actor \(object.type) {")
             if object.publishes {
-                for (name, property) in object.description.properties.sorted(by: { $0.key < $1.key }) {
+                for (name, property) in object.description.properties.sorted(by: { $0.key < $1.key })
+                where property[Script.privateKey] != .bool(true) {
+                    // What can't be written in Swift isn't declared: code can't use it as it is.
+                    guard let type = property.swiftType else { continue }
                     lines += documented(property["description"], indent: "    ")
                     // Read from another actor's node: awaited, and tried, whatever it holds.
-                    lines.append("    var \(name): \(property.swiftType) { get async throws }")
+                    lines.append("    var \(name): \(type) { get async throws }")
                     schemas.append(property)
                 }
             }
             for (name, action) in object.description.actions.sorted(by: { $0.key < $1.key }) {
+                guard let parameters = parameters(of: action.input) else { continue }
+                let output: String?? = action.output.map(\.swiftType)
+                if case .some(nil) = output { continue }
                 lines += documented(action.description.map(JSONValue.string), indent: "    ")
                 lines += documentedParameters(of: action.input, indent: "    ")
                 // Called on another actor's node: awaited, and tried, whatever its code declares.
                 lines.append(
-                    "    func \(name)(\(written(parameters(of: action.input)))) async throws" + (action.output.map { " -> \($0.swiftType)" } ?? ""))
+                    "    func \(name)(\(written(parameters))) async throws"
+                        + (output.flatMap { $0 }.map { " -> \($0)" } ?? ""))
                 if let input = action.input { schemas.append(input) }
                 if let output = action.output { schemas.append(output) }
+            }
+            // The protocols it declares, within it, as its code declares them: `Shop.RefundManager` is
+            // `RefundManager` in `Shop`. A requirement is a message, so it's awaited and tried.
+            for (name, declared) in object.description.protocols.sorted(by: { $0.key < $1.key }) {
+                let local = name.hasPrefix("\(object.type).") ? String(name.dropFirst(object.type.count + 1)) : name
+                lines += documented(declared.description.map(JSONValue.string), indent: "    ")
+                lines.append("    protocol \(local) {")
+                for (requirement, action) in declared.requirements.sorted(by: { $0.key < $1.key }) {
+                    guard let parameters = parameters(of: action.input) else { continue }
+                    let output: String?? = action.output.map(\.swiftType)
+                    if case .some(nil) = output { continue }
+                    lines += documented(action.description.map(JSONValue.string), indent: "        ")
+                    lines.append(
+                        "        func \(requirement)(\(written(parameters))) async throws"
+                            + (output.flatMap { $0 }.map { " -> \($0)" } ?? ""))
+                    if let input = action.input { schemas.append(input) }
+                    if let output = action.output { schemas.append(output) }
+                }
+                lines.append("    }")
             }
             for (name, event) in object.description.events.sorted(by: { $0.key < $1.key }) {
                 // As a function, named as Swift names one: `TrackChanged`'s is `trackChanged`.
                 let function = name.prefix(1).lowercased() + name.dropFirst()
-                lines.append("    @\(RuntimeMacros.event) func \(function)(\(written(parameters(of: event.data))))")
+                guard let parameters = parameters(of: event.data) else { continue }
+                lines.append("    @\(RuntimeMacros.event) func \(function)(\(written(parameters)))")
                 // Its handler takes its values, never the event itself: the types are its values'.
                 if case .object(let values)? = event.data["properties"] { schemas += values.values }
             }
             lines.append("}")
             actors.append(lines.joined(separator: "\n"))
         }
-        let values = declarations(of: schemas)
-        return ModuleInterface(name: module, source: (actors + (values.isEmpty ? [] : [values])).joined(separator: "\n\n"))
+        let values = declarations(of: schemas, except: own)
+        return ModuleInterface(
+            name: module, source: (actors + (values.isEmpty ? [] : [values])).joined(separator: "\n\n"))
     }
 
     /// The parameters a schema's values are, as Swift declares them, in the order they're
     /// declared: each with its label, `nil` for `_`, its name and its type, an optional where
-    /// it may be left out.
-    public static func parameters(of schema: JSONValue?) -> [(label: String?, name: String, type: String)] {
+    /// it may be left out; `nil` when one's type can't be written.
+    public static func parameters(of schema: JSONValue?) -> [(label: String?, name: String, type: String)]? {
         guard case .object(let properties)? = schema?["properties"] else { return [] }
         let required = Set(schema?["required"]?.arrayValue?.compactMap(\.stringValue) ?? [])
-        let order = schema?["x-order"]?.arrayValue?.compactMap(\.stringValue)
-            ?? properties.keys.filter(required.contains).sorted() + properties.keys.filter { !required.contains($0) }.sorted()
-        return order.compactMap { name in
-            guard let property = properties[name] else { return nil }
+        let order =
+            schema?["x-order"]?.arrayValue?.compactMap(\.stringValue)
+            ?? properties.keys.filter(required.contains).sorted()
+            + properties.keys.filter { !required.contains($0) }.sorted()
+        var parameters: [(label: String?, name: String, type: String)] = []
+        for name in order {
+            guard let property = properties[name] else { continue }
             // Its label as its code declares it, `_` for none; an object that doesn't say is
             // called with its parameters' names.
             let label: String? =
@@ -99,14 +145,17 @@ extension Uses {
                 case .string(let label)?: label
                 default: name
                 }
-            return (label, name, property.declaredType(optional: !required.contains(name)))
+            guard let type = property.declaredType(optional: !required.contains(name)) else { return nil }
+            parameters.append((label, name, type))
         }
+        return parameters
     }
 
     /// Parameters as a declaration lists them: `from ann: Ann, _ amount: Int`.
     static func written(_ parameters: [(label: String?, name: String, type: String)]) -> String {
         parameters.map { parameter in
-            (parameter.label == parameter.name ? parameter.name : "\(parameter.label ?? "_") \(parameter.name)") + ": \(parameter.type)"
+            (parameter.label == parameter.name ? parameter.name : "\(parameter.label ?? "_") \(parameter.name)")
+                + ": \(parameter.type)"
         }.joined(separator: ", ")
     }
 }
@@ -118,28 +167,33 @@ extension Uses {
     /// what it is, then its fields or its cases, each with its type as Swift writes it. Words,
     /// never declarations to copy.
     public var valuesInWords: [String] {
-        Parser.parse(source: interface.source).statements.compactMap { statement -> String? in
-            if let structure = statement.item.as(StructDeclSyntax.self) {
-                var lines = [Self.titled(structure.name.text, Self.summary(structure.leadingTrivia)), "  Fields:"]
+        interface.valueDeclarations.compactMap { name, declaration -> String? in
+            if let structure = declaration.as(StructDeclSyntax.self) {
+                var lines = [Self.titled(name, Self.summary(structure.leadingTrivia)), "  Fields:"]
                 for member in structure.memberBlock.members {
                     guard let variable = member.decl.as(VariableDeclSyntax.self) else { continue }
                     for binding in variable.bindings {
                         let type = binding.typeAnnotation?.type.trimmedDescription ?? "Any"
-                        lines.append("    \(binding.pattern.trimmedDescription): \(type)" + Self.said(Self.summary(variable.leadingTrivia)))
+                        lines.append(
+                            "    \(binding.pattern.trimmedDescription): \(type)"
+                                + Self.said(Self.summary(variable.leadingTrivia)))
                     }
                 }
                 return lines.joined(separator: "\n")
             }
-            if let enumeration = statement.item.as(EnumDeclSyntax.self) {
-                var lines = [Self.titled(enumeration.name.text, Self.summary(enumeration.leadingTrivia)) + " One of:"]
+            if let enumeration = declaration.as(EnumDeclSyntax.self) {
+                var lines = [Self.titled(name, Self.summary(enumeration.leadingTrivia)) + " One of:"]
                 for member in enumeration.memberBlock.members {
                     guard let cases = member.decl.as(EnumCaseDeclSyntax.self) else { continue }
                     for element in cases.elements {
-                        let values = element.parameterClause.map { clause in
-                            "(" + clause.parameters.map { parameter in
-                                (parameter.firstName.map { "\($0.text): " } ?? "") + parameter.type.trimmedDescription
-                            }.joined(separator: ", ") + ")"
-                        } ?? ""
+                        let values =
+                            element.parameterClause.map { clause in
+                                "("
+                                    + clause.parameters.map { parameter in
+                                        (parameter.firstName.map { "\($0.text): " } ?? "")
+                                            + parameter.type.trimmedDescription
+                                    }.joined(separator: ", ") + ")"
+                            } ?? ""
                         lines.append("    \(element.name.text)\(values)" + Self.said(Self.summary(cases.leadingTrivia)))
                     }
                 }
@@ -164,7 +218,11 @@ extension Uses {
     /// What a declaration's documentation says, from its `///` lines.
     private static func summary(_ trivia: Trivia) -> String? {
         let lines = trivia.compactMap { piece -> String? in
-            if case .docLineComment(let text) = piece { String(text.dropFirst(3)).trimmingCharacters(in: .whitespaces) } else { nil }
+            if case .docLineComment(let text) = piece {
+                String(text.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            } else {
+                nil
+            }
         }
         return lines.isEmpty ? nil : lines.joined(separator: " ")
     }
@@ -183,42 +241,63 @@ extension Uses {
         return required ? "" : " = nil"
     }
 
-    static func declarations(of schemas: [JSONValue]) -> String {
+    static func declarations(of schemas: [JSONValue], except own: String? = nil) -> String {
         var named: [(name: String, schema: JSONValue)] = []
         func collect(_ schema: JSONValue) {
-            if let name = schema.typeName, !named.contains(where: { $0.name == name }) {
+            // A type of the object `own`, which its code declares itself, isn't declared again.
+            if let name = schema.typeName, own.map({ name != $0 && !name.hasPrefix("\($0).") }) ?? true,
+                !named.contains(where: { $0.name == name })
+            {
                 named.append((name, schema))
             }
             for child in schema.children { collect(child) }
         }
         for schema in schemas { collect(schema) }
-        return named.compactMap { declaration(of: $0.schema, named: $0.name) }.joined(separator: "\n\n")
+        return named.compactMap { name, schema in
+            // A nested type is declared in an extension of the type it's in, as Swift lets it be.
+            guard let dot = name.lastIndex(of: ".") else { return declaration(of: schema, named: name) }
+            return declaration(of: schema, named: String(name[name.index(after: dot)...])).map { declared in
+                "extension \(name[..<dot]) {\n"
+                    + declared.split(separator: "\n", omittingEmptySubsequences: false).map { "    \($0)" }.joined(
+                        separator: "\n") + "\n}"
+            }
+        }.joined(separator: "\n\n")
     }
 
     /// One type's declaration, read from its schema.
     static func declaration(of schema: JSONValue, named name: String) -> String? {
         var lines = documented(schema["description"], indent: "")
         // An enumeration with associated values: one option per case, as `Codable` writes it.
-        if case .array(let options)? = schema["oneOf"], options.allSatisfy({ $0["properties"]?.objectValue?.count == 1 && $0["const"] == nil }) {
-            lines.append("enum \(name) {")
+        if case .array(let options)? = schema["oneOf"],
+            options.allSatisfy({ $0["properties"]?.objectValue?.count == 1 && $0["const"] == nil })
+        {
+            lines.append("enum \(name): Codable {")
             for option in options {
                 guard let (caseName, values) = option["properties"]?.objectValue?.first else { continue }
                 lines += documented(values["description"], indent: "    ")
-                let associated = ordered(values).map { label, field in
-                    (label.hasPrefix("_") ? "" : "\(label): ") + field.declaredType(optional: !required(values).contains(label))
-                        + Self.swiftDefault(of: field, required: required(values).contains(label))
+                var associated: [String] = []
+                for (label, field) in ordered(values) {
+                    // A type with a value that can't be written isn't declared.
+                    guard let type = field.declaredType(optional: !required(values).contains(label)) else { return nil }
+                    associated.append(
+                        (label.hasPrefix("_") ? "" : "\(label): ") + type
+                            + Self.swiftDefault(of: field, required: required(values).contains(label)))
                 }
-                lines.append("    case \(caseName)" + (associated.isEmpty ? "" : "(\(associated.joined(separator: ", ")))"))
+                lines.append(
+                    "    case \(caseName)" + (associated.isEmpty ? "" : "(\(associated.joined(separator: ", ")))"))
             }
             lines.append("}")
             return lines.joined(separator: "\n")
         }
         // An enumeration with raw values, its cases as Swift names them.
         if case .array(let names)? = schema["x-enum-varnames"] {
-            let values: [JSONValue] = if case .array(let values)? = schema["enum"] { values } else { (schema["oneOf"]?.arrayValue ?? []).map { $0["const"] ?? .null } }
+            let values: [JSONValue] =
+                if case .array(let values)? = schema["enum"] { values } else {
+                    (schema["oneOf"]?.arrayValue ?? []).map { $0["const"] ?? .null }
+                }
             let descriptions = (schema["oneOf"]?.arrayValue ?? []).map(\.["description"])
             let raw = schema["type"] == "integer" ? "Int" : "String"
-            lines.append("enum \(name): \(raw) {")
+            lines.append("enum \(name): \(raw), Codable {")
             for (index, caseName) in names.compactMap(\.stringValue).enumerated() {
                 if index < descriptions.count { lines += documented(descriptions[index], indent: "    ") }
                 let value = index < values.count ? values[index] : .null
@@ -235,12 +314,11 @@ extension Uses {
         }
         // A structure: its fields, in the order they're declared.
         guard schema["properties"] != nil else { return nil }
-        lines.append("struct \(name) {")
+        lines.append("struct \(name): Codable {")
         for (field, fieldSchema) in ordered(schema) {
+            guard let type = fieldSchema.declaredType(optional: !required(schema).contains(field)) else { return nil }
             lines += documented(fieldSchema["description"], indent: "    ")
-            lines.append(
-                "    var \(field): \(fieldSchema.declaredType(optional: !required(schema).contains(field)))"
-                    + Self.swiftDefault(of: fieldSchema, required: true))
+            lines.append("    var \(field): \(type)" + Self.swiftDefault(of: fieldSchema, required: true))
         }
         lines.append("}")
         return lines.joined(separator: "\n")
@@ -262,8 +340,10 @@ extension Uses {
     /// a `- Parameters:` list for more, in the order they're declared.
     static func documentedParameters(of schema: JSONValue?, indent: String) -> [String] {
         let properties = schema?["properties"]?.objectValue ?? [:]
-        let said: [(String, String)] = parameters(of: schema).compactMap { parameter in
-            guard case .string(let text)? = properties[parameter.name]?["description"], !text.isEmpty else { return nil }
+        let said: [(String, String)] = (parameters(of: schema) ?? []).compactMap { parameter in
+            guard case .string(let text)? = properties[parameter.name]?["description"], !text.isEmpty else {
+                return nil
+            }
             return (parameter.name, text)
         }
         guard said.count > 1 else { return said.map { "\(indent)/// - Parameter \($0.0): \($0.1)" } }
@@ -282,7 +362,9 @@ extension JSONValue {
         var children: [JSONValue] = []
         if case .object(let properties)? = self["properties"] { children += properties.values }
         if let items = self["items"] { children.append(items) }
-        if case .object = self["additionalProperties"], let values = self["additionalProperties"] { children.append(values) }
+        if case .object = self["additionalProperties"], let values = self["additionalProperties"] {
+            children.append(values)
+        }
         if case .array(let options)? = self["anyOf"] { children += options }
         if case .array(let options)? = self["oneOf"] { children += options }
         return children
@@ -295,8 +377,8 @@ extension JSONValue {
 
     /// The Swift type of a value of this schema, an optional when it's `optional` and isn't
     /// already one.
-    public func declaredType(optional: Bool) -> String {
-        let type = swiftType
+    public func declaredType(optional: Bool) -> String? {
+        guard let type = swiftType else { return nil }
         return optional && !type.hasSuffix("?") ? type + "?" : type
     }
 }

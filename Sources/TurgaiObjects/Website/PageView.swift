@@ -162,18 +162,26 @@ struct LayoutView: HTML {
     var body: some HTML {
         switch layout {
         case .row(let id, let items, let alignment, let spacing):
-            div(.id(Identity.of(id: id, place: place).name), .class("row \(alignment.rawValue)"), .style("gap: \(Self.points(spacing))")) {
+            div(
+                .id(Identity.of(id: id, place: place).name), .class("row \(alignment.rawValue)"),
+                .style("gap: \(Self.points(spacing))")
+            ) {
                 children(items, Anchor(horizontal: .leading, vertical: alignment))
             }.attributes(contentsOf: named(id))
         case .column(let id, let items, let alignment, let spacing):
-            div(.id(Identity.of(id: id, place: place).name), .class("column \(alignment.rawValue)"), .style("gap: \(Self.points(spacing))")) {
+            div(
+                .id(Identity.of(id: id, place: place).name), .class("column \(alignment.rawValue)"),
+                .style("gap: \(Self.points(spacing))")
+            ) {
                 children(items, Anchor(horizontal: alignment, vertical: .top))
             }.attributes(contentsOf: named(id))
         case .text(let id, let text, let style, let color):
-            p(.id(Identity.of(id: id, place: place).name), .class("\(style.rawValue) \(color.rawValue)")) { text }.attributes(contentsOf: named(id))
+            p(.id(Identity.of(id: id, place: place).name), .class("\(style.rawValue) \(color.rawValue)")) { text }
+                .attributes(contentsOf: named(id))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
             img(
-                .id(Identity.of(id: id, place: place).name), .src(url.absoluteString), .alt(description), .custom(name: "loading", value: "lazy"),
+                .id(Identity.of(id: id, place: place).name), .src(url.absoluteString), .alt(description),
+                .custom(name: "loading", value: "lazy"),
                 .class("image \(fit.rawValue)"), .style(Self.imageStyle(aspectRatio, width))
             ).attributes(contentsOf: named(id))
         case .button(let id, let label, let kind):
@@ -226,7 +234,8 @@ struct LayoutView: HTML {
 
         private static func escaped(_ text: String) -> String {
             text.unicodeScalars.map { scalar in
-                CharacterSet.alphanumerics.contains(scalar) && scalar.isASCII ? String(scalar) : "_\(String(scalar.value, radix: 16))_"
+                CharacterSet.alphanumerics.contains(scalar) && scalar.isASCII
+                    ? String(scalar) : "_\(String(scalar.value, radix: 16))_"
             }.joined()
         }
     }

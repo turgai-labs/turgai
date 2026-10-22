@@ -1,11 +1,40 @@
 import DiscoverableActors
 import Distributed
 import DistributedCluster
+import VirtualActors
+
+/// Which object something is, as the system knows it, and as models and people are shown it.
+public enum ObjectID: Hashable, Codable, Sendable, CustomStringConvertible, Comparable {
+    /// An object made by name, by the id it was made with, or a built-in object, the one of its kind
+    /// here, by its type.
+    case named(String)
+    /// A virtual actor, by its id: the same wherever and whenever it runs.
+    case virtual(VirtualActorID)
+    /// Any other actor, by its id: which it is while it lives.
+    case actor(ClusterSystem.ActorID)
+
+    /// How it's written: exactly, so it reads back as itself. An actor's is its node, with the
+    /// process it runs in, and its path there.
+    public var description: String {
+        switch self {
+        case .named(let name): name
+        case .virtual(let id): id.rawValue
+        case .actor(let id): "\(id.node)\(id.path)"
+        }
+    }
+
+    /// In the order they're written in, as they're listed.
+    public static func < (lhs: ObjectID, rhs: ObjectID) -> Bool {
+        lhs.description < rhs.description
+    }
+}
 
 /// A catalog entry ready to show to a model.
 public struct ObjectEntry: Codable, Sendable {
+    public let id: ObjectID
     public let object: DiscoverableObject
-    public let title: String
+    /// The type it is of.
+    public let type: String
     public let description: String?
     public let scope: ObjectScope
     /// Each action with its arguments, such as `play(query)`.
@@ -14,15 +43,17 @@ public struct ObjectEntry: Codable, Sendable {
     public let events: [String]
 
     public init(
+        id: ObjectID,
         object: DiscoverableObject,
-        title: String,
+        type: String,
         description: String?,
         scope: ObjectScope,
         actions: [String],
         events: [String] = []
     ) {
+        self.id = id
         self.object = object
-        self.title = title
+        self.type = type
         self.description = description
         self.scope = scope
         self.actions = actions
@@ -30,7 +61,8 @@ public struct ObjectEntry: Codable, Sendable {
     }
 }
 
-/// Follows the cluster receptionist's listings and caches descriptions for roots.
+/// Lists the objects of each scope: the ones its directory holds, and the ones that check in
+/// with the cluster receptionist themselves, whose descriptions it follows and caches.
 /// Actor references are resolved from IDs when requested, so the catalog doesn't
 /// keep root actors alive.
 public distributed actor ObjectCatalog: LifecycleWatch {
@@ -38,7 +70,7 @@ public distributed actor ObjectCatalog: LifecycleWatch {
 
     public struct Record: Sendable {
         public let id: ClusterSystem.ActorID
-        public let title: String
+        public let type: String
         public let description: String?
         public let actions: [String]
         public let events: [String]
@@ -64,6 +96,11 @@ public distributed actor ObjectCatalog: LifecycleWatch {
         continuation.yield()
         self.observers.append(continuation)
         return changes
+    }
+
+    /// An object a scope holds was made, changed or removed: whoever follows changes looks again.
+    public distributed func changed() {
+        notifyObservers()
     }
 
     private func notifyObservers() {
@@ -95,7 +132,7 @@ public distributed actor ObjectCatalog: LifecycleWatch {
             let description = try await object.describe()
             self.records[scope, default: [:]][object.id] = Record(
                 id: object.id,
-                title: description.title,
+                type: description.type,
                 description: description.description,
                 actions: description.actions.map { Self.signature($0.key, input: $0.value.input) }.sorted(),
                 events: description.events.keys.sorted()
@@ -120,25 +157,41 @@ public distributed actor ObjectCatalog: LifecycleWatch {
             } else { [] }
         // As Swift declares it, with its label, when its schema keeps it.
         func declared(_ name: String, _ schema: JSONValue) -> String {
-            guard case .string(let label)? = schema[ObjectShape.Message.labelKey], label != name else { return "\(name): \(schema.swiftType)" }
-            return "\(label) \(name): \(schema.swiftType)"
+            let type = schema.swiftType.map { ": \($0)" } ?? ""
+            guard case .string(let label)? = schema[ObjectShape.Message.labelKey], label != name else {
+                return name + type
+            }
+            return "\(label) \(name)\(type)"
         }
-        let written = required.compactMap { name in properties[name].map { declared(name, $0) } }
-            + properties.keys.filter { !required.contains($0) }.sorted().map { "\($0): \(properties[$0]!.swiftType)?" }
+        let written =
+            required.compactMap { name in properties[name].map { declared(name, $0) } }
+            + properties.keys.filter { !required.contains($0) }.sorted().map { name in
+                "\(name)" + (properties[name]!.swiftType.map { ": \($0)?" } ?? "?")
+            }
         return "\(name)(\(written.joined(separator: ", ")))"
     }
 
-    public distributed func entries(in scopes: [ObjectScope]) -> [ObjectEntry] {
+    /// The objects in `scopes`: those each scope holds, from its own directory, and the objects
+    /// that checked in there themselves, from the receptionist.
+    public distributed func entries(in scopes: [ObjectScope]) async throws -> [ObjectEntry] {
         for scope in scopes { startListing(for: scope) }
         var entries: [ObjectEntry] = []
         var seen: Set<ClusterSystem.ActorID> = []
+        for scope in scopes {
+            for held in try await DynamicObjects.resolve(on: actorSystem, scope: scope).held()
+            where seen.insert(held.object.id).inserted {
+                entries.append(held)
+            }
+        }
         for scope in scopes {
             for record in self.records[scope, default: [:]].values where seen.insert(record.id).inserted {
                 guard let object = try? DiscoverableObject.resolve(id: record.id, using: actorSystem) else { continue }
                 entries.append(
                     ObjectEntry(
+                        // A built-in is the one of its kind here: its type is which one.
+                        id: .named(ObjectNames.handle(for: record.type)),
                         object: object,
-                        title: record.title,
+                        type: record.type,
                         description: record.description,
                         scope: scope,
                         actions: record.actions,

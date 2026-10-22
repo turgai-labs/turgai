@@ -388,7 +388,7 @@ public struct HailAgentAdapter: Sendable {
                     try await agentStream.send(
                         input,
                         received: input.received(),
-                            inputID: input.inputID,
+                        inputID: input.inputID,
                         to: agent
                     )
                 }
@@ -426,7 +426,8 @@ public struct HailAgentAdapter: Sendable {
             case .modelUnavailable:
                 return "I’m having trouble reaching my main systems right now. Please try again in a moment."
             case .modelThoughtPastAnswer:
-                return "The model thought for the whole length of an answer without answering, so there's no reply. Ask again, perhaps in a smaller step."
+                return
+                    "The model thought for the whole length of an answer without answering, so there's no reply. Ask again, perhaps in a smaller step."
             case .modelMisbehavior(let reason):
                 return "The model's answer couldn't be used: \(HailErrorFormatter.sanitizedModelOutput(reason))"
             default:

@@ -24,12 +24,6 @@ extension ObjectScope {
         [.shared, .owned(by: user)]
     }
 
-    /// The key objects made here also check in under, as what they are: a session finds them
-    /// there, typed, rather than calling an object to learn whether it is one.
-    public var madeObjectsKey: DistributedReception.Key<DynamicObject> {
-        .init(id: "turgai.objects.made.\(name)")
-    }
-
     /// The cluster receptionist key for this visibility scope.
     public var receptionistKey: DistributedReception.Key<DiscoverableObject> {
         switch self {

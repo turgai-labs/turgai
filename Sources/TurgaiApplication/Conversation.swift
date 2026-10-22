@@ -556,7 +556,9 @@ public distributed actor Conversation {
                         await self.whenLocal { await $0.follow(event) }
                     }
                 } catch {
-                    log.debug("Could not follow the agent's activity", metadata: ["error": .string(String(describing: error))])
+                    log.debug(
+                        "Could not follow the agent's activity", metadata: ["error": .string(String(describing: error))]
+                    )
                     break
                 }
             }
@@ -596,14 +598,19 @@ public distributed actor Conversation {
         case .status(let message):
             await publishLive(.reply(.status(conversationID: conversationID, turnID: turnID, message: message)))
         case .toolCalled(let name, let arguments, let at):
-            await publishLive(.reply(.status(conversationID: conversationID, turnID: turnID, message: "Using \(name)…")))
-            await publishLive(.reply(.step(
-                conversationID: conversationID, turnID: turnID,
-                step: .toolCalled(name: name, arguments: arguments, at: at))))
+            await publishLive(
+                .reply(.status(conversationID: conversationID, turnID: turnID, message: "Using \(name)…")))
+            await publishLive(
+                .reply(
+                    .step(
+                        conversationID: conversationID, turnID: turnID,
+                        step: .toolCalled(name: name, arguments: arguments, at: at))))
         case .toolFinished(let name, let output, let failure, let at):
-            await publishLive(.reply(.step(
-                conversationID: conversationID, turnID: turnID,
-                step: .toolFinished(name: name, output: output, failure: failure, at: at))))
+            await publishLive(
+                .reply(
+                    .step(
+                        conversationID: conversationID, turnID: turnID,
+                        step: .toolFinished(name: name, output: output, failure: failure, at: at))))
         case .text(let fragment):
             await publish(phase: .typing, of: &turn)
             turn.text += fragment
@@ -1249,7 +1256,6 @@ public distributed actor Conversation {
         }
     }
 
-
     private func action(for event: ConversationModelEvent) -> ConversationAction {
         switch event {
         case .completed(let turnID, let completion):
@@ -1294,7 +1300,9 @@ public distributed actor Conversation {
         {
             // A turn failed by its failure, even when the next turn starts right after it.
             let failure: ConversationFailure? =
-                if case .modelFailed(_, let failure) = action { failure } else if case .failed(let failure) = next.status { failure } else { nil }
+                if case .modelFailed(_, let failure) = action {
+                    failure
+                } else if case .failed(let failure) = next.status { failure } else { nil }
             if let failure {
                 events.append(.turnFailed(previousTurnID, failure))
             } else {

@@ -84,13 +84,17 @@ struct ChatView: View {
     /// A floating glass capsule: the mark, the name, and the connection. Clicking it opens
     /// the agent's turns.
     private var header: some View {
-        Button { openWindow(id: WindowID.turns) } label: { headerLabel }
-            .buttonStyle(.plain)
-            .help("Show the agent's turns")
-            .frame(maxWidth: .infinity)
-            // Clear of the window's traffic lights under the hidden title bar.
-            .padding(.top, 36)
-            .padding(.bottom, 8)
+        Button {
+            openWindow(id: WindowID.turns)
+        } label: {
+            headerLabel
+        }
+        .buttonStyle(.plain)
+        .help("Show the agent's turns")
+        .frame(maxWidth: .infinity)
+        // Clear of the window's traffic lights under the hidden title bar.
+        .padding(.top, 36)
+        .padding(.bottom, 8)
     }
 
     private var headerLabel: some View {

@@ -31,8 +31,9 @@ struct RecordedTurn: Sendable {
                 case .toolRequested(let call, _):
                     requested[call.id] = call.arguments.jsonString
                     turn.calls.append(
-                        Call(id: call.id, name: call.name, arguments: call.arguments.jsonString,
-                             output: "", completed: false, failed: false))
+                        Call(
+                            id: call.id, name: call.name, arguments: call.arguments.jsonString,
+                            output: "", completed: false, failed: false))
                 case .toolCompleted(let result, _):
                     if let index = turn.calls.firstIndex(where: { $0.id == result.toolCallID }) {
                         turn.calls[index].output = result.output.textRepresentation
@@ -44,9 +45,10 @@ struct RecordedTurn: Sendable {
                             failed: result.failureKind != nil)
                     } else {
                         turn.calls.append(
-                            Call(id: result.toolCallID, name: result.name, arguments: requested[result.toolCallID] ?? "",
-                                 output: result.output.textRepresentation, completed: true,
-                                 failed: result.failureKind != nil))
+                            Call(
+                                id: result.toolCallID, name: result.name, arguments: requested[result.toolCallID] ?? "",
+                                output: result.output.textRepresentation, completed: true,
+                                failed: result.failureKind != nil))
                     }
                 case .responseRecorded(let content, _):
                     turn.answer = content
@@ -58,7 +60,8 @@ struct RecordedTurn: Sendable {
         }
         do {
             try await stream.send(
-                text, received: AgentHistory.Input(from: .user(id: "user"), content: GeneratedContent(text), at: Date()),
+                text,
+                received: AgentHistory.Input(from: .user(id: "user"), content: GeneratedContent(text), at: Date()),
                 to: agent)
         } catch {
             // The model may fail after several useful tool calls. Keep those calls in the trace.

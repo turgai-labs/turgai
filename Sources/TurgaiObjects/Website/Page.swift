@@ -1,6 +1,6 @@
 import AnyLanguageModel
-import Foundation
 import DiscoverableActors
+import Foundation
 
 // A page nests three levels deep, each level its own type: a recursive `@Generable` type
 // overflows the stack building its schema, as its schema asks for its own again. Once
@@ -24,7 +24,9 @@ public enum Item: Codable, Sendable, Equatable {
     /// A button. Pressing it announces ButtonPressed with its label.
     case button(id: String? = nil, label: String, kind: ButtonKind = .normal)
     /// A picture from the web, at an http or https `url`, `description` saying what it shows, `width` points wide, or as wide as there's room for.
-    case image(id: String? = nil, url: String, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit, width: Double? = nil)
+    case image(
+        id: String? = nil, url: String, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit,
+        width: Double? = nil)
     /// Things side by side, left to right, aligned, `spacing` points apart.
     case row(id: String? = nil, items: [Inner], alignment: RowAlignment = .center, spacing: Double = 12)
     /// Things one under another, top to bottom, aligned, `spacing` points apart.
@@ -40,7 +42,9 @@ public enum Inner: Codable, Sendable, Equatable {
     /// A button. Pressing it announces ButtonPressed with its label.
     case button(id: String? = nil, label: String, kind: ButtonKind = .normal)
     /// A picture from the web, at an http or https `url`, `description` saying what it shows, `width` points wide, or as wide as there's room for.
-    case image(id: String? = nil, url: String, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit, width: Double? = nil)
+    case image(
+        id: String? = nil, url: String, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit,
+        width: Double? = nil)
     /// Things side by side, left to right, aligned, `spacing` points apart.
     case row(id: String? = nil, items: [Leaf], alignment: RowAlignment = .center, spacing: Double = 12)
     /// Things one under another, top to bottom, aligned, `spacing` points apart.
@@ -56,7 +60,9 @@ public enum Leaf: Codable, Sendable, Equatable {
     /// A button. Pressing it announces ButtonPressed with its label.
     case button(id: String? = nil, label: String, kind: ButtonKind = .normal)
     /// A picture from the web, at an http or https `url`, `description` saying what it shows, `width` points wide, or as wide as there's room for.
-    case image(id: String? = nil, url: String, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit, width: Double? = nil)
+    case image(
+        id: String? = nil, url: String, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit,
+        width: Double? = nil)
 }
 
 // Each thing's `id`, when it's given, is what it is on the page: the same thing on the page
@@ -181,7 +187,9 @@ indirect enum Layout: Equatable, Sendable {
     case column(id: String? = nil, [Layout], alignment: ColumnAlignment = .center, spacing: Double = 12)
     case text(id: String? = nil, String, style: TextStyle = .body, color: TextColor = .primary)
     case button(id: String? = nil, String, kind: ButtonKind = .normal)
-    case image(id: String? = nil, URL, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit, width: Double? = nil)
+    case image(
+        id: String? = nil, URL, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit,
+        width: Double? = nil)
 
     init(_ page: Page) throws {
         self = .column(try page.items.map(Layout.init))
@@ -201,8 +209,14 @@ indirect enum Layout: Equatable, Sendable {
         case .button(let id, let label, let kind): self = try .labelled(label, kind, id)
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
             self = try .pictured(id, url, description, aspectRatio, fit, width)
-        case .row(let id, let items, let alignment, let spacing): self = .row(id: try Self.identified(id), try items.map(Layout.init), alignment: alignment, spacing: try Self.spaced(spacing))
-        case .column(let id, let items, let alignment, let spacing): self = .column(id: try Self.identified(id), try items.map(Layout.init), alignment: alignment, spacing: try Self.spaced(spacing))
+        case .row(let id, let items, let alignment, let spacing):
+            self = .row(
+                id: try Self.identified(id), try items.map(Layout.init), alignment: alignment,
+                spacing: try Self.spaced(spacing))
+        case .column(let id, let items, let alignment, let spacing):
+            self = .column(
+                id: try Self.identified(id), try items.map(Layout.init), alignment: alignment,
+                spacing: try Self.spaced(spacing))
         }
     }
 
@@ -212,8 +226,14 @@ indirect enum Layout: Equatable, Sendable {
         case .button(let id, let label, let kind): self = try .labelled(label, kind, id)
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
             self = try .pictured(id, url, description, aspectRatio, fit, width)
-        case .row(let id, let items, let alignment, let spacing): self = .row(id: try Self.identified(id), try items.map(Layout.init), alignment: alignment, spacing: try Self.spaced(spacing))
-        case .column(let id, let items, let alignment, let spacing): self = .column(id: try Self.identified(id), try items.map(Layout.init), alignment: alignment, spacing: try Self.spaced(spacing))
+        case .row(let id, let items, let alignment, let spacing):
+            self = .row(
+                id: try Self.identified(id), try items.map(Layout.init), alignment: alignment,
+                spacing: try Self.spaced(spacing))
+        case .column(let id, let items, let alignment, let spacing):
+            self = .column(
+                id: try Self.identified(id), try items.map(Layout.init), alignment: alignment,
+                spacing: try Self.spaced(spacing))
         }
     }
 
@@ -227,7 +247,9 @@ indirect enum Layout: Equatable, Sendable {
     }
 
     /// Words, which have something to say.
-    private static func said(_ words: String, _ style: TextStyle, _ color: TextColor, _ id: String?) throws(PageProblem) -> Layout {
+    private static func said(_ words: String, _ style: TextStyle, _ color: TextColor, _ id: String?) throws(PageProblem)
+        -> Layout
+    {
         let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { throw .noText }
         return .text(id: try identified(id), words, style: style, color: color)
@@ -235,16 +257,20 @@ indirect enum Layout: Equatable, Sendable {
 
     /// A picture, from the web, which says what it shows.
     private static func pictured(
-        _ id: String?, _ url: String, _ description: String, _ aspectRatio: AspectRatio, _ fit: ImageFit, _ width: Double?
+        _ id: String?, _ url: String, _ description: String, _ aspectRatio: AspectRatio, _ fit: ImageFit,
+        _ width: Double?
     ) throws(PageProblem) -> Layout {
         let address = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsed = URL(string: address), ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""), parsed.host != nil else {
+        guard let parsed = URL(string: address), ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""),
+            parsed.host != nil
+        else {
             throw .notAWebAddress(address)
         }
         let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !description.isEmpty else { throw .noDescription }
         if let width { guard width > 0, width.isFinite else { throw .noWidth(width) } }
-        return .image(id: try identified(id), parsed, description: description, aspectRatio: aspectRatio, fit: fit, width: width)
+        return .image(
+            id: try identified(id), parsed, description: description, aspectRatio: aspectRatio, fit: fit, width: width)
     }
 
     /// How far apart things are, in points: never less than touching.
@@ -280,7 +306,8 @@ indirect enum Layout: Equatable, Sendable {
     /// Every id given, in page order.
     var ids: [String] {
         switch self {
-        case .row(let id, let items, _, _), .column(let id, let items, _, _): [id].compactMap { $0 } + items.flatMap(\.ids)
+        case .row(let id, let items, _, _), .column(let id, let items, _, _):
+            [id].compactMap { $0 } + items.flatMap(\.ids)
         case .text(let id, _, _, _), .button(let id, _, _), .image(let id, _, _, _, _, _): [id].compactMap { $0 }
         }
     }

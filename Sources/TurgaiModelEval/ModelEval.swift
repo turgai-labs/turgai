@@ -25,7 +25,9 @@ struct ModelEval: AsyncParsableCommand {
     @Option(help: "Only the tasks whose request contains this, ignoring case; repeat for more. All tasks without it.")
     var task: [String] = []
 
-    @Option(help: "A file with the agent's instructions, as a profile's would be. Blank without it, like a default profile.")
+    @Option(
+        help: "A file with the agent's instructions, as a profile's would be. Blank without it, like a default profile."
+    )
     var instructions: String?
 
     @Option(help: "Replace only the objects page introduction with text from this file, for controlled evaluations.")
@@ -46,12 +48,17 @@ struct ModelEval: AsyncParsableCommand {
             try await WriterProbe.run(model: try AgentModel(model), runs: runs, temperature: temperature)
             return
         }
-        let tasks = task.isEmpty
-            ? EvalTask.all : EvalTask.all.filter { request in task.contains { request.request.localizedCaseInsensitiveContains($0) } }
+        let tasks =
+            task.isEmpty
+            ? EvalTask.all
+            : EvalTask.all.filter { request in task.contains { request.request.localizedCaseInsensitiveContains($0) } }
         let service = ModelEvalService(
-            model: try AgentModel(model), tasks: tasks, runs: runs, log: URL(fileURLWithPath: log), temperature: temperature,
+            model: try AgentModel(model), tasks: tasks, runs: runs, log: URL(fileURLWithPath: log),
+            temperature: temperature,
             instructions: try instructions.map { try String(contentsOfFile: $0, encoding: .utf8) } ?? "",
-            objectsPageDescription: try objectsPageDescription.map { try String(contentsOfFile: $0, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines) })
+            objectsPageDescription: try objectsPageDescription.map {
+                try String(contentsOfFile: $0, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+            })
         // Done is done: the group ends when the evals do.
         let configuration = ServiceGroupConfiguration(
             services: [.init(service: service, successTerminationBehavior: .gracefullyShutdownGroup)],
@@ -78,7 +85,9 @@ struct ModelEvalService: Service {
             var passed = 0
             for task in tasks {
                 for run in 1...runs {
-                    let result = await task.run(with: model, temperature: temperature, instructions: instructions, objectsPageDescription: objectsPageDescription)
+                    let result = await task.run(
+                        with: model, temperature: temperature, instructions: instructions,
+                        objectsPageDescription: objectsPageDescription)
                     try Task.checkCancellation()
                     if result.passed { passed += 1 }
                     print(result.line)

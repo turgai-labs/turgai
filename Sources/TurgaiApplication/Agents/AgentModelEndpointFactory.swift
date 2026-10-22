@@ -36,8 +36,8 @@ public actor AgentModelEndpointFactory {
     ) async throws -> any ModelEndpoint {
         let model = agentModel.id.rawValue
         let contextWindow = configuration.contextWindow
-        let session: any HTTPTransport =
-            configuration.account(for: agentModel).map { transports.transport(for: $0) } ?? makeDefaultSession()
+        let transport: any HTTPTransport =
+            configuration.account(for: agentModel).map { transports.transport(for: $0) } ?? makeDefaultTransport()
         switch configuration {
         case .ollama(let baseURL, _):
             let think: Bool?
@@ -61,7 +61,7 @@ public actor AgentModelEndpointFactory {
                 contextWindow: contextWindow,
                 keepAlive: ollamaKeepAlive,
                 think: think,
-                session: session
+                transport: transport
             )
         case .openAI(let reference, _):
             let apiKey = try await credential(reference)
@@ -69,7 +69,7 @@ public actor AgentModelEndpointFactory {
                 languageModel: OpenAILanguageModel(
                     apiKey: apiKey,
                     model: model,
-                session: session
+                    transport: transport
                 ),
                 modelIdentifier: model,
                 temperature: temperature,
@@ -85,7 +85,7 @@ public actor AgentModelEndpointFactory {
                 languageModel: AnthropicLanguageModel(
                     apiKey: apiKey,
                     model: model,
-                session: session
+                    transport: transport
                 ),
                 modelIdentifier: model,
                 temperature: temperature,
@@ -101,7 +101,7 @@ public actor AgentModelEndpointFactory {
                 languageModel: GeminiLanguageModel(
                     apiKey: apiKey,
                     model: model,
-                session: session
+                    transport: transport
                 ),
                 modelIdentifier: model,
                 temperature: temperature,
@@ -120,7 +120,7 @@ public actor AgentModelEndpointFactory {
                         baseURL: baseURL,
                         apiKey: key,
                         model: model,
-                    session: session
+                        transport: transport
                     ),
                     modelIdentifier: model,
                     temperature: temperature,
@@ -137,7 +137,7 @@ public actor AgentModelEndpointFactory {
                         baseURL: baseURL,
                         apiKey: key,
                         model: model,
-                    session: session
+                        transport: transport
                     ),
                     modelIdentifier: model,
                     temperature: temperature,

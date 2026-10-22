@@ -80,7 +80,9 @@ public struct UserProcessTool: HailCore.Tool {
         )
     }
 
-    public func run(_ input: GeneratedContent, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<ProcessEffect>) async throws -> CallReturn {
+    public func run(
+        _ input: GeneratedContent, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<ProcessEffect>
+    ) async throws -> CallReturn {
         if tool.approval == .always {
             let request = token.withConfiguration { effect in
                 ApprovalRequest(

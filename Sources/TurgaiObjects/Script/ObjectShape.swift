@@ -1,72 +1,7 @@
 import DiscoverableActors
 import SwiftParser
+import SwiftScriptSema
 import SwiftSyntax
-
-/// What an object's data and messages are made of: plain values, which can be saved and sent,
-/// and other objects.
-public indirect enum ValueKind: Codable, Sendable, Equatable {
-    case int, double, string, bool
-    case list(ValueKind)
-    case map(ValueKind)
-    /// Another object: a reference, untyped, as an Erlang pid. Any type that names neither data
-    /// nor a type the object declares is one, such as `owner: TripPlanner`: the name says what
-    /// it's meant to be, and the object it is says what it takes.
-    case object
-    /// A type the object declares, or `Any`: what a value of it is gets checked when it's made.
-    case other(String)
-
-    /// The kind of a type as written, given the types the object declares.
-    init(_ type: TypeSyntax, declared: Set<String>) {
-        if let optional = type.as(OptionalTypeSyntax.self) {
-            self.init(optional.wrappedType, declared: declared)
-        } else if let unwrapped = type.as(ImplicitlyUnwrappedOptionalTypeSyntax.self) {
-            self.init(unwrapped.wrappedType, declared: declared)
-        } else if let array = type.as(ArrayTypeSyntax.self) {
-            self = .list(ValueKind(array.element, declared: declared))
-        } else if let dictionary = type.as(DictionaryTypeSyntax.self) {
-            self = .map(ValueKind(dictionary.value, declared: declared))
-        } else if let some = type.as(SomeOrAnyTypeSyntax.self) {
-            self.init(some.constraint, declared: declared)
-        } else {
-            switch type.trimmedDescription {
-            case "Int": self = .int
-            case "Double", "Float": self = .double
-            case "String": self = .string
-            case "Bool": self = .bool
-            case "Object": self = .object
-            case let name where declared.contains(name) || name == "Any" || name == "State": self = .other(name)
-            default: self = .object
-            }
-        }
-    }
-
-    public var written: String {
-        switch self {
-        case .int: "Int"
-        case .double: "Double"
-        case .string: "String"
-        case .bool: "Bool"
-        case .list(let element): "[\(element.written)]"
-        case .map(let value): "[String: \(value.written)]"
-        case .object: "Object"
-        case .other(let type): type
-        }
-    }
-
-    /// A value of this kind, as a JSON schema, as an action's input or output is described.
-    public var schema: JSONValue {
-        switch self {
-        case .int: ["type": "integer"]
-        case .double: ["type": "number"]
-        case .string: ["type": "string"]
-        case .bool: ["type": "boolean"]
-        case .list(let element): ["type": "array", "items": element.schema]
-        case .map(let value): ["type": "object", "additionalProperties": value.schema]
-        case .object: ["x-actor-reference": true]
-        case .other: [:]
-        }
-    }
-}
 
 /// What's wrong with an object's code, in a line, at a line of it when that's known.
 public struct CodeProblem: Error, Codable, Sendable, Equatable, CustomStringConvertible {
@@ -115,19 +50,31 @@ public struct ObjectShape: Sendable, Equatable {
         public let name: String
         /// Written with `let`: it keeps its starting value.
         public let constant: Bool
-        /// Its type as written, when it's written: otherwise its starting value's.
-        public let kind: ValueKind?
         /// Its type as the code writes it, when it does.
         public let type: String?
+        /// Its type as the checker resolved it: `.unresolved` for code that doesn't check.
+        public var resolved: SwiftType = .unresolved
+        /// Not `private`: other objects read it, as another actor's property is read in Swift.
+        public var published = true
     }
 
     public struct Parameter: Sendable, Equatable {
         /// What it's called with: `nil` for `_`.
         public let label: String?
         public let name: String
-        public let kind: ValueKind
-        /// Its type as the code writes it: `Ann` for an object, where its kind says only object.
+        /// Its type as the code writes it.
         public let type: String
+        /// Its type as the checker resolved it: `.unresolved` for code that doesn't check.
+        public var resolved: SwiftType = .unresolved
+        /// The schema a value of it is described with, from its resolved type.
+        public var schema: JSONValue = [:]
+        /// It may be left out: it's optional, or has a default.
+        public var optional = false
+        /// Its type as code elsewhere names it, `RefundDesk.Refund`: `nil` for any object, which
+        /// is written as it's declared.
+        public var qualified: String? = nil
+        /// The object it takes, when it takes one: `nil` for a value.
+        public var object: Takes? = nil
 
         /// As Swift declares it: `from ann: Ann`, `amount: Int`, `_ text: String`.
         public var declared: String {
@@ -136,12 +83,23 @@ public struct ObjectShape: Sendable, Equatable {
         }
     }
 
+    /// The object a parameter takes.
+    public enum Takes: Sendable, Equatable {
+        /// Any object: `Object`.
+        case anyObject
+        /// An object of an actor type.
+        case of(ObjectTypeName)
+        /// An object conforming to a protocol: `any Shop.RefundManager`.
+        case conforming(to: ObjectProtocolName)
+    }
+
     public struct Message: Sendable, Equatable {
         public let name: String
-        public let parameters: [Parameter]
-        public let reply: ValueKind?
-        /// Its reply's type as the code writes it.
+        public var parameters: [Parameter]
+        /// Its reply's type as the code writes it: `nil` when it returns nothing.
         public var replyType: String? = nil
+        /// Its reply's schema, from its resolved type: `nil` when it returns nothing.
+        public var replySchema: JSONValue? = nil
         /// What its doc comment says it does.
         public var summary: String? = nil
         /// For each object it's given, what it calls on that object, as Swift names it:
@@ -149,19 +107,15 @@ public struct ObjectShape: Sendable, Equatable {
         public var calls: [String: [String]] = [:]
         /// What its declaration says it may do besides return: wait, and throw.
         public var effects: [ObjectAction.Effect] = []
-
         /// As Swift declares it: `askForRaise(from ann: Ann, amount: Int) async throws -> Bool`.
         public var written: String {
-            "\(name)(\(parameters.map(\.declared).joined(separator: ", ")))" + effects.map { " \($0.rawValue)" }.joined()
+            "\(name)(\(parameters.map(\.declared).joined(separator: ", ")))"
+                + effects.map { " \($0.rawValue)" }.joined()
                 + (replyType.map { " -> \($0)" } ?? "")
         }
 
-        /// Its reply, as a JSON schema, with its type as the code writes it.
-        public var output: JSONValue? {
-            guard let reply, case .object(var schema) = reply.schema else { return reply?.schema }
-            if let replyType { schema[Self.swiftTypeKey] = .string(replyType) }
-            return .object(schema)
-        }
+        /// Its reply, as a JSON schema: `nil` when it returns nothing.
+        public var output: JSONValue? { replySchema }
 
         /// Where a schema keeps the Swift type of what it describes, and a parameter its label.
         public static let swiftTypeKey = "x-swift-type"
@@ -173,30 +127,34 @@ public struct ObjectShape: Sendable, Equatable {
                 ? nil
                 : [
                     "type": "object",
-                    "properties": .object(Dictionary(uniqueKeysWithValues: parameters.map { parameter in
-                        var schema = parameter.kind.schema
-                        if case .object(var members) = schema {
-                            members[Self.swiftTypeKey] = .string(parameter.type)
-                            members[Self.labelKey] = .string(parameter.label ?? "_")
-                            schema = .object(members)
-                        }
-                        // An object it's given is any Object, known by what it's called with here.
-                        if parameter.kind == .object, let called = calls[parameter.name], !called.isEmpty, case .object(var members) = schema {
-                            members["description"] = .string("that takes " + called.joined(separator: ", "))
-                            schema = .object(members)
-                        }
-                        return (parameter.name, schema)
-                    })),
-                    "required": .array(parameters.map { .string($0.name) }),
+                    "properties": .object(
+                        Dictionary(
+                            uniqueKeysWithValues: parameters.map { parameter in
+                                var schema = parameter.schema
+                                if case .object(var members) = schema {
+                                    members[Self.swiftTypeKey] = .string(parameter.qualified ?? parameter.type)
+                                    members[Self.labelKey] = .string(parameter.label ?? "_")
+                                    schema = .object(members)
+                                }
+                                // An object it's given is any Object, known by what it's called with here.
+                                if parameter.object == .anyObject, let called = calls[parameter.name], !called.isEmpty,
+                                    case .object(var members) = schema
+                                {
+                                    members["description"] = .string("that takes " + called.joined(separator: ", "))
+                                    schema = .object(members)
+                                }
+                                return (parameter.name, schema)
+                            })),
+                    "required": .array(parameters.filter { !$0.optional }.map { .string($0.name) }),
                 ]
         }
     }
 
     public let type: String
-    public let fields: [Field]
-    public let messages: [Message]
+    public private(set) var fields: [Field]
+    public private(set) var messages: [Message]
     /// What it announces: its `@Event` methods, which nobody else can call.
-    public let events: [Message]
+    public private(set) var events: [Message]
     /// The fields whose object it follows the events of: its `@Subscribed` properties.
     public let subscriptions: [String]
     /// Whether it declares `_check()`, which says which of its checks its data breaks, if any.
@@ -228,13 +186,19 @@ public struct ObjectShape: Sendable, Equatable {
                 super.init(viewMode: .sourceAccurate)
             }
             override func visit(_ node: InfixOperatorExprSyntax) -> SyntaxVisitorContinueKind {
-                let assigns = node.operator.is(AssignmentExprSyntax.self)
-                    || (node.operator.as(BinaryOperatorExprSyntax.self).map { $0.operator.text.hasSuffix("=") && !["==", "!=", "<=", ">="].contains($0.operator.text) } ?? false)
-                if assigns, let name = Self.property(node.leftOperand), held.contains(name), !changes.contains(name) { changes.append(name) }
+                let assigns =
+                    node.operator.is(AssignmentExprSyntax.self)
+                    || (node.operator.as(BinaryOperatorExprSyntax.self).map {
+                        $0.operator.text.hasSuffix("=") && !["==", "!=", "<=", ">="].contains($0.operator.text)
+                    } ?? false)
+                if assigns, let name = Self.property(node.leftOperand), held.contains(name), !changes.contains(name) {
+                    changes.append(name)
+                }
                 return .visitChildren
             }
             override func visit(_ call: FunctionCallExprSyntax) -> SyntaxVisitorContinueKind {
-                if let member = call.calledExpression.as(MemberAccessExprSyntax.self), let base = member.base.flatMap(Self.property),
+                if let member = call.calledExpression.as(MemberAccessExprSyntax.self),
+                    let base = member.base.flatMap(Self.property),
                     base != "self"
                 {
                     let written = "\(base).\(member.declName.baseName.text)"
@@ -250,7 +214,9 @@ public struct ObjectShape: Sendable, Equatable {
             /// The property an expression names: `x` or `self.x`.
             static func property(_ expression: ExprSyntax) -> String? {
                 if let reference = expression.as(DeclReferenceExprSyntax.self) { return reference.baseName.text }
-                if let member = expression.as(MemberAccessExprSyntax.self), member.base?.as(DeclReferenceExprSyntax.self)?.baseName.tokenKind == .keyword(.self) {
+                if let member = expression.as(MemberAccessExprSyntax.self),
+                    member.base?.as(DeclReferenceExprSyntax.self)?.baseName.tokenKind == .keyword(.self)
+                {
                     return member.declName.baseName.text
                 }
                 return nil
@@ -259,7 +225,8 @@ public struct ObjectShape: Sendable, Equatable {
         guard let body = function.body else { return nil }
         let effects = Effects(held: held)
         effects.walk(body)
-        let parts = (effects.changes.isEmpty ? [] : ["changes " + effects.changes.joined(separator: ", ")])
+        let parts =
+            (effects.changes.isEmpty ? [] : ["changes " + effects.changes.joined(separator: ", ")])
             + (effects.calls.isEmpty ? [] : ["calls " + effects.calls.joined(separator: ", ")])
         return parts.isEmpty ? nil : parts.joined(separator: "; ")
     }
@@ -277,7 +244,9 @@ public struct ObjectShape: Sendable, Equatable {
                 if let member = call.calledExpression.as(MemberAccessExprSyntax.self),
                     member.base?.as(DeclReferenceExprSyntax.self)?.baseName.text == name
                 {
-                    let written = member.declName.baseName.text + "(" + call.arguments.map { ($0.label?.text ?? "_") + ":" }.joined() + ")"
+                    let written =
+                        member.declName.baseName.text + "("
+                        + call.arguments.map { ($0.label?.text ?? "_") + ":" }.joined() + ")"
                     if !found.contains(written) { found.append(written) }
                 }
                 return .visitChildren
@@ -290,15 +259,60 @@ public struct ObjectShape: Sendable, Equatable {
 
     /// The shape of `script`'s actor: with the types other objects' values are, which it uses.
     public init(_ script: Script) throws(CodeProblem) {
-        try self.init(code: script.code, type: script.type, values: script.uses.interface.valueTypes)
+        try self.init(code: script.code, type: script.type)
+        // Its values' types as the checker resolved them, for code that checks.
+        guard
+            let declarations = SwiftCheck.declarations(
+                of: script.type, in: ObjectModule.objectFile, of: ScriptInstance.files(script)
+            ).declarations,
+            case .actor(let held, let methods, _, _)? = declarations[script.type]
+        else { return }
+        fields = fields.map { field in
+            var field = field
+            field.resolved = held.first { $0.name == field.name }?.type ?? .unresolved
+            return field
+        }
+        messages = messages.map { Self.typed($0, by: methods, in: declarations) }
+        events = events.map { Self.typed($0, by: methods, in: declarations) }
     }
 
-    /// The shape of the actor `type` in `code`, where `values` are types declared elsewhere that
-    /// it uses; a class reads the same.
-    public init(code: String, type: String, values: Set<String> = []) throws(CodeProblem) {
+    /// `message` with its parameters' and reply's types as the checker resolved them.
+    static func typed(_ message: Message, by methods: [Declarations.Method], in declarations: Declarations) -> Message {
+        guard
+            let method = methods.first(where: {
+                $0.name == message.name && $0.parameters.map(\.label) == message.parameters.map(\.label)
+            })
+        else { return message }
+        var message = message
+        for (index, resolved) in method.parameters.enumerated() where index < message.parameters.count {
+            var parameter = message.parameters[index]
+            parameter.resolved = resolved.type
+            parameter.schema = SwiftTypeSchema.schema(of: resolved.type, in: declarations)
+            parameter.optional = SwiftTypeSchema.isOptional(resolved.type) || resolved.hasDefault
+            parameter.qualified = SwiftTypeSchema.written(resolved.type)
+            if case .named(let name, _) = resolved.type.unwrapped, case .actor? = declarations[name] {
+                parameter.object = .of(ObjectTypeName(rawValue: name))
+            } else if let conformed = SwiftTypeSchema.conformed(resolved.type, in: declarations) {
+                parameter.object = .conforming(to: conformed)
+            } else if SwiftTypeSchema.isAnyObject(resolved.type) {
+                parameter.object = .anyObject
+            }
+            message.parameters[index] = parameter
+        }
+        if message.replyType != nil {
+            message.replySchema = SwiftTypeSchema.schema(of: method.result, in: declarations)
+        }
+        return message
+    }
+
+    /// The shape of the actor `type` in `code`, as written; a class reads the same. Its types are
+    /// the checker's, which ``init(_:)`` adds.
+    init(code: String, type: String) throws(CodeProblem) {
         let file = Parser.parse(source: code)
         let lines = SourceLocationConverter(fileName: "", tree: file)
-        func line(_ node: some SyntaxProtocol) -> Int { lines.location(for: node.positionAfterSkippingLeadingTrivia).line }
+        func line(_ node: some SyntaxProtocol) -> Int {
+            lines.location(for: node.positionAfterSkippingLeadingTrivia).line
+        }
 
         let declared: [(name: String, members: MemberBlockSyntax)] = file.statements.compactMap { statement in
             if let actor = statement.item.as(ActorDeclSyntax.self) { return (actor.name.text, actor.memberBlock) }
@@ -306,17 +320,15 @@ public struct ObjectShape: Sendable, Equatable {
             return nil
         }
         guard let actor = declared.first(where: { $0.name == type }) else {
-            throw CodeProblem(declared.isEmpty ? "There's no `actor \(type)`." : "The actor is named `\(declared[0].name)`, not `\(type)`.")
+            throw CodeProblem(
+                declared.isEmpty
+                    ? "There's no `actor \(type)`." : "The actor is named `\(declared[0].name)`, not `\(type)`.")
         }
-        // The types it declares inside are its own, and those it uses are other objects' values:
-        // neither is another object.
-        let types = values.union(actor.members.members.compactMap { member -> String? in
-            member.decl.as(EnumDeclSyntax.self)?.name.text ?? member.decl.as(StructDeclSyntax.self)?.name.text
-        })
         // The data it holds, by name, to tell what each method changes.
-        let held = Set(actor.members.members.flatMap { member in
-            member.decl.as(VariableDeclSyntax.self)?.bindings.map(\.pattern.trimmedDescription) ?? []
-        })
+        let held = Set(
+            actor.members.members.flatMap { member in
+                member.decl.as(VariableDeclSyntax.self)?.bindings.map(\.pattern.trimmedDescription) ?? []
+            })
         var fields: [Field] = []
         var messages: [Message] = []
         var events: [Message] = []
@@ -332,28 +344,34 @@ public struct ObjectShape: Sendable, Equatable {
                     // What it starts as is its default or what `init()` sets, which the check
                     // makes sure of, as Swift's definite initialization does.
                     let name = binding.pattern.trimmedDescription
-                    fields.append(
-                        Field(
-                            name: name, constant: constant, kind: binding.typeAnnotation.map { ValueKind($0.type, declared: types) },
-                            type: binding.typeAnnotation?.type.trimmedDescription))
+                    var field = Field(
+                        name: name, constant: constant, type: binding.typeAnnotation?.type.trimmedDescription)
+                    field.published = !variable.modifiers.contains { modifier in
+                        [.keyword(.private), .keyword(.fileprivate)].contains(modifier.name.tokenKind)
+                            && modifier.detail == nil
+                    }
+                    fields.append(field)
                     if Self.carries(variable.attributes, RuntimeMacros.subscribed) { subscriptions.append(name) }
                 }
             } else if let function = member.decl.as(FunctionDeclSyntax.self), !function.name.text.hasPrefix("_"),
-                !function.modifiers.contains(where: { $0.name.tokenKind == .keyword(.private) || $0.name.tokenKind == .keyword(.fileprivate) })
+                !function.modifiers.contains(where: {
+                    $0.name.tokenKind == .keyword(.private) || $0.name.tokenKind == .keyword(.fileprivate)
+                })
             {
                 let parameters = function.signature.parameterClause.parameters.map { parameter in
                     Parameter(
                         label: parameter.firstName.tokenKind == .wildcard ? nil : parameter.firstName.text,
                         name: (parameter.secondName ?? parameter.firstName).text,
-                        kind: ValueKind(parameter.type, declared: types),
                         type: parameter.type.trimmedDescription)
                 }
-                // Any type: the reply itself is checked to be data when it's given.
-                let reply = function.signature.returnClause.map { ValueKind($0.type, declared: types) }
-                var message = Message(name: function.name.text, parameters: parameters, reply: reply)
+                var message = Message(name: function.name.text, parameters: parameters)
                 message.replyType = function.signature.returnClause?.type.trimmedDescription
+                // Until the checker resolves it, a reply is known by its type as written.
+                message.replySchema = message.replyType.map { [Message.swiftTypeKey: .string($0)] }
                 let specifiers = function.signature.effectSpecifiers
-                message.effects = [specifiers?.asyncSpecifier != nil ? .async : nil, specifiers?.throwsClause != nil ? .throws : nil].compactMap { $0 }
+                message.effects = [
+                    specifiers?.asyncSpecifier != nil ? .async : nil, specifiers?.throwsClause != nil ? .throws : nil,
+                ].compactMap { $0 }
                 // What it says it does, or else what its code shows it does.
                 // An event is announced by calling it, from its own code: it isn't a message.
                 if Self.carries(function.attributes, RuntimeMacros.event) {
@@ -362,21 +380,16 @@ public struct ObjectShape: Sendable, Equatable {
                     continue
                 }
                 message.summary = Self.summary(of: function) ?? Self.effects(of: function, holding: held)
-                for parameter in parameters where parameter.kind == .object {
-                    message.calls[parameter.name] = Self.calls(on: parameter.name, in: function)
+                // What it calls on each parameter: what an object it's given is known by.
+                for parameter in parameters {
+                    let called = Self.calls(on: parameter.name, in: function)
+                    if !called.isEmpty { message.calls[parameter.name] = called }
                 }
                 messages.append(message)
             }
         }
-        // The runtime makes the object, and another object's code makes one with `Type()`: nothing
-        // passes an `init` arguments.
-        if let initializer = actor.members.members.compactMap({ $0.decl.as(InitializerDeclSyntax.self) })
-            .first(where: { !$0.signature.parameterClause.parameters.isEmpty })
-        {
-            throw CodeProblem(
-                line: line(initializer), span: "init\(initializer.signature.trimmedDescription)",
-                "needs no parameters: the runtime makes the object", phrasing: .statement)
-        }
+        // How its stored properties get their values, as an object's do.
+        if let problem = StartingValues.problems(in: code, type: type).first { throw problem }
         self.type = type
         self.fields = fields
         self.messages = messages

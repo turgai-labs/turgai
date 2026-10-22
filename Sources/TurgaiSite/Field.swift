@@ -31,7 +31,10 @@ struct Node {
     let tone: Tone
     let label: Side
 
-    init(_ name: String, note: String? = nil, at x: Double, _ y: Double, radius: Double = 14, tone: Tone = .ink, label: Side = .trailing) {
+    init(
+        _ name: String, note: String? = nil, at x: Double, _ y: Double, radius: Double = 14, tone: Tone = .ink,
+        label: Side = .trailing
+    ) {
         self.name = name
         self.note = note
         self.at = Point(x: x, y: y)
@@ -51,7 +54,8 @@ struct Pulse {
 
     /// The same curve the link is drawn with.
     var control: Point {
-        let dx = to.x - from.x, dy = to.y - from.y
+        let dx = to.x - from.x
+        let dy = to.y - from.y
         return Point(x: (from.x + to.x) / 2 - dy * 0.18, y: (from.y + to.y) / 2 + dx * 0.18)
     }
 
@@ -62,7 +66,9 @@ struct Pulse {
     var keyframes: String {
         let steps = 12
         let stops = (0...steps).map { step -> String in
-            let t = Double(step) / Double(steps), u = 1 - t, c = control
+            let t = Double(step) / Double(steps)
+            let u = 1 - t
+            let c = control
             let x = u * u * from.x + 2 * u * t * c.x + t * t * to.x
             let y = u * u * from.y + 2 * u * t * c.y + t * t * to.y
             return String(format: "%.1f%% { translate: %.2f%% %.2f%%; }", t * 100, (x + 60) / 11.2, (y + 60) / 11.2)
@@ -72,7 +78,8 @@ struct Pulse {
 
     var html: String {
         let lead = (from.x + to.y).truncatingRemainder(dividingBy: 1.7)
-        return "<div class=\"pulse-way motion\(joining ? " joins-fade" : "")\"><div class=\"pulse \(name)\" style=\"animation-delay:-\(lead.rounded1)s\"></div></div>"
+        return
+            "<div class=\"pulse-way motion\(joining ? " joins-fade" : "")\"><div class=\"pulse \(name)\" style=\"animation-delay:-\(lead.rounded1)s\"></div></div>"
     }
 }
 
@@ -133,10 +140,14 @@ struct Field {
             switch self {
             case .app: Node("your app", at: 500, 550, radius: 22, label: .above)
             // two agents, each a part like any other, each on its own model
-            case .concierge: Node("concierge", note: "agent · small model", at: 320, 440, radius: 20, tone: .message, label: .leading)
-            case .planner: Node("planner", note: "agent · big model", at: 680, 410, radius: 20, tone: .message, label: .trailing)
+            case .concierge:
+                Node(
+                    "concierge", note: "agent · small model", at: 320, 440, radius: 20, tone: .message, label: .leading)
+            case .planner:
+                Node("planner", note: "agent · big model", at: 680, 410, radius: 20, tone: .message, label: .trailing)
             case .traveller: Node("traveller", note: "Telegram", at: 200, 270, label: .above)
-            case .tripDesk: Node("trip desk", note: "approval rule", at: 730, 710, radius: 20, tone: .life, label: .trailing)
+            case .tripDesk:
+                Node("trip desk", note: "approval rule", at: 730, 710, radius: 20, tone: .life, label: .trailing)
             case .owner: Node("Anna", note: "owner", at: 880, 550, label: .above)
             case .groupTours: Node("group tours", note: "by the planner", at: 560, 890, tone: .life, label: .below)
             case .flights: Node("flights", note: "supplier API", at: 190, 690, label: .leading)
@@ -182,7 +193,9 @@ struct Field {
         ]
         let drawn = boxes.map { box in
             "<rect class=\"machine\" x=\"\(box.from.x)\" y=\"\(box.from.y)\" width=\"\(box.to.x - box.from.x)\" height=\"\(box.to.y - box.from.y)\" rx=\"36\"/>"
-                + text(box.name, at: Point(x: box.from.x + 24, y: box.from.y - 16), anchor: "start", style: "machine-label")
+                + text(
+                    box.name, at: Point(x: box.from.x + 24, y: box.from.y - 16), anchor: "start", style: "machine-label"
+                )
         }.joined()
         return "<g class=\"joins\">\(drawn)</g>"
     }
@@ -196,16 +209,21 @@ struct Field {
         let systems = Node("your systems", note: "what it can do", at: 830, 210, label: .leading)
         let rules = Node("your rules", note: "what it may do", at: 170, 780, tone: .life)
         let people = Node("people", note: "who it talks to", at: 830, 780, label: .leading)
-        let links = [(concierge, people), (concierge, memory), (concierge, planner), (planner, systems), (planner, rules), (planner, memory)]
+        let links = [
+            (concierge, people), (concierge, memory), (concierge, planner), (planner, systems), (planner, rules),
+            (planner, memory),
+        ]
         // the two agents start on different models and switch out of step
         func swapping(_ agent: Node, startingAt first: Int, after delay: Double) -> String {
             let order = Array(models[first...] + models[..<first])
             return cycle(order, for: agent, every: 2.4, after: delay) + switching(agent, every: 2.4, after: delay)
         }
         // everything inside one boundary: it all runs on Dopline's own server, and only models plug in from outside
-        let server = "<rect class=\"machine\" x=\"90\" y=\"140\" width=\"820\" height=\"720\" rx=\"36\"/>"
+        let server =
+            "<rect class=\"machine\" x=\"90\" y=\"140\" width=\"820\" height=\"720\" rx=\"36\"/>"
             + text("dopline’s server", at: Point(x: 114, y: 124), anchor: "start", style: "machine-label")
-        let art = server + links.map { link($0.0, $0.1) }.joined() + [memory, systems, rules, people].map(node).joined()
+        let art =
+            server + links.map { link($0.0, $0.1) }.joined() + [memory, systems, rules, people].map(node).joined()
             + [concierge, planner].map { node($0, .hidden) + still(note("any model", for: $0)) }.joined()
             + motion(swapping(concierge, startingAt: 1, after: 0) + swapping(planner, startingAt: 2, after: 1.2))
         return Drawing(art: art, pulses: links.map { Pulse(from: $0.0.at, to: $0.1.at, joining: false) })
@@ -242,10 +260,13 @@ struct Field {
         }
         let present = Self.links.filter { Self.chapter(of: $0) <= chapter }
         let links = present.map { link in eased(self.link(link.0.node, link.1.node), joining: Self.chapter(of: link)) }
-        let pulses = present.map { Pulse(from: $0.0.node.at, to: $0.1.node.at, joining: Self.chapter(of: $0) == chapter) }
+        let pulses = present.map {
+            Pulse(from: $0.0.node.at, to: $0.1.node.at, joining: Self.chapter(of: $0) == chapter)
+        }
         // parts that restart drop their usual note here, so "stopped" and "back" have the spot to themselves
         let parts = Part.allCases.filter { $0.joins <= chapter }.map { part in
-            let drawn = restartingParts.contains(part)
+            let drawn =
+                restartingParts.contains(part)
                 ? node(part.node, .hidden) + still(notes(of: part.node))
                 : node(part.node)
             return eased(drawn, joining: part.joins)
@@ -265,14 +286,18 @@ struct Field {
     private var constellation: String {
         var seed: UInt64 = 7
         func random() -> Double {
-            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
             return Double(seed >> 11) / Double(1 << 53)
         }
         let points = birdPoints.map { Point(x: $0.x * 1000, y: $0.y * 1000) }
-        let nearest = points.indices.flatMap { a in points.indices.filter { $0 > a }.map { b in (a, b, distance(points[a], points[b])) } }
+        let nearest = points.indices.flatMap { a in
+            points.indices.filter { $0 > a }.map { b in (a, b, distance(points[a], points[b])) }
+        }
         let shortest = nearest.map(\.2).min() ?? 0
         let lines = nearest.filter { $0.2 < shortest * 1.25 }
-            .map { "M\(points[$0.0].x.rounded1) \(points[$0.0].y.rounded1)L\(points[$0.1].x.rounded1) \(points[$0.1].y.rounded1)" }
+            .map {
+                "M\(points[$0.0].x.rounded1) \(points[$0.0].y.rounded1)L\(points[$0.1].x.rounded1) \(points[$0.1].y.rounded1)"
+            }
             .joined()
         let stars = points.map { point in
             let from = Point(x: random() * 1120 - 60, y: random() * 1120 - 60)
@@ -287,7 +312,7 @@ struct Field {
     private var dust: String {
         var seed: UInt64 = 42
         func random() -> Double {
-            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
             return Double(seed >> 11) / Double(1 << 53)
         }
         let stars = (0..<46).map { _ in
@@ -309,21 +334,29 @@ struct Field {
         let timing = "dur=\"\(period)s\" begin=\"\(begin)s\" repeatCount=\"indefinite\""
         let down = "values=\"0;1;1;0;0\" keyTimes=\"0;0.025;0.1375;0.175;1\""
         let notePoint = notePosition(for: member)
-        return "<circle class=\"hole\" cx=\"\(at.x)\" cy=\"\(at.y)\" r=\"\(r + 2)\" opacity=\"0\"><animate attributeName=\"opacity\" \(down) \(timing)/></circle>"
+        return
+            "<circle class=\"hole\" cx=\"\(at.x)\" cy=\"\(at.y)\" r=\"\(r + 2)\" opacity=\"0\"><animate attributeName=\"opacity\" \(down) \(timing)/></circle>"
             + "<circle class=\"outline t-\(member.tone.rawValue)\" cx=\"\(at.x)\" cy=\"\(at.y)\" r=\"\(r)\" opacity=\"0\"><animate attributeName=\"opacity\" \(down) \(timing)/></circle>"
             + "<circle class=\"ring\" cx=\"\(at.x)\" cy=\"\(at.y)\" r=\"\(r + 4)\" opacity=\"0\">"
             + "<animate attributeName=\"r\" values=\"\(r + 4);\(r + 4);\(r + 34);\(r + 34)\" keyTimes=\"0;0.1375;0.26;1\" \(timing)/>"
             + "<animate attributeName=\"opacity\" values=\"0;0;0.8;0;0\" keyTimes=\"0;0.137;0.1375;0.26;1\" \(timing)/></circle>"
-            + discrete(text("stopped", at: notePoint.0, anchor: notePoint.1, style: "note"), values: "0;1;0", keyTimes: "0;0.025;0.1375", timing: timing)
-            + discrete(text("back · state restored", at: notePoint.0, anchor: notePoint.1, style: "note"), values: "0;1;0", keyTimes: "0;0.1375;0.3", timing: timing)
+            + discrete(
+                text("stopped", at: notePoint.0, anchor: notePoint.1, style: "note"), values: "0;1;0",
+                keyTimes: "0;0.025;0.1375", timing: timing)
+            + discrete(
+                text("back · state restored", at: notePoint.0, anchor: notePoint.1, style: "note"), values: "0;1;0",
+                keyTimes: "0;0.1375;0.3", timing: timing)
     }
 
     private func node(_ node: Node) -> String { self.node(node, .shown) }
 
     private func node(_ node: Node, _ notes: Notes) -> String {
         let label = labelPosition(for: node)
-        return "<circle class=\"t-\(node.tone.rawValue)\" cx=\"\(node.at.x)\" cy=\"\(node.at.y)\" r=\"\(node.radius)\"/>"
-            + (node.tone == .life ? "<circle class=\"glow t-life\" cx=\"\(node.at.x)\" cy=\"\(node.at.y)\" r=\"\(node.radius * 2.6)\"/>" : "")
+        return
+            "<circle class=\"t-\(node.tone.rawValue)\" cx=\"\(node.at.x)\" cy=\"\(node.at.y)\" r=\"\(node.radius)\"/>"
+            + (node.tone == .life
+                ? "<circle class=\"glow t-life\" cx=\"\(node.at.x)\" cy=\"\(node.at.y)\" r=\"\(node.radius * 2.6)\"/>"
+                : "")
             + text(node.name, at: label.0, anchor: label.1, style: "label")
             + (notes == .shown ? self.notes(of: node) : "")
     }
@@ -378,7 +411,9 @@ struct Field {
     /// Hidden when the visitor prefers reduced motion.
     private func motion(_ content: String) -> String { "<g class=\"motion\">\(content)</g>" }
 
-    private func distance(_ a: Point, _ b: Point) -> Double { ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)).squareRoot() }
+    private func distance(_ a: Point, _ b: Point) -> Double {
+        ((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y)).squareRoot()
+    }
 }
 
 extension Double {

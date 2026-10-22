@@ -66,7 +66,10 @@ public struct UserPromptTool: HailCore.Tool {
         )
     }
 
-    public func run(_ input: GeneratedContent, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<CoordinationEffect>) async throws -> CallReturn {
+    public func run(
+        _ input: GeneratedContent, in scope: borrowing ToolScope<Never>,
+        token: borrowing EffectToken<CoordinationEffect>
+    ) async throws -> CallReturn {
         _ = token
         if tool.approval == .always {
             let decision = try await approval.decide(

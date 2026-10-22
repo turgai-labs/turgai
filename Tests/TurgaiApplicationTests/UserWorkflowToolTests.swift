@@ -117,10 +117,10 @@ struct UserWorkflowToolTests {
         )
         let capture = WorkflowCapture()
 
-        let output = try await withDependencies({ dependencies in
+        let output = try await withDependencies { dependencies in
             dependencies.network = capture.networkDependency()
             dependencies.process = capture.processDependency()
-        }) {
+        } operation: {
             try await tool.runOutput(
                 input: workflowArguments(#"{"city":"Berlin"}"#),
                 authority: FullAuthority()
@@ -166,9 +166,9 @@ struct UserWorkflowToolTests {
             .granting(for: NetworkEffect.self) { _ in .denied("network closed") }
 
         await #expect(throws: EffectDenied.self) {
-            try await withDependencies({ dependencies in
+            try await withDependencies { dependencies in
                 dependencies.network = capture.networkDependency()
-            }) {
+            } operation: {
                 try await tool.runOutput(
                     input: workflowArguments(#"{"city":"Berlin"}"#),
                     authority: authority
@@ -199,9 +199,9 @@ struct UserWorkflowToolTests {
         )
         let capture = WorkflowCapture()
         let input = workflowArguments(#"{"city":"Berlin"}"#)
-        _ = try await withDependencies({ dependencies in
+        _ = try await withDependencies { dependencies in
             dependencies.process = capture.processDependency()
-        }) {
+        } operation: {
             try await tool.runOutput(input: input, authority: FullAuthority())
         }
         let request = try #require(capture.processRequests.withLock { $0.first })

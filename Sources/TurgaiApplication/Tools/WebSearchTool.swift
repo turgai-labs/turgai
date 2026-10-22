@@ -529,7 +529,9 @@ public struct WebSearchTool {
         }
     }
 
-    public func run(_ input: WebSearchToolInput, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<NetworkEffect>) async throws -> CallReturn {
+    public func run(
+        _ input: WebSearchToolInput, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<NetworkEffect>
+    ) async throws -> CallReturn {
         switch input.action {
         case .search:
             let query = try validatedQuery(input.query)

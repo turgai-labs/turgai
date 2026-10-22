@@ -1,9 +1,9 @@
+import AnyLanguageModel
 import DiscoverableActors
 import DistributedCluster
 import EventSourcing
 import Foundation
 import Hail
-import AnyLanguageModel
 import TurgaiApplication
 import TurgaiHail
 import TurgaiObjects
@@ -19,8 +19,11 @@ struct EvalNode: Sendable {
     let workspace: URL
     let objectCatalog: ObjectCatalog
 
-    static func start(model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil) async throws -> EvalNode {
-        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("turgai-eval-\(UUID().uuidString)")
+    static func start(
+        model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil
+    ) async throws -> EvalNode {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "turgai-eval-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         let store = MemoryEventStore()
         // One catalog for the node, following the objects from when it starts, as the app keeps
@@ -29,7 +32,8 @@ struct EvalNode: Sendable {
         let catalog = Catalog()
         let configuration = try Self.configuration(for: model)
         let endpoints = AgentModelEndpointFactory(
-            credentials: AgentCredentialStore(files: try FileClient(directory: workspace.appendingPathComponent("credentials"))),
+            credentials: AgentCredentialStore(
+                files: try FileClient(directory: workspace.appendingPathComponent("credentials"))),
             transports: ModelTransports(limits: RequestLimitStore.defaultLimits))
         let runtime = HailRuntimeConfiguration(temperature: temperature, contextWindow: configuration.contextWindow)
         let plugin = try runtime.makeAgentRuntimePlugin(
@@ -51,12 +55,15 @@ struct EvalNode: Sendable {
             },
             turnToolsProvider: { context, actorSystem in
                 // An object's Swift is written by the same model, in a session of its own.
-                let writing = try await endpoints.endpoint(model: model, configuration: configuration, temperature: runtime.temperature)
+                let writing = try await endpoints.endpoint(
+                    model: model, configuration: configuration, temperature: runtime.temperature)
                 let session = ObjectSession(
                     actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: [.shared],
-                    writer: ObjectWriter(endpoint: writing, report: { FileHandle.standardError.write(Data($0.written.utf8)) }),
+                    writer: ObjectWriter(
+                        endpoint: writing, report: { FileHandle.standardError.write(Data($0.written.utf8)) }),
                     request: context.input.text)
-                let tools = try await ObjectTools(session: session).tools().filter { $0.name != "use_object" }
+                let tools =
+                    try await ObjectTools(session: session).tools().filter { $0.name != "use_object" }
                     + session.objectTools()
                 return TurnTools(tools: tools, pages: EvalPages(base: session, introduction: objectsPageDescription))
             },
@@ -131,12 +138,18 @@ private struct EvalDumpEndpoint: ModelEndpoint {
     where Input: Sendable, Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let entries = (try? encoder.encode(request.entries)).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
-        let schemas = (try? encoder.encode(tools.map(\.schema))).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
-        FileHandle.standardError.write(Data("\n=== EVAL REQUEST: TRANSCRIPT ===\n\(entries)\n=== EVAL REQUEST: TOOLS ===\n\(schemas)\n=== END EVAL REQUEST ===\n".utf8))
+        let entries =
+            (try? encoder.encode(request.entries)).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
+        let schemas =
+            (try? encoder.encode(tools.map(\.schema))).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
+        FileHandle.standardError.write(
+            Data(
+                "\n=== EVAL REQUEST: TRANSCRIPT ===\n\(entries)\n=== EVAL REQUEST: TOOLS ===\n\(schemas)\n=== END EVAL REQUEST ===\n"
+                    .utf8))
         // What the model generates, as it streams: its activity and tool calls as they come, and
         // what it had generated when it ended or failed, in full.
-        let events = base.stream(request: request, tools: tools, authority: authority, generating: generating, purpose: purpose)
+        let events = base.stream(
+            request: request, tools: tools, authority: authority, generating: generating, purpose: purpose)
         return AsyncStream { continuation in
             let task = Task {
                 var last = ""
@@ -146,8 +159,10 @@ private struct EvalDumpEndpoint: ModelEndpoint {
                     case .activity(let activity): write("=== EVAL ACTIVITY: \(activity)\n")
                     case .toolCall(let call): write("=== EVAL TOOL CALL: \(call)\n")
                     case .partialUpdated(let partial): last = String(describing: partial)
-                    case .generated(let output): write("=== EVAL GENERATED ===\n\(output)\n=== END EVAL GENERATED ===\n")
-                    case .failed(let error): write("=== EVAL FAILED: \(error)\n=== LAST PARTIAL ===\n\(last)\n=== END LAST PARTIAL ===\n")
+                    case .generated(let output):
+                        write("=== EVAL GENERATED ===\n\(output)\n=== END EVAL GENERATED ===\n")
+                    case .failed(let error):
+                        write("=== EVAL FAILED: \(error)\n=== LAST PARTIAL ===\n\(last)\n=== END LAST PARTIAL ===\n")
                     case .usage, .contextUsage: break
                     }
                     continuation.yield(event)
@@ -191,7 +206,7 @@ actor MemoryEventStore: EventStore {
                 event: try JSONDecoder().decode(Event.self, from: data))
         }
         return AsyncThrowingStream { continuation in
-            envelopes.forEach { continuation.yield($0) }
+            for envelope in envelopes { continuation.yield(envelope) }
             continuation.finish()
         }
     }

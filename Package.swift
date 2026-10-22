@@ -121,7 +121,7 @@ let package = Package(
             name: "TurgaiSite",
             dependencies: [
                 "TurgaiBrand",
-                .product(name: "Elementary", package: "elementary")
+                .product(name: "Elementary", package: "elementary"),
             ],
             resources: [
                 .process("Resources")

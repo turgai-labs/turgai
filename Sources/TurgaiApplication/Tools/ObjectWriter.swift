@@ -29,10 +29,10 @@ public struct ObjectWriter: Sendable {
     /// How the runtime runs an object's code, one fact to a line: what the writer has to know to
     /// write it, and nothing it would copy.
     public static let runtime = [
-        "The runtime makes the object with init(), which takes no parameters.",
+        "Its stored properties start from their default values.",
         "Stored properties are what it keeps; methods are what it can be asked to do.",
+        CodableValues.rule,
         "Only the actor goes in the file: code outside it never runs.",
-        "Other objects are reached by name.",
     ]
 
     /// Writes the actor `type` for `task`, starting from `current` code when it's changed, with
@@ -42,7 +42,8 @@ public struct ObjectWriter: Sendable {
     /// that explain an idea the code may need, each with its title.
     /// Each answer goes to `save`, which says what's wrong with it, or `nil` when it's saved.
     public func write(
-        type: String, task: String, current: String?, failure: String? = nil, others: [String] = [], values: [String] = [],
+        type: String, task: String, current: String?, failure: String? = nil, others: [String] = [],
+        values: [String] = [],
         request: String? = nil,
         runtime: [String] = ObjectWriter.runtime, explained: [String] = [RuntimeMacros.declared],
         isolation: isolated (any Actor)? = #isolation,
@@ -52,11 +53,13 @@ public struct ObjectWriter: Sendable {
         var parts: [String] = []
         if current == nil {
             parts.append(
-                (["Write one Swift actor, `actor \(type)`, with only the standard library."] + (request.map { ["The request: \($0)"] } ?? []) + ["Its part: \(task)"])
+                (["Write one Swift actor, `actor \(type)`, with only the standard library."]
+                    + (request.map { ["The request: \($0)"] } ?? []) + ["Its part: \(task)"])
                     .joined(separator: "\n"))
         } else {
             parts.append(
-                (["Change the Swift actor `actor \(type)`, with only the standard library."] + (request.map { ["The request: \($0)"] } ?? []) + ["The change: \(task)"]
+                (["Change the Swift actor `actor \(type)`, with only the standard library."]
+                    + (request.map { ["The request: \($0)"] } ?? []) + ["The change: \(task)"]
                     + (failure.map { ["It last failed: \($0)"] } ?? []))
                     .joined(separator: "\n"))
         }
@@ -110,9 +113,13 @@ public struct ObjectWriter: Sendable {
     /// The code without the Markdown fence a chat model wraps it in, which is never Swift.
     static func unfenced(_ text: String) -> String {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }) else { return text }
+        guard let start = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }) else {
+            return text
+        }
         lines = Array(lines[(start + 1)...])
-        if let end = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }) { lines = Array(lines[..<end]) }
+        if let end = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("```") }) {
+            lines = Array(lines[..<end])
+        }
         return lines.joined(separator: "\n")
     }
 }

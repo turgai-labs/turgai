@@ -113,9 +113,9 @@ struct UserProcessToolTests {
         let (tool, _) = try makeProcessTool()
         let input = arguments(#"{"value":"hello"}"#)
         let capture = ProcessCapture()
-        let output = try await withDependencies({ dependencies in
+        let output = try await withDependencies { dependencies in
             dependencies.process = capture.dependency()
-        }) {
+        } operation: {
             try await tool.runOutput(input: input, authority: FullAuthority())
         }
 

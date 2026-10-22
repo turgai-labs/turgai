@@ -15,37 +15,37 @@ import Yams
 /// Discovery's DiscoveryJSON; AnyLanguageModel has its own `JSONValue`.
 typealias DiscoveryJSON = DiscoverableActors.JSONValue
 
-/// The objects a model has met during one turn, behind readable handles such as
-/// `mac` or `reminder-list-2`.
+/// The objects a model has met during one turn, each by its id: an object made by name by the id
+/// it was made with, a built-in object by its type, the one of its kind here, and an object an
+/// action returned by the id the system has for it, which holds while it lives. No id is made up.
 ///
-/// The model never sees actor IDs, so it can only use objects it was given:
-/// the directory's roots and whatever their actions return. A handle points at
-/// one incarnation of an object; when that object stops, the model lists again
-/// and walks back to it.
+/// The model can only use objects it was given: the directory's and whatever their actions
+/// return.
 public actor ObjectSession {
     let actorSystem: ClusterSystem
     private var objectCatalog: ObjectCatalog?
     let scopes: [ObjectScope]
 
-    private var objects: [String: DiscoverableObject] = [:]
-    private var handles: [ClusterSystem.ActorID: String] = [:]
-    /// How many handles each kind of object has, to number the second one on.
-    private var kinds: [String: Int] = [:]
+    /// The objects met, by id.
+    private var objects: [ObjectID: DiscoverableObject] = [:]
+    /// The objects actions returned, by type, as written: what a tool of their type offers to
+    /// choose from.
+    private var returned: [ObjectTypeName: [ObjectID]] = [:]
     /// What the current result named, in order: its links are their tools.
     private var named: [Named] = []
-    /// The objects made here that this session has met, by handle.
-    private var made: [String: DynamicObject] = [:]
+    /// The objects made here that this session has met, by id.
+    private var made: [ObjectID: DynamicObject] = [:]
     /// What the last action's object printed handling it.
     private(set) var printed: [String] = []
 
     /// Something a result names, whose tools it links to.
     private enum Named: Equatable {
         /// A reference to an object: following it opens the object's first page.
-        case object(String)
+        case object(ObjectID)
         /// An open object's contents: its actions and current values, and removing it.
-        case objectContents(String)
+        case objectContents(ObjectID)
         /// One action of an object, such as the shop's `startShift`.
-        case action(String, String)
+        case action(ObjectID, String)
     }
 
     /// Writes an object's Swift from what it should do, in a session of its own.
@@ -73,8 +73,8 @@ public actor ObjectSession {
         .array(
             try await entries().map { entry in
                 [
-                    "handle": .string(handle(for: entry.object, titled: entry.title)),
-                    "title": .string(entry.title),
+                    "object_id": .string(listed(entry).description),
+                    "type": .string(entry.type),
                     "description": entry.description.map(DiscoveryJSON.string) ?? .null,
                     "actions": .array(entry.actions.map(DiscoveryJSON.string)),
                     "events": .array(entry.events.map(DiscoveryJSON.string)),
@@ -100,16 +100,18 @@ public actor ObjectSession {
                 actions = ""
             }
             return ObjectSearchIndex.Document(
-                handle: text(entry["handle"]),
-                title: text(entry["title"]),
+                handle: text(entry["object_id"]),
+                title: text(entry["type"]),
                 actions: actions,
                 description: text(entry["description"])
             )
         }
         let ranked = ObjectSearchIndex(documents).search(query, limit: limit).compactMap { match in
-            entries.first { text($0["handle"]) == match.handle }
+            entries.first { text($0["object_id"]) == match.handle }
         }
-        for entry in ranked { if case .string(let handle)? = entry["handle"] { link(.object(handle)) } }
+        for entry in ranked {
+            if case .string(let written)? = entry["object_id"] { link(.object(try await id(written: written))) }
+        }
         return .array(Array(ranked))
     }
 
@@ -117,67 +119,71 @@ public actor ObjectSession {
     /// agent's owner, then the others. What one holds and takes is its own tool, a call away.
     func listMade() async throws -> String {
         let yours = try await runtimeObjects().sorted()
-        let others = try await entries().map { handle(for: $0.object, titled: $0.title) }.filter { !yours.contains($0) }.sorted()
+        let others = try await entries().map { listed($0) }.filter { !yours.contains($0) }.sorted()
         for handle in yours + others { link(.object(handle)) }
         var lines: [String] = []
-        if !others.isEmpty { lines.append("Objects: " + others.joined(separator: ", ") + ".") }
+        if !others.isEmpty { lines.append("Objects: " + others.map(\.description).joined(separator: ", ") + ".") }
         lines.append(
             yours.isEmpty
                 ? "None made for you yet: create_object makes one."
-                : "Made for you: " + yours.joined(separator: ", ") + ".")
+                : "Made for you: " + yours.map(\.description).joined(separator: ", ") + ".")
         return lines.joined(separator: "\n")
     }
 
     /// Your objects, to choose from.
-    func yourObjects() async throws -> [String] {
+    func yourObjects() async throws -> [ObjectID] {
         try await runtimeObjects().sorted()
     }
 
-    /// The objects made in this session's scopes and out in the runtime, by handle.
-    private func runtimeObjects() async throws -> [String] {
-        // Made here a moment ago, before the runtime lists it, or listed by the runtime.
-        var out = Array(made.values)
+    /// The objects this session's scopes hold, by handle.
+    private func runtimeObjects() async throws -> [ObjectID] {
+        var out: [DynamicObject] = []
         for scope in scopes {
-            out += await actorSystem.receptionist.lookup(scope.madeObjectsKey)
+            let objects = try await DynamicObjects.resolve(on: actorSystem, scope: scope)
+            for entry in try await objects.held() {
+                guard let identity = try await objects.identity(of: entry.object.id) else { continue }
+                out.append(try await objects.held(identity))
+            }
         }
         return try await names(of: out)
     }
 
-    /// The handles of `objects`, once each, sorted, as they'll be called by this session.
-    private func names(of objects: [DynamicObject]) async throws -> [String] {
-        var seen: Set<ClusterSystem.ActorID> = []
-        var names: [String] = []
-        for object in objects where seen.insert(object.id).inserted {
+    /// The ids of `objects`, once each, sorted.
+    private func names(of objects: [DynamicObject]) async throws -> [ObjectID] {
+        var names: Set<ObjectID> = []
+        for object in objects {
             let discoverable = try DiscoverableObject.resolve(id: object.id, using: actorSystem)
             guard let description = try? await discoverable.describe() else { continue }
-            let handle = handle(for: discoverable, titled: description.title)
-            made[handle] = object
-            names.append(handle)
+            let id = id(of: discoverable, type: description.type)
+            made[id] = object
+            names.insert(id)
         }
         return names.sorted()
     }
 
     /// An object's properties and actions, with actor references shown as handles.
-    func describe(_ handle: String) async throws -> DiscoveryJSON {
+    func describe(_ handle: ObjectID) async throws -> DiscoveryJSON {
         let description = try await described(handle)
         return Self.presentingReferences(try DiscoveryJSON(encoding: description))
     }
 
     /// Runs an action. The Mac's objects are guarded by macOS's own permissions,
     /// which ask the user the first time an app is used; Turgai doesn't ask again.
-    func invoke(_ handle: String, action name: String, arguments text: String?) async throws -> DiscoveryJSON {
+    func invoke(_ handle: ObjectID, action name: String, arguments text: String?) async throws -> DiscoveryJSON {
         do {
             let result = try await perform(handle, action: name, arguments: text)
             actorSystem.log.info(
                 "Object call",
-                metadata: ["handle": .string(handle), "action": .string(name), "arguments": .string(text ?? "")]
+                metadata: [
+                    "object_id": .string(handle.description), "action": .string(name), "arguments": .string(text ?? ""),
+                ]
             )
             return result
         } catch {
             actorSystem.log.info(
                 "Object call failed",
                 metadata: [
-                    "handle": .string(handle), "action": .string(name), "arguments": .string(text ?? ""),
+                    "object_id": .string(handle.description), "action": .string(name), "arguments": .string(text ?? ""),
                     "error": .string(String(describing: error)),
                 ]
             )
@@ -186,20 +192,68 @@ public actor ObjectSession {
     }
 
     /// What an object says it is and does.
-    func described(_ handle: String) async throws -> ObjectDescription {
+    func described(_ handle: ObjectID) async throws -> ObjectDescription {
         try await call(handle) { try await $0.describe() }
     }
 
-    private func perform(_ handle: String, action name: String, arguments text: String?) async throws -> DiscoveryJSON {
+    // MARK: Contracts
+
+    /// Each type's contract, read from the description it was read from: read again when that
+    /// changes, as code changing does.
+    private var contracts: [ObjectTypeName: (description: ObjectDescription, contract: ObjectContract)] = [:]
+
+    /// The contract of what `description` describes.
+    private func contract(of description: ObjectDescription) -> ObjectContract? {
+        let type = ObjectTypeName(rawValue: description.type)
+        if let read = contracts[type], read.description == description { return read.contract }
+        guard let contract = try? ObjectContract(description) else { return nil }
+        contracts[type] = (description, contract)
+        return contract
+    }
+
+    /// The objects here conforming to `name`, by id, in order: what an argument of `any` of it
+    /// chooses from. Its requirements are those the type declaring it declares; who conforms is
+    /// what each takes, made here or built in.
+    func conforming(to name: ObjectProtocolName) async -> [ObjectID] {
+        var handles = (try? await runtimeObjects()) ?? []
+        for entry in (try? await entries()) ?? [] {
+            let handle = listed(entry)
+            if !handles.contains(handle) { handles.append(handle) }
+        }
+        var contracts: [(handle: ObjectID, contract: ObjectContract)] = []
+        for handle in handles {
+            if let description = try? await described(handle), let contract = contract(of: description) {
+                contracts.append((handle, contract))
+            }
+        }
+        guard let requirements = contracts.lazy.compactMap({ $0.contract.protocols[name] }).first else { return [] }
+        return contracts.filter { $0.contract.conforms(to: requirements) }.map(\.handle).sorted()
+    }
+
+    /// For each protocol an action's arguments take an object conforming to, as code writes it,
+    /// `any Shop.RefundManager`, the objects here that do.
+    func choices(for input: DiscoveryJSON?) async -> [String: [ObjectID]] {
+        guard case .object(let properties)? = input?["properties"] else { return [:] }
+        var choices: [String: [ObjectID]] = [:]
+        for property in properties.values {
+            guard let written = property.swiftType, written.hasPrefix("any "), choices[written] == nil else { continue }
+            choices[written] = await conforming(to: ObjectProtocolName(rawValue: String(written.dropFirst(4))))
+        }
+        return choices
+    }
+
+    private func perform(_ handle: ObjectID, action name: String, arguments text: String?) async throws -> DiscoveryJSON
+    {
         let description = try await described(handle)
         guard let action = description.actions[name] else {
-            throw ObjectToolError.unknownAction(name, on: handle, available: description.actions.keys.sorted())
+            throw ObjectToolError.unknownAction(
+                name, on: handle.description, available: description.actions.keys.sorted())
         }
         let given = try Self.arguments(text, schema: action.input)
         let missing = Self.missingArguments(given, schema: action.input)
         guard missing.isEmpty else {
             throw ObjectToolError.missingArguments(
-                "\(description.title).\(name)", missing: missing,
+                "\(description.type).\(name)", missing: missing,
                 unexpected: Self.unexpectedArguments(given, schema: action.input))
         }
         let arguments = try await translate(given, schema: action.input, reference: resolveHandle)
@@ -215,7 +269,7 @@ public actor ObjectSession {
             }
         } catch DiscoveryError.invalidArgument(let argument, let reason) {
             throw ObjectToolError.invalidArgument(
-                "\(description.title).\(name)", argument: argument,
+                "\(description.type).\(name)", argument: argument,
                 reason: Self.explanation(of: reason, for: argument, given: given, schema: action.input),
                 usage: action.description)
         }
@@ -223,32 +277,53 @@ public actor ObjectSession {
     }
 
     /// Reads a property, with actor references shown as handles.
-    func read(_ handle: String, property: String) async throws -> DiscoveryJSON {
+    func read(_ handle: ObjectID, property: String) async throws -> DiscoveryJSON {
         let description = try await described(handle)
         let value = try await call(handle) { try await $0.read(property: property) }
         return try await translate(value, schema: description.properties[property], reference: mintHandle)
     }
 
-    // MARK: Handles
+    // MARK: Ids
 
-    /// A handle named after the object's title, such as `reminder-list` for ReminderList or
-    /// `refund-manager` for "Refund manager", numbered from the second one on.
-    private func handle(for object: DiscoverableObject, titled title: String) -> String {
-        if let handle = handles[object.id] { return handle }
-        let kind = Self.kind(of: title)
-        let count = kinds[kind, default: 0] + 1
-        kinds[kind] = count
-        let handle = count == 1 ? kind : "\(kind)-\(count)"
-        objects[handle] = object
-        handles[object.id] = handle
-        return handle
+    /// The id `object`, of `type`, is shown by: a dynamic object's own, the one it was made with; a
+    /// built-in's type, the one of its kind checked in here; and otherwise the id the system has
+    /// for it, which an action returned, valid while it lives.
+    private func id(of object: DiscoverableObject, type: String) -> ObjectID {
+        let id: ObjectID
+        if let identity = DynamicObject.identity(of: object.id) {
+            id = .named(identity.rawValue)
+        } else if let listed = checkedIn[object.id] {
+            id = listed
+        } else {
+            id = object.id.virtualActorID.map(ObjectID.virtual) ?? .actor(object.id)
+            let typeName = ObjectTypeName(rawValue: type)
+            if !returned[typeName, default: []].contains(id) { returned[typeName, default: []].append(id) }
+        }
+        return showing(id, object)
     }
 
-    /// The object's kind in kebab case, such as `reminder-list`, from its actor name
-    /// (`ReminderList-b`): the cluster names an actor after its type, then a dash and a
-    /// unique suffix. Type names can't contain a dash, so the suffix starts at the first one.
-    static func kind(of title: String) -> String {
-        ObjectNames.handle(for: title)
+    /// `object` shown as `id`: how it's written, which reads back as it.
+    private func showing(_ id: ObjectID, _ object: DiscoverableObject) -> ObjectID {
+        objects[id] = object
+        return id
+    }
+
+    /// The id of an object listed here, as its entry has it.
+    private func listed(_ entry: ObjectEntry) -> ObjectID {
+        showing(entry.id, entry.object)
+    }
+
+    /// The objects listed in this session's scopes, as the catalog last listed them, by id.
+    private var checkedIn: [ClusterSystem.ActorID: ObjectID] = [:]
+
+    /// The type of the object an action returned with `id`, if one did.
+    private func returnedType(of id: ObjectID) -> ObjectTypeName? {
+        returned.first { $0.value.contains(id) }?.key
+    }
+
+    /// The objects of `type` actions returned: what its tools choose from.
+    private func returned(_ type: ObjectTypeName) -> [ObjectID] {
+        returned[type] ?? []
     }
 
     /// The roots this session can see, from the cluster receptionist, in the same
@@ -257,18 +332,32 @@ public actor ObjectSession {
     private func entries() async throws -> [ObjectEntry] {
         if objectCatalog == nil { objectCatalog = await ObjectCatalog(actorSystem: actorSystem) }
         guard let objectCatalog else { return [] }
-        return try await objectCatalog.entries(in: scopes)
+        let entries = try await objectCatalog.entries(in: scopes)
+        checkedIn = Dictionary(entries.map { ($0.object.id, $0.id) }) { first, _ in first }
+        return entries
     }
 
-    /// The object behind `handle`. A root's handle works without listing first, since
-    /// the model may know it from the turn's summary.
-    /// The object behind `handle`, ignoring case: handles are lowercase, and models often
-    /// capitalize names, such as `Ann` for `ann`.
-    private func object(_ handle: String) async throws -> DiscoverableObject {
-        let handle = handle.lowercased()
-        if let object = objects[handle] { return object }
-        for entry in try await entries() { _ = self.handle(for: entry.object, titled: entry.title) }
-        guard let object = objects[handle] else { throw ObjectToolError.unknownHandle(handle) }
+    /// The object with `id`. One of the directory's works without listing first, since the model
+    /// may know it from the turn's summary; a name's id is lowercase, and models often capitalize
+    /// names, such as `Ann` for `ann`.
+    /// The id of the object the model wrote `written` for: one it was shown, as it was written,
+    /// or the same with other capitals. Text becomes an id here, once, as it comes in.
+    func id(written: String) async throws -> ObjectID {
+        func met() -> ObjectID? {
+            objects.keys.first { $0.description == written }
+                ?? objects.keys.first { $0.description.lowercased() == written.lowercased() }
+        }
+        if let id = met() { return id }
+        for entry in try await entries() { _ = self.listed(entry) }
+        guard let id = met() else { throw ObjectToolError.unknownHandle(written) }
+        return id
+    }
+
+    /// The object met with `id`.
+    private func object(_ id: ObjectID) async throws -> DiscoverableObject {
+        if let object = objects[id] { return object }
+        for entry in try await entries() { _ = self.listed(entry) }
+        guard let object = objects[id] else { throw ObjectToolError.unknownHandle(id.description) }
         return object
     }
 
@@ -278,20 +367,27 @@ public actor ObjectSession {
     /// own, whose answer is the code, until it's saved. Code that's never saved makes nothing.
     func make(_ name: String, described task: String) async throws -> CallReturn {
         if let existing = try await madeObject(named: name) {
-            throw ObjectToolError.failed("`\(existing.handle)` already exists: change it with edit_object.")
+            let type = try await existing.object.source.type
+            throw ObjectToolError.failed(
+                DynamicObjectsError.exists(existing.handle.description, type: type).description)
         }
         guard let writer else { throw ObjectToolError.failed("Objects can't be written here.") }
         let type = Self.typeName(of: name)
-        var handle: String?
+        var handle: ObjectID?
         let others = await others(except: type)
         let outcome = try await writer.write(
-            type: type, task: task, current: nil, others: others.declarations, values: others.uses.valuesInWords, request: request
+            type: type, task: task, current: nil, others: others.declarations, values: others.uses.valuesInWords,
+            request: request
         ) { code in
             do {
                 let source = try Script(code: code, type: type, uses: others.uses)
                 let problems = await ScriptInstance.problems(in: source)
                 guard problems.isEmpty else { return problems.map { $0.written(in: code) }.joined(separator: "\n") }
-                if let made = handle { try await self.replace(made, with: source) } else { handle = try await self.create(name, described: task, spec: .new(source)) }
+                if let made = handle {
+                    try await self.replace(made, with: source)
+                } else {
+                    handle = try await self.create(name, described: task, spec: .new(source))
+                }
                 return nil
             } catch let problem as CodeProblem {
                 return problem.written(in: code)
@@ -305,12 +401,14 @@ public actor ObjectSession {
             throw ObjectToolError.failed("\(name) wasn't made: its code couldn't be written from this description.")
         }
         let shape = try? ObjectShape(try await dynamicObject(handle).source)
-        return landing("Saved \(handle): \(Self.contents(of: shape, now: try await currentValues(handle))).", on: .object(handle: handle))
+        return landing(
+            "Saved \(handle): \(Self.contents(of: shape, now: try await currentValues(handle))).",
+            on: .object(handle: handle))
     }
 
     /// Changes an object made here as `change` says: its Swift is rewritten in a session of its
     /// own, from its code now, until it's saved. A change that's never saved leaves it as it was.
-    func edit(_ handle: String, change: String) async throws -> CallReturn {
+    func edit(_ handle: ObjectID, change: String) async throws -> CallReturn {
         let object = try await dynamicObject(handle)
         guard let writer else { throw ObjectToolError.failed("Objects can't be written here.") }
         let current = try await object.source
@@ -333,11 +431,15 @@ public actor ObjectSession {
                 return Self.problem(error)
             }
         }
-        if case .failed = outcome { throw ObjectToolError.failed("\(handle) wasn't changed: the code for this change couldn't be written.") }
+        if case .failed = outcome {
+            throw ObjectToolError.failed("\(handle) wasn't changed: the code for this change couldn't be written.")
+        }
         let changed = try await object.source
         let after = try? ObjectShape(changed)
         let said = Self.changes(from: before, to: after, now: try await currentValues(handle))
-        return landing("Saved \(handle): \(said).\(Self.codeChanges(from: current.code, to: changed.code))", on: .object(handle: handle))
+        return landing(
+            "Saved \(handle): \(said).\(Self.codeChanges(from: current.code, to: changed.code))",
+            on: .object(handle: handle))
     }
 
     /// The objects that exist here but `type`, as code written here meets them: one spec, read
@@ -353,46 +455,69 @@ public actor ObjectSession {
 
     func others(except type: String) async -> Others {
         var handles = Set((try? await runtimeObjects()) ?? [])
-        for entry in (try? await entries()) ?? [] { handles.insert(handle(for: entry.object, titled: entry.title)) }
+        for entry in (try? await entries()) ?? [] { handles.insert(listed(entry)) }
         var objects: [Uses.Object] = []
-        var names: [String: String] = [:]
+        var existing: [ObjectIdentity: String] = [:]
         var summaries: [String: String] = [:]
         var descriptions: [String: ObjectDescription] = [:]
-        for handle in handles.sorted() where Self.typeName(of: handle) != type {
-            guard let description = try? await object(handle).describe() else { continue }
-            let typeName = Self.typeName(of: handle)
-            // What it publishes is read, never written. An object made here is only asked, through
-            // its functions; what it holds is its own.
-            objects.append(Uses.Object(type: typeName, description: description, publishes: (try? await madeObject(handle)) == nil))
-            names[Self.valueName(of: handle)] = typeName
+        for handle in handles.sorted() {
+            guard let description = try? await object(handle).describe(), description.type != type else { continue }
+            let typeName = description.type
+            // What it publishes is read, never written: what isn't `private`, as Swift reads another
+            // actor's property.
+            // Code reaches by id, `Type(id:)`, what has one: an object made by name, or a built-in one.
+            if case .named(let name) = handle { existing[ObjectIdentity(rawValue: name)] = typeName }
+            // One actor per type: every object of it is a constant of that type.
+            guard !objects.contains(where: { $0.type == typeName }) else { continue }
+            objects.append(Uses.Object(description: description, publishes: true))
             summaries[typeName] = Self.given(description.description)
             descriptions[typeName] = description
         }
-        // Kinds no object runs yet: what an object made with `Type()` will be, reached by no name.
-        for (kindType, description) in ((try? await making { try await $0.unmadeKinds() }) ?? [:]).sorted(by: { $0.key < $1.key })
-        where kindType != type && !objects.contains(where: { $0.type == kindType }) {
-            objects.append(Uses.Object(type: kindType, description: description, publishes: false))
-            summaries[kindType] = Self.given(description.description)
+        // Types no object is of yet: what an object made with `Type()` will be, reached by no name.
+        for (unmade, description) in ((try? await making { try await $0.unmadeTypes() }) ?? [:]).sorted(by: {
+            $0.key < $1.key
+        })
+        where unmade != type && !objects.contains(where: { $0.type == unmade }) {
+            objects.append(Uses.Object(description: description, publishes: true))
+            summaries[unmade] = Self.given(description.description)
         }
-        let interface = Uses.interface(of: objects)
-        var others = Others(uses: Uses(interface: interface, names: names))
+        // The object being written declares its own types: they aren't declared for it again.
+        let interface = Uses.interface(of: objects, except: type)
+        var others = Others(uses: Uses(interface: interface, objects: existing))
         // In words, from the spec itself.
         for actor in interface.actors(events: [RuntimeMacros.event]) {
-            let name = names.first { $0.value == actor.name }?.key ?? actor.name
-            var declaration = ["- \(name): \(actor.name)"]
+            // Each as the code that reaches it; a type no object is of yet, as the code that makes one.
+            let reached = others.uses.ids(of: actor.name).map { "\(actor.name)(id: \"\($0)\")" }
+            var declaration = ["- \(reached.isEmpty ? "\(actor.name)(id:)" : reached.joined(separator: ", "))"]
             if let summary = summaries[actor.name] { declaration.append("  \(summary).") }
             // Each with what its parameters are, as its object says, in words.
             let takes = actor.methods.sorted { $0.key < $1.key }.map { name, method in
-                ([Self.written(name, method)] + Self.parameterWords(descriptions[actor.name]?.actions[name]?.input)).joined(separator: "\n")
+                ([Self.written(name, method)] + Self.parameterWords(descriptions[actor.name]?.actions[name]?.input))
+                    .joined(separator: "\n")
             }
             if !takes.isEmpty { declaration.append("  Methods:\n" + takes.map { "    \($0)" }.joined(separator: "\n")) }
-            let publishes = actor.properties.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value) { get async throws }" }
+            let publishes = actor.properties.sorted { $0.key < $1.key }.map {
+                "\($0.key): \($0.value) { get async throws }"
+            }
             if !publishes.isEmpty {
                 declaration.append("  Properties:\n" + publishes.map { "    \($0)" }.joined(separator: "\n"))
             }
-            let announces = actor.events.sorted { $0.key < $1.key }.map { Self.written(DynamicObject.handler(for: $0.key), $0.value) }
+            // What an object conforming to each protocol it declares takes.
+            let protocols = actor.protocols.sorted { $0.key < $1.key }.map { name, requirements in
+                "\(name): "
+                    + requirements.sorted { $0.key < $1.key }.map { Self.written($0.key, $0.value) }.joined(
+                        separator: "; ")
+            }
+            if !protocols.isEmpty {
+                declaration.append("  Protocols:\n" + protocols.map { "    \($0)" }.joined(separator: "\n"))
+            }
+            let announces = actor.events.sorted { $0.key < $1.key }.map {
+                Self.written(DynamicObject.handler(for: $0.key), $0.value)
+            }
             if !announces.isEmpty {
-                declaration.append("  Events, each received by a function of this name:\n" + announces.map { "    \($0)" }.joined(separator: "\n"))
+                declaration.append(
+                    "  Events, each received by a function of this name:\n"
+                        + announces.map { "    \($0)" }.joined(separator: "\n"))
             }
             others.declarations.append(declaration.joined(separator: "\n"))
         }
@@ -402,8 +527,10 @@ public actor ObjectSession {
     /// What each parameter of an action is, one to a line under it, as its object says.
     static func parameterWords(_ input: DiscoveryJSON?) -> [String] {
         guard case .object(let properties)? = input?["properties"] else { return [] }
-        return Uses.parameters(of: input).compactMap { parameter in
-            guard case .string(let text)? = properties[parameter.name]?["description"], !text.isEmpty else { return nil }
+        return (Uses.parameters(of: input) ?? []).compactMap { parameter in
+            guard case .string(let text)? = properties[parameter.name]?["description"], !text.isEmpty else {
+                return nil
+            }
             return "      \(parameter.name): \(text)"
         }
     }
@@ -411,32 +538,30 @@ public actor ObjectSession {
     /// A method as Swift declares it: `show(page: Page)`, `approve(_ amount: Int) -> Bool`.
     static func written(_ name: String, _ method: DeclaredActor.Method) -> String {
         let parameters = method.parameters.map { parameter in
-            let called = parameter.label == parameter.name ? parameter.name : "\(parameter.label ?? "_") \(parameter.name)"
+            let called =
+                parameter.label == parameter.name ? parameter.name : "\(parameter.label ?? "_") \(parameter.name)"
             return "\(called): \(parameter.type)"
         }
         return "\(name)(\(parameters.joined(separator: ", ")))" + (method.effects.map { " \($0)" } ?? "")
             + (method.returns.map { " -> \($0)" } ?? "")
     }
 
-    /// How code names the object with `handle`: `trip-planner` is `tripPlanner`, as a Swift value.
-    static func valueName(of handle: String) -> String {
-        let words = handle.split(separator: "-")
-        guard let first = words.first else { return handle }
-        return first.lowercased() + words.dropFirst().map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
-    }
-
     /// An object made here, now running `source`, and every object sharing its code.
-    private func replace(_ handle: String, with source: Script) async throws {
+    private func replace(_ handle: ObjectID, with source: Script) async throws {
         let identity = try await dynamicObject(handle).identity
         try await making { try await $0.update(identity, source: source) }
-        try await catalogue(handle)
+        await changed()
     }
 
     /// What an edit changed, in a line: the messages it now takes or no longer takes, and the data
     /// it now holds, with its value, or no longer holds.
-    static func changes(from before: ObjectShape?, to after: ObjectShape?, now values: [String: DiscoveryJSON]) -> String {
-        let old = Set(before?.messages.map(\.written) ?? []), new = after?.messages.map(\.written) ?? []
-        let oldData = Set(before?.fields.map(\.name) ?? []), newData = after?.fields.map(\.name) ?? []
+    static func changes(from before: ObjectShape?, to after: ObjectShape?, now values: [String: DiscoveryJSON])
+        -> String
+    {
+        let old = Set(before?.messages.map(\.written) ?? [])
+        let new = after?.messages.map(\.written) ?? []
+        let oldData = Set(before?.fields.map(\.name) ?? [])
+        let newData = after?.fields.map(\.name) ?? []
         var parts: [String] = []
         let takes = new.filter { !old.contains($0) }
         if !takes.isEmpty { parts.append("it now takes " + takes.joined(separator: ", ")) }
@@ -456,13 +581,18 @@ public actor ObjectSession {
             .difference(from: before.split(separator: "\n", omittingEmptySubsequences: false))
         let lines = difference.compactMap { change -> String? in
             switch change {
-            case .remove(_, let line, _): line.trimmingCharacters(in: .whitespaces).isEmpty ? nil : "- " + line.trimmingCharacters(in: .whitespaces)
-            case .insert(_, let line, _): line.trimmingCharacters(in: .whitespaces).isEmpty ? nil : "+ " + line.trimmingCharacters(in: .whitespaces)
+            case .remove(_, let line, _):
+                line.trimmingCharacters(in: .whitespaces).isEmpty
+                    ? nil : "- " + line.trimmingCharacters(in: .whitespaces)
+            case .insert(_, let line, _):
+                line.trimmingCharacters(in: .whitespaces).isEmpty
+                    ? nil : "+ " + line.trimmingCharacters(in: .whitespaces)
             }
         }
         guard !lines.isEmpty else { return "\nIts code is the same as before." }
         let shown = lines.prefix(limit).joined(separator: "\n")
-        return "\nIts code changed:\n" + shown + (lines.count > limit ? "\n(\(lines.count - limit) more lines changed)" : "")
+        return "\nIts code changed:\n" + shown
+            + (lines.count > limit ? "\n(\(lines.count - limit) more lines changed)" : "")
     }
 
     /// What an object is, in a line, as an edit's changes are said: the data it holds, with its
@@ -487,50 +617,54 @@ public actor ObjectSession {
     /// The actor's type for an object's name, from its handle, so every spelling of one object
     /// meets there: `coffee counter`, `coffee-counter` and `coffeeCounter` are `CoffeeCounter`.
     static func typeName(of name: String) -> String {
-        let type = ObjectNames.handle(for: name).split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
-        return type.first?.isLetter == true ? type : "Object" + type
+        ObjectNames.typeName(of: name)
     }
 
     /// Makes an object, linking its tools; returns its handle.
-    private func create(_ name: String, described description: String? = nil, spec: Spec) async throws -> String {
-        let identity = try await making { try await $0.create(name: name, description: description, spec: spec) }
-        // The reference it checks in under, so searching for it later finds the same handle.
-        let object = try await DynamicObject.resolve(on: actorSystem, identity: identity).stableReference
+    private func create(_ name: String, described description: String? = nil, spec: Spec) async throws -> ObjectID {
+        let object = try await making { directory in
+            try await directory.held(try await directory.create(name: name, description: description, spec: spec))
+        }
         actorSystem.log.info("Created object", metadata: ["name": .string(name)])
-        let handle = handle(for: try DiscoverableObject.resolve(id: object.id, using: actorSystem), titled: name)
+        let handle = id(
+            of: try DiscoverableObject.resolve(id: object.id, using: actorSystem), type: try await object.source.type)
         made[handle] = object
-        try await catalogue(handle)
+        await changed()
         return handle
     }
 
-    /// Records an object made or changed here in the catalog right away, so searching finds it
-    /// as it is now, without waiting for the receptionist's listing.
-    private func catalogue(_ handle: String) async throws {
+    /// Tells whoever follows the catalog that this session made or changed an object, which its
+    /// scope's objects list as it is now.
+    private func changed() async {
         if objectCatalog == nil { objectCatalog = await ObjectCatalog(actorSystem: actorSystem) }
-        try await objectCatalog?.record(try object(handle), in: .shared)
-    }
-
-    /// Runs `body`, with a typing error as the model reads it.
-    static func reading<Result>(_ body: () throws -> Result) throws -> Result {
-        do {
-            return try body()
-        } catch let error as BehaviorError {
-            throw ObjectToolError.failed(error.description)
-        }
+        try? await objectCatalog?.changed()
     }
 
     /// An object's values now, all of them.
-    func values(_ handle: String) async throws -> String {
+    func values(_ handle: ObjectID) async throws -> String {
         try Self.text(.object(try await currentValues(handle)))
     }
 
-    /// An object's values now, by name, to say what an action changed.
-    func values(of handle: String) async throws -> [String: DiscoveryJSON] {
-        try await currentValues(handle)
+    /// An object's values now, by name, to say what an action changed: an object it holds is
+    /// shown with what that object holds, so a change inside it is a change.
+    func values(of handle: ObjectID) async throws -> [String: DiscoveryJSON] {
+        let description = try await described(handle)
+        var values: [String: DiscoveryJSON] = [:]
+        for name in description.properties.keys {
+            let value = try await call(handle) { try await $0.read(property: name) }
+            values[name] = try await translate(value, schema: description.properties[name]) { reference in
+                let minted = try await self.mintHandle(reference)
+                guard case .string(let written) = minted, let id = try? await self.id(written: written),
+                    let object = try? await self.object(id)
+                else { return minted }
+                return .string("`\(id)`, " + (try await Self.inside(object)))
+            }
+        }
+        return values
     }
 
     /// An object's values now, by name.
-    private func currentValues(_ handle: String) async throws -> [String: DiscoveryJSON] {
+    private func currentValues(_ handle: ObjectID) async throws -> [String: DiscoveryJSON] {
         let description = try await described(handle)
         var values: [String: DiscoveryJSON] = [:]
         for name in description.properties.keys {
@@ -540,29 +674,35 @@ public actor ObjectSession {
     }
 
     /// Uses one of your objects: what it holds now, with its actions as the tools it lands on.
-    func use(_ handle: String) async throws -> CallReturn {
-        let title = try await described(handle).title
-        var lines = ["\(title) now:", try await values(handle)]
-        if case .failing(let failure)? = try await madeObject(handle)?.health { lines.append("Last failed: \(failure.written)") }
+    func use(_ handle: ObjectID) async throws -> CallReturn {
+        let type = try await described(handle).type
+        var lines = ["\(type) `\(handle)` now:", try await values(handle)]
+        if case .failing(let failure)? = try await madeObject(handle)?.health {
+            lines.append("Last failed: \(failure.written)")
+        }
         return landing(lines.joined(separator: "\n"), on: .object(handle: handle))
     }
 
     /// An object's first page: enough identity and state to choose an action. Its action schemas
     /// are linked from the page instead of repeated in its text.
-    func open(_ handle: String) async throws -> String {
+    func open(_ handle: ObjectID) async throws -> String {
         let description = try await described(handle)
-        var lines = ["\(description.title) (`\(handle)`)"]
+        var lines = ["\(description.type) (id `\(handle)`)"]
         if let summary = Self.given(description.description) { lines.append(summary) }
 
         let current = try await values(handle)
         if current != "{}" { lines.append("Current values:\n" + current) }
-        if case .failing(let failure)? = try await madeObject(handle)?.health { lines.append("Last failed: \(failure.written)") }
+        if case .failing(let failure)? = try await madeObject(handle)?.health {
+            lines.append("Last failed: \(failure.written)")
+        }
 
         if !description.actions.isEmpty {
             var actions: [String] = []
+            let returnedType = returnedType(of: handle)
             for (name, action) in description.actions.sorted(by: { $0.key < $1.key }) {
-                actions.append(
-                    "- \(handle)_\(name)" + (Self.given(action.description).map { ": \($0)" } ?? ""))
+                // One an action returned is used through its type's tools.
+                let tool = returnedType.map { "\($0)_\(name)" } ?? "\(handle)_\(name)"
+                actions.append("- \(tool)" + (Self.given(action.description).map { ": \($0)" } ?? ""))
             }
             lines.append("Actions:\n" + actions.joined(separator: "\n"))
         }
@@ -572,8 +712,8 @@ public actor ObjectSession {
 
     /// The object made here that `name` is the handle of, written as its handle or as its name.
     /// A handle of an object made elsewhere can't be defined.
-    private func madeObject(named name: String) async throws -> (handle: String, object: DynamicObject)? {
-        for handle in [ObjectNames.handle(for: name), name] {
+    private func madeObject(named name: String) async throws -> (handle: ObjectID, object: DynamicObject)? {
+        for handle in [ObjectID.named(ObjectNames.handle(for: name)), .named(name)] {
             guard (try? await object(handle)) != nil else { continue }
             return (handle, try await dynamicObject(handle))
         }
@@ -596,7 +736,7 @@ public actor ObjectSession {
     public func objectTools() async -> [any HailCore.Tool] {
         var handles = (try? await yourObjects()) ?? []
         for entry in (try? await entries()) ?? [] {
-            let handle = handle(for: entry.object, titled: entry.title)
+            let handle = listed(entry)
             if !handles.contains(handle) { handles.append(handle) }
         }
         var tools: [any HailCore.Tool] = []
@@ -608,17 +748,23 @@ public actor ObjectSession {
     }
 
     /// The tool that reads an object: what it holds now, and what it takes, after which its actions
-    /// are offered.
-    private func pageLink(_ handle: String) async -> ObjectReadTool {
-        ObjectReadTool(session: self, handle: handle, title: (try? await described(handle).title) ?? handle)
+    /// are offered. One an action returned is read through its type's tool.
+    private func pageLink(_ handle: ObjectID) async -> any HailCore.Tool {
+        if let type = returnedType(of: handle),
+            let tool = try? TypedReadTool(session: self, type: type.rawValue, among: returned(type))
+        {
+            return tool
+        }
+        return ObjectReadTool(
+            session: self, handle: handle, type: (try? await described(handle).type) ?? handle.description)
     }
 
     /// Removes an object made with create, for good.
-    func remove(_ handle: String) async throws -> DiscoveryJSON {
+    func remove(_ handle: ObjectID) async throws -> DiscoveryJSON {
         let identity = try await dynamicObject(handle).identity
         try await making { try await $0.remove(identity) }
-        made[handle.lowercased()] = nil
-        objects[handle.lowercased()] = nil
+        made[handle] = nil
+        objects[handle] = nil
         return "removed"
     }
 
@@ -639,23 +785,35 @@ public actor ObjectSession {
 
     /// The object behind `handle`, if it was made with create.
     /// The object behind `handle`, if it was made here: one checked in as what it is, so no other
-    /// kind of object is ever called as one.
-    private func dynamicObject(_ handle: String) async throws -> DynamicObject {
+    /// object is ever called as one.
+    private func dynamicObject(_ handle: ObjectID) async throws -> DynamicObject {
+        // One code named by its id is reached by it too.
+        if (try? await madeObject(handle)) == nil, case .named(let name) = handle {
+            let identity = ObjectIdentity(rawValue: ObjectNames.handle(for: name))
+            for scope in scopes {
+                if let named = try await DynamicObjects.resolve(on: actorSystem, scope: scope).existing(identity) {
+                    return named
+                }
+            }
+        }
         guard let made = try await madeObject(handle) else {
-            throw ObjectToolError.failed("`\(handle)` wasn't made with create_object, so it can't be changed or removed this way.")
+            throw ObjectToolError.failed(
+                "`\(handle)` wasn't made with create_object, so it can't be changed or removed this way.")
         }
         return made
     }
 
-    /// The object behind `handle` as one made here, or `nil` for any other kind of object.
-    func madeObject(_ handle: String) async throws -> DynamicObject? {
-        let handle = handle.lowercased()
+    /// The object behind `handle` as one made here, or `nil` for any other object.
+    func madeObject(_ handle: ObjectID) async throws -> DynamicObject? {
         if let known = made[handle] { return known }
         let object = try await object(handle)
+        // One that its scopes hold, made there by name.
         for scope in scopes {
-            for candidate in await actorSystem.receptionist.lookup(scope.madeObjectsKey) where candidate.id == object.id {
-                made[handle] = candidate
-                return candidate
+            let directory = try await DynamicObjects.resolve(on: actorSystem, scope: scope)
+            if let identity = try await directory.identity(of: object.id) {
+                let made = try await directory.held(identity)
+                self.made[handle] = made
+                return made
             }
         }
         return nil
@@ -676,7 +834,7 @@ public actor ObjectSession {
     }
 
     /// An object as it is now, to use: what it holds, and its actions.
-    func usingPage(of handle: String) async throws -> ToolPage {
+    func usingPage(of handle: ObjectID) async throws -> ToolPage {
         await linked(try await open(handle))
     }
 
@@ -698,28 +856,37 @@ public actor ObjectSession {
             case .objectContents(let handle):
                 links += await actionTools(of: handle)
             case .action(let handle, let action):
-                links += await actionTools(of: handle).filter { $0.name == ActionNaming.byHandle.name(handle, action) }
+                links += await actionTools(of: handle).filter {
+                    $0.name == ActionNaming.byHandle.name(handle.description, action)
+                }
             }
         }
         return .text(text, links: links)
     }
 
-
-    /// What an object does: a tool for each action, and one for its values.
-    func actionTools(of handle: String, naming: ActionNaming = .byHandle) async -> [any HailCore.Tool] {
+    /// What an object does: a tool for each action, and one for its values. One an action returned
+    /// is used through its type's tools, which take which one as their typed `object`.
+    func actionTools(of handle: ObjectID, naming: ActionNaming = .byHandle) async -> [any HailCore.Tool] {
         var tools: [any HailCore.Tool] = []
         // One that can't describe itself now, such as a removed object, offers nothing.
         guard let description = try? await described(handle) else { return [] }
+        let receivers = returnedType(of: handle).map(returned)
         for (name, action) in description.actions.sorted(by: { $0.key < $1.key }) {
             do {
+                let choices = await choices(for: action.input)
                 tools.append(
                     try ObjectActionTool(
-                        session: self, handle: handle, title: description.title, action: name,
-                        summary: action.description, input: action.input, naming: naming))
+                        session: self,
+                        receiver: receivers.map { .typed(description.type, among: $0) } ?? .named(handle),
+                        type: description.type, action: name, summary: action.description, input: action.input,
+                        choices: choices,
+                        naming: naming))
             } catch {
                 actorSystem.log.warning(
                     "Object action has no usable schema",
-                    metadata: ["handle": .string(handle), "action": .string(name), "error": .string("\(error)")])
+                    metadata: [
+                        "object_id": .string(handle.description), "action": .string(name), "error": .string("\(error)"),
+                    ])
             }
         }
         return tools
@@ -737,8 +904,10 @@ public actor ObjectSession {
         var lines = [ObjectTools.description]
         if case .array(let entries) = try await list(), !entries.isEmpty {
             let shown = entries.prefix(limit).map { entry in
-                let actions = texts(entry["actions"]), events = texts(entry["events"])
-                return "- \(text(entry["handle"]) ?? ""): Object — " + (Self.given(text(entry["description"])) ?? text(entry["title"]) ?? "")
+                let actions = texts(entry["actions"])
+                let events = texts(entry["events"])
+                return "- id: `\(text(entry["object_id"]) ?? "")`; type: `\(text(entry["type"]) ?? "")`"
+                    + (Self.given(text(entry["description"])).map { " — \($0)" } ?? "")
                     + (actions.isEmpty ? "" : ". Takes \(actions.joined(separator: ", ")).")
                     + (events.isEmpty ? "" : "; events: \(events.joined(separator: ", "))")
             }
@@ -749,12 +918,12 @@ public actor ObjectSession {
         lines.append(
             madeHandles.isEmpty
                 ? "No objects have been created for you yet. create_object makes a new one."
-                : "Your objects: " + madeHandles.joined(separator: ", ") + ".")
+                : "Your objects: " + madeHandles.map(\.description).joined(separator: ", ") + ".")
 
         // Give each object its own no-argument link. A generic `use_object` call asks the model
         // to repeat a handle in an argument, creating a second way to open the same page and an
         // easy place to send the title under the wrong key.
-        let directoryHandles = try await entries().map { handle(for: $0.object, titled: $0.title) }
+        let directoryHandles = try await entries().map { listed($0) }
         let handles = Set(directoryHandles + madeHandles).sorted()
         var objectLinks: [any HailCore.Tool] = []
         for handle in handles { objectLinks.append(await pageLink(handle)) }
@@ -765,7 +934,7 @@ public actor ObjectSession {
 
     /// Runs a call on a handle's object, explaining a failure the model can recover from.
     private func call<Value>(
-        _ handle: String,
+        _ handle: ObjectID,
         _ body: (DiscoverableObject) async throws -> Value
     ) async throws -> Value {
         let object = try await object(handle)
@@ -776,9 +945,9 @@ public actor ObjectSession {
         } catch let error as ObjectToolError {
             throw error
         } catch let error as DeadLetterError {
-            throw ObjectToolError.unreachable(handle, reason: String(describing: error))
+            throw ObjectToolError.unreachable(handle.description, reason: String(describing: error))
         } catch let error as RemoteCallError {
-            throw ObjectToolError.unreachable(handle, reason: String(describing: error))
+            throw ObjectToolError.unreachable(handle.description, reason: String(describing: error))
         } catch let error as GenericRemoteCallError {
             // The object failed with an error the cluster couldn't send back as it was.
             throw ObjectToolError.failed(error.message)
@@ -793,30 +962,48 @@ public actor ObjectSession {
     private func mintHandle(_ value: DiscoveryJSON) async throws -> DiscoveryJSON {
         let reference: ActorReference
         switch ObjectReference(value) {
-        case .actor(let actor)?:
+        case .actor(let actor, _)?:
             reference = actor
-        case .named(let name)?, .virtual(let name, _)?:
-            let named = ObjectNames.handle(for: name)
+        case .named(let name, _)?:
+            let named = ObjectID.named(ObjectNames.handle(for: name))
             link(.object(named))
-            return .string(named)
-        case .itself?, nil:
+            return .string(named.description)
+        case .itself?, .unmade?, nil:
             throw ObjectToolError.failed("`\(value.inline)` isn't an object it can name.")
         }
         let object = try reference.resolve(using: actorSystem)
-        let minted: String
-        if let known = handles[object.id] {
-            minted = known
-        } else {
-            minted = handle(for: object, titled: try await object.describe().title)
+        // One made by code is its holder's: shown as what it is and holds, never as one to call.
+        if DynamicObject.identity(of: object.id) != nil, try await !isHeld(object) {
+            return .string(try await Self.inside(object))
         }
+        let minted = id(of: object, type: try await object.describe().type)
         link(.object(minted))
-        return .string(minted)
+        return .string(minted.description)
+    }
+
+    /// Whether one of this session's scopes holds `object`, made there by name.
+    private func isHeld(_ object: DiscoverableObject) async throws -> Bool {
+        for scope in scopes
+        where try await DynamicObjects.resolve(on: actorSystem, scope: scope).identity(of: object.id) != nil {
+            return true
+        }
+        return false
+    }
+
+    /// An object another holds, as its holder shows it: its type, and what it holds.
+    private static func inside(_ object: DiscoverableObject) async throws -> String {
+        let description = try await object.describe()
+        var held: [String] = []
+        for name in description.properties.keys.sorted() {
+            held.append("\(name): \(try await object.read(property: name).inline)")
+        }
+        return "a `\(description.type)`" + (held.isEmpty ? "" : " holding " + held.joined(separator: ", "))
     }
 
     /// A handle in the model's arguments becomes a reference.
     private func resolveHandle(_ value: DiscoveryJSON) async throws -> DiscoveryJSON {
-        guard case .string(let handle) = value else { throw ObjectToolError.expectedHandle }
-        return try DiscoveryJSON.reference(to: try await object(handle))
+        guard case .string(let written) = value else { throw ObjectToolError.expectedHandle }
+        return try DiscoveryJSON.reference(to: try await object(try await id(written: written)))
     }
 
     // MARK: References
@@ -888,19 +1075,23 @@ public actor ObjectSession {
         guard reason.hasPrefix("expected object, got array"),
             schema?["properties"]?[argument]?["additionalProperties"] != nil
         else { return reason }
-        let explained = "`\(argument)` is a list, but it's a mapping by name: each one under its own name, not as list items"
+        let explained =
+            "`\(argument)` is a list, but it's a mapping by name: each one under its own name, not as list items"
         guard case .array(let items)? = given[argument],
-            case .object(let mapping) = items.reduce(into: DiscoveryJSON.object([:]), { merged, item in
-                guard case .object(var members) = merged, case .object(let entry) = item, entry.count == 1 else {
-                    merged = .null
-                    return
-                }
-                members.merge(entry) { first, _ in first }
-                merged = .object(members)
-            }),
+            case .object(let mapping) = items.reduce(
+                into: DiscoveryJSON.object([:]),
+                { merged, item in
+                    guard case .object(var members) = merged, case .object(let entry) = item, entry.count == 1 else {
+                        merged = .null
+                        return
+                    }
+                    members.merge(entry) { first, _ in first }
+                    merged = .object(members)
+                }),
             let fixed = try? text([argument: .object(mapping)])
         else { return "\(explained)." }
-        return "\(explained). Yours, as a mapping:\n\n" + fixed.split(separator: "\n").map { "    \($0)" }.joined(separator: "\n")
+        return "\(explained). Yours, as a mapping:\n\n"
+            + fixed.split(separator: "\n").map { "    \($0)" }.joined(separator: "\n")
     }
 
     /// The arguments `value` names that the action doesn't take.
@@ -1016,13 +1207,13 @@ public enum ObjectToolError: Error, Equatable, Sendable, CustomStringConvertible
         // Each says what went wrong and what to do instead, with only real names in it: a small
         // model copies examples, so an invented one becomes its next mistake.
         case .unknownHandle(let handle):
-            "There's no object `\(handle)`. Find it with search_objects, by what it's for or what it does, or with list_objects for your own."
+            "There's no object with id `\(handle)`. Find it with search_objects, by what it's for or what it does, or with list_objects for your own."
         case .unknownAction(let action, let handle, let available) where available.isEmpty:
             "`\(handle)` has no action `\(action)`: it has no actions yet. Edit it with edit_object to add its events."
         case .unknownAction(let action, let handle, let available):
             "`\(handle)` has no action `\(action)`. Its actions are: \(available.joined(separator: ", "))."
         case .unreachable(let handle, let reason):
-            "The object `\(handle)` can't be reached right now (\(reason)). Find it again with search_objects or list_objects."
+            "The object with id `\(handle)` can't be reached right now (\(reason)). Find it again with search_objects or list_objects."
         case .expectedHandle:
             "Supply the object ID shown by search_objects or list_objects."
         case .unreadable(let explanation):
@@ -1041,7 +1232,6 @@ public enum ObjectToolError: Error, Equatable, Sendable, CustomStringConvertible
 
 // MARK: - Effects
 
-
 /// An object being made or changed, a step at a time: its fields, the messages it takes, and what
 /// it does with each. Read as a spec only when it's checked; nothing exists, or changes, until
 /// it's done.
@@ -1051,20 +1241,20 @@ public enum ObjectToolError: Error, Equatable, Sendable, CustomStringConvertible
 enum ObjectAddress: Hashable {
     /// The objects: what's here, and the tools to find, make and use them.
     case objects
-    case object(handle: String)
+    case object(handle: ObjectID)
 
     private static let objectsName = "objects"
 
     var address: ToolPageAddress {
         switch self {
         case .objects: ToolPageAddress(rawValue: Self.objectsName)
-        case .object(let handle): ToolPageAddress(rawValue: handle.lowercased())
+        case .object(let handle): ToolPageAddress(rawValue: handle.description)
         }
     }
 
-    /// The address read back: only this type writes them, so routing is all it takes.
-    init(_ address: ToolPageAddress) {
-        self = address.rawValue == Self.objectsName ? .objects : .object(handle: address.rawValue)
+    /// Whether `address` is the objects page's: any other is an object's, by its id as written.
+    static func isObjects(_ address: ToolPageAddress) -> Bool {
+        address.rawValue == objectsName
     }
 }
 
@@ -1072,10 +1262,8 @@ extension ObjectSession: ToolPages {
     /// An object's page as it is now. One that's no longer there is gone.
     public func open(_ address: ToolPageAddress) async throws(ToolPageUnavailable) -> ToolPage {
         do {
-            switch ObjectAddress(address) {
-            case .objects: return try await objectsPage()
-            case .object(let handle): return try await usingPage(of: handle)
-            }
+            if ObjectAddress.isObjects(address) { return try await objectsPage() }
+            return try await usingPage(of: try await id(written: address.rawValue))
         } catch ObjectToolError.unknownHandle {
             throw .gone
         } catch {
@@ -1119,7 +1307,7 @@ public struct MakeObjectEffect: ScopedEffect, Sendable {
 public struct RemoveObjectEffect: ScopedEffect, Sendable {
     public let name = "objects.remove"
     let session: ObjectSession
-    let handle: String
+    let handle: ObjectID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
         let (session, handle) = token.withConfiguration { ($0.session, $0.handle) }
         return await session.page(try ObjectSession.text(try await session.remove(handle)))
@@ -1129,7 +1317,7 @@ public struct RemoveObjectEffect: ScopedEffect, Sendable {
 public struct UseObjectEffect: ScopedEffect, Sendable {
     public let name = "objects.use"
     let session: ObjectSession
-    let handle: String
+    let handle: ObjectID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
         let (session, handle) = token.withConfiguration { ($0.session, $0.handle) }
         return try await session.use(handle)
@@ -1140,7 +1328,7 @@ public struct UseObjectEffect: ScopedEffect, Sendable {
 public struct EditObjectEffect: ScopedEffect, Sendable {
     public let name = "objects.edit"
     let session: ObjectSession
-    let handle: String
+    let handle: ObjectID
     let change: String
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
         let (session, handle, change) = token.withConfiguration { ($0.session, $0.handle, $0.change) }
@@ -1151,7 +1339,7 @@ public struct EditObjectEffect: ScopedEffect, Sendable {
 public struct InvokeObjectEffect: ScopedEffect, Sendable {
     public let name = "objects.invoke"
     let session: ObjectSession
-    let handle: String
+    let handle: ObjectID
     let action: String
     let arguments: String?
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
@@ -1163,7 +1351,8 @@ public struct InvokeObjectEffect: ScopedEffect, Sendable {
         let result = try await session.invoke(handle, action: action, arguments: arguments)
         let after = try await session.values(of: handle)
         let changes = Set(before.keys).union(after.keys).sorted().compactMap { name -> String? in
-            let old = before[name] ?? .null, new = after[name] ?? .null
+            let old = before[name] ?? .null
+            let new = after[name] ?? .null
             return old == new ? nil : "\(name): \(old.inline) → \(new.inline)"
         }
         var lines = [result == .null ? "Done." : "Result: \(result.inline)"]
@@ -1218,8 +1407,12 @@ public struct SearchObjectsTool: HailCore.Tool {
     public let name = "search_objects"
     public let description =
         "Find objects by their purpose or actions. Returns matching object IDs and links to open them. Includes this machine's apps."
-    public func effect(for input: Input) throws -> FindObjectsEffect { FindObjectsEffect(session: session, query: input.query) }
-    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<FindObjectsEffect>) async throws -> CallReturn {
+    public func effect(for input: Input) throws -> FindObjectsEffect {
+        FindObjectsEffect(session: session, query: input.query)
+    }
+    public func run(
+        _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<FindObjectsEffect>
+    ) async throws -> CallReturn {
         try await FindObjectsEffect.run(in: token)
     }
 }
@@ -1228,9 +1421,11 @@ public struct ListObjectsTool: HailCore.Tool {
     public typealias Input = EmptyToolInput
     let session: ObjectSession
     public let name = "list_objects"
-    public let description = "List every object by name: the ones made for you, and the others."
+    public let description = "List every object by its id: the ones made for you, and the others."
     public func effect(for input: Input) throws -> ListObjectsEffect { ListObjectsEffect(session: session) }
-    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<ListObjectsEffect>) async throws -> CallReturn {
+    public func run(
+        _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<ListObjectsEffect>
+    ) async throws -> CallReturn {
         try await ListObjectsEffect.run(in: token)
     }
 }
@@ -1256,7 +1451,9 @@ public struct CreateObjectTool: HailCore.Tool {
     public func effect(for input: Input) throws -> MakeObjectEffect {
         MakeObjectEffect(session: session, objectName: input.name, task: input.description)
     }
-    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<MakeObjectEffect>) async throws -> CallReturn {
+    public func run(
+        _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<MakeObjectEffect>
+    ) async throws -> CallReturn {
         try await MakeObjectEffect.run(in: token)
     }
 }
@@ -1276,15 +1473,65 @@ public enum ActionNaming: Sendable {
     }
 }
 
-/// One action of one object as a tool of its own, such as `shop_startShift`: the model calls it
-/// with typed arguments, the way it calls any tool. Objects are passed and returned by handle.
+/// Which object a tool is for: one named, whose id is the tool's name, or one of a type an action
+/// returned, which the model chooses as the tool's typed `object`, among those there are.
+public enum Receiver: Sendable, Equatable {
+    case named(ObjectID)
+    case typed(String, among: [ObjectID])
+
+    /// The argument that chooses the object, for a tool of a type.
+    static let property = "object"
+
+    /// The schema `input` with the object to choose, for a tool of a type: a `type`, one of `ids`.
+    func schema(_ input: DiscoveryJSON?) -> DiscoveryJSON? {
+        guard case .typed(let type, let ids) = self else { return input }
+        var schema: [String: DiscoveryJSON] = ["type": "object", "properties": [:]]
+        if case .object(let given)? = input { schema = given }
+        var properties: [String: DiscoveryJSON] = [:]
+        if case .object(let given)? = schema["properties"] { properties = given }
+        let choice: DiscoveryJSON = .object([
+            "type": .string("string"), "description": .string("Which `\(type)`, by its id."),
+            "enum": .array(ids.map { .string($0.description) }),
+        ])
+        properties[Self.property] = choice
+        schema["properties"] = .object(properties)
+        var required: [DiscoveryJSON] = []
+        if case .array(let given)? = schema["required"] { required = given }
+        schema["required"] = .array([.string(Self.property)] + required)
+        if case .array(let order)? = schema["x-order"] { schema["x-order"] = .array([.string(Self.property)] + order) }
+        return .object(schema)
+    }
+
+    /// The object `arguments` are for, and the arguments that are the action's own.
+    func choosing(in arguments: DiscoveryJSON, for tool: String) throws -> (id: ObjectID, arguments: DiscoveryJSON) {
+        switch self {
+        case .named(let id):
+            return (id, arguments)
+        case .typed(_, let ids):
+            guard case .object(var members) = arguments, case .string(let written)? = members[Self.property] else {
+                throw ObjectToolError.missingArguments(tool, missing: [Self.property], unexpected: [])
+            }
+            guard let id = ids.first(where: { $0.description == written }) else {
+                throw ObjectToolError.failed(
+                    UnofferedChoice(given: written, offered: ids.map(\.description), argument: Self.property)
+                        .description)
+            }
+            members[Self.property] = nil
+            return (id, .object(members))
+        }
+    }
+}
+
+/// One action as a tool of its own, such as `shop_startShift`, or `Reminder_complete` for a
+/// reminder an action returned: the model calls it with typed arguments, the way it calls any
+/// tool. Objects are passed and returned by id.
 public struct ObjectActionTool: HailCore.Tool {
     public typealias Input = GeneratedContent
     public typealias Effect = InvokeObjectEffect
 
     let session: ObjectSession
-    let handle: String
-    let title: String
+    let receiver: Receiver
+    let type: String
     let action: String
     let summary: String?
     /// What the action is called, as a tool.
@@ -1294,34 +1541,50 @@ public struct ObjectActionTool: HailCore.Tool {
     private let parameters: GenerationSchema
 
     init(
-        session: ObjectSession, handle: String, title: String, action: String, summary: String?,
-        input: DiscoveryJSON?, naming: ActionNaming = .byHandle
+        session: ObjectSession, receiver: Receiver, type: String, action: String, summary: String?,
+        input: DiscoveryJSON?, choices: [String: [ObjectID]] = [:], naming: ActionNaming = .byHandle
     ) throws {
         self.session = session
-        self.handle = handle
-        self.title = title
+        self.receiver = receiver
+        self.type = type
         self.action = action
         self.summary = summary
         self.naming = naming
         self.input = input
-        let schema = Self.handles(in: input ?? ["type": "object", "properties": [:]])
+        let schema = Self.handles(
+            in: receiver.schema(input) ?? ["type": "object", "properties": [:]], choices: choices)
         self.parameters = try JSONDecoder().decode(GenerationSchema.self, from: JSONEncoder().encode(schema))
     }
 
-    public var name: String { naming.name(handle, action) }
+    public var name: String {
+        switch receiver {
+        case .named(let id): naming.name(id.description, action)
+        case .typed(let type, _): naming.name(type, action)
+        }
+    }
     public var description: String {
-        "\(action) on \(title) (`\(handle)`)" + (summary.map { ": \($0)" } ?? "")
+        let on: String =
+            switch receiver {
+            case .named(let id): "\(type) `\(id)`"
+            case .typed(let type, _): "a `\(type)`"
+            }
+        return "\(action) on \(on)" + (summary.map { ": \($0)" } ?? "")
     }
     public var schema: ToolDefinition {
         ToolDefinition(name: name, description: description, parameters: parameters)
     }
 
     public func effect(for arguments: GeneratedContent) throws -> InvokeObjectEffect {
-        InvokeObjectEffect(
-            session: session, handle: handle, action: action, arguments: input == nil ? nil : arguments.jsonString)
+        let given = try JSONDecoder().decode(DiscoveryJSON.self, from: Data(arguments.jsonString.utf8))
+        let (id, own) = try receiver.choosing(in: given, for: name)
+        let text = String(decoding: try JSONEncoder().encode(own), as: UTF8.self)
+        return InvokeObjectEffect(session: session, handle: id, action: action, arguments: input == nil ? nil : text)
     }
 
-    public func run(_ input: GeneratedContent, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<InvokeObjectEffect>) async throws
+    public func run(
+        _ input: GeneratedContent, in scope: borrowing ToolScope<Never>,
+        token: borrowing EffectToken<InvokeObjectEffect>
+    ) async throws
         -> CallReturn
     {
         let page = try await InvokeObjectEffect.run(in: token)
@@ -1330,20 +1593,28 @@ public struct ObjectActionTool: HailCore.Tool {
 
     /// The schema as the model writes it: a reference to an object is its handle, a string, and an
     /// optional value is the value, since leaving it out of `required` already makes it optional.
-    static func handles(in schema: DiscoveryJSON) -> DiscoveryJSON {
+    /// - Parameter choices: For each protocol an argument takes an object conforming to, as code
+    ///   writes it, the ids of the objects that do: only they can be given.
+    static func handles(in schema: DiscoveryJSON, choices: [String: [ObjectID]] = [:]) -> DiscoveryJSON {
         switch schema {
         case .object(let members) where members["x-actor-reference"] == .bool(true):
-            // An object is given by its name, as the objects page lists it, and is of the type its
-            // code writes.
-            let takes = members["description"].flatMap { if case .string(let text) = $0 { ", " + text } else { nil } } ?? ""
-            return ["type": "string", "description": .string("\(DiscoveryJSON.object(members).swiftType)\(takes).")]
+            // An object is given by its id, as objects are listed, and is of the type its code
+            // writes.
+            let written = DiscoveryJSON.object(members).swiftType ?? "Object"
+            let takes =
+                members["description"].flatMap { if case .string(let text) = $0 { ", " + text } else { nil } } ?? ""
+            var handle: [String: DiscoveryJSON] = [
+                "type": "string", "description": .string("The id of a `\(written)`\(takes)."),
+            ]
+            if let ids = choices[written], !ids.isEmpty { handle["enum"] = .array(ids.map { .string($0.description) }) }
+            return .object(handle)
         case .object(let members):
-            if case .array(let choices)? = members["anyOf"] {
-                let present = choices.filter { $0["type"] != "null" }
-                if present.count == 1 { return handles(in: present[0]) }
+            if case .array(let options)? = members["anyOf"] {
+                let present = options.filter { $0["type"] != "null" }
+                if present.count == 1 { return handles(in: present[0], choices: choices) }
             }
-            return .object(members.mapValues(handles))
-        case .array(let items): return .array(items.map(handles))
+            return .object(members.mapValues { handles(in: $0, choices: choices) })
+        case .array(let items): return .array(items.map { handles(in: $0, choices: choices) })
         default: return schema
         }
     }
@@ -1353,23 +1624,27 @@ public struct ObjectActionTool: HailCore.Tool {
 /// no other can be named.
 struct YourObject {
     static let property = "object"
-    let objects: [String]
+    let objects: [ObjectID]
 
     func property(_ about: String) -> DynamicGenerationSchema.Property {
-        .init(name: Self.property, description: about, schema: .init(type: String.self, guides: [.anyOf(objects)]))
+        .init(
+            name: Self.property, description: about,
+            schema: .init(type: String.self, guides: [.anyOf(objects.map(\.description))]))
     }
 
-    /// The object the arguments name: missing is a missing argument, and one that isn't yours
-    /// isn't on offer.
-    func object(in input: GeneratedContent, for tool: String) throws -> String {
-        let object: String
+    /// The object the arguments name, as it's written: missing is a missing argument, and one
+    /// that isn't yours isn't on offer.
+    func object(in input: GeneratedContent, for tool: String) throws -> ObjectID {
+        let written: String
         do {
-            object = try input.value(String.self, forProperty: Self.property)
+            written = try input.value(String.self, forProperty: Self.property)
         } catch GeneratedContentError.propertyNotFound {
             throw ObjectToolError.missingArguments(tool, missing: [Self.property], unexpected: [])
         }
-        guard objects.contains(object) else {
-            throw ObjectToolError.failed(UnofferedChoice(given: object, offered: objects, argument: Self.property).description)
+        guard let object = objects.first(where: { $0.description == written }) else {
+            throw ObjectToolError.failed(
+                UnofferedChoice(given: written, offered: objects.map(\.description), argument: Self.property)
+                    .description)
         }
         return object
     }
@@ -1380,13 +1655,46 @@ struct YourObject {
 public struct ObjectReadTool: HailCore.Tool {
     public typealias Input = EmptyToolInput
     let session: ObjectSession
-    let handle: String
-    let title: String
+    let handle: ObjectID
+    let type: String
     /// Marked as an object's, so it isn't taken for one of its actions.
     public var name: String { "object_\(handle)" }
-    public var description: String { "What \(title) holds now, and what it takes." }
+    public var description: String { "What \(type) `\(handle)` holds now, and what it takes." }
     public func effect(for input: Input) throws -> UseObjectEffect { UseObjectEffect(session: session, handle: handle) }
-    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<UseObjectEffect>) async throws -> CallReturn {
+    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<UseObjectEffect>)
+        async throws -> CallReturn
+    {
+        try await UseObjectEffect.run(in: token)
+    }
+}
+
+/// Reads one of the objects of a type an action returned, chosen by its id: what it holds now, and
+/// what it takes. Its actions are offered after it.
+public struct TypedReadTool: HailCore.Tool {
+    public typealias Input = GeneratedContent
+    let session: ObjectSession
+    let receiver: Receiver
+    let type: String
+    private let parameters: GenerationSchema
+
+    init(session: ObjectSession, type: String, among ids: [ObjectID]) throws {
+        self.session = session
+        self.type = type
+        receiver = .typed(type, among: ids)
+        let schema = receiver.schema(nil) ?? [:]
+        parameters = try JSONDecoder().decode(GenerationSchema.self, from: JSONEncoder().encode(schema))
+    }
+
+    public var name: String { "object_\(type)" }
+    public var description: String { "What a `\(type)` holds now, and what it takes." }
+    public var schema: ToolDefinition { ToolDefinition(name: name, description: description, parameters: parameters) }
+    public func effect(for input: Input) throws -> UseObjectEffect {
+        let given = try JSONDecoder().decode(DiscoveryJSON.self, from: Data(input.jsonString.utf8))
+        return UseObjectEffect(session: session, handle: try receiver.choosing(in: given, for: name).id)
+    }
+    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<UseObjectEffect>)
+        async throws -> CallReturn
+    {
         try await UseObjectEffect.run(in: token)
     }
 }
@@ -1397,10 +1705,11 @@ public struct UseObjectTool: HailCore.Tool {
     /// Your objects, to choose from.
     let objects: YourObject
     public let name = "use_object"
-    public let description = "Open an object to see its current values and available actions. Opening it does not run an action."
+    public let description =
+        "Open an object to see its current values and available actions. Opening it does not run an action."
     private let parameters: GenerationSchema
 
-    init(session: ObjectSession, objects: [String]) throws {
+    init(session: ObjectSession, objects: [ObjectID]) throws {
         self.session = session
         self.objects = YourObject(objects: objects)
         self.parameters = try GenerationSchema(
@@ -1413,7 +1722,9 @@ public struct UseObjectTool: HailCore.Tool {
     public func effect(for input: Input) throws -> UseObjectEffect {
         UseObjectEffect(session: session, handle: try objects.object(in: input, for: name))
     }
-    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<UseObjectEffect>) async throws -> CallReturn {
+    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<UseObjectEffect>)
+        async throws -> CallReturn
+    {
         try await UseObjectEffect.run(in: token)
     }
 }
@@ -1429,14 +1740,16 @@ public struct EditObjectTool: HailCore.Tool {
     public let description = "Change what an object holds or does: its Swift code is rewritten for it."
     private let parameters: GenerationSchema
 
-    init(session: ObjectSession, objects: [String]) throws {
+    init(session: ObjectSession, objects: [ObjectID]) throws {
         self.session = session
         self.objects = YourObject(objects: objects)
         self.parameters = try GenerationSchema(
-            root: DynamicGenerationSchema(name: "EditObject", properties: [
-                self.objects.property("The object to change."),
-                .init(name: Self.changeProperty, description: "What to change.", schema: .init(type: String.self)),
-            ]),
+            root: DynamicGenerationSchema(
+                name: "EditObject",
+                properties: [
+                    self.objects.property("The object to change."),
+                    .init(name: Self.changeProperty, description: "What to change.", schema: .init(type: String.self)),
+                ]),
             dependencies: [])
     }
 
@@ -1448,7 +1761,9 @@ public struct EditObjectTool: HailCore.Tool {
         }
         return EditObjectEffect(session: session, handle: try objects.object(in: input, for: name), change: change)
     }
-    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<EditObjectEffect>) async throws -> CallReturn {
+    public func run(
+        _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<EditObjectEffect>
+    ) async throws -> CallReturn {
         try await EditObjectEffect.run(in: token)
     }
 }
@@ -1466,11 +1781,12 @@ public struct RemoveObjectTool: HailCore.Tool {
     public let description = "Permanently remove an object."
     private let parameters: GenerationSchema
 
-    init(session: ObjectSession, objects: [String]) throws {
+    init(session: ObjectSession, objects: [ObjectID]) throws {
         self.session = session
         self.objects = YourObject(objects: objects)
         self.parameters = try GenerationSchema(
-            root: DynamicGenerationSchema(name: "RemoveObject", properties: [self.objects.property("The object to remove.")]),
+            root: DynamicGenerationSchema(
+                name: "RemoveObject", properties: [self.objects.property("The object to remove.")]),
             dependencies: [])
     }
 
@@ -1479,7 +1795,9 @@ public struct RemoveObjectTool: HailCore.Tool {
     public func effect(for input: Input) throws -> RemoveObjectEffect {
         RemoveObjectEffect(session: session, handle: try objects.object(in: input, for: name))
     }
-    public func run(_ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<RemoveObjectEffect>) async throws -> CallReturn {
+    public func run(
+        _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<RemoveObjectEffect>
+    ) async throws -> CallReturn {
         try await RemoveObjectEffect.run(in: token)
     }
 }
@@ -1491,7 +1809,9 @@ public struct RemoveObjectTool: HailCore.Tool {
 extension GeneratedContent {
     /// A property's content, if it has one.
     func property(_ name: String) -> GeneratedContent? {
-        guard case .structure(let properties, _) = kind, let property = properties[name], property.kind != .null else { return nil }
+        guard case .structure(let properties, _) = kind, let property = properties[name], property.kind != .null else {
+            return nil
+        }
         return property
     }
 }

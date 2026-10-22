@@ -132,9 +132,9 @@ struct UserWasmToolTests {
         #expect(FileManager.default.fileExists(atPath: fixture.source.path))
         #expect(FileManager.default.isReadableFile(atPath: fixture.module.path))
         _ = try tool.effect(for: input)
-        let output = try await withDependencies({ dependencies in
+        let output = try await withDependencies { dependencies in
             dependencies.process = capture.dependency()
-        }) {
+        } operation: {
             try await tool.runOutput(input: input, authority: FullAuthority())
         }
 
@@ -178,9 +178,9 @@ struct UserWasmToolTests {
         let effect = try tool.effect(for: arguments(#"{"words":"hi"}"#))
         try FileManager.default.removeItem(at: fixture.module)
         let capture = ProcessCapture()
-        let output = try await withDependencies({ dependencies in
+        let output = try await withDependencies { dependencies in
             dependencies.process = capture.dependency()
-        }) {
+        } operation: {
             try await withEffect(effect, authority: FullAuthority()) { token in
                 try await tool.runOutput(
                     input: arguments(#"{"words":"hi"}"#),
