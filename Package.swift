@@ -18,7 +18,7 @@ let package = Package(
         .library(name: "MacApp", targets: ["MacApp"]),
     ],
     dependencies: [
-        .package(path: "../hail"),
+        .package(url: "https://github.com/akbashev/hail.git", branch: "main"),
         .package(
             url: "https://github.com/akbashev/discoverable-distributed-actors.git", branch: "main",
             traits: ["ClusterSystem"]),
@@ -27,7 +27,8 @@ let package = Package(
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
-            path: "../AnyLanguageModel",
+            url: "https://github.com/huggingface/AnyLanguageModel.git",
+            branch: "main",
             traits: ["AsyncHTTPClient", "Llama"]
         ),
         .package(
