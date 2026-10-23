@@ -611,9 +611,9 @@ public distributed actor Conversation {
                     .step(
                         conversationID: conversationID, turnID: turnID,
                         step: .toolFinished(name: name, output: output, failure: failure, at: at))))
-        case .text(let fragment):
+        case .reply(let text):
             await publish(phase: .typing, of: &turn)
-            turn.text += fragment
+            turn.text = text
             await publishLive(.reply(.partial(conversationID: conversationID, turnID: turnID, text: turn.text)))
         default:
             break

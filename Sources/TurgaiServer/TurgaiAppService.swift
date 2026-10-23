@@ -252,10 +252,7 @@ struct TurgaiAppService: Service, Sendable {
                         }
                         return ModelConfiguration(
                             model: currentDefault.model,
-                            reasoningEffort: currentDefault.reasoningEffort,
-                            sessionConfigurationIdentity: Self.sessionConfigurationIdentity(
-                                for: currentDefault
-                            )
+                            reasoningEffort: currentDefault.reasoningEffort
                         )
                     }
                     guard let profile = await agentProfiles.profile(id: role) else {
@@ -266,10 +263,7 @@ struct TurgaiAppService: Service, Sendable {
                     }
                     return ModelConfiguration(
                         model: profile.model,
-                        reasoningEffort: profile.reasoningEffort,
-                        sessionConfigurationIdentity: Self.sessionConfigurationIdentity(
-                            for: profile
-                        )
+                        reasoningEffort: profile.reasoningEffort
                     )
                 },
                 definitionProvider: { spawnConfig in
@@ -573,18 +567,6 @@ struct TurgaiAppService: Service, Sendable {
 
     private static func conversationIDs(persistenceIDs: [String]) -> [ConversationID] {
         persistenceIDs.compactMap { ConversationPersistenceID(rawValue: $0)?.conversationID }
-    }
-
-    private static func sessionConfigurationIdentity(
-        for profile: TurgaiAgentProfile
-    ) -> String {
-        [
-            profile.id,
-            profile.model.identifier,
-            profile.reasoningEffort?.rawValue ?? "provider-default",
-            String(describing: profile.providerConfiguration),
-            String(profile.contextWindow),
-        ].joined(separator: "\u{1F}")
     }
 
     private static func makeSearchBackend(environment: [String: String]) throws -> WebSearchBackend {

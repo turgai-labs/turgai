@@ -114,7 +114,6 @@ public struct HailRuntimeConfiguration: Sendable {
         return try AgentRuntimePlugin(
             maxToolRounds: maxToolRounds,
             routerConfiguration: routerConfiguration,
-            mcpServerConfiguration: nil,
             modelEndpointProvider: modelEndpointProvider,
             turnToolsProvider: turnToolsProvider,
             authorityProvider: authorityProvider,

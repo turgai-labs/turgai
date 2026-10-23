@@ -124,7 +124,6 @@ private struct EvalDumpEndpoint: ModelEndpoint {
     let base: any ModelEndpoint
 
     var model: String { base.model }
-    var contextOwnership: ModelContextOwnership { base.contextOwnership }
     var effectiveContextWindow: Int? { base.effectiveContextWindow }
     var tokenCounting: TokenCounting { base.tokenCounting }
 

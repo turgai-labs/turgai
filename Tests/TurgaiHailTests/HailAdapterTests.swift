@@ -39,7 +39,7 @@ struct HailAdapterTests {
 
     @Test
     func emptyResponsesCannotCrossTheHailBoundary() {
-        #expect(HailResponse(content: "   ") == nil)
+        #expect(throws: HailAdapterError.emptyResponse) { try HailResponse(AgentReply(text: "   ")) }
         #expect(
             HailAgentAdapter.userFacingMessage(for: HailAdapterError.emptyResponse)
                 == "I couldn’t produce a reply to that message. Please try again."
@@ -47,47 +47,19 @@ struct HailAdapterTests {
     }
 
     @Test
-    func mapsTypedPartialAndCompletionUpdates() {
-        let partial = "hel"
-        let timestamp = Date(timeIntervalSince1970: 1)
-        let partialUpdate = AgentRunEvent<String>.modelOutputPartialUpdated(
-            content: partial,
-            at: timestamp
-        )
-        let completedUpdate = AgentRunEvent<String>.responseRecorded(
-            content: "hello",
-            at: timestamp
-        )
-
-        let partialEvents = HailStructuredUpdateMapper.map(partialUpdate)
-        let completedEvents = HailStructuredUpdateMapper.map(completedUpdate)
-
-        guard case .partial(let partialValue)? = partialEvents.first else {
-            Issue.record("Expected a typed partial event")
-            return
-        }
-        guard case .completed(let completedValue)? = completedEvents.first else {
-            Issue.record("Expected a typed completed event")
-            return
-        }
-        #expect(partialValue == partial)
-        #expect(completedValue == "hello")
-    }
-
-    @Test
-    func mapsHailProgressWithoutLeakingHailValues() throws {
+    func mapsTheReplySoFarWithoutLeakingHailValues() throws {
         let activity = AgentActivity.turn(
-            .progress(.narration(GeneratedContent("partial"))),
+            .progress(.partial(try GeneratedContent(json: #"{"text":"hel"}"#))),
             at: Date(timeIntervalSince1970: 1)
         )
 
         let events = HailActivityMapper.map(activity)
         try #require(events.count == 1)
-        guard case .text(let fragment) = events[0] else {
-            Issue.record("Expected a text event, got \(events)")
+        guard case .reply(let text) = events[0] else {
+            Issue.record("Expected the reply so far, got \(events)")
             return
         }
-        #expect(fragment == "partial")
+        #expect(text == "hel")
     }
 
     @Test
@@ -186,14 +158,11 @@ struct HailAdapterTests {
         )
         let peer = HailConversationPeer(
             run: { request in
-                guard let response = HailResponse(content: request.message.text) else {
-                    throw HailAdapterError.emptyResponse
-                }
-                return response
+                try HailResponse(AgentReply(text: request.message.text))
             },
             activities: {
                 AsyncStream {
-                    $0.yield(.text("partial"))
+                    $0.yield(.reply("partial"))
                     $0.finish()
                 }
             }
@@ -216,11 +185,11 @@ struct HailAdapterTests {
         var events: [HailModelEvent] = []
         for await event in try await peer.activities() { events.append(event) }
         try #require(events.count == 1)
-        guard case .text(let fragment) = events[0] else {
-            Issue.record("Expected a text event, got \(events)")
+        guard case .reply(let text) = events[0] else {
+            Issue.record("Expected the reply so far, got \(events)")
             return
         }
-        #expect(fragment == "partial")
+        #expect(text == "partial")
     }
 
     @Test

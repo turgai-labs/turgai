@@ -94,11 +94,8 @@ public struct UserPromptTool: HailCore.Tool {
             )
         )
         let agent: Agent = try await actorSystem.agent(childID)
-        let received = AgentHistory.Input(
-            from: .agent(sourceAgentID), content: GeneratedContent(instruction), at: Date())
         let response: String = try await agent.respond(
             instruction,
-            received: received,
             inputID: "\(turnID):\(name)"
         )
         return .text(response)

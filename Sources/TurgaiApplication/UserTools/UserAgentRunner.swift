@@ -29,11 +29,8 @@ enum UserAgentRunner {
             )
         )
         let agent: Agent = try await actorSystem.agent(childID)
-        let received = AgentHistory.Input(
-            from: .agent(sourceAgentID), content: GeneratedContent(instruction), at: Date())
         return try await agent.respond(
             instruction,
-            received: received,
             inputID: "\(turnID):\(toolName)"
         )
     }

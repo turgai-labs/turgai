@@ -42,8 +42,9 @@ public enum ConversationTools {
         let groups: [ToolGroup] = [WeatherTools().group]
 
         var pages: any ToolPages = NoToolPages()
+        // The person whose conversation this is.
+        let owner = ConversationID(stableKey: context.agentID.contextID.rawValue)?.participantUserID
         if let actorSystem {
-            let owner = ConversationID(stableKey: context.agentID.contextID.rawValue)?.participantUserID
             let session = ObjectSession(
                 actorSystem: actorSystem,
                 objectCatalog: objectCatalog,
@@ -61,7 +62,8 @@ public enum ConversationTools {
 
         if let userTools {
             let builtinNames = Set(tools.map(\.name))
-            let requesterID = Self.requester(context.input.from)
+            // Asked on behalf of the person whose conversation this is.
+            let requesterID = owner?.rawValue ?? ""
             let conversationID = context.agentID.contextID.rawValue
             let turnID = context.turnID.rawValue
             for tool in userTools.load() {
@@ -164,13 +166,5 @@ public enum ConversationTools {
             }
         }
         return TurnTools(tools: tools, groups: groups, pages: pages)
-    }
-
-    /// Who an approval is asked on behalf of: whoever said what the turn answers.
-    private static func requester(_ participant: AgentHistory.Participant) -> String {
-        switch participant {
-        case .user(let id): id
-        case .agent(let agentID): agentID.rawValue
-        }
     }
 }

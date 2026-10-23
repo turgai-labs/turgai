@@ -10,6 +10,15 @@ import VirtualActors
     import Foundation
 #endif
 
+/// What a conversation's agent replies with.
+@Generable
+public struct AgentReply: Codable, Sendable {
+    /// What the assistant says back.
+    public let text: String
+}
+
+extension AgentReply.PartiallyGenerated: Codable {}
+
 public struct HailResponse: Hashable, Sendable {
     public let reply: ConversationReply
 
@@ -17,9 +26,10 @@ public struct HailResponse: Hashable, Sendable {
         reply.text
     }
 
-    public init?(content: String) {
-        guard let reply = ConversationReply(content) else {
-            return nil
+    /// The agent's reply, which says something: an empty one is an error.
+    public init(_ reply: AgentReply) throws(HailAdapterError) {
+        guard let reply = ConversationReply(reply.text) else {
+            throw .emptyResponse
         }
         self.reply = reply
     }
@@ -29,22 +39,14 @@ public struct HailResponse: Hashable, Sendable {
     }
 }
 
-/// The only Hail input used by the conversation adapter. It carries a
-/// Turgai-owned sender identity into Hail without exposing Telegram (or any
-/// other channel) types to Hail. What the agent reads is what was said, and its
+/// The only Hail input used by the conversation adapter, without Telegram (or any
+/// other channel) types. What the agent reads is what was said, and its
 /// attachments: where things are now is reached through its tools.
-struct HailConversationInput: Codable, Sendable {
-    let sender: String
+struct HailConversationInput: ConvertibleToGeneratedContent, Codable, Sendable {
     let content: String
-    let timestamp: Date
     let inputID: String?
 
-    init(
-        sender: String,
-        message: InboundMessage
-    ) {
-        self.sender = sender
-        self.timestamp = message.receivedAt
+    init(message: InboundMessage) {
         self.inputID = message.id.rawValue.uuidString
 
         let attachmentLines = message.attachments.map { attachment in
@@ -71,10 +73,7 @@ struct HailConversationInput: Codable, Sendable {
         }
     }
 
-    /// What was said, as the agent's history records it.
-    func received() -> AgentHistory.Input {
-        AgentHistory.Input(from: .user(id: sender), content: GeneratedContent(content), at: timestamp)
-    }
+    var generatedContent: GeneratedContent { GeneratedContent(content) }
 }
 
 /// Hail activity translated into values that can be consumed by the
@@ -82,7 +81,8 @@ struct HailConversationInput: Codable, Sendable {
 public enum HailModelEvent: Sendable {
     case started
     case status(String)
-    case text(String)
+    /// The reply so far, whole: it replaces what was shown before.
+    case reply(String)
     case reasoning(String)
     /// A tool the model called, with its arguments as the model wrote them.
     case toolCalled(name: String, arguments: String, at: Date)
@@ -114,8 +114,11 @@ public enum HailActivityMapper {
                 return [.status(text(message))]
             case .reasoning(let text):
                 return [.reasoning(self.text(text))]
-            case .narration(let text):
-                return [.text(self.text(text))]
+            case .partial(let content):
+                guard let reply = try? AgentReply.PartiallyGenerated(content), let text = reply.text else {
+                    return []
+                }
+                return [.reply(text)]
             case .toolCalled(let call):
                 return [.toolCalled(name: call.name, arguments: call.arguments.jsonString, at: at)]
             case .toolFinished(let result):
@@ -143,71 +146,6 @@ public enum HailActivityMapper {
                 return [.compaction(output: output, context: context)]
             }
         }
-    }
-}
-
-/// A typed update from a Hail turn. Structured partial values are cumulative
-/// snapshots, like FoundationModels' `PartiallyGenerated` values; consumers
-/// replace their current preview rather than append to it.
-public enum HailStructuredEvent<Output>: Sendable
-where Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Codable & Sendable {
-    case started
-    case partial(Output.PartiallyGenerated)
-    case completed(Output)
-    case failed(AgentRuntimeError)
-}
-
-/// Converts Hail's typed run channel into the small structured boundary that
-/// Turgai features can consume without handling every Hail lifecycle event.
-public enum HailStructuredUpdateMapper {
-    public static func map<Output>(
-        _ update: AgentRunEvent<Output>
-    ) -> [HailStructuredEvent<Output>]
-    where Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Codable & Sendable {
-        switch update {
-        case .runStarted:
-            return [.started]
-        case .modelOutputPartialUpdated(let content, _):
-            return [.partial(content)]
-        case .responseRecorded(let content, _):
-            return [.completed(content)]
-        case .runFailed(let error, _):
-            return [.failed(error)]
-        case .received, .modelOutputGenerated, .toolRequested, .toolCompleted,
-            .runCompleted:
-            return []
-        }
-    }
-}
-
-/// A typed Hail run boundary for features whose model output is a
-/// FoundationModels `@Generable` value. Events are delivered through an
-/// awaited callback so a slow consumer applies backpressure to the run.
-public struct HailStructuredConversationPeer<Output>: Sendable
-where Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Codable & Sendable {
-    public typealias EventHandler = @Sendable (HailStructuredEvent<Output>) async throws -> Void
-
-    private let runHandler:
-        @Sendable (
-            ConversationTurnRequest,
-            @escaping EventHandler
-        ) async throws -> Void
-
-    public init(
-        run:
-            @escaping @Sendable (
-                ConversationTurnRequest,
-                @escaping EventHandler
-            ) async throws -> Void
-    ) {
-        self.runHandler = run
-    }
-
-    public func run(
-        to request: ConversationTurnRequest,
-        onEvent: @escaping EventHandler
-    ) async throws {
-        try await runHandler(request, onEvent)
     }
 }
 
@@ -245,10 +183,6 @@ public struct HailConversationPeer: Sendable {
     /// Asks the agent, and waits for its reply.
     public func run(to request: ConversationTurnRequest) async throws -> HailResponse {
         try await runHandler(request)
-    }
-
-    public func respond(to request: ConversationTurnRequest) async throws -> HailResponse {
-        try await run(to: request)
     }
 
     /// What the agent does, as it does it, in any turn: a subscription that lasts until the
@@ -309,22 +243,12 @@ public struct HailAgentAdapter: Sendable {
                     throw HailAdapterError.conversationMismatch
                 }
                 let message = request.message
-                let input = HailConversationInput(
-                    sender: message.userID.rawValue,
-                    message: message
-                )
+                let input = HailConversationInput(message: message)
                 let agent = try await self.agent(for: conversationID)
-                // Plain chat is a String output. Attachments remain opaque references unless
-                // the model explicitly fetches one.
-                let response: String = try await agent.respond(
-                    input,
-                    received: input.received(),
-                    inputID: input.inputID
-                )
-                guard let response = HailResponse(content: response) else {
-                    throw HailAdapterError.emptyResponse
-                }
-                return response
+                // Attachments remain opaque references unless the model fetches one. The reply so
+                // far reaches whoever watches through the agent's activity.
+                let reply: AgentReply = try await agent.respond(input, inputID: input.inputID)
+                return try HailResponse(reply)
             },
             activities: {
                 let agent = try await self.agent(for: conversationID)
@@ -350,51 +274,6 @@ public struct HailAgentAdapter: Sendable {
                 try await self.deactivate(for: conversationID)
             }
         )
-    }
-
-    /// Resolves a typed Hail stream for a concrete generated output, including
-    /// `@Generable` partial snapshots and the final typed response.
-    public func structuredPeer<Output>(
-        for conversationID: ConversationID,
-        output: Output.Type
-    ) async throws -> HailStructuredConversationPeer<Output>
-    where Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Codable & Sendable {
-        let actorSystem = self.actorSystem
-
-        return HailStructuredConversationPeer(run: { request, onEvent in
-            guard request.conversationID == conversationID else {
-                throw HailAdapterError.conversationMismatch
-            }
-            let message = request.message
-            let agent = try await self.agent(for: conversationID)
-
-            let input = HailConversationInput(
-                sender: message.userID.rawValue,
-                message: message
-            )
-
-            let agentStream = AgentStream<Output>(actorSystem: actorSystem)
-            let updates = agentStream.updates
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask {
-                    for await update in updates {
-                        for event in HailStructuredUpdateMapper.map(update) {
-                            try await onEvent(event)
-                        }
-                    }
-                }
-                group.addTask {
-                    defer { agentStream.finish() }
-                    try await agentStream.send(
-                        input,
-                        received: input.received(),
-                        inputID: input.inputID,
-                        to: agent
-                    )
-                }
-                try await group.waitForAll()
-            }
-        })
     }
 
     private func agent(for conversationID: ConversationID) async throws -> Agent {

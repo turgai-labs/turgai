@@ -300,12 +300,10 @@ enum TechTopic: String, CaseIterable {
         """
 
     /// How one agent asks another, as Hail's agent tool does: find it by its id (wherever it runs, woken if
-    /// idle), say who is asking, and call it.
+    /// idle), and call it.
     static let respond = """
         <b>let</b> planner: Agent = <b>try await</b> actorSystem.agent(plannerID)
-        <b>let</b> received = AgentHistory.Input(
-          from: .agent(conciergeID), content: GeneratedContent(request), at: Date())
-        <b>let</b> plan: String = <b>try await</b> planner.respond(request, received: received)
+        <b>let</b> plan: String = <b>try await</b> planner.respond(request)
         """
 
     static let profile = """

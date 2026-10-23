@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "621397dcae75bc4de81399fbb146a86afae18277"
+        "revision" : "380725082c20ccc1604bcbed1ca0485c038056e9"
       }
     },
     {
@@ -197,15 +197,6 @@
       "state" : {
         "revision" : "39ce38a93408937bcd27f521f3cdf88266136b80",
         "version" : "1.33.1"
-      }
-    },
-    {
-      "identity" : "swift-acp",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/wiedymi/swift-acp.git",
-      "state" : {
-        "branch" : "main",
-        "revision" : "9498537769d1309b6519fbb87d0c22fcf9317f3e"
       }
     },
     {

@@ -2,6 +2,7 @@ import AnyLanguageModel
 import DistributedCluster
 import Foundation
 import Hail
+import TurgaiHail
 
 /// What one turn did: its tool calls, with what each returned, and its answer.
 struct RecordedTurn: Sendable {
@@ -22,7 +23,7 @@ struct RecordedTurn: Sendable {
 
     /// Sends `text` to the agent, recording the turn from its updates.
     static func send(_ text: String, to agent: Agent, on system: ClusterSystem) async -> RecordedTurn {
-        let stream = AgentStream<String>(actorSystem: system)
+        let stream = AgentStream<AgentReply>(actorSystem: system)
         let recording = Task {
             var turn = RecordedTurn()
             var requested: [String: String] = [:]
@@ -50,8 +51,8 @@ struct RecordedTurn: Sendable {
                                 output: result.output.textRepresentation, completed: true,
                                 failed: result.failureKind != nil))
                     }
-                case .responseRecorded(let content, _):
-                    turn.answer = content
+                case .responseRecorded(let reply, _):
+                    turn.answer = reply.text
                 default:
                     break
                 }
@@ -59,10 +60,7 @@ struct RecordedTurn: Sendable {
             return turn
         }
         do {
-            try await stream.send(
-                text,
-                received: AgentHistory.Input(from: .user(id: "user"), content: GeneratedContent(text), at: Date()),
-                to: agent)
+            try await stream.send(text, to: agent)
         } catch {
             // The model may fail after several useful tool calls. Keep those calls in the trace.
             stream.finish()
