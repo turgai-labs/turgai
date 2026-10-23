@@ -1,13 +1,13 @@
 {
-  "originHash" : "84ad2a0af44b8022c55b31ef0723486dce147d6488ac1967957e43493e65bf6a",
+  "originHash" : "38153bced2573c9c80673005f545ed97442f07504b911e4e2f6ef8680aa0ac2f",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/AnyLanguageModel.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "15f28d9869dce3877c95d85bc3954c74bb419806"
+        "revision" : "7d432196ff19f8a2f948ce33c774fba169af0e1e",
+        "version" : "1.1.0"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "f95db6f0232b50a1167b2e101e5e301fe92d1fa9"
+        "revision" : "621397dcae75bc4de81399fbb146a86afae18277"
       }
     },
     {
