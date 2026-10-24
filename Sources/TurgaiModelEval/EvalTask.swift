@@ -228,10 +228,13 @@ struct EvalTask: Sendable {
             why = parts.joined(separator: "; ")
         }
         let note = why.map { "  (\($0.prefix(200)))" } ?? ""
+        // What the runtime had to tell the model, each another request.
+        let notices = turns.flatMap(\.notices)
+        let noticed = notices.isEmpty ? "" : "  [noticed: \(notices.joined(separator: ", "))]"
         return Result(
             passed: passed,
             line:
-                "\(passed ? "PASS" : "FAIL")  \(Int(Date().timeIntervalSince(started)))s  \(marks)\(request.prefix(45))\(note)",
+                "\(passed ? "PASS" : "FAIL")  \(Int(Date().timeIntervalSince(started)))s  \(marks)\(request.prefix(45))\(note)\(noticed)",
             transcript: (failure.map { "failed: \($0)\n" } ?? "")
                 + turns.enumerated().map { index, turn in
                     "=== turn \(index + 1)\n" + turn.transcript

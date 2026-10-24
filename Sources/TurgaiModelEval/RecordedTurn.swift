@@ -20,6 +20,9 @@ struct RecordedTurn: Sendable {
     var failure: String?
     /// The context the turn's last model request used, as the provider reported it.
     var context: ContextUsage?
+    /// What the runtime told the model during the turn, such as that its answer wasn't in the form
+    /// asked for: each one cost another request.
+    var notices: [String] = []
 
     /// Sends `text` to the agent, recording the turn from its updates.
     static func send(_ text: String, to agent: Agent, on system: ClusterSystem) async -> RecordedTurn {
@@ -67,16 +70,33 @@ struct RecordedTurn: Sendable {
             var partial = await recording.value
             partial.failure = String(describing: error)
             partial.context = try? await agent.contextSnapshot.contextUsage
+            partial.notices = await notices(of: agent)
             return partial
         }
         stream.finish()
         var turn = await recording.value
         turn.context = try? await agent.contextSnapshot.contextUsage
+        turn.notices = await notices(of: agent)
         return turn
+    }
+
+    /// The notices of the agent's last turn, by what they said.
+    private static func notices(of agent: Agent) async -> [String] {
+        guard let turn = try? await agent.history().closed.last else { return [] }
+        return turn.steps.compactMap { step in
+            guard case .noticed(let notice, _) = step else { return nil }
+            return switch notice {
+            case .answerRanOut: "answer ran out"
+            case .answerOutOfShape: "answer out of shape"
+            case .toolCallsRanOut: "tool calls ran out"
+            case .toolCallsRepeated: "tool calls repeated"
+            }
+        }
     }
 
     var transcript: String {
         calls.map { "--- \($0.name) \($0.arguments)\n=> \($0.output)\n" }.joined()
+            + notices.map { "=== noticed: \($0)\n" }.joined()
             + "=== answer: \(answer)\n"
             + (failure.map { "=== failure: \($0)\n" } ?? "")
             + (context.map { "=== context: \($0.usedTokens) of \($0.limitTokens) tokens\n" } ?? "")
