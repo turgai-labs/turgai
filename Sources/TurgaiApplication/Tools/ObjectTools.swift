@@ -730,7 +730,7 @@ public actor ObjectSession {
             let returnedType = returnedType(of: handle)
             for (name, action) in description.actions.sorted(by: { $0.key < $1.key }) {
                 // One an action returned is used through its type's tools.
-                let tool = returnedType.map { "\($0)_\(name)" } ?? "\(handle)_\(name)"
+                let tool = ActionNaming.byHandle.name(returnedType?.rawValue ?? handle.description, name)
                 actions.append("- \(tool)" + (Self.given(action.description).map { ": \($0)" } ?? ""))
             }
             lines.append("Actions:\n" + actions.joined(separator: "\n"))
@@ -1506,7 +1506,8 @@ public enum ActionNaming: Sendable {
     case asObject
 
     func name(_ handle: String, _ action: String) -> String {
-        switch self {
+        let action = ActionKeys.toolName(of: action)
+        return switch self {
         case .byHandle: "\(handle)_\(action)"
         case .asObject: "object_\(handle)_\(action)"
         }

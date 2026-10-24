@@ -107,6 +107,29 @@ public struct ObjectShape: Sendable, Equatable {
         public var calls: [String: [String]] = [:]
         /// What its declaration says it may do besides return: wait, and throw.
         public var effects: [ObjectAction.Effect] = []
+        /// Swift's name for it, its labels in it: `plan(request:)`, `plan(_:)`, `reset()`.
+        public var selector: String {
+            "\(name)(" + parameters.map { "\($0.label ?? "_"):" }.joined() + ")"
+        }
+
+        /// Its selector with its parameters' types, for overloads only their types tell apart:
+        /// `plan(_: String)`.
+        var typedSelector: String {
+            "\(name)(" + parameters.map { "\($0.label ?? "_"): \($0.type)" }.joined(separator: ", ") + ")"
+        }
+
+        /// Whether a call with `given` is to it, keyed as code calls it, each by its label or, without
+        /// one, its position (`_0`), or else as a model calls it, by its parameters' names: each it
+        /// takes is there, and nothing else is.
+        func takes(_ given: [String: JSONValue], byNames: Bool) -> Bool {
+            var keys = Set(given.keys)
+            for (index, parameter) in parameters.enumerated() {
+                let key = byNames ? parameter.name : (parameter.label ?? "_\(index)")
+                if keys.remove(key) == nil, !parameter.optional { return false }
+            }
+            return keys.isEmpty
+        }
+
         /// As Swift declares it: `askForRaise(from ann: Ann, amount: Int) async throws -> Bool`.
         public var written: String {
             "\(name)(\(parameters.map(\.declared).joined(separator: ", ")))"
@@ -153,6 +176,25 @@ public struct ObjectShape: Sendable, Equatable {
     public let type: String
     public private(set) var fields: [Field]
     public private(set) var messages: [Message]
+
+    /// The action a message is, as its object describes it: its name when it's the only one called
+    /// that, as Swift lets a call name it; one of several with a name, its selector, `plan(request:)`;
+    /// and of several with one selector, which only their types tell apart, with them.
+    public func actionKey(of message: Message) -> String {
+        let named = messages.filter { $0.name == message.name }
+        guard named.count > 1 else { return message.name }
+        return named.filter({ $0.selector == message.selector }).count > 1 ? message.typedSelector : message.selector
+    }
+
+    /// The message a call to `action` with `given` is to: the one it names, or of the overloads its
+    /// name has, the one whose labels the arguments are given by, as Swift picks an overload.
+    public func message(_ action: String, given: [String: JSONValue]) -> Message? {
+        if let exact = messages.first(where: { actionKey(of: $0) == action }) { return exact }
+        if let selected = messages.first(where: { $0.selector == action }) { return selected }
+        let named = messages.filter { $0.name == action }
+        if named.count == 1 { return named[0] }
+        return named.first { $0.takes(given, byNames: false) } ?? named.first { $0.takes(given, byNames: true) }
+    }
     /// What it announces: its `@Event` methods, which nobody else can call.
     public private(set) var events: [Message]
     /// The fields whose object it follows the events of: its `@Subscribed` properties.

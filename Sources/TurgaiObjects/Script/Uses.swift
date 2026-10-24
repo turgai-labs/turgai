@@ -84,7 +84,7 @@ extension Uses {
                 lines += documentedParameters(of: action.input, indent: "    ")
                 // Called on another actor's node: awaited, and tried, whatever its code declares.
                 lines.append(
-                    "    func \(name)(\(written(parameters))) async throws"
+                    "    func \(ActionKeys.baseName(of: name))(\(written(parameters))) async throws"
                         + (output.flatMap { $0 }.map { " -> \($0)" } ?? ""))
                 if let input = action.input { schemas.append(input) }
                 if let output = action.output { schemas.append(output) }

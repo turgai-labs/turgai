@@ -154,11 +154,17 @@ public final class ScriptInstance {
     /// their types, and what isn't of its type is refused with where it is in the value. A message
     /// that fails leaves the instance as it failed: its object starts it again from the journal.
     public func handle(_ name: String, arguments: JSONValue) async throws(CodeProblem) -> ObjectReply {
-        guard let message = shape.messages.first(where: { $0.name == name }) else {
+        let given = arguments.objectValue ?? [:]
+        guard let message = shape.message(name, given: given) else {
+            let named = shape.messages.filter { $0.name == ActionKeys.baseName(of: name) }
+            if !named.isEmpty {
+                throw CodeProblem(
+                    "`\(name)` is called with what one of these takes: "
+                        + named.map(\.written).joined(separator: ", ") + ".")
+            }
             let takes = shape.messages.map(\.written).joined(separator: ", ")
             throw CodeProblem("It takes no `\(name)`; it takes \(takes.isEmpty ? "nothing yet" : takes).")
         }
-        let given = arguments.objectValue ?? [:]
         var values: [(label: String?, value: Portable)] = []
         for (index, parameter) in message.parameters.enumerated() {
             guard let argument = given[parameter.name] ?? parameter.label.flatMap({ given[$0] }) ?? given["_\(index)"],

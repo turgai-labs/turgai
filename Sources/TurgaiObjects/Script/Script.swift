@@ -190,7 +190,7 @@ extension Script {
         }
         var actions: [String: ObjectAction] = [:]
         for message in shape.messages {
-            actions[message.name] = ObjectAction(
+            actions[shape.actionKey(of: message)] = ObjectAction(
                 description: message.summary, input: message.input, output: message.output, effects: message.effects)
         }
         var events: [String: ObjectEvent] = [:]

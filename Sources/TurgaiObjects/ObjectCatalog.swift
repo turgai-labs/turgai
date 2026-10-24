@@ -152,7 +152,8 @@ public distributed actor ObjectCatalog: LifecycleWatch {
 
     /// An action with its argument names, such as `add(title, notes?)`, so a model
     /// can call it without describing the object first.
-    public static func signature(_ name: String, input: JSONValue?) -> String {
+    public static func signature(_ key: String, input: JSONValue?) -> String {
+        let name = ActionKeys.baseName(of: key)
         guard case .object(let properties)? = input?["properties"], !properties.isEmpty else { return "\(name)()" }
         let required: [String] =
             if case .array(let names)? = input?["required"] {
