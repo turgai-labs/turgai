@@ -2,7 +2,6 @@ import DiscoverableActors
 import DistributedCluster
 import Foundation
 import Hail
-import TurgaiDomain
 import TurgaiObjects
 import VirtualActors
 
@@ -13,8 +12,8 @@ import VirtualActors
 // A profile's agent, as an object: it describes itself as `@Discoverable` would describe its own
 // `respond(_:)` answering in text, `func respond(_ request: String) async throws -> String`, its
 // schemas from those types. The agents
-// Turgai lists are the ones asked on a person's behalf: one per person and profile, the person's own,
-// with a history of its own, seeing their objects.
+// Turgai lists are the ones asked as objects: one per profile, shared as made objects are, with a
+// history of its own.
 extension Agent: @retroactive DiscoverableActor {
     private static let objectType = "Agent"
 
@@ -83,31 +82,29 @@ extension Agent: @retroactive DiscoverableActor {
 }
 
 extension Agent {
-    /// The agent of `role` asked on `person`'s behalf.
-    static func asked(_ role: Role, by person: TurgaiDomain.UserID) -> AgentID {
-        AgentID(role: role, contextID: AgentContext.asked(by: person, as: role).contextID)
+    /// The agent of `role` asked as an object.
+    static func asked(_ role: Role) -> AgentID {
+        AgentID(role: role, contextID: AgentContext.asked(as: role).contextID)
     }
 
     /// The id an asked agent is listed by: its virtual actor's.
-    static func objectID(_ role: Role, askedBy person: TurgaiDomain.UserID) -> ObjectID {
-        .virtual(VirtualActorID(rawValue: asked(role, by: person).rawValue))
+    static func objectID(_ role: Role) -> ObjectID {
+        .virtual(VirtualActorID(rawValue: asked(role).rawValue))
     }
 
-    /// The agents of `roles`, asked on `person`'s behalf, as their objects are listed: each checked
-    /// in in their scope, where code finds it by its name, and described as every agent is. None
+    /// The agents of `roles`, asked as objects, as their objects are listed: each checked in where
+    /// made objects are, where code finds it by its name, and described as every agent is. None
     /// starts until it's asked.
-    public static func offered(_ roles: [Role], to person: TurgaiDomain.UserID, on system: ClusterSystem) async throws
-        -> [ObjectEntry]
-    {
-        let scope = ObjectScope.owned(by: person)
+    public static func offered(_ roles: [Role], on system: ClusterSystem) async throws -> [ObjectEntry] {
+        let scope = ObjectScope.shared
         var entries: [ObjectEntry] = []
         for role in roles {
-            let agent = try await system.agent(asked(role, by: person))
+            let agent = try await system.agent(asked(role))
             let object = try DiscoverableObject.resolve(id: agent.id, using: system)
             await system.receptionist.checkIn(object, with: scope.virtualReceptionistKey)
             entries.append(
                 ObjectEntry(
-                    id: objectID(role, askedBy: person), object: object, type: objectType,
+                    id: objectID(role), object: object, type: objectType,
                     description: objectDescription.description, scope: scope,
                     actions: objectDescription.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
                         .sorted()))

@@ -5,7 +5,6 @@ import EventSourcing
 import Foundation
 import Hail
 import TurgaiApplication
-import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
 import TurgaiPersistence
@@ -19,9 +18,6 @@ struct EvalNode: Sendable {
     let virtualNode: VirtualNode
     let workspace: URL
     let objectCatalog: ObjectCatalog
-
-    /// The person agents work for, in tasks that have agents.
-    static let person = TurgaiDomain.UserID(rawValue: "participant:eval:ann")
 
     static func start(
         model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil,
@@ -63,18 +59,12 @@ struct EvalNode: Sendable {
                 // An object's Swift is written by the same model, in a session of its own.
                 let writing = try await endpoints.endpoint(
                     model: model, configuration: configuration, temperature: runtime.temperature)
-                // A task with agents has a person they work for, whose objects they are, as in the
-                // app; the eval's own agent works for that person too.
-                var scopes: [ObjectScope] = [.shared]
-                var offered: [ObjectEntry] = []
-                if !agents.isEmpty {
-                    let person = AgentContext(context.agentID.contextID)?.person ?? Self.person
-                    scopes = ObjectScope.visible(to: person)
-                    offered = try await Agent.offered(
-                        agents.map(\.role).filter { $0 != context.agentID.role }, to: person, on: actorSystem)
-                }
+                // A task's agents, which the others can ask: never itself.
+                let offered = try await Agent.offered(
+                    agents.map(\.role).filter { $0 != context.agentID.role }, on: actorSystem)
                 let session = ObjectSession(
-                    actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: scopes, agents: offered,
+                    actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: [.shared],
+                    agents: offered,
                     writer: ObjectWriter(
                         endpoint: writing, report: { FileHandle.standardError.write(Data($0.written.utf8)) }),
                     request: context.input.text)

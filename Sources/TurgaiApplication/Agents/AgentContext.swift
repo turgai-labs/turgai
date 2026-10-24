@@ -1,26 +1,22 @@
 import Hail
 import TurgaiDomain
 
-/// Who a profile's agent works for, as its Hail context says: a conversation, or a person who
-/// asked it as an object. Read once, from the context, where a turn's tools are made.
+/// What a profile's agent answers for, as its Hail context says: a conversation, or being asked as
+/// an object. Read once, from the context, where a turn's tools are made.
 public enum AgentContext: Equatable, Sendable {
     /// Replying in a conversation.
     case conversation(ConversationID)
-    /// Asked as an object, on this person's behalf: its own history, no conversation to reply in.
-    /// It ends with its role, the agent's name in the person's scope, as an object's id ends with
-    /// its name.
-    case asked(by: TurgaiDomain.UserID, as: Role)
+    /// Asked as an object: its own history, no conversation to reply in. It ends with its role, the
+    /// agent's name among the objects, as an object's id ends with its name.
+    case asked(as: Role)
 
-    private static let askedPrefix = "asked-by/"
+    private static let askedPrefix = "asked/"
 
     public init?(_ id: AgentContextID) {
         if id.rawValue.hasPrefix(Self.askedPrefix) {
-            let rest = id.rawValue.dropFirst(Self.askedPrefix.count)
-            guard let slash = rest.lastIndex(of: "/") else { return nil }
-            let person = rest[..<slash]
-            let role = rest[rest.index(after: slash)...]
-            guard !person.isEmpty, !role.isEmpty else { return nil }
-            self = .asked(by: TurgaiDomain.UserID(rawValue: String(person)), as: Role(String(role)))
+            let role = id.rawValue.dropFirst(Self.askedPrefix.count)
+            guard !role.isEmpty, !role.contains("/") else { return nil }
+            self = .asked(as: Role(String(role)))
         } else if let conversation = ConversationID(stableKey: id.rawValue) {
             self = .conversation(conversation)
         } else {
@@ -31,15 +27,15 @@ public enum AgentContext: Equatable, Sendable {
     public var contextID: AgentContextID {
         switch self {
         case .conversation(let conversation): AgentContextID(conversation.stableKey)
-        case .asked(let person, let role): AgentContextID("\(Self.askedPrefix)\(person.rawValue)/\(role.rawValue)")
+        case .asked(let role): AgentContextID(Self.askedPrefix + role.rawValue)
         }
     }
 
-    /// The person it works for.
+    /// The person it works for: a conversation's. One asked as an object works for no one person.
     public var person: TurgaiDomain.UserID? {
         switch self {
         case .conversation(let conversation): conversation.participantUserID
-        case .asked(let person, _): person
+        case .asked: nil
         }
     }
 }

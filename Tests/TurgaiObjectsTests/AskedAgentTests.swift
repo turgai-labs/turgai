@@ -11,17 +11,16 @@ import TurgaiObjects
 
 @Suite
 struct AskedAgentTests {
-    /// The agents asked on a person's behalf are objects in their scope: each by its own id, listed
-    /// apart on the objects page, with its tools, and found by name from code. One not offered, such
-    /// as the asking agent's own, isn't listed. None starts to be listed: only the one code reaches.
+    /// The agents asked as objects are shared, as made objects are: each by its own id, listed apart
+    /// on the objects page, with its tools, and found by name from code. One not offered, such as the
+    /// asking agent's own, isn't listed. None starts to be listed: only the one code reaches.
     @Test(.timeLimit(.minutes(1)))
     func agentsAreListedAndFoundByTheirIds() async throws {
         let started = StartedAgents()
         try await withAgentNodes(started) { objects, sessionNode in
-            let ann = TurgaiDomain.UserID(rawValue: "participant:test:ann")
-            _ = try await Agent.offered([Role("conversation")], to: ann, on: objects)
-            let offered = try await Agent.offered([Role("planner"), Role("chef")], to: ann, on: sessionNode)
-            let session = ObjectSession(actorSystem: sessionNode, scopes: ObjectScope.visible(to: ann), agents: offered)
+            _ = try await Agent.offered([Role("conversation")], on: objects)
+            let offered = try await Agent.offered([Role("planner"), Role("chef")], on: sessionNode)
+            let session = ObjectSession(actorSystem: sessionNode, scopes: [.shared], agents: offered)
 
             var page = ""
             for _ in 0..<50 {
@@ -42,11 +41,9 @@ struct AskedAgentTests {
             #expect(await session.actionTools(of: planner).map(\.name) == ["planner_respond"])
             #expect(await started.roles.isEmpty)
 
-            // Code finds one by its name; two of one type never collide.
-            let found = try #require(
-                try await ObjectNames.object(named: "chef", in: ObjectScope.visible(to: ann), using: sessionNode))
-            #expect(found.object.id.virtualActorID.map { ObjectID.virtual($0) } == Agent.objectID(Role("chef"), askedBy: ann))
-            #expect(try await ObjectNames.object(named: "planner", in: [.shared], using: sessionNode) == nil)
+            // Code in a shared object finds one by its name; two of one type never collide.
+            let found = try #require(try await ObjectNames.object(named: "chef", in: [.shared], using: sessionNode))
+            #expect(found.object.id.virtualActorID.map { ObjectID.virtual($0) } == Agent.objectID(Role("chef")))
             #expect(await started.roles == ["chef"])
         }
     }

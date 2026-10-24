@@ -11,7 +11,7 @@ struct EvalTask: Sendable {
     /// Requests that follow it, one turn each, before the check: what a person asks for one
     /// object at a time.
     var then: [String] = []
-    /// The agents the person has, besides the one asked: each can be asked as an object.
+    /// The agents there are, besides the one asked: each can be asked as an object.
     var agents: [EvalAgent] = []
     let check: Check
 
@@ -48,7 +48,7 @@ struct EvalTask: Sendable {
         self.check = check
     }
 
-    /// The person's planner, whose every plan starts the same way, so an answer can be told to be its.
+    /// A planner, whose every plan starts the same way, so an answer can be told to be its.
     private static let planner = EvalAgent(
         role: Role("planner"),
         instructions: "You plan people's days. Every plan you give starts with coffee at nine.")

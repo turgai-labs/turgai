@@ -50,10 +50,8 @@ public enum ConversationTools {
         // The person the agent works for.
         let owner = working?.person
         if let actorSystem {
-            // The other agents working for them, which it can ask: never itself.
-            let others = agents.filter { $0 != context.agentID.role }
-            var askable: [ObjectEntry] = []
-            if let owner { askable = try await Agent.offered(others, to: owner, on: actorSystem) }
+            // The other agents, which it can ask: never itself.
+            let askable = try await Agent.offered(agents.filter { $0 != context.agentID.role }, on: actorSystem)
             let session = ObjectSession(
                 actorSystem: actorSystem,
                 objectCatalog: objectCatalog,
