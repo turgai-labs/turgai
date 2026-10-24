@@ -125,7 +125,7 @@ public distributed actor DynamicObject: DiscoverableActor {
             guard existing.type == type.rawValue else {
                 throw CodeProblem("`\(identity)` is a `\(existing.type)`, not a `\(type)`.")
             }
-        } else if let builtIn = await ObjectNames.object(
+        } else if let builtIn = try await ObjectNames.object(
             named: identity.rawValue, in: scopes(around: scope), using: system)
         {
             // A built-in object, the one of its kind, is reached as it checked in.
@@ -612,7 +612,7 @@ public distributed actor DynamicObject: DiscoverableActor {
                     return .made(try await DynamicObject.resolve(on: system, nature: nature))
                 }
             }
-            guard let found = await ObjectNames.object(named: name, in: scopes, using: system) else {
+            guard let found = try await ObjectNames.object(named: name, in: scopes, using: system) else {
                 throw DynamicObjectError.noObjectNamed(name)
             }
             return .other(found.object)

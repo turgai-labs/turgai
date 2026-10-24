@@ -32,18 +32,32 @@ public enum ObjectNames {
         title.lowercased() == name.lowercased() || handle(for: title) == handle(for: name)
     }
 
-    /// The object named `name` among those checked in to `scopes`, if one is.
+    /// The object named `name` among those checked in to `scopes`, if one is: a virtual actor by its
+    /// id, the one of its kind by its type. Two of one name are refused: neither is the one meant.
+    /// A virtual actor checked in by its id is only asked what it is once it's the one.
     public static func object(
         named name: String, in scopes: [ObjectScope], using system: ClusterSystem
-    ) async -> (object: DiscoverableObject, description: ObjectDescription)? {
+    ) async throws -> (object: DiscoverableObject, description: ObjectDescription)? {
+        var found: [DiscoverableObject] = []
+        var described: [ClusterSystem.ActorID: ObjectDescription] = [:]
         for scope in scopes {
-            for object in await system.receptionist.lookup(scope.receptionistKey) {
-                guard let description = try? await object.describe(), matches(name, title: description.type) else {
-                    continue
+            for object in await system.receptionist.lookup(scope.virtualReceptionistKey) {
+                if object.id.virtualActorID.map({ ObjectID.virtual($0).name }) == handle(for: name) {
+                    found.append(object)
                 }
-                return (object, description)
+            }
+            for object in await system.receptionist.lookup(scope.receptionistKey) {
+                guard let description = try? await object.describe() else { continue }
+                let id = object.id.virtualActorID.map(ObjectID.virtual) ?? .actor(object.id, type: description.type)
+                if id.name == handle(for: name) {
+                    found.append(object)
+                    described[object.id] = description
+                }
             }
         }
-        return nil
+        guard found.count < 2 else { throw DynamicObjectError.severalNamed(name) }
+        guard let object = found.first else { return nil }
+        if let description = described[object.id] { return (object, description) }
+        return (object, try await object.describe())
     }
 }

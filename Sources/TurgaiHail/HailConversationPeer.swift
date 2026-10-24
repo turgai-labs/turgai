@@ -1,4 +1,5 @@
 import AnyLanguageModel
+import DiscoverableActors
 import DistributedCluster
 import Hail
 import TurgaiDomain
@@ -10,8 +11,9 @@ import VirtualActors
     import Foundation
 #endif
 
-/// What a conversation's agent replies with.
+/// What an agent replies with.
 @Generable
+@Describable
 public struct AgentReply: Codable, Sendable {
     /// What the assistant says back.
     public let text: String

@@ -273,6 +273,7 @@ public enum DynamicObjectError: Error, Codable, Equatable, Sendable, CustomStrin
     case unknownField(String, held: [String])
     case noReference(String)
     case noObjectNamed(String)
+    case severalNamed(String)
     case callsTooDeep(CallChain)
     /// A call made through a type this object isn't.
     case notA(String, isA: String)
@@ -287,6 +288,7 @@ public enum DynamicObjectError: Error, Codable, Equatable, Sendable, CustomStrin
             "It holds no `\(name)`. It holds \(held.map { "`\($0)`" }.joined(separator: ", "))."
         case .noReference(let value): "\(value) isn't an object to call."
         case .noObjectNamed(let name): "There's no object named `\(name)`."
+        case .severalNamed(let name): "Several objects are named `\(name)`."
         case .notA(let type, let isA): "It's a `\(isA)`, not a `\(type)`."
         case .callsTooDeep(let chain):
             "calls between objects went \(chain.objects.count) deep: "

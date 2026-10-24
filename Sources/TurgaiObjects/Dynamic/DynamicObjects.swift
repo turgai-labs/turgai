@@ -85,7 +85,7 @@ public distributed actor DynamicObjects {
             throw DynamicObjectsError.exists(identity.rawValue, type: code.type)
         }
         guard !state.identities.contains(identity), !state.removed.contains(identity),
-            await ObjectNames.object(
+            try await ObjectNames.object(
                 named: identity.rawValue, in: DynamicObject.scopes(around: scope), using: actorSystem) == nil
         else { throw DynamicObjectsError.nameTaken(name) }
         let made = try await DynamicObject.resolve(
@@ -126,7 +126,7 @@ public distributed actor DynamicObjects {
             let spec = try await object.describe()
             held.append(
                 ObjectEntry(
-                    id: .named(entry.identity.rawValue),
+                    id: .virtual(DynamicObject.actorID(for: ObjectNature(identity: entry.identity, scope: scope))),
                     object: try DiscoverableObject.resolve(id: object.id, using: actorSystem), type: spec.type,
                     description: spec.description,
                     scope: scope,

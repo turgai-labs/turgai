@@ -373,6 +373,10 @@ struct TurgaiAppService: Service, Sendable {
                         actorSystem: actorSystem,
                         objectCatalog: objectCatalog,
                         writer: writer,
+                        // Every enabled profile's agent can be asked, as an object.
+                        agents: await agentProfiles.profiles().filter { $0.availability == .enabled }.map {
+                            Role($0.id)
+                        },
                         includeConversationTools: context.agentID.role.rawValue != "user-tool"
                     )
                     // Hail's files and agent messaging, for the agents granted them.

@@ -58,13 +58,13 @@ struct DemoObjectsTests {
 
             // Today the model carries the story; step 2 lets the objects do it themselves.
             let order = try await session.invoke(
-                .named("shop"), action: "placeOrder", arguments: #"{"item": "Lamp", "amount": 40}"#)
+                try await session.id(written: "shop"), action: "placeOrder", arguments: #"{"item": "Lamp", "amount": 40}"#)
             #expect(order["status"] == "placed")
             let request = #"{"number": 1, "replyTo": "customer"}"#
-            let requested = try await session.invoke(.named("shop"), action: "requestRefund", arguments: request)
+            let requested = try await session.invoke(try await session.id(written: "shop"), action: "requestRefund", arguments: request)
             #expect(requested["status"] == "refundRequested")
             _ = try await session.invoke(
-                .named("warehouse"), action: "refundApproved",
+                try await session.id(written: "warehouse"), action: "refundApproved",
                 arguments: try ObjectSession.text(["order": requested]))
 
             let notes = try await warehouse.notes
@@ -72,7 +72,7 @@ struct DemoObjectsTests {
             #expect(notes.map(\.instruction) == [.expectReturn])
 
             await #expect(throws: ObjectToolError.failed(ShopError.notRefundable(1, .refundRequested).description)) {
-                try await session.invoke(.named("shop"), action: "requestRefund", arguments: request)
+                try await session.invoke(try await session.id(written: "shop"), action: "requestRefund", arguments: request)
             }
             _ = (shop, catalog)
         }

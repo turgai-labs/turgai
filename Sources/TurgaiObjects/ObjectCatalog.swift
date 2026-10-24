@@ -3,25 +3,28 @@ import Distributed
 import DistributedCluster
 import VirtualActors
 
-/// Which object something is, as the system knows it, and as models and people are shown it.
+/// Which object something is, as the system knows it, and as models and people are shown it: the
+/// system's own id, and nothing else.
 public enum ObjectID: Hashable, Codable, Sendable, CustomStringConvertible, Comparable {
-    /// An object made by name, by the id it was made with, or a built-in object, the one of its kind
-    /// here, by its type.
-    case named(String)
     /// A virtual actor, by its id: the same wherever and whenever it runs.
     case virtual(VirtualActorID)
-    /// Any other actor, by its id: which it is while it lives.
-    case actor(ClusterSystem.ActorID)
+    /// Any other actor, by its id: which it is while it lives. With the type it's found by when
+    /// it's the one of its kind checked in here.
+    case actor(ClusterSystem.ActorID, type: String?)
 
-    /// How it's written: exactly, so it reads back as itself. An actor's is its node, with the
-    /// process it runs in, and its path there.
-    public var description: String {
+    /// What it's called: a virtual actor's id within its scope, the part after it; the type of the
+    /// one of its kind checked in here. One an action returned, of a type there can be many of, is
+    /// called by its id.
+    public var name: String {
         switch self {
-        case .named(let name): name
-        case .virtual(let id): id.rawValue
-        case .actor(let id): "\(id.node)\(id.path)"
+        case .virtual(let id): id.rawValue.split(separator: "/").last.map(String.init) ?? id.rawValue
+        case .actor(_, let type?): ObjectNames.handle(for: type)
+        case .actor(let id, nil): "\(id.node)\(id.path)"
         }
     }
+
+    /// How it's written: its name, which reads back as it.
+    public var description: String { name }
 
     /// In the order they're written in, as they're listed.
     public static func < (lhs: ObjectID, rhs: ObjectID) -> Bool {
@@ -188,8 +191,9 @@ public distributed actor ObjectCatalog: LifecycleWatch {
                 guard let object = try? DiscoverableObject.resolve(id: record.id, using: actorSystem) else { continue }
                 entries.append(
                     ObjectEntry(
-                        // A built-in is the one of its kind here: its type is which one.
-                        id: .named(ObjectNames.handle(for: record.type)),
+                        // A virtual actor by its id; any other, the one of its kind here, by its
+                        // id with its type, which it's found by.
+                        id: record.id.virtualActorID.map(ObjectID.virtual) ?? .actor(record.id, type: record.type),
                         object: object,
                         type: record.type,
                         description: record.description,
@@ -199,6 +203,7 @@ public distributed actor ObjectCatalog: LifecycleWatch {
                     ))
             }
         }
-        return entries.sorted { $0.object.id.description < $1.object.id.description }
+        // By id, which is the same in every run, as an actor's path isn't.
+        return entries.sorted { $0.id < $1.id }
     }
 }

@@ -305,7 +305,7 @@ struct DynamicObjectTests {
                     words.contains("- Card: what a board shows. One of:\n    piece(Piece)\n    row(items: [Piece])"))
                 #expect(!words.contains("struct"))
                 // A built-in object's card is its spec.
-                guard case .markdown(let card) = try await session.card(.named("player")) else { return }
+                guard case .markdown(let card) = try await session.card(try await session.id(written: "player")) else { return }
                 #expect(card.contains("takes:\n- 'play(track: Track) async throws'"))
                 #expect(card.contains("publishes:\n- 'playing: Track? { get async throws }'"))
                 #expect(card.contains("announces:\n- 'trackChanged(track: Track?)'"))
@@ -349,7 +349,7 @@ struct DynamicObjectTests {
                 // A struct it holds is journaled as `Codable` writes it.
                 #expect(try await bridge.read(property: "last") == ["title": "Song"])
                 // What it holds reads back, the object it follows as that object's handle.
-                #expect(try await session.values(.named("bridge")).contains("player: player"))
+                #expect(try await session.values(try await session.id(written: "bridge")).contains("player: player"))
             }
         }
     }
@@ -432,11 +432,11 @@ struct DynamicObjectTests {
                 for identity in [annID, bobID] {
                     _ = try await DynamicObjects.resolve(on: node, scope: .shared).held(identity).describe()
                 }
-                try await eventually { (try? await session.yourObjects()) == [.named("ann"), .named("bob")] }
-                #expect(try await session.yourObjects() == [.named("ann"), .named("bob")])
+                try await eventually { (try? await session.yourObjects())?.map(\.name) == ["ann", "bob"] }
+                #expect(try await session.yourObjects().map(\.name) == ["ann", "bob"])
                 // Using one offers its tools, never another `edit_object` for it alone, which would
                 // stand in for the one that changes any of them.
-                let bobTools = try await session.usingPage(of: .named("bob")).links.map(\.name)
+                let bobTools = try await session.usingPage(of: try await session.id(written: "bob")).links.map(\.name)
                 #expect(!bobTools.contains("edit_object"))
                 let root = try await ObjectTools(session: session).tools().map(\.name)
                 #expect(root.contains("edit_object"))
@@ -714,7 +714,7 @@ struct DynamicObjectTests {
 
                 // Only Ann conforms: she's what the shift's argument offers.
                 #expect(
-                    await session.conforming(to: ObjectProtocolName(rawValue: "Desk.RefundManager")) == [.named("ann")])
+                    await session.conforming(to: ObjectProtocolName(rawValue: "Desk.RefundManager")) == [try await session.id(written: "ann")])
 
                 let deskObject = try await objects.held(deskID)
                 let annObject = try await objects.held(annID)
@@ -829,33 +829,17 @@ private func eventually(_ condition: () async throws -> Bool) async throws {
     Issue.record("Timed out waiting")
 }
 
-/// Settings for every node in these tests, journaled to `store`, all able to host the journal
-/// and the virtual actors' router, which are cluster singletons and run on the leader.
-private func configure(_ settings: inout ClusterSystemSettings, store: MemoryEventStore) {
-    settings.bindHost = "127.0.0.1"
-    settings.bindPort = PortFinder.findAvailablePort(host: "127.0.0.1")
-    settings.autoLeaderElection = .lowestReachable(minNumberOfMembers: 1)
-    settings.plugins.install(plugin: ClusterSingletonPlugin())
-    let virtualActors = ClusterVirtualActorsPlugin.configuring(&settings)
-    settings.plugins.install(plugin: virtualActors)
-    settings.plugins.install(plugin: DiscoveryPlugin())
-    settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
-}
-
 /// A node for the shop and warehouse, and one for customers, both outliving any dynamic node.
 private func withShopNodes<Result>(
     store: MemoryEventStore,
     _ body: (_ shop: ClusterSystem, _ customers: ClusterSystem) async throws -> Result
 ) async throws -> Result {
-    let shop = await ClusterSystem("shop") { configure(&$0, store: store) }
-    let customers = await ClusterSystem("customers") { configure(&$0, store: store) }
-    defer {
-        _ = try? shop.shutdown()
-        _ = try? customers.shutdown()
+    try await withClusterSystem("shop", store: store, hostsVirtualActors: false) { shop in
+        try await withClusterSystem("customers", store: store, joining: shop, hostsVirtualActors: false) {
+            customers in
+            try await body(shop, customers)
+        }
     }
-    customers.cluster.join(endpoint: shop.cluster.endpoint)
-    try await shop.cluster.waitFor(customers.cluster.node, .up, within: .seconds(10))
-    return try await body(shop, customers)
 }
 
 /// A node hosting dynamic objects, joined to `other`, for as long as `body` runs.
@@ -864,13 +848,7 @@ private func withDynamicNode<Result>(
     store: MemoryEventStore,
     _ body: (ClusterSystem) async throws -> Result
 ) async throws -> Result {
-    let node = await ClusterSystem("dynamic") { configure(&$0, store: store) }
-    defer { _ = try? node.shutdown() }
-    // Hosts the node's virtual actors while it's held.
-    let virtualNode = await VirtualNode(actorSystem: node)
-    node.cluster.join(endpoint: other.cluster.endpoint)
-    try await other.cluster.waitFor(node.cluster.node, .up, within: .seconds(10))
-    return try await body(node)
+    try await withClusterSystem("dynamic", store: store, joining: other, hostsVirtualActors: true, body)
 }
 
 /// Events kept in memory, standing in for the file journal.

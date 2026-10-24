@@ -33,4 +33,11 @@ extension ObjectScope {
             .init(id: "turgai.objects.owned.\(user.rawValue)")
         }
     }
+
+    /// The key of virtual actors checked in here, found by the name their id gives them without
+    /// being asked what they are, which would start them: whoever offers them lists them, as the
+    /// catalog doesn't.
+    public var virtualReceptionistKey: DistributedReception.Key<DiscoverableObject> {
+        .init(id: receptionistKey.id + ".virtual")
+    }
 }

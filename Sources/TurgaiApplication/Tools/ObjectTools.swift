@@ -25,6 +25,10 @@ public actor ObjectSession {
     let actorSystem: ClusterSystem
     private var objectCatalog: ObjectCatalog?
     let scopes: [ObjectScope]
+    /// The agents its own agent can ask: the other agents working for the same person, never
+    /// itself, which it can't ask while it answers. They're described as every agent is, so none
+    /// starts to be listed.
+    let agents: [ObjectEntry]
 
     /// The objects met, by id.
     private var objects: [ObjectID: DiscoverableObject] = [:]
@@ -58,12 +62,14 @@ public actor ObjectSession {
         actorSystem: ClusterSystem,
         objectCatalog: ObjectCatalog? = nil,
         scopes: [ObjectScope],
+        agents: [ObjectEntry] = [],
         writer: ObjectWriter? = nil,
         request: String? = nil
     ) {
         self.actorSystem = actorSystem
         self.objectCatalog = objectCatalog
         self.scopes = scopes
+        self.agents = agents
         self.writer = writer
         self.request = request
     }
@@ -193,7 +199,8 @@ public actor ObjectSession {
 
     /// What an object says it is and does.
     func described(_ handle: ObjectID) async throws -> ObjectDescription {
-        try await call(handle) { try await $0.describe() }
+        if agents.contains(where: { $0.id == handle }) { return Agent.objectDescription }
+        return try await call(handle) { try await $0.describe() }
     }
 
     // MARK: Contracts
@@ -285,17 +292,17 @@ public actor ObjectSession {
 
     // MARK: Ids
 
-    /// The id `object`, of `type`, is shown by: a dynamic object's own, the one it was made with; a
-    /// built-in's type, the one of its kind checked in here; and otherwise the id the system has
-    /// for it, which an action returned, valid while it lives.
+    /// The id `object`, of `type`, is shown by: one checked in here as it was listed; a dynamic
+    /// object's own, its virtual actor's; and otherwise the id the system has for it, which an
+    /// action returned, valid while it lives.
     private func id(of object: DiscoverableObject, type: String) -> ObjectID {
         let id: ObjectID
-        if let identity = DynamicObject.identity(of: object.id) {
-            id = .named(identity.rawValue)
-        } else if let listed = checkedIn[object.id] {
+        if let listed = checkedIn[object.id] {
             id = listed
+        } else if DynamicObject.identity(of: object.id) != nil, let virtual = object.id.virtualActorID {
+            id = .virtual(virtual)
         } else {
-            id = object.id.virtualActorID.map(ObjectID.virtual) ?? .actor(object.id)
+            id = object.id.virtualActorID.map(ObjectID.virtual) ?? .actor(object.id, type: nil)
             let typeName = ObjectTypeName(rawValue: type)
             if !returned[typeName, default: []].contains(id) { returned[typeName, default: []].append(id) }
         }
@@ -332,7 +339,8 @@ public actor ObjectSession {
     private func entries() async throws -> [ObjectEntry] {
         if objectCatalog == nil { objectCatalog = await ObjectCatalog(actorSystem: actorSystem) }
         guard let objectCatalog else { return [] }
-        let entries = try await objectCatalog.entries(in: scopes)
+        // By id, as the catalog lists its own, so each is in the same place every time.
+        let entries = (try await objectCatalog.entries(in: scopes) + agents).sorted { $0.id < $1.id }
         checkedIn = Dictionary(entries.map { ($0.object.id, $0.id) }) { first, _ in first }
         return entries
     }
@@ -351,6 +359,24 @@ public actor ObjectSession {
         for entry in try await entries() { _ = self.listed(entry) }
         guard let id = met() else { throw ObjectToolError.unknownHandle(written) }
         return id
+    }
+
+    /// The object code named `name`: one met or listed here, or one code made under it, which its
+    /// scope's directory doesn't list.
+    private func id(named name: String) async throws -> ObjectID {
+        let written = ObjectNames.handle(for: name)
+        if let id = try? await id(written: written) { return id }
+        for scope in scopes {
+            guard
+                let made = try await DynamicObjects.resolve(on: actorSystem, scope: scope).existing(
+                    ObjectIdentity(rawValue: written)),
+                let virtual = made.id.virtualActorID
+            else { continue }
+            let id = ObjectID.virtual(virtual)
+            self.made[id] = made
+            return showing(id, try DiscoverableObject.resolve(id: made.id, using: actorSystem))
+        }
+        throw ObjectToolError.unknownHandle(written)
     }
 
     /// The object met with `id`.
@@ -461,12 +487,15 @@ public actor ObjectSession {
         var summaries: [String: String] = [:]
         var descriptions: [String: ObjectDescription] = [:]
         for handle in handles.sorted() {
-            guard let description = try? await object(handle).describe(), description.type != type else { continue }
+            guard let description = try? await described(handle), description.type != type else { continue }
             let typeName = description.type
             // What it publishes is read, never written: what isn't `private`, as Swift reads another
             // actor's property.
             // Code reaches by id, `Type(id:)`, what has one: an object made by name, or a built-in one.
-            if case .named(let name) = handle { existing[ObjectIdentity(rawValue: name)] = typeName }
+            switch handle {
+            case .virtual, .actor(_, type: _?): existing[ObjectIdentity(rawValue: handle.name)] = typeName
+            case .actor(_, type: nil): break
+            }
             // One actor per type: every object of it is a constant of that type.
             guard !objects.contains(where: { $0.type == typeName }) else { continue }
             objects.append(Uses.Object(description: description, publishes: true))
@@ -713,9 +742,11 @@ public actor ObjectSession {
     /// The object made here that `name` is the handle of, written as its handle or as its name.
     /// A handle of an object made elsewhere can't be defined.
     private func madeObject(named name: String) async throws -> (handle: ObjectID, object: DynamicObject)? {
-        for handle in [ObjectID.named(ObjectNames.handle(for: name)), .named(name)] {
-            guard (try? await object(handle)) != nil else { continue }
-            return (handle, try await dynamicObject(handle))
+        for written in [ObjectNames.handle(for: name), name] {
+            guard let handle = try? await id(written: written), let made = try await madeObject(handle) else {
+                continue
+            }
+            return (handle, made)
         }
         return nil
     }
@@ -788,8 +819,8 @@ public actor ObjectSession {
     /// object is ever called as one.
     private func dynamicObject(_ handle: ObjectID) async throws -> DynamicObject {
         // One code named by its id is reached by it too.
-        if (try? await madeObject(handle)) == nil, case .named(let name) = handle {
-            let identity = ObjectIdentity(rawValue: ObjectNames.handle(for: name))
+        if (try? await madeObject(handle)) == nil, case .virtual = handle {
+            let identity = ObjectIdentity(rawValue: handle.name)
             for scope in scopes {
                 if let named = try await DynamicObjects.resolve(on: actorSystem, scope: scope).existing(identity) {
                     return named
@@ -902,17 +933,26 @@ public actor ObjectSession {
             return values.compactMap { text($0) }
         }
         var lines = [ObjectTools.description]
-        if case .array(let entries) = try await list(), !entries.isEmpty {
-            let shown = entries.prefix(limit).map { entry in
-                let actions = texts(entry["actions"])
-                let events = texts(entry["events"])
-                return "- id: `\(text(entry["object_id"]) ?? "")`; type: `\(text(entry["type"]) ?? "")`"
-                    + (Self.given(text(entry["description"])).map { " — \($0)" } ?? "")
-                    + (actions.isEmpty ? "" : ". Takes \(actions.joined(separator: ", ")).")
-                    + (events.isEmpty ? "" : "; events: \(events.joined(separator: ", "))")
+        func line(_ entry: DiscoveryJSON) -> String {
+            let actions = texts(entry["actions"])
+            let events = texts(entry["events"])
+            return "- id: `\(text(entry["object_id"]) ?? "")`; type: `\(text(entry["type"]) ?? "")`"
+                + (Self.given(text(entry["description"])).map { " — \($0)" } ?? "")
+                + (actions.isEmpty ? "" : ". Takes \(actions.joined(separator: ", ")).")
+                + (events.isEmpty ? "" : "; events: \(events.joined(separator: ", "))")
+        }
+        if case .array(let listed) = try await list() {
+            // Agents are objects too, listed apart: the same tools reach them.
+            let agentIDs = Set(agents.map(\.id.description))
+            let agentEntries = listed.filter { text($0["object_id"]).map(agentIDs.contains) ?? false }
+            let entries = listed.filter { !(text($0["object_id"]).map(agentIDs.contains) ?? false) }
+            if !entries.isEmpty {
+                let more = entries.count > limit ? ["…and \(entries.count - limit) more; search_objects finds them."] : []
+                lines.append((["Available objects:"] + entries.prefix(limit).map(line) + more).joined(separator: "\n"))
             }
-            let more = entries.count > limit ? ["…and \(entries.count - limit) more; search_objects finds them."] : []
-            lines.append((["Available objects:"] + shown + more).joined(separator: "\n"))
+            if !agentEntries.isEmpty {
+                lines.append((["Agents:"] + agentEntries.map(line)).joined(separator: "\n"))
+            }
         }
         let madeHandles = try await runtimeObjects()
         lines.append(
@@ -965,7 +1005,7 @@ public actor ObjectSession {
         case .actor(let actor, _)?:
             reference = actor
         case .named(let name, _)?:
-            let named = ObjectID.named(ObjectNames.handle(for: name))
+            let named = try await id(named: name)
             link(.object(named))
             return .string(named.description)
         case .itself?, .unmade?, nil:

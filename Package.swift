@@ -182,6 +182,7 @@ let package = Package(
             dependencies: [
                 "TurgaiDomain",
                 .product(name: "Hail", package: "hail"),
+                .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
             ]

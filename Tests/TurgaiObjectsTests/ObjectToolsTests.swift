@@ -75,27 +75,11 @@ func withObjectNodes(
     _ body: (_ objects: ClusterSystem, _ session: ClusterSystem) async throws -> Void
 ) async throws {
     let store = MemoryEventStore()
-    func configure(_ settings: inout ClusterSystemSettings) {
-        settings.bindHost = "127.0.0.1"
-        settings.bindPort = PortFinder.findAvailablePort(host: "127.0.0.1")
-        // Shops reach their owners as virtual actors.
-        settings.plugins.install(plugin: ClusterSingletonPlugin())
-        let virtualActors = ClusterVirtualActorsPlugin.configuring(&settings)
-        settings.plugins.install(plugin: virtualActors)
-        settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
+    try await withClusterSystem("objects", store: store, hostsVirtualActors: true) { objects in
+        try await withClusterSystem("session", store: store, joining: objects, hostsVirtualActors: false) { session in
+            try await body(objects, session)
+        }
     }
-    let first = await ClusterSystem("objects", configuredWith: configure)
-    let second = await ClusterSystem("session", configuredWith: configure)
-    defer {
-        _ = try? first.shutdown()
-        _ = try? second.shutdown()
-    }
-    // Hosts the made objects while it's held.
-    let virtualNode = await VirtualNode(actorSystem: first)
-    second.cluster.join(endpoint: first.cluster.endpoint)
-    try await first.cluster.waitFor(second.cluster.node, .up, within: .seconds(10))
-    try await body(first, second)
-    _ = virtualNode
 }
 
 /// The receptionist spreads check-ins by gossip, so wait until the session's node sees them.
@@ -130,14 +114,14 @@ struct ObjectToolsTests {
             #expect(root["object_id"] == "reminders")
 
             // Descriptions show references as handles, never as actor IDs.
-            let described = try await session.describe(.named("reminders"))
+            let described = try await session.describe(try await session.id(written: "reminders"))
             #expect(described["actions"]?["lists"]?["output"]?["items"]?["type"] == "string")
             #expect(described["actions"]?["lists"]?["safe"] == true)
 
             // The returned list comes back as the id the system has for it, never a made-up one.
-            let lists = try await session.invoke(.named("reminders"), action: "lists", arguments: nil)
+            let lists = try await session.invoke(try await session.id(written: "reminders"), action: "lists", arguments: nil)
             let list = try #require(try await ids(in: session, lists).first)
-            #expect(try await ids(in: session, lists).count == 1 && list != .named("reminder-list"))
+            #expect(try await ids(in: session, lists).count == 1 && list.name != "reminder-list")
             #expect(try await session.read(list, property: "title") == "Groceries")
 
             // The new reminder comes back by its id too.
@@ -172,10 +156,10 @@ struct ObjectToolsTests {
             let reminders = try await Reminders(actorSystem: objectsNode, client: makeClient(memory: memory))
             let session = ObjectSession(actorSystem: sessionNode, scopes: [.shared])
             _ = try await waitForRoots(1, in: session)
-            #expect(await session.actionTools(of: .named("reminders")).map(\.name).contains("reminders_lists"))
+            #expect(await session.actionTools(of: try await session.id(written: "reminders")).map(\.name).contains("reminders_lists"))
 
             let lists = try await ids(
-                in: session, try await session.invoke(.named("reminders"), action: "lists", arguments: nil))
+                in: session, try await session.invoke(try await session.id(written: "reminders"), action: "lists", arguments: nil))
             #expect(lists.count == 2)
             let tools = await session.actionTools(of: lists[0])
             let add = try #require(tools.first { $0.name == "ReminderList_add" } as? ObjectActionTool)
@@ -205,7 +189,7 @@ struct ObjectToolsTests {
             _ = try await waitForRoots(1, in: session)
             let list = try #require(
                 try await ids(
-                    in: session, try await session.invoke(.named("reminders"), action: "lists", arguments: nil)
+                    in: session, try await session.invoke(try await session.id(written: "reminders"), action: "lists", arguments: nil)
                 ).first)
 
             await #expect(
@@ -341,14 +325,14 @@ struct ObjectToolsTests {
 
             _ = try await id(
                 in: session,
-                try await session.invoke(.named("reminders"), action: "add", arguments: #"{"title": "Call mum"}"#))
+                try await session.invoke(try await session.id(written: "reminders"), action: "add", arguments: #"{"title": "Call mum"}"#))
             #expect(
                 try await memory.reminders(in: .init(rawValue: "inbox"), includeCompleted: false).map(\.title) == [
                     "Call mum"
                 ])
 
             _ = try await session.invoke(
-                .named("reminders"), action: "add", arguments: #"{"title": "Milk", "list": "groceries"}"#)
+                try await session.id(written: "reminders"), action: "add", arguments: #"{"title": "Milk", "list": "groceries"}"#)
             #expect(
                 try await memory.reminders(in: .init(rawValue: "groceries"), includeCompleted: false).map(\.title) == [
                     "Milk"
@@ -356,7 +340,7 @@ struct ObjectToolsTests {
 
             await #expect(throws: ObjectToolError.self) {
                 try await session.invoke(
-                    .named("reminders"), action: "add", arguments: #"{"title": "X", "list": "Work"}"#)
+                    try await session.id(written: "reminders"), action: "add", arguments: #"{"title": "X", "list": "Work"}"#)
             }
             _ = reminders
         }
@@ -380,7 +364,7 @@ struct ObjectToolsTests {
             _ = try await waitForRoots(1, in: session)
 
             await #expect(throws: ObjectToolError.failed(ReminderError.accessDenied.description)) {
-                try await session.invoke(.named("reminders"), action: "lists", arguments: nil)
+                try await session.invoke(try await session.id(written: "reminders"), action: "lists", arguments: nil)
             }
             _ = reminders
         }
@@ -445,7 +429,7 @@ struct ObjectToolsTests {
             // A new session, as a later turn gets: the listed handle works straight away.
             let session = ObjectSession(
                 actorSystem: sessionNode, objectCatalog: catalog, scopes: [.shared])
-            #expect(try await session.describe(.named("reminders"))["type"] == "Reminders")
+            #expect(try await session.describe(try await session.id(written: "reminders"))["type"] == "Reminders")
             _ = (mac, reminders)
         }
     }
@@ -475,7 +459,7 @@ struct ObjectToolsTests {
             try await withObjectNodes { _, sessionNode in
                 let session = ObjectSession(
                     actorSystem: sessionNode, scopes: [.shared])
-                _ = try await session.describe(.named("h9"))
+                _ = try await session.describe(try await session.id(written: "h9"))
             }
         }
     }

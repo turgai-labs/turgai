@@ -25,9 +25,11 @@ public enum ConversationTools {
         actorSystem: ClusterSystem? = nil,
         objectCatalog: ObjectCatalog? = nil,
         writer: ObjectWriter? = nil,
+        agents: [Role] = [],
         includeConversationTools: Bool = true
     ) async throws -> TurnTools {
         guard includeConversationTools else { return TurnTools() }
+        let working = AgentContext(context.agentID.contextID)
         var tools: [any Tool] = [
             WebSearchTool(backend: searchBackend),
             FetchURLTool(),
@@ -35,20 +37,28 @@ public enum ConversationTools {
             NowTool(),
             FetchAttachmentTool(resolver: attachmentResolver),
         ]
-        tools += ScheduleTools(context: context).tools
-        tools += TimerTools(context: context).tools
+        // Schedules and timers reply in a conversation: an agent asked as an object has none.
+        if case .conversation? = working {
+            tools += ScheduleTools(context: context).tools
+            tools += TimerTools(context: context).tools
+        }
         // Tools that belong together and say what they're for are a page: the turn starts from
         // their link, and the page says the rest.
         let groups: [ToolGroup] = [WeatherTools().group]
 
         var pages: any ToolPages = NoToolPages()
-        // The person whose conversation this is.
-        let owner = ConversationID(stableKey: context.agentID.contextID.rawValue)?.participantUserID
+        // The person the agent works for.
+        let owner = working?.person
         if let actorSystem {
+            // The other agents working for them, which it can ask: never itself.
+            let others = agents.filter { $0 != context.agentID.role }
+            var askable: [ObjectEntry] = []
+            if let owner { askable = try await Agent.offered(others, to: owner, on: actorSystem) }
             let session = ObjectSession(
                 actorSystem: actorSystem,
                 objectCatalog: objectCatalog,
                 scopes: owner.map(ObjectScope.visible(to:)) ?? [.shared],
+                agents: askable,
                 writer: writer,
                 request: context.input.text
             )
