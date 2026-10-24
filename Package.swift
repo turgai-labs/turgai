@@ -27,8 +27,8 @@ let package = Package(
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
-            url: "https://github.com/huggingface/AnyLanguageModel.git",
-            from: "1.1.0",
+            url: "https://github.com/akbashev/AnyLanguageModel.git",
+            branch: "fix/schema-in-prompt",
             traits: ["AsyncHTTPClient", "Llama"]
         ),
         .package(
