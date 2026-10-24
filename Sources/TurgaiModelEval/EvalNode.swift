@@ -5,6 +5,7 @@ import EventSourcing
 import Foundation
 import Hail
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
 import TurgaiPersistence
@@ -19,8 +20,12 @@ struct EvalNode: Sendable {
     let workspace: URL
     let objectCatalog: ObjectCatalog
 
+    /// The person agents work for, in tasks that have agents.
+    static let person = TurgaiDomain.UserID(rawValue: "participant:eval:ann")
+
     static func start(
-        model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil
+        model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil,
+        agents: [EvalAgent] = []
     ) async throws -> EvalNode {
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
             "turgai-eval-\(UUID().uuidString)")
@@ -51,14 +56,25 @@ struct EvalNode: Sendable {
             definitionProvider: { config in
                 // A profile's instructions, as given; blank by default. What the agent can do comes
                 // with its tools.
-                AgentDefinition(role: config.agentID.role, behavior: .init(systemPrompt: instructions))
+                let own = agents.first { $0.role == config.agentID.role }?.instructions
+                return AgentDefinition(role: config.agentID.role, behavior: .init(systemPrompt: own ?? instructions))
             },
             turnToolsProvider: { context, actorSystem in
                 // An object's Swift is written by the same model, in a session of its own.
                 let writing = try await endpoints.endpoint(
                     model: model, configuration: configuration, temperature: runtime.temperature)
+                // A task with agents has a person they work for, whose objects they are, as in the
+                // app; the eval's own agent works for that person too.
+                var scopes: [ObjectScope] = [.shared]
+                var offered: [ObjectEntry] = []
+                if !agents.isEmpty {
+                    let person = AgentContext(context.agentID.contextID)?.person ?? Self.person
+                    scopes = ObjectScope.visible(to: person)
+                    offered = try await Agent.offered(
+                        agents.map(\.role).filter { $0 != context.agentID.role }, to: person, on: actorSystem)
+                }
                 let session = ObjectSession(
-                    actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: [.shared],
+                    actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: scopes, agents: offered,
                     writer: ObjectWriter(
                         endpoint: writing, report: { FileHandle.standardError.write(Data($0.written.utf8)) }),
                     request: context.input.text)
@@ -182,6 +198,12 @@ private actor Catalog {
     func start(on system: ClusterSystem) async {
         current = await ObjectCatalog(actorSystem: system)
     }
+}
+
+/// A profile's agent in a task: its role, and its own instructions.
+struct EvalAgent: Sendable {
+    let role: Role
+    let instructions: String
 }
 
 struct UnsupportedModel: Error, CustomStringConvertible {

@@ -11,6 +11,8 @@ struct EvalTask: Sendable {
     /// Requests that follow it, one turn each, before the check: what a person asks for one
     /// object at a time.
     var then: [String] = []
+    /// The agents the person has, besides the one asked: each can be asked as an object.
+    var agents: [EvalAgent] = []
     let check: Check
 
     enum Check: Sendable {
@@ -22,25 +24,34 @@ struct EvalTask: Sendable {
         /// follow it in the same conversation; after each, customers ask the shop for refunds,
         /// which the managers on duty must decide as asked.
         case shop([ShopTurn])
+        /// One turn, in which the agent asks `agent`, and its answer must say what that agent said.
+        case asks(agent: String, answered: @Sendable (String) -> Bool)
     }
 
     init(
-        request: String, then: [String] = [], followUp: String, stateAddress: String? = nil,
+        request: String, then: [String] = [], agents: [EvalAgent] = [], followUp: String, stateAddress: String? = nil,
         stateAddresses: [String] = [],
         stateMatches: @escaping @Sendable (String) -> Bool = { _ in false },
         answered: @escaping @Sendable (String) -> Bool
     ) {
         self.request = request
         self.then = then
+        self.agents = agents
         self.check = .followUp(
             followUp, stateAddresses: stateAddresses + (stateAddress.map { [$0] } ?? []),
             answered: answered, stateMatches: stateMatches)
     }
 
-    init(request: String, check: Check) {
+    init(request: String, agents: [EvalAgent] = [], check: Check) {
         self.request = request
+        self.agents = agents
         self.check = check
     }
+
+    /// The person's planner, whose every plan starts the same way, so an answer can be told to be its.
+    private static let planner = EvalAgent(
+        role: Role("planner"),
+        instructions: "You plan people's days. Every plan you give starts with coffee at nine.")
 
     static let all = [
         EvalTask(
@@ -92,6 +103,17 @@ struct EvalTask: Sendable {
         EvalTask(
             request: ShopTurn.all[0].prompt,
             check: .shop(ShopTurn.all)),
+        EvalTask(
+            request: "Ask the planner what I should do first on Saturday, and tell me.",
+            agents: [planner],
+            check: .asks(agent: "planner", answered: has("coffee"))),
+        EvalTask(
+            request:
+                "Make a day planner that, when I ask it for a plan, asks the planner agent for one and keeps the latest plan.",
+            agents: [planner],
+            followUp: "Get me a plan for Saturday. What's first on it?",
+            stateMatches: { $0.lowercased().contains("coffee") },
+            answered: has("coffee")),
     ]
 
     private static func has(_ words: String...) -> @Sendable (String) -> Bool {
@@ -116,7 +138,7 @@ struct EvalTask: Sendable {
         do {
             let node = try await EvalNode.start(
                 model: model, temperature: temperature, instructions: instructions,
-                objectsPageDescription: objectsPageDescription)
+                objectsPageDescription: objectsPageDescription, agents: agents)
             defer { node.stop() }
             switch check {
             case .followUp(let followUp, let stateAddresses, _, _):
@@ -174,6 +196,9 @@ struct EvalTask: Sendable {
                         turns.append(RecordedTurn(answer: "Saved code:\n" + saved.joined(separator: "\n\n")))
                     }
                 }
+            case .asks:
+                let agent = try await node.freshAgent()
+                turns.append(await RecordedTurn.send(request, to: agent, on: node.system))
             case .shop(let shopTurns):
                 let floor = try await ShopFloor(on: node.system)
                 let agent = try await node.freshAgent()
@@ -213,6 +238,14 @@ struct EvalTask: Sendable {
             case .followUp(_, _, let answered, let stateMatches):
                 failure == nil && replies.contains(where: answered) && stateMatches(stateText)
             case .shop: failure == nil
+            case .asks(let agent, let answered):
+                failure == nil
+                    // Its tool, by the agent's id, whichever way tools are named: `planner_respond`,
+                    // `object_planner_respond`.
+                    && turns.flatMap(\.calls).contains {
+                        $0.name.hasSuffix("\(agent)_respond") && $0.completed && !$0.failed
+                    }
+                    && turns.last.map { answered($0.answer) } == true
             }
         let marks = turnChecks.isEmpty ? "" : "turns " + turnChecks.map { $0 == nil ? "✓" : "✗" }.joined() + "  "
         // Why it failed, in a line: the error, or the state the objects ended in and the reply.
