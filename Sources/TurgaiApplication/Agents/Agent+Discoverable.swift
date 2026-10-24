@@ -59,8 +59,13 @@ extension Agent: @retroactive DiscoverableActor {
         case "respond":
             try _DiscoverySupport.validate(arguments, allowedKeys: ["request"])
             let request = try _DiscoverySupport.argument(String.self, "request", in: arguments, actorSystem: actorSystem)
-            let answer: String = try await respond(request)
-            return try _DiscoverySupport.json(answer)
+            do {
+                let answer: String = try await respond(request)
+                return try _DiscoverySupport.json(answer)
+            } catch AgentRuntimeError.busy(let busy) {
+                // Whoever asked decides what to do: asking again once it's done, or without it.
+                throw AgentAskError.busy(agentID.role, busy)
+            }
         default:
             throw DiscoveryError.unknownAction(action)
         }
@@ -79,6 +84,19 @@ extension Agent: @retroactive DiscoverableActor {
     }
 
     public distributed func _unsubscribe(_ subscriber: _SubscriberID) async throws {}
+}
+
+/// Why an agent asked as an object didn't answer.
+public enum AgentAskError: Error, Sendable, Equatable, Codable, CustomStringConvertible {
+    /// It was busy, with what it was doing: it does one thing at a time.
+    case busy(Role, AgentStatus.Busy)
+
+    public var description: String {
+        switch self {
+        case .busy(let role, .responding): "The \(role.rawValue) agent is busy answering: ask it again once it has."
+        case .busy(let role, .compacting): "The \(role.rawValue) agent is busy tidying its history: ask it again soon."
+        }
+    }
 }
 
 extension Agent {

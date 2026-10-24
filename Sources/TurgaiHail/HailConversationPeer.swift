@@ -101,6 +101,9 @@ public enum HailActivityMapper {
 
     public static func map(_ activity: AgentActivity) -> [HailModelEvent] {
         switch activity {
+        // A conversation's agent is asked one message at a time; what it's doing isn't shown.
+        case .status:
+            return []
         case .turn(.started, _):
             return [.started]
         case .turn(.completed, _):
