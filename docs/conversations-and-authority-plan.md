@@ -64,11 +64,29 @@ Hail is not changed by the split. Hail already runs one turn at a time per agent
 - **An answer within a short window** continues the call in the same turn. Otherwise the call returns "waiting for …", and the later answer arrives as a notice that starts a turn.
 - **A device's own consent** (macOS) is one more step before a grant finishes, only possible on that device.
 - **The Mac app, the web and Telegram** only render requests, and all three can revoke.
+
+### Objects: what can be found, and what can be used
+
+Two rules, kept apart:
+
+- **Visibility** decides only what can be *found*:
+  - **Shared** objects are found by everyone, everywhere in the cluster. Made objects and the agents asked as objects are shared, for now.
+  - An object **owned** by a person is found only by that person: by their conversation's agent, and by code in objects they own.
+  - **An agent asked as an object** works for no one person, so it finds only shared objects.
+- **Authority** decides what can be *used*, on every call. Not finding something isn't protection: a reference passed as an argument, or returned by a result, can still be called. So every call is checked: the exact calling party needs a grant from the object's owner, or must be the owner.
+  - Beneath that, each call has to carry **who is calling**, in a form that can't be forged. That's mTLS on the cluster, then a caller context on every call. Until then, any local process can call any actor.
+
+**Example.** Ann owns her calendar object, and the shared planner calls `events(from:to:)` on it:
+
+1. The planner has no grant on Ann's calendar, so the call becomes a **request**, asked of Ann, who owns it.
+2. Ann allows it. The grant is to the planner exactly: `.action(calendar, events) · read · to: planner · by: Ann`, once or until she revokes it.
+3. If Ann gives someone `decide` on her calendar, that person can grant access to others for her, without owning it.
+
 ## Open
 
 1. Two actor kinds (room + agent participant), or one?
 2. Can a conversation have more than one agent?
-3. When B is called by A, does A's lack of a grant limit B? This also covers people asking an agent, and timers and announcements, which have no caller.
+3. When B is called by A, does A's lack of a grant limit B? This also covers people asking an agent, and timers and announcements, which have no caller. Ann asking the shared planner is this case: whether the planner's calls run with Ann's grants. For now, a call is checked against the party whose code makes it.
 4. Groups: how families and companies own things and decide, beyond "a group is a party".
 
 ## Order
