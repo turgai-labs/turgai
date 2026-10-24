@@ -33,13 +33,13 @@ struct AskedAgentTests {
                 page.contains(
                     """
                     Agents:
-                    - id: `chef`; type: `Agent` — An agent: ask it something, and it answers. Takes ask(request: String).
-                    - id: `planner`; type: `Agent` — An agent: ask it something, and it answers. Takes ask(request: String).
+                    - id: `chef`; type: `Agent` — An agent: ask it something, and it answers. Takes respond(request: String).
+                    - id: `planner`; type: `Agent` — An agent: ask it something, and it answers. Takes respond(request: String).
                     """), "\(page)")
             #expect(!page.contains("`conversation`"))
 
             let planner = try await session.id(written: "planner")
-            #expect(await session.actionTools(of: planner).map(\.name) == ["planner_ask"])
+            #expect(await session.actionTools(of: planner).map(\.name) == ["planner_respond"])
             #expect(await started.roles.isEmpty)
 
             // Code finds one by its name; two of one type never collide.

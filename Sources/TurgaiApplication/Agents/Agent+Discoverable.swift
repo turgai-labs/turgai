@@ -3,7 +3,6 @@ import DistributedCluster
 import Foundation
 import Hail
 import TurgaiDomain
-import TurgaiHail
 import TurgaiObjects
 import VirtualActors
 
@@ -11,8 +10,9 @@ import VirtualActors
     import FoundationEssentials
 #endif
 
-// A profile's agent, as an object: it describes itself as `@Discoverable` would describe
-// `func ask(_ request: String) async throws -> AgentReply`, its schemas from those types. The agents
+// A profile's agent, as an object: it describes itself as `@Discoverable` would describe its own
+// `respond(_:)` answering in text, `func respond(_ request: String) async throws -> String`, its
+// schemas from those types. The agents
 // Turgai lists are the ones asked on a person's behalf: one per person and profile, the person's own,
 // with a history of its own, seeing their objects.
 extension Agent: @retroactive DiscoverableActor {
@@ -25,22 +25,22 @@ extension Agent: @retroactive DiscoverableActor {
     /// What every agent is and takes, the same on every node running this code: whoever knows an
     /// object is an agent reads it here, and doesn't start the agent to ask.
     static let objectDescription: ObjectDescription = {
-        let ask = "Ask the agent, and wait for its answer."
+        let respond = "Ask the agent, and wait for its answer."
         return ObjectDescription(
             type: Agent.objectType,
             description: "An agent: ask it something, and it answers.",
             properties: [:],
             actions: [
-                "ask": ObjectAction(
-                    description: ask,
+                "respond": ObjectAction(
+                    description: respond,
                     input: _DiscoverySupport.schema(
-                        description: ask,
+                        description: respond,
                         parameters: [
                             Discovery.parameter(
                                 "request", description: "What you ask, in words.",
                                 type: _DiscoverySupport.described(String.self))
                         ]),
-                    output: Discovery.schema(for: _DiscoverySupport.described(AgentReply.self)),
+                    output: Discovery.schema(for: _DiscoverySupport.described(String.self)),
                     safe: false,
                     idempotent: false,
                     effects: [.async, .throws])
@@ -57,11 +57,11 @@ extension Agent: @retroactive DiscoverableActor {
             throw DiscoveryError.notA(type, isA: Self.objectType)
         }
         switch action {
-        case "ask":
+        case "respond":
             try _DiscoverySupport.validate(arguments, allowedKeys: ["request"])
             let request = try _DiscoverySupport.argument(String.self, "request", in: arguments, actorSystem: actorSystem)
-            let reply: AgentReply = try await respond(request)
-            return try _DiscoverySupport.json(reply)
+            let answer: String = try await respond(request)
+            return try _DiscoverySupport.json(answer)
         default:
             throw DiscoveryError.unknownAction(action)
         }
@@ -96,7 +96,7 @@ extension Agent {
     /// The agents of `roles`, asked on `person`'s behalf, as their objects are listed: each checked
     /// in in their scope, where code finds it by its name, and described as every agent is. None
     /// starts until it's asked.
-    static func offered(_ roles: [Role], to person: TurgaiDomain.UserID, on system: ClusterSystem) async throws
+    public static func offered(_ roles: [Role], to person: TurgaiDomain.UserID, on system: ClusterSystem) async throws
         -> [ObjectEntry]
     {
         let scope = ObjectScope.owned(by: person)

@@ -19,8 +19,7 @@ enum UserAgentRunner {
         instruction: String,
         toolName: String,
         actorSystem: ClusterSystem,
-        sourceAgentID: AgentID,
-        turnID: String
+        sourceAgentID: AgentID
     ) async throws -> String {
         let childID = AgentID(
             role: Role("user-tool"),
@@ -29,9 +28,6 @@ enum UserAgentRunner {
             )
         )
         let agent: Agent = try await actorSystem.agent(childID)
-        return try await agent.respond(
-            instruction,
-            inputID: "\(turnID):\(toolName)"
-        )
+        return try await agent.respond(instruction)
     }
 }

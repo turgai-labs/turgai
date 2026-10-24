@@ -3,7 +3,7 @@ import TurgaiDomain
 
 /// Who a profile's agent works for, as its Hail context says: a conversation, or a person who
 /// asked it as an object. Read once, from the context, where a turn's tools are made.
-enum AgentContext: Equatable, Sendable {
+public enum AgentContext: Equatable, Sendable {
     /// Replying in a conversation.
     case conversation(ConversationID)
     /// Asked as an object, on this person's behalf: its own history, no conversation to reply in.
@@ -13,7 +13,7 @@ enum AgentContext: Equatable, Sendable {
 
     private static let askedPrefix = "asked-by/"
 
-    init?(_ id: AgentContextID) {
+    public init?(_ id: AgentContextID) {
         if id.rawValue.hasPrefix(Self.askedPrefix) {
             let rest = id.rawValue.dropFirst(Self.askedPrefix.count)
             guard let slash = rest.lastIndex(of: "/") else { return nil }
@@ -28,7 +28,7 @@ enum AgentContext: Equatable, Sendable {
         }
     }
 
-    var contextID: AgentContextID {
+    public var contextID: AgentContextID {
         switch self {
         case .conversation(let conversation): AgentContextID(conversation.stableKey)
         case .asked(let person, let role): AgentContextID("\(Self.askedPrefix)\(person.rawValue)/\(role.rawValue)")
@@ -36,7 +36,7 @@ enum AgentContext: Equatable, Sendable {
     }
 
     /// The person it works for.
-    var person: TurgaiDomain.UserID? {
+    public var person: TurgaiDomain.UserID? {
         switch self {
         case .conversation(let conversation): conversation.participantUserID
         case .asked(let person, _): person

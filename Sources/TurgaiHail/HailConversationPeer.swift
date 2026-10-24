@@ -1,5 +1,4 @@
 import AnyLanguageModel
-import DiscoverableActors
 import DistributedCluster
 import Hail
 import TurgaiDomain
@@ -11,9 +10,8 @@ import VirtualActors
     import Foundation
 #endif
 
-/// What an agent replies with.
+/// What a conversation's agent replies with.
 @Generable
-@Describable
 public struct AgentReply: Codable, Sendable {
     /// What the assistant says back.
     public let text: String
@@ -46,11 +44,8 @@ public struct HailResponse: Hashable, Sendable {
 /// attachments: where things are now is reached through its tools.
 struct HailConversationInput: ConvertibleToGeneratedContent, Codable, Sendable {
     let content: String
-    let inputID: String?
 
     init(message: InboundMessage) {
-        self.inputID = message.id.rawValue.uuidString
-
         let attachmentLines = message.attachments.map { attachment in
             var details = "- kind: \(attachment.kind.rawValue)\n  attachment_id: \(attachment.id.rawValue)"
             if let filename = attachment.filename {
@@ -249,7 +244,7 @@ public struct HailAgentAdapter: Sendable {
                 let agent = try await self.agent(for: conversationID)
                 // Attachments remain opaque references unless the model fetches one. The reply so
                 // far reaches whoever watches through the agent's activity.
-                let reply: AgentReply = try await agent.respond(input, inputID: input.inputID)
+                let reply: AgentReply = try await agent.respond(input)
                 return try HailResponse(reply)
             },
             activities: {

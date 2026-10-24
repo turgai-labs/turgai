@@ -299,7 +299,6 @@ public struct UserWorkflowTool: HailCore.Tool {
             effect: token.withConfiguration { $0 },
             actorSystem: actorSystem,
             sourceAgentID: sourceAgentID,
-            turnID: turnID,
             token: token
         )
         return .text(Self.present(result, maximumCharacters: maximumOutputCharacters))
@@ -327,7 +326,6 @@ private enum UserWorkflowRunner {
         effect: UserWorkflowEffect,
         actorSystem: ClusterSystem?,
         sourceAgentID: AgentID?,
-        turnID: String,
         token: borrowing EffectToken<UserWorkflowEffect>
     ) async throws -> GeneratedContent {
         var context = WorkflowContext(input: effect.input)
@@ -361,7 +359,6 @@ private enum UserWorkflowRunner {
                     toolName: effect.toolName,
                     actorSystem: actorSystem,
                     sourceAgentID: sourceAgentID,
-                    turnID: turnID,
                     token: token
                 )
             }
@@ -519,7 +516,6 @@ private enum UserWorkflowRunner {
         toolName: String,
         actorSystem: ClusterSystem?,
         sourceAgentID: AgentID?,
-        turnID: String,
         token: borrowing EffectToken<UserWorkflowEffect>
     ) async throws -> GeneratedContent {
         guard let instruction = step.instruction else {
@@ -544,8 +540,7 @@ private enum UserWorkflowRunner {
             instruction: prompt,
             toolName: "\(toolName)-\(step.id)",
             actorSystem: actorSystem,
-            sourceAgentID: sourceAgentID,
-            turnID: turnID
+            sourceAgentID: sourceAgentID
         )
         return GeneratedContent(response)
     }

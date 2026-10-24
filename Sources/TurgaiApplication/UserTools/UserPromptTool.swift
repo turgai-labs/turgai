@@ -94,10 +94,7 @@ public struct UserPromptTool: HailCore.Tool {
             )
         )
         let agent: Agent = try await actorSystem.agent(childID)
-        let response: String = try await agent.respond(
-            instruction,
-            inputID: "\(turnID):\(name)"
-        )
+        let response: String = try await agent.respond(instruction)
         return .text(response)
     }
 }
