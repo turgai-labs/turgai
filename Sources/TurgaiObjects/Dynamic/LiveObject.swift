@@ -84,28 +84,6 @@ public enum Happening: Codable, Sendable, Equatable {
     case announced(Announcement)
 }
 
-/// The objects a call went through to get here, the first first: what makes calls that go round
-/// in a circle fail, with the circle as the reason, instead of running until memory runs out.
-public struct CallChain: Codable, Sendable, Equatable {
-    public let objects: [String]
-
-    /// How deep calls between objects may go.
-    static let limit = 64
-
-    /// A call from outside the objects: a model's, or a built-in object's.
-    public static let start = CallChain(objects: [])
-
-    /// The chain of a call `caller` makes, refused once it's too deep.
-    func continuing(from caller: String) throws(DynamicObjectError) -> CallChain {
-        let next = CallChain(objects: objects + [caller])
-        guard next.objects.count <= Self.limit else { throw .callsTooDeep(next) }
-        return next
-    }
-
-    /// The chain a message is handled in, on its own node: what its code's calls continue.
-    @TaskLocal static var current = CallChain.start
-}
-
 // MARK: State
 
 /// A dynamic object's journaled state: living, or removed.
@@ -274,7 +252,6 @@ public enum DynamicObjectError: Error, Codable, Equatable, Sendable, CustomStrin
     case noReference(String)
     case noObjectNamed(String)
     case severalNamed(String)
-    case callsTooDeep(CallChain)
     /// A call made through a type this object isn't.
     case notA(String, isA: String)
 
@@ -290,9 +267,6 @@ public enum DynamicObjectError: Error, Codable, Equatable, Sendable, CustomStrin
         case .noObjectNamed(let name): "There's no object named `\(name)`."
         case .severalNamed(let name): "Several objects are named `\(name)`."
         case .notA(let type, let isA): "It's a `\(isA)`, not a `\(type)`."
-        case .callsTooDeep(let chain):
-            "calls between objects went \(chain.objects.count) deep: "
-                + (chain.objects.prefix(6) + (chain.objects.count > 6 ? ["…"] : [])).joined(separator: " → ")
         }
     }
 }

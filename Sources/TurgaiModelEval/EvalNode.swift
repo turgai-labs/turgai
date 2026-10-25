@@ -5,6 +5,7 @@ import EventSourcing
 import Foundation
 import Hail
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
 import TurgaiPersistence
@@ -64,7 +65,7 @@ struct EvalNode: Sendable {
                     agents.map(\.role).filter { $0 != context.agentID.role }, on: actorSystem)
                 let session = ObjectSession(
                     actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: [.shared],
-                    agents: offered,
+                    agents: offered, caller: Party(agent: context.agentID),
                     writer: ObjectWriter(
                         endpoint: writing, report: { FileHandle.standardError.write(Data($0.written.utf8)) }),
                     request: context.input.text)
@@ -93,6 +94,7 @@ struct EvalNode: Sendable {
             let virtualActors = ClusterVirtualActorsPlugin.configuring(&settings)
             settings.plugins.install(plugin: virtualActors)
             settings.plugins.install(plugin: DiscoveryPlugin())
+            settings.propagateCallChain()
             settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
             settings.plugins.install(plugin: plugin)
         }

@@ -2,6 +2,7 @@ import DiscoverableActors
 import DistributedCluster
 import Foundation
 import Hail
+import TurgaiDomain
 import TurgaiObjects
 import VirtualActors
 
@@ -59,6 +60,8 @@ extension Agent: @retroactive DiscoverableActor {
         case "respond":
             try _DiscoverySupport.validate(arguments, allowedKeys: ["request"])
             let request = try _DiscoverySupport.argument(String.self, "request", in: arguments, actorSystem: actorSystem)
+            // A call that came from its own answer: it can't answer it until it has answered.
+            if CallChain.ongoing.contains(Party(agent: agentID)) { throw AgentAskError.askedByItself(agentID.role) }
             do {
                 let answer: String = try await respond(request)
                 return try _DiscoverySupport.json(answer)
@@ -89,12 +92,22 @@ extension Agent: @retroactive DiscoverableActor {
 public enum AgentAskError: Error, Sendable, Equatable, Codable, CustomStringConvertible {
     /// It was busy, with what it was doing: it does one thing at a time.
     case busy(Role, AgentStatus.Busy)
+    /// The call came from its own answer: the agent asked is the one asking.
+    case askedByItself(Role)
 
     public var description: String {
         switch self {
         case .busy(let role, .responding): "The \(role.rawValue) agent is busy answering."
         case .busy(let role, .compacting): "The \(role.rawValue) agent is busy compacting its history."
+        case .askedByItself(let role): "The \(role.rawValue) agent is you: this call came from your own answer."
         }
+    }
+}
+
+extension Party {
+    /// The agent with `id`, as its virtual actor is known.
+    public init(agent id: AgentID) {
+        self = .agent(ActorIdentity(rawValue: id.rawValue))
     }
 }
 

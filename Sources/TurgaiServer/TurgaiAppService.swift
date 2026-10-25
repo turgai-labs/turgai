@@ -460,6 +460,7 @@ struct TurgaiAppService: Service, Sendable {
                 let virtualActorsPlugin = ClusterVirtualActorsPlugin.configuring(&settings)
                 settings.plugins.install(plugin: virtualActorsPlugin)
                 settings.plugins.install(plugin: DiscoveryPlugin())
+                settings.propagateCallChain()
                 settings.plugins.install(plugin: journalPlugin)
                 settings.plugins.install(plugin: runtimePlugin)
                 settings.plugins.install(plugin: workflowsPlugin)

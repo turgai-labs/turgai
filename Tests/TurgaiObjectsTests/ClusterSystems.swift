@@ -46,5 +46,6 @@ private func configure(_ settings: inout ClusterSystemSettings, store: MemoryEve
     let virtualActors = ClusterVirtualActorsPlugin.configuring(&settings)
     settings.plugins.install(plugin: virtualActors)
     settings.plugins.install(plugin: DiscoveryPlugin())
+    settings.propagateCallChain()
     settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
 }

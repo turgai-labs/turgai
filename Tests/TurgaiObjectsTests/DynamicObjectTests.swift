@@ -810,7 +810,7 @@ struct DynamicObjectTests {
                     return
                 }
                 #expect(
-                    failure.problem.hasPrefix("calls between objects went 65 deep: Ann → Ann → "), "\(failure.problem)")
+                    failure.problem.hasPrefix("calls went 65 deep: ann → ann → "), "\(failure.problem)")
             }
         }
     }

@@ -3,6 +3,7 @@ import Distributed
 import DistributedCluster
 import EventSourcing
 import Foundation
+import TurgaiDomain
 import VirtualActors
 
 /// An object that runs Swift a model wrote, its ``Script``, the way an Erlang process runs a
@@ -325,34 +326,28 @@ public distributed actor DynamicObject: DiscoverableActor {
     public distributed func invoke(_ action: String, arguments: JSONValue, through type: String?) async throws
         -> JSONValue
     {
-        try await respond(action, arguments: arguments, chain: .start, through: type).reply
+        try await respond(action, arguments: arguments, through: type).reply
     }
 
-    /// Handles a message as ``invoke(_:arguments:)`` does, with what its code printed.
-    public distributed func respond(_ action: String, arguments: JSONValue) async throws -> ObjectReply {
-        try await respond(action, arguments: arguments, chain: .start)
-    }
-
-    /// Handles a message another object's code sent, in the chain of calls it came through. A
-    /// message that fails is journaled with why, and stops its code, to start again from what's
-    /// journaled.
+    /// Handles a message as ``invoke(_:arguments:)`` does, with what its code printed, in the chain
+    /// of calls it came through. A message that fails is journaled with why, and stops its code,
+    /// to start again from what's journaled.
     /// It runs only as its type: a call made through another type isn't for it. One made through a
     /// protocol, `any Shop.RefundManager`, is for any object taking the message.
     public distributed func respond(
-        _ action: String, arguments: JSONValue, chain: CallChain, through type: String? = nil
+        _ action: String, arguments: JSONValue, through type: String? = nil
     ) async throws -> ObjectReply {
         let code = try state.live.running
         if let type, !type.hasPrefix("any "), type != code.type {
             throw DynamicObjectError.notA(type, isA: code.type)
         }
         return try await handling(
-            action, arguments: arguments, origin: .message(Delivery(message: action, arguments: arguments, at: Date())),
-            chain: chain)
+            action, arguments: arguments, origin: .message(Delivery(message: action, arguments: arguments, at: Date())))
     }
 
     /// Handles `action` with `arguments`, run by `origin`: a message, or an event of an object it
     /// follows. What it changed is journaled, then what it announced, which its subscribers get.
-    private func handling(_ action: String, arguments: JSONValue, origin: Origin, chain: CallChain) async throws
+    private func handling(_ action: String, arguments: JSONValue, origin: Origin) async throws
         -> ObjectReply
     {
         try state.live.taking(action)
@@ -361,9 +356,7 @@ public distributed actor DynamicObject: DiscoverableActor {
         let after: [String: JSONValue]
         do {
             instance = try await running()
-            reply = try await CallChain.$current.withValue(chain) {
-                try await instance.handle(action, arguments: arguments)
-            }
+            reply = try await instance.handle(action, arguments: arguments)
             after = try await instance.fields()
         } catch {
             stop()
@@ -400,28 +393,29 @@ public distributed actor DynamicObject: DiscoverableActor {
         let scopes = Self.scopes(around: nature.scope)
         let system = actorSystem
         let generation = process.generation + 1
-        let caller = object.name ?? code.type
+        let caller = Party.object(ActorIdentity(Self.actorID(for: nature)))
         let started = try await ScriptInstance.start(
             code, as: nature.identity, holding: object.fields,
             reaches: { recipient, request in
                 let callee = try await Self.recipient(recipient, me: me, scopes: scopes, using: system)
-                switch (request, callee) {
-                case (.call(let message, let arguments, let type), .made(let callee)):
-                    // A call continues the chain of the message it's made in.
-                    let chain = try CallChain.current.continuing(from: caller)
-                    return try await callee.respond(
-                        message, arguments: try Self.replacingSelf(in: arguments, with: me, as: code.type),
-                        chain: chain, through: type
-                    ).reply
-                case (.call(let message, let arguments, let type), .other(let callee)):
-                    return try await callee.invoke(
-                        message, arguments: try Self.replacingSelf(in: arguments, with: me, as: code.type),
-                        through: type)
-                // What a built-in object publishes; an object made here only answers messages.
-                case (.read(let name), .other(let callee)):
-                    return try await callee.read(property: name)
-                case (.read(let name), .made(let callee)):
-                    return try await callee.read(property: name)
+                // A call its code makes continues the chain of the message it's made in, from it.
+                return try await CallChain.$current.withValue(try CallChain.ongoing.continuing(from: caller)) {
+                    switch (request, callee) {
+                    case (.call(let message, let arguments, let type), .made(let callee)):
+                        return try await callee.respond(
+                            message, arguments: try Self.replacingSelf(in: arguments, with: me, as: code.type),
+                            through: type
+                        ).reply
+                    case (.call(let message, let arguments, let type), .other(let callee)):
+                        return try await callee.invoke(
+                            message, arguments: try Self.replacingSelf(in: arguments, with: me, as: code.type),
+                            through: type)
+                    // What a built-in object publishes; an object made here only answers messages.
+                    case (.read(let name), .other(let callee)):
+                        return try await callee.read(property: name)
+                    case (.read(let name), .made(let callee)):
+                        return try await callee.read(property: name)
+                    }
                 }
             },
             // An object its code names by id is the one of its scope with that id.
@@ -568,7 +562,10 @@ public distributed actor DynamicObject: DiscoverableActor {
         let handler = Self.handler(for: event)
         let origin = Origin.event(Delivery(message: handler, arguments: values, at: Date()), from: field)
         do {
-            _ = try await handling(handler, arguments: values, origin: origin, chain: .start)
+            // An event it follows starts a chain of its own, as a task does.
+            _ = try await CallChain.$current.withValue(.start) {
+                try await handling(handler, arguments: values, origin: origin)
+            }
         } catch {
             // Journaled as it failed; the next event is delivered all the same.
         }

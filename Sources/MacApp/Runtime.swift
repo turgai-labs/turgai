@@ -100,6 +100,7 @@ actor MacObjectsService: Service {
             let virtualActors = ClusterVirtualActorsPlugin.configuring(&settings)
             settings.plugins.install(plugin: virtualActors)
             settings.plugins.install(plugin: DiscoveryPlugin())
+            settings.propagateCallChain()
         }
         defer { _ = try? system.shutdown() }
         try await withGracefulShutdownHandler {
