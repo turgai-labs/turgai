@@ -1,5 +1,5 @@
 {
-  "originHash" : "bc5bc49ab55fd100acda360f0c82acbaee811ce510705d9fa4caca5eae43feb2",
+  "originHash" : "15d7a5a1968cce46c5cfa0a0258ecfdc097c911dfa58cc6ee28c96ee0742503e",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "380725082c20ccc1604bcbed1ca0485c038056e9"
+        "revision" : "1f2c87190736e721018641dd0a41c13bd4afea05"
       }
     },
     {
@@ -367,7 +367,7 @@
       "location" : "https://github.com/turgai-labs/swift-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "6f84628db766c0e3396623f80a2b16c6f001e402"
+        "revision" : "c9dfdb76f62c5863338ff9369aaf63fcc9dc6afa"
       }
     },
     {
