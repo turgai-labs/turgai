@@ -63,7 +63,6 @@ extension Agent: @retroactive DiscoverableActor {
                 let answer: String = try await respond(request)
                 return try _DiscoverySupport.json(answer)
             } catch AgentRuntimeError.busy(let busy) {
-                // Whoever asked decides what to do: asking again once it's done, or without it.
                 throw AgentAskError.busy(agentID.role, busy)
             }
         default:
@@ -93,8 +92,8 @@ public enum AgentAskError: Error, Sendable, Equatable, Codable, CustomStringConv
 
     public var description: String {
         switch self {
-        case .busy(let role, .responding): "The \(role.rawValue) agent is busy answering: ask it again once it has."
-        case .busy(let role, .compacting): "The \(role.rawValue) agent is busy tidying its history: ask it again soon."
+        case .busy(let role, .responding): "The \(role.rawValue) agent is busy answering."
+        case .busy(let role, .compacting): "The \(role.rawValue) agent is busy compacting its history."
         }
     }
 }
