@@ -1,5 +1,6 @@
 import DiscoverableActors
 import Foundation
+import TurgaiDomain
 
 // A dynamic object's domain, with no actor in it: what happens to an object (its events), what it
 // is (its state, a reducer over the events), and what may happen next (decisions, from its state).
@@ -9,7 +10,7 @@ import Foundation
 public enum DynamicObjectEvent: Codable, Sendable {
     /// The code of its type it runs from now on, first or new, with the starting values of the
     /// data new to it.
-    case adopted(BehaviorID, Script, starts: [String: JSONValue])
+    case adopted(BehaviorID, Script, starts: [String: JSONValue], by: CallScope)
     /// What it's called and what it was made for, as it was asked for: an object made by name has
     /// them, one made by code doesn't.
     case described(name: String, description: String?)
@@ -131,6 +132,9 @@ public struct LiveObject: Codable, Sendable {
     /// The type it runs, and its code as it runs it: none until it's given one.
     public private(set) var type: BehaviorID?
     public private(set) var code: Script?
+    /// Whoever it was made by: on whose behalf it was first given code. What it starts itself, its
+    /// tasks and the events it follows, is on their behalf.
+    public private(set) var maker: CallScope?
     /// What it's called and what it was made for: an object made by name has them.
     public private(set) var name: String?
     public private(set) var description: String?
@@ -150,9 +154,10 @@ public struct LiveObject: Codable, Sendable {
     func applying(_ event: DynamicObjectEvent) -> LiveObject {
         var next = self
         switch event {
-        case .adopted(let type, let code, let starts):
+        case .adopted(let type, let code, let starts, let scope):
             next.type = type
             next.code = code
+            next.maker = maker ?? scope
             // New code starts again: what failed before is the old code's.
             next.health = .working
             // Data new to it starts as its code has it; the values it holds stay its own, and
@@ -192,9 +197,20 @@ public struct LiveObject: Codable, Sendable {
         }
     }
 
-    /// Running `code` of the type `type` from now on, with `starts` for data new to it.
-    func adopting(_ type: BehaviorID, _ code: Script, starts: [String: JSONValue]) -> DynamicObjectEvent {
-        .adopted(type, code, starts: starts)
+    /// Running `code` of the type `type` from now on, with `starts` for data new to it, given on
+    /// behalf of `scope`.
+    func adopting(
+        _ type: BehaviorID, _ code: Script, starts: [String: JSONValue], by scope: CallScope
+    ) -> DynamicObjectEvent {
+        .adopted(type, code, starts: starts, by: scope)
+    }
+
+    /// On whose behalf what it starts itself runs: whoever made it, once it has code.
+    var startedBy: CallScope {
+        get throws(DynamicObjectError) {
+            guard let maker else { throw .noCode }
+            return maker
+        }
     }
 
     /// Its name and what it was made for, which an object is given once.

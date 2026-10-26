@@ -8,7 +8,7 @@ import TurgaiObjects
 
 /// Methods of one name are overloads, as in Swift: each its own action, by its selector, and a
 /// call is to the one it names, or whose labels its arguments are given by.
-@Suite
+@Suite(.asTheRuntime)
 struct OverloadTests {
     static let code = """
         actor Planner {

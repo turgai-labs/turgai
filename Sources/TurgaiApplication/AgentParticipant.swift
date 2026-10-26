@@ -69,9 +69,10 @@ public distributed actor AgentParticipant {
                 // What the agent does meanwhile reaches the conversation through its activity;
                 // this only asks, and waits for the reply.
                 await participant.whenLocal { $0.followActivity() }
-                // The agent's turn starts a chain of its own: what it calls comes from it.
+                // The agent's turn starts a chain of its own, on behalf of whoever it answers: what
+                // it calls comes from it.
                 let agentID = HailAgentAdapter.agentID(for: request.conversationID, role: request.agentRole)
-                let response = try await CallChain.$current.withValue(.start) {
+                let response = try await CallChain.$current.withValue(.start(request.scope)) {
                     try await Agent.answering(as: agentID) { try await peer.run(to: request) }
                 }
                 await Self.remember(request, answered: response.reply.text, with: memoryExtraction, on: actorSystem)

@@ -9,7 +9,7 @@ import TurgaiObjects
 
 @testable import TurgaiApplication
 
-@Suite
+@Suite(.asTheRuntime)
 struct AskedAgentTests {
     /// The agents asked as objects are shared, as made objects are: each by its own id, listed apart
     /// on the objects page, with its tools, and found by name from code. One not offered, such as the

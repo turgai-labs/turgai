@@ -62,3 +62,27 @@ public struct Group: Hashable, Codable, Sendable {
         return next
     }
 }
+
+/// Which group something happens in. A conversation's members are the only group for now, so a
+/// group is known by its conversation's id.
+public struct GroupID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    /// The group of the conversation with `id`: its members.
+    public init(_ id: ConversationID) {
+        self.init(rawValue: id.stableKey)
+    }
+}
+
+/// Who a call is on behalf of: whoever started its chain, as they came in.
+public enum CallScope: Hashable, Codable, Sendable {
+    /// A person, in the group they came in through, with the role they have there as the chain starts.
+    case person(UserID, in: GroupID, as: GroupRole)
+    /// Turgai itself, with no person behind it: what it starts as it launches or recovers. Only
+    /// Turgai's own code starts a chain this way, never a chat.
+    case runtime
+}

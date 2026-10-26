@@ -330,7 +330,8 @@ struct ConversationReducerTests {
                         conversationID: conversationID,
                         turnID: pending.turnID,
                         message: pending.message,
-                        agentRole: pending.agentRole
+                        agentRole: pending.agentRole,
+                        scope: .person(pending.message.userID, in: GroupID(conversationID), as: .member)
                     )
                 )
             ])

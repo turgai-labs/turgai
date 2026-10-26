@@ -748,26 +748,34 @@ public struct ConversationTurnRequest: Hashable, Codable, Sendable {
     public let turnID: TurnID
     public let message: InboundMessage
     public let agentRole: String
+    /// Who the turn is on behalf of: the message's sender, in this conversation's group.
+    public let scope: CallScope
 
     public init(
         conversationID: ConversationID,
         turnID: TurnID,
         message: InboundMessage,
-        agentRole: String
+        agentRole: String,
+        scope: CallScope
     ) {
         self.conversationID = conversationID
         self.turnID = turnID
         self.message = message
         self.agentRole = agentRole
+        self.scope = scope
     }
 }
 
 extension ConversationTurnRequest {
-    /// The turn that answers `pending` in the conversation with `conversationID`.
-    init(_ pending: PendingConversationMessage, in conversationID: ConversationID) {
+    /// The turn that answers `pending` in the conversation `state` is of: on behalf of its sender,
+    /// with the role they have in its members now. Whoever wrote joined as a member.
+    init(_ pending: PendingConversationMessage, in state: ConversationState) {
+        let sender = pending.message.userID
         self.init(
-            conversationID: conversationID, turnID: pending.turnID, message: pending.message,
-            agentRole: pending.agentRole)
+            conversationID: state.conversationID, turnID: pending.turnID, message: pending.message,
+            agentRole: pending.agentRole,
+            scope: .person(
+                sender, in: GroupID(state.conversationID), as: state.members.role(of: sender) ?? .member))
     }
 }
 
@@ -950,7 +958,7 @@ extension ConversationDecision {
                 if next != pending { events.append(.inbox(.queued(pending))) }
                 return ConversationDecision(
                     events: events + [.inbox(.turnStarted(next))],
-                    effects: [.runReply(ConversationTurnRequest(next, in: state.conversationID))])
+                    effects: [.runReply(ConversationTurnRequest(next, in: state))])
             }
             return ConversationDecision(events: events + [.inbox(.queued(pending))])
 
@@ -994,7 +1002,7 @@ extension ConversationDecision {
             case .running:
                 guard let active = state.inbox.activeMessage else { return ConversationDecision() }
                 return ConversationDecision(effects: [
-                    .runReply(ConversationTurnRequest(active, in: state.conversationID))
+                    .runReply(ConversationTurnRequest(active, in: state))
                 ])
             case .failed:
                 return startingNext(in: state)
@@ -1007,7 +1015,7 @@ extension ConversationDecision {
         guard let next = state.inbox.pendingMessages.first else { return ConversationDecision() }
         return ConversationDecision(
             events: [.inbox(.turnStarted(next))],
-            effects: [.runReply(ConversationTurnRequest(next, in: state.conversationID))])
+            effects: [.runReply(ConversationTurnRequest(next, in: state))])
     }
 }
 

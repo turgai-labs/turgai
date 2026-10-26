@@ -1,21 +1,27 @@
 import DistributedCluster
+import TurgaiDomain
 
-/// The actors a call went through to get here, the first first: each while its code handles the
-/// call. It's what tells an actor a call came from its own handling, and what makes calls that go
-/// round in a circle fail, with the circle as the reason, instead of running until memory runs out.
+/// Who a call is on behalf of, and the actors it went through to get here, the first first: each
+/// while its code handles the call. It's what tells an actor a call came from its own handling,
+/// and what makes calls that go round in a circle fail, with the circle as the reason, instead of
+/// running until memory runs out.
 public struct CallChain: Codable, Sendable, Equatable {
+    /// Whoever started it, as they came in. It stays the same down the chain.
+    public let scope: CallScope
     public let actors: [ObjectID]
 
     /// How deep calls may go.
     static let limit = 64
 
-    /// A call no actor's code made: the start of a chain.
-    public static let start = CallChain(actors: [])
+    /// A call no actor's code made, on behalf of `scope`: the start of a chain.
+    public static func start(_ scope: CallScope) -> CallChain {
+        CallChain(scope: scope, actors: [])
+    }
 
     /// The chain inside `actor`'s handling of a call that came through this one, refused once
     /// it's too deep. It's left as the handling ends, with the chain it was entered from.
     public func entering(_ actor: ObjectID) throws(CallsTooDeep) -> CallChain {
-        let next = CallChain(actors: actors + [actor])
+        let next = CallChain(scope: scope, actors: actors + [actor])
         guard next.actors.count <= Self.limit else { throw CallsTooDeep(chain: next) }
         return next
     }
@@ -28,8 +34,19 @@ public struct CallChain: Codable, Sendable, Equatable {
     /// The chain the current task is in, carried with its calls to other nodes.
     @TaskLocal public static var current: CallChain?
 
-    /// The chain the current task is in: none is the start of one.
-    public static var ongoing: CallChain { current ?? .start }
+    /// The chain the current task is in, entered by `actor` as it handles a call. A call in no
+    /// chain is on behalf of no one, and is refused.
+    public static func entering(_ actor: ObjectID) throws -> CallChain {
+        guard let current else { throw CallOnBehalfOfNoOne(actor: actor) }
+        return try current.entering(actor)
+    }
+}
+
+/// A call that no chain carried, so on behalf of no one: every call starts with someone.
+public struct CallOnBehalfOfNoOne: Error, Sendable, Equatable, CustomStringConvertible {
+    public let actor: ObjectID
+
+    public var description: String { "a call to \(actor) is on behalf of no one" }
 }
 
 /// Calls that went deeper than a chain may go.

@@ -411,9 +411,12 @@ struct ShopFloor: Sendable {
     /// `endings`, or what they are instead after ten seconds.
     func refunds(of amounts: [Decimal], endingAs endings: [[ShopOrderStatus]]) async throws -> String? {
         let first = try await demo.shop.orders.count + 1
-        for amount in amounts { _ = try await demo.shop.placeOrder(item: "Lamp", amount: amount) }
-        for number in first..<(first + amounts.count) {
-            _ = try await demo.shop.requestRefund(number: number, replyTo: replyTo)
+        // The eval orders and asks as Turgai itself.
+        try await CallChain.$current.withValue(.start(.runtime)) {
+            for amount in amounts { _ = try await demo.shop.placeOrder(item: "Lamp", amount: amount) }
+            for number in first..<(first + amounts.count) {
+                _ = try await demo.shop.requestRefund(number: number, replyTo: replyTo)
+            }
         }
         func statuses() async throws -> [ShopOrderStatus] {
             try await demo.shop.orders.dropFirst(first - 1).map(\.status)

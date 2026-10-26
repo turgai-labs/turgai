@@ -61,7 +61,7 @@ extension Agent: @retroactive DiscoverableActor {
             try _DiscoverySupport.validate(arguments, allowedKeys: ["request"])
             let request = try _DiscoverySupport.argument(String.self, "request", in: arguments, actorSystem: actorSystem)
             // A call that came from its own answer: it can't answer it until it has answered.
-            if CallChain.ongoing.contains(Self.objectID(of: agentID)) {
+            if CallChain.current?.contains(Self.objectID(of: agentID)) == true {
                 throw AgentAskError.askedByItself(agentID.role)
             }
             do {
@@ -127,7 +127,7 @@ extension Agent {
     public static func answering<Value: Sendable>(
         as id: AgentID, _ body: () async throws -> Value
     ) async throws -> Value {
-        try await CallChain.$current.withValue(try CallChain.ongoing.entering(objectID(of: id))) {
+        try await CallChain.$current.withValue(try CallChain.entering(objectID(of: id))) {
             try await body()
         }
     }

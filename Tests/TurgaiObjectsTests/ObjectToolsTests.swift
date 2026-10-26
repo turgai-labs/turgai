@@ -93,7 +93,7 @@ func waitForRoots(_ count: Int, in session: ObjectSession) async throws -> Disco
     return try await session.list()
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .asTheRuntime)
 struct ObjectToolsTests {
     @Test
     func modelWalksFromRootToReminderAndBack() async throws {

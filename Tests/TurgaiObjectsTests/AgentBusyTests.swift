@@ -11,7 +11,7 @@ import TurgaiHail
 /// An agent does one thing at a time, and says so: asked again from within its own turn, which
 /// would wait for itself, it's busy answering at once, and the turn answers all the same. Asked
 /// after, by whoever it answered, it's idle again.
-@Suite
+@Suite(.asTheRuntime)
 struct AgentBusyTests {
     @Test(.timeLimit(.minutes(1)))
     func anAgentAskedWithinItsOwnTurnIsBusy() async throws {

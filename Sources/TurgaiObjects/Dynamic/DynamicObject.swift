@@ -3,6 +3,7 @@ import Distributed
 import DistributedCluster
 import EventSourcing
 import Foundation
+import TurgaiDomain
 import VirtualActors
 
 /// An object that runs Swift a model wrote, its ``Script``, the way an Erlang process runs a
@@ -148,11 +149,12 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// starts as the code has it, and the objects its `init()` makes there are made now.
     distributed func adopt(_ type: BehaviorID, code: Script) async throws {
         let live = try state.live
+        guard let scope = CallChain.current?.scope else { throw CallOnBehalfOfNoOne(actor: objectID) }
         var starts = try await ScriptInstance.starts(code, as: nature.identity)
         for (field, value) in starts where live.fields[field] == nil {
             starts[field] = try await Self.making(value, in: nature.scope, on: actorSystem)
         }
-        try await emit(event: live.adopting(type, code, starts: starts))
+        try await emit(event: live.adopting(type, code, starts: starts, by: scope))
         stop()
         rehub()
         refollow()
@@ -257,6 +259,11 @@ public distributed actor DynamicObject: DiscoverableActor {
         get throws { try state.live.type }
     }
 
+    /// Whoever it was made by: on whose behalf it was first given code.
+    public distributed var maker: CallScope? {
+        get throws { try state.live.maker }
+    }
+
     /// What it's called, when it was made by name.
     public distributed var name: String? {
         get throws { try state.live.name }
@@ -359,7 +366,7 @@ public distributed actor DynamicObject: DiscoverableActor {
         do {
             instance = try await running()
             // Its code handles the message in the chain the message came in, entered.
-            reply = try await CallChain.$current.withValue(try CallChain.ongoing.entering(objectID)) {
+            reply = try await CallChain.$current.withValue(try CallChain.entering(objectID)) {
                 try await instance.handle(action, arguments: arguments)
             }
             after = try await instance.fields()
@@ -448,8 +455,10 @@ public distributed actor DynamicObject: DiscoverableActor {
         tasks[id] = Task {
             let origin = Origin.task(at: Date())
             do {
-                // A task's starter doesn't wait on it: its calls start a chain of their own.
-                let announced = try await CallChain.$current.withValue(try CallChain.start.entering(objectID)) {
+                // A task's starter doesn't wait on it: its calls start a chain of their own, on
+                // behalf of whoever made it.
+                let chain = try CallChain.start(try state.live.startedBy).entering(objectID)
+                let announced = try await CallChain.$current.withValue(chain) {
                     try await instance.runTask(id)
                 }
                 let after = try await instance.fields()
@@ -565,8 +574,9 @@ public distributed actor DynamicObject: DiscoverableActor {
         let handler = Self.handler(for: event)
         let origin = Origin.event(Delivery(message: handler, arguments: values, at: Date()), from: field)
         do {
-            // An event it follows starts a chain of its own, as a task does: its handling enters it.
-            _ = try await CallChain.$current.withValue(.start) {
+            // An event it follows starts a chain of its own, as a task does, on behalf of whoever
+            // made it: its handling enters it.
+            _ = try await CallChain.$current.withValue(.start(try state.live.startedBy)) {
                 try await handling(handler, arguments: values, origin: origin)
             }
         } catch {

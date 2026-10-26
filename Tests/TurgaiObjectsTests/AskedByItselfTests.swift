@@ -12,7 +12,7 @@ import TurgaiObjects
 
 /// An agent asked by a call that came from its own answer, through objects and nodes, is told it's
 /// itself: the call chain says so, wherever the call went.
-@Suite
+@Suite(.asTheRuntime)
 struct AskedByItselfTests {
     static let relay = """
         actor Relay {

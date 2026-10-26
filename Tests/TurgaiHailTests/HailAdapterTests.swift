@@ -177,7 +177,8 @@ struct HailAdapterTests {
                 text: "hello",
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
-            agentRole: "test"
+            agentRole: "test",
+            scope: .runtime
         )
 
         let response = try await peer.run(to: request)

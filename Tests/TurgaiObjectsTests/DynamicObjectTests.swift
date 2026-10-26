@@ -4,6 +4,7 @@ import EventSourcing
 import Foundation
 import Hail
 import Testing
+import TurgaiDomain
 import VirtualActors
 
 import struct AnyLanguageModel.GeneratedContent
@@ -11,7 +12,7 @@ import struct AnyLanguageModel.GeneratedContent
 @testable import TurgaiApplication
 @testable import TurgaiObjects
 
-@Suite(.serialized)
+@Suite(.serialized, .asTheRuntime)
 struct DynamicObjectTests {
     @Test
     func objectSearchRanksIdentityActionsAndPrefixes() {
@@ -508,6 +509,39 @@ struct DynamicObjectTests {
                 #expect(try await desk.respond("addTea", arguments: [:]).reply == .integer(4))
                 #expect(try await desk.respond("addCoffee", arguments: [:]).reply == .integer(2))
                 #expect(try await desk.respond("add", arguments: ["to": "juice"]).reply == .integer(3))
+            }
+        }
+    }
+
+    /// An object is made on behalf of whoever's call made it, from any node, and so is one its
+    /// code makes as it starts. Both keep it across a restart.
+    @Test(.timeLimit(.minutes(2)))
+    func anObjectKeepsWhoMadeIt() async throws {
+        let store = MemoryEventStore()
+        let ann = CallScope.person(UserID("ann"), in: GroupID(rawValue: "family"), as: .admin)
+        let counter = "actor Counter {\n    var count = 0\n}"
+        let drinks = "actor Drinks {\n    private let tea = Counter(id: \"tea\")\n}"
+        let uses = Uses(
+            interface: ModuleInterface(name: Uses.module, source: "actor Counter {\n    init(id: String)\n}"),
+            objects: [:])
+        try await withShopNodes(store: store) { shop, customers in
+            let drinksID = try await withDynamicNode(joining: shop, store: store) { _ in
+                // Made from a node that hosts no objects: the call carries Ann to the one that does.
+                try await CallChain.$current.withValue(.start(ann)) {
+                    let objects = try await DynamicObjects.resolve(on: customers, scope: .shared)
+                    _ = try await objects.create(
+                        name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
+                    return try await objects.create(
+                        name: "Drinks", spec: .new(try Script(code: drinks, type: "Drinks", uses: uses)))
+                }
+            }
+            try await withDynamicNode(joining: shop, store: store) { node in
+                let objects = try await DynamicObjects.resolve(on: node, scope: .shared)
+                #expect(try await objects.held(drinksID).maker == ann)
+                let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
+                let made = try await DynamicObject.resolve(
+                    on: node, nature: ObjectNature(identity: tea, scope: .shared))
+                #expect(try await made.maker == ann)
             }
         }
     }
