@@ -37,6 +37,7 @@ So there's one boundary, the distributed call, and one infrastructure on it:
 ### Finding, reading, changing
 
 - **Finding is coarse:** everyone, or only some. Something that can be found but not used is what a request is made from.
+- **Lists name people, objects, or groups:** a family, a team, a chat's members. Who's in a group is the group's own: someone joining gets access, someone leaving loses it, and the object's lists don't change.
 - **Each action either reads or changes.** The actor's own code says which. For objects, that's the authority attributes in object code. For a tool or an agent, whoever offers it through the ToolsAPI says it.
 - **Two lists:** who may read, and who may change. Changing includes reading.
 
