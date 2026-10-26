@@ -108,6 +108,7 @@ private enum TelegramAPIMethod: String, Sendable {
     case sendMessageDraft
     case sendMessage
     case editMessageText
+    case getChatAdministrators
 }
 
 /// Telegram Bot API calls as a value of closures, in the same style as
@@ -136,6 +137,8 @@ public struct TelegramAPIClient: Sendable {
     public var editMessageText:
         @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?) async throws ->
             Void
+    /// The users who administer a group or channel: its creator, and the admins it appointed.
+    public var getChatAdministrators: @Sendable (_ chatID: Int64) async throws -> [TelegramUser]
 
     public init(
         getUpdates: @escaping @Sendable (_ offset: Int64?, _ timeout: Int) async throws -> [TelegramUpdate],
@@ -166,7 +169,8 @@ public struct TelegramAPIClient: Sendable {
             )? = nil,
         editMessageText:
             @escaping @Sendable (_ chatID: Int64, _ messageID: Int64, _ text: String, _ parseMode: TelegramParseMode?)
-            async throws -> Void
+            async throws -> Void,
+        getChatAdministrators: @escaping @Sendable (_ chatID: Int64) async throws -> [TelegramUser]
     ) {
         self.getUpdates = getUpdates
         self.getMe = getMe
@@ -181,6 +185,7 @@ public struct TelegramAPIClient: Sendable {
                 try await sendMessage(chatID, text, parseMode, replyParameters)
             }
         self.editMessageText = editMessageText
+        self.getChatAdministrators = getChatAdministrators
     }
 
     private var getMe: @Sendable () async throws -> TelegramUser
@@ -552,6 +557,14 @@ extension TelegramAPIClient {
                 {
                     // Editing a message to identical text is a Telegram no-op.
                 }
+            },
+            getChatAdministrators: { chatID in
+                try await call(
+                    method: .getChatAdministrators,
+                    body: GetChatAdministratorsRequest(chatID: chatID),
+                    result: [TelegramChatMember].self,
+                    timeout: .seconds(Int64(requestTimeout.rounded(.up)))
+                ).map(\.user)
             }
         )
     }
@@ -601,6 +614,19 @@ private struct GetUpdatesRequest: Encodable, Sendable {
         try container.encodeIfPresent(offset, forKey: .offset)
         try container.encode(timeout, forKey: .timeout)
     }
+}
+
+private struct GetChatAdministratorsRequest: Encodable, Sendable {
+    let chatID: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case chatID = "chat_id"
+    }
+}
+
+/// One of a chat's members, as Telegram describes them: only who they are is read.
+private struct TelegramChatMember: Decodable, Sendable {
+    let user: TelegramUser
 }
 
 private struct GetFileRequest: Encodable, Sendable {

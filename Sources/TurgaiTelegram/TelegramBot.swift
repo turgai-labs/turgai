@@ -110,6 +110,9 @@ public actor TelegramConnection {
         case .command(let command):
             return await sendToApplication(.command(command))
 
+        case .admins(let conversationID, let admins):
+            return await sendToApplication(.admins(conversationID: conversationID, admins))
+
         case .approval(let conversationID, let approvalID, let decision, let person):
             return await sendToApplication(
                 .approval(conversationID: conversationID, approvalID: approvalID, decision: decision, by: person))
@@ -218,6 +221,9 @@ public actor TelegramBot {
     private let connectionContinuation: ConnectionStream.Continuation
     private var activeConnections: [ConversationID: TelegramConnection] = [:]
     private var connectionsSubscribed = false
+    /// When each group's admins were last asked for: they're asked again after a while.
+    private var adminsAsked: [Int64: ContinuousClock.Instant] = [:]
+    private static let adminsKeptFor: Duration = .seconds(600)
     private var runTask: Task<Void, any Error>?
 
     public init(
@@ -510,6 +516,10 @@ public actor TelegramBot {
                         attachments: attachments
                     ) {
                         let connection = connection(for: event.conversationID)
+                        // Who decides for the chat, before what's said in it.
+                        if case .message = event, let admins = await admins(of: update) {
+                            _ = await connection.receive(admins)
+                        }
                         let accepted = await connection.receive(event)
                         if !accepted {
                             iterator.retryPendingUpdate()
@@ -532,6 +542,30 @@ public actor TelegramBot {
             }
             try await checkpointOffset(nextOffset)
             offset = nextOffset
+        }
+    }
+
+    /// The chat's admins, when they're due to be said: a private chat's one person, or a group's
+    /// administrators as Telegram lists them, asked for again after a while. None when it's not
+    /// time yet, or Telegram can't say.
+    private func admins(of update: TelegramUpdate) async -> TelegramInboundEvent? {
+        guard let message = update.message, let sender = message.from else { return nil }
+        let chat = message.chat
+        let conversationID = ConversationID(
+            channel: conversationChannel, externalAddress: ExternalConversationAddress(String(chat.id)))
+        func person(_ user: TelegramUser) -> UserID { UserID(participantID: Self.participantID(for: user.id)) }
+        if chat.type == "private" {
+            return .admins(conversationID: conversationID, [person(sender)])
+        }
+        let now = ContinuousClock.now
+        if let asked = adminsAsked[chat.id], asked + Self.adminsKeptFor > now { return nil }
+        do {
+            let administrators = try await client.getChatAdministrators(chat.id)
+            adminsAsked[chat.id] = now
+            return .admins(conversationID: conversationID, Set(administrators.filter { !$0.isBot }.map(person)))
+        } catch {
+            logger.warning("Could not ask Telegram for the chat's administrators: \(error)")
+            return nil
         }
     }
 
@@ -642,6 +676,7 @@ extension TelegramInboundEvent {
         case .context(let conversationID, _, _): conversationID
         case .diagnose(let conversationID, _, _): conversationID
         case .approval(let conversationID, _, _, _): conversationID
+        case .admins(let conversationID, _): conversationID
         case .command(let command):
             switch command {
             case .reminders(let conversationID, _, _),

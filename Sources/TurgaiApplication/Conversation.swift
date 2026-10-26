@@ -532,6 +532,11 @@ public distributed actor Conversation {
         try await dispatch(.reset)
     }
 
+    /// Who its admins are now, as its platform says: they decide for it.
+    public distributed func reportAdmins(_ admins: Set<TurgaiDomain.UserID>) async throws {
+        try await dispatch(.admins(admins))
+    }
+
     /// Shows only the requesting user's bounded active memory. The command is
     /// handled here rather than sent through the model, so it cannot create a
     /// turn or become a new memory observation.

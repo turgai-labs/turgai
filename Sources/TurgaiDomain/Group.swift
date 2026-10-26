@@ -2,17 +2,21 @@
 public enum GroupRole: String, Hashable, Codable, Sendable {
     /// Takes part, and uses what the group has.
     case member
-    /// Also decides for the group: on what's asked of it, and who's in it.
+    /// Also decides for the group: on what's asked of it.
     case admin
 }
 
 /// What happened to a group's members.
 public enum GroupEvent: Hashable, Codable, Sendable {
+    /// Someone is in it, with their role.
     case joined(UserID, as: GroupRole)
+    /// Someone's role changed.
+    case roleChanged(UserID, to: GroupRole)
 }
 
-/// The people in a group, each with their role. A conversation's members are one, for now; it
-/// becomes its own once something else needs it.
+/// The people in a group, each with their role. Who's in it is the platform's to say, as whoever
+/// can write there; who decides for it is too, where the platform knows. A conversation's members
+/// are one, for now; it becomes its own once something else needs it.
 public struct Group: Hashable, Codable, Sendable {
     public private(set) var members: [UserID: GroupRole]
 
@@ -30,18 +34,29 @@ public struct Group: Hashable, Codable, Sendable {
         Set(members.filter { $0.value == .admin }.keys)
     }
 
-    /// `person` joining, as someone writing in the group does: the first to join is its admin.
-    /// None for someone already in it.
+    /// `person` taking part, as someone writing in the group does: a member. None for someone
+    /// already in it.
     public func admitting(_ person: UserID) -> GroupEvent? {
-        guard members[person] == nil else { return nil }
-        return .joined(person, as: members.isEmpty ? .admin : .member)
+        members[person] == nil ? .joined(person, as: .member) : nil
+    }
+
+    /// The group's admins becoming exactly `admins`: whoever isn't in it yet joins as one, and each
+    /// whose role differs has it changed. Nothing when they already are.
+    public func having(admins: Set<UserID>) -> [GroupEvent] {
+        let joining = admins.subtracting(members.keys).sorted { $0.rawValue < $1.rawValue }
+            .map { GroupEvent.joined($0, as: .admin) }
+        let changing = members.keys.sorted { $0.rawValue < $1.rawValue }.compactMap { person -> GroupEvent? in
+            let role: GroupRole = admins.contains(person) ? .admin : .member
+            return members[person] == role ? nil : .roleChanged(person, to: role)
+        }
+        return joining + changing
     }
 
     /// The group after `event`: the one place its members change.
     public func applying(_ event: GroupEvent) -> Group {
         var next = self
         switch event {
-        case .joined(let person, let role):
+        case .joined(let person, let role), .roleChanged(let person, let role):
             next.members[person] = role
         }
         return next

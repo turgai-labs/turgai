@@ -209,7 +209,7 @@ struct TelegramTests {
                 for await delivery in inbound {
                     received.append(delivery.input)
                     await delivery.receipt.acknowledge()
-                    if received.count == 2 {
+                    if received.count == 3 {
                         return received
                     }
                 }
@@ -219,10 +219,12 @@ struct TelegramTests {
         let runTask = Task { try await bot.run() }
 
         let received = await consumer.value
-        #expect(received.count == 2)
+        #expect(received.count == 3)
         let participantID = TelegramBot.participantID(for: 7)
         let userID = UserID(participantID: participantID)
-        if case .message(let message, _) = received[0] {
+        // A private chat's one person decides for it.
+        #expect(received[0] == .admins(conversationID: TelegramBot.conversationID(for: 42), [userID]))
+        if case .message(let message, _) = received[1] {
             #expect(message.text == "hello Turgai")
             #expect(message.participantID == participantID)
             #expect(message.userID == userID)
@@ -237,7 +239,7 @@ struct TelegramTests {
         } else {
             Issue.record("Expected the first application input to be a message")
         }
-        #expect(received[1] == .reset(TelegramBot.conversationID(for: 42)))
+        #expect(received[2] == .reset(TelegramBot.conversationID(for: 42)))
 
         // The bot persists offsets after processing every update, including
         // updates that are filtered out before reaching a connection.
@@ -252,6 +254,51 @@ struct TelegramTests {
         #expect(requestedOffsets.first! == nil)
         #expect(requestedOffsets.contains(15))
         #expect(await offsets.currentOffset == 15)
+        await bot.stop()
+        _ = try? await runTask.value
+    }
+
+    @Test
+    func aGroupsAdministratorsAreItsAdminsAndAskedForOnce() async throws {
+        let group = TelegramChat(id: 42, type: "group")
+        let ann = TelegramUser(id: 7, firstName: "Ann")
+        let bob = TelegramUser(id: 8, firstName: "Bob")
+        let updates = (1...2).map { index in
+            TelegramUpdate(
+                updateID: Int64(index),
+                message: TelegramMessage(
+                    messageID: Int64(index), from: bob, chat: group, date: 100, text: "hello \(index)"))
+        }
+        let recorder = TelegramCallRecorder(responses: [updates])
+        let bot = TelegramBot(
+            client: makeClient(
+                recorder: recorder, administrators: [ann, TelegramUser(id: 9, isBot: true, firstName: "Turgai")]),
+            conversationChannel: ChannelID("telegram"),
+            allowedChatIDs: [42],
+            initialOffset: nil,
+            checkpointOffset: { _ in },
+            configuration: TelegramBotConfiguration(timeout: 1, retryDelay: .milliseconds(1))
+        )
+
+        let connectionStream = try await bot.connections()
+        let consumer = Task { () -> [ConversationInput] in
+            var received: [ConversationInput] = []
+            for await connection in connectionStream {
+                for await delivery in await connection.inbound {
+                    received.append(delivery.input)
+                    await delivery.receipt.acknowledge()
+                    if received.count == 3 { return received }
+                }
+            }
+            return received
+        }
+        let runTask = Task { try await bot.run() }
+
+        let received = await consumer.value
+        let annID = UserID(participantID: TelegramBot.participantID(for: 7))
+        #expect(received.first == .admins(conversationID: TelegramBot.conversationID(for: 42), [annID]))
+        #expect(received.dropFirst().allSatisfy { if case .message = $0 { true } else { false } })
+        #expect(await recorder.administratorRequests == 1)
         await bot.stop()
         _ = try? await runTask.value
     }
@@ -386,6 +433,8 @@ struct TelegramTests {
                 let inbound = await connection.inbound
                 for await delivery in inbound {
                     await delivery.receipt.acknowledge()
+                    // Who decides for the chat comes first.
+                    if case .admins = delivery.input { continue }
                     return delivery.input
                 }
             }
@@ -636,7 +685,9 @@ private actor TelegramOffsetRecorder {
     }
 }
 
-private func makeClient(recorder: TelegramCallRecorder) -> TelegramAPIClient {
+private func makeClient(
+    recorder: TelegramCallRecorder, administrators: [TelegramUser] = []
+) -> TelegramAPIClient {
     TelegramAPIClient(
         getUpdates: { offset, timeout in
             try await recorder.getUpdates(offset: offset, timeout: timeout)
@@ -671,6 +722,10 @@ private func makeClient(recorder: TelegramCallRecorder) -> TelegramAPIClient {
         },
         editMessageText: { _, _, text, parseMode in
             try await recorder.recordEdit(text, parseMode: parseMode)
+        },
+        getChatAdministrators: { _ in
+            await recorder.askedForAdministrators()
+            return administrators
         }
     )
 }
@@ -693,6 +748,7 @@ private actor TelegramCallRecorder {
     private var draftsSupported = true
     private var rateLimitedDrafts = 0
     private(set) var draftAttempts = 0
+    private(set) var administratorRequests = 0
     private(set) var requestedOffsets: [Int64?] = []
     private(set) var requestedFileIDs: [String] = []
     private(set) var sentActions: [String] = []
@@ -769,6 +825,10 @@ private actor TelegramCallRecorder {
         }
         sentDraftIDs.append(draftID)
         sentDrafts.append(text)
+    }
+
+    func askedForAdministrators() {
+        administratorRequests += 1
     }
 
     func sendMessage(

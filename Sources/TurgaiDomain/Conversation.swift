@@ -433,6 +433,8 @@ public enum ConversationInput: Sendable, Equatable {
         userID: UserID
     )
     case command(ConversationCommand)
+    /// Who the conversation's admins are now, as its platform says.
+    case admins(conversationID: ConversationID, Set<UserID>)
 }
 
 public struct PendingConversationMessage: Hashable, Codable, Sendable {
@@ -893,6 +895,8 @@ public enum ConversationAction: Sendable {
     case modelFailed(turnID: TurnID, failure: ConversationFailure)
     case reset
     case resume
+    /// Who its admins are now, as its platform says.
+    case admins(Set<UserID>)
 }
 
 // MARK: Deciding
@@ -974,6 +978,9 @@ extension ConversationDecision {
             let next = startingNext(in: state)
             return ConversationDecision(
                 events: [.inbox(.turnFailed(turnID, failure))] + next.events, effects: next.effects)
+
+        case .admins(let admins):
+            return ConversationDecision(events: state.members.having(admins: admins).map(ConversationEvent.member))
 
         case .reset:
             let cancel = state.inbox.activeTurnID.map { [ConversationEffect.cancelModel($0)] } ?? []

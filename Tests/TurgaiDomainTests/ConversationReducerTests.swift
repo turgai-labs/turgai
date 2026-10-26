@@ -24,7 +24,7 @@ struct ConversationReducerTests {
     }
 
     @Test
-    func whoeverWritesJoinsTheFirstAsItsAdmin() {
+    func whoeverWritesJoinsAsAMember() {
         func message(from participant: String) -> InboundMessage {
             InboundMessage(
                 conversationID: conversationID, participantID: ParticipantID(participant), text: "hello",
@@ -37,8 +37,35 @@ struct ConversationReducerTests {
             state = step(state, .receive(message: sent, turnID: TurnID(), agentRole: "conversation")).0
         }
 
-        #expect(state.members.members == [ann.userID: .admin, bob.userID: .member])
-        #expect(state.members.admins == [ann.userID])
+        #expect(state.members.members == [ann.userID: .member, bob.userID: .member])
+        #expect(state.members.admins.isEmpty)
+    }
+
+    @Test
+    func thePlatformSaysWhoTheAdminsAre() {
+        let ann = UserID(participantID: ParticipantID("ann"))
+        let bob = UserID(participantID: ParticipantID("bob"))
+        let cat = UserID(participantID: ParticipantID("cat"))
+        let sent = InboundMessage(
+            conversationID: conversationID, participantID: ParticipantID("ann"), text: "hello",
+            receivedAt: Date(timeIntervalSince1970: 1))
+        var state = step(
+            ConversationState(conversationID: conversationID),
+            .receive(message: sent, turnID: TurnID(), agentRole: "conversation")
+        ).0
+
+        state = step(state, .admins([ann, bob])).0
+        #expect(state.members.members == [ann: .admin, bob: .admin])
+
+        // Bob is no longer one, and Cat now is: Bob stays, as a member.
+        let decision = ConversationDecision(.admins([ann, cat]), in: state)
+        #expect(
+            decision.events == [.member(.joined(cat, as: .admin)), .member(.roleChanged(bob, to: .member))])
+        state = state.applying(decision.events)
+        #expect(state.members.admins == [ann, cat])
+
+        // The same admins again change nothing.
+        #expect(ConversationDecision(.admins([ann, cat]), in: state).events.isEmpty)
     }
 
     @Test

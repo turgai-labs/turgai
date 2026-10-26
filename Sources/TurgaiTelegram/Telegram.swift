@@ -251,6 +251,8 @@ public enum TelegramInboundEvent: Equatable, Sendable {
         userID: UserID
     )
     case command(ConversationCommand)
+    /// Who the chat's admins are now: a group's administrators, or a private chat's one person.
+    case admins(conversationID: ConversationID, Set<UserID>)
     /// Someone's answer to a question the conversation asked, by tapping its button.
     case approval(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision, by: UserID)
 }
