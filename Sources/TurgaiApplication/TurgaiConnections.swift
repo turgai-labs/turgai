@@ -686,7 +686,7 @@ actor LiveSession {
     }
 
     private func publish(_ event: OutboundEvent) async {
-        try? await conversationConnection.broadcast(event)
+        try? await conversationConnection.receive(event)
     }
 
     private func resolveConversation(

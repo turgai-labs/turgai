@@ -30,11 +30,16 @@ public enum ConversationModelEvent: Codable, Sendable, Equatable {
     )
 }
 
+/// Someone in a conversation who's shown what happens in it.
+public protocol ConversationListener: DistributedActor where ActorSystem == ClusterSystem {
+    distributed func receive(_ event: OutboundEvent) async throws
+}
+
 /// A node-local delivery endpoint held by a durable Conversation actor.
 ///
 /// It mirrors the connection actors used by Stagehand: connections and
 /// callbacks are transient, while the Conversation aggregate is durable.
-public distributed actor ConversationConnection {
+public distributed actor ConversationConnection: ConversationListener {
     public typealias ActorSystem = ClusterSystem
     public typealias EventHandler = @Sendable (OutboundEvent) async throws -> Void
 
@@ -48,7 +53,7 @@ public distributed actor ConversationConnection {
         self.onEvent = onEvent
     }
 
-    public distributed func broadcast(_ event: OutboundEvent) async throws {
+    public distributed func receive(_ event: OutboundEvent) async throws {
         try await onEvent(event)
     }
 }
@@ -72,13 +77,6 @@ private struct ConversationLiveState: Sendable {
             break
         }
     }
-}
-
-/// The turn whose activity the conversation is following: what it shows, so far.
-private struct FollowedTurn: Sendable {
-    let id: TurgaiDomain.TurnID
-    var phase: ReplyPhase = .thinking
-    var text = ""
 }
 
 private enum PublishEvent: Sendable {
@@ -252,67 +250,6 @@ enum ContextPresentation {
     private static let numberLocale = Locale(identifier: "en_US")
 }
 
-/// The application-side interpreter for one scoped model output.
-///
-/// It resolves the live connections for every lifecycle event. This matters
-/// after recovery: a channel connection may reconnect while the durable turn
-/// is still running, and the terminal reply must reach that new connection.
-private struct ConversationScope: ScopeLifecycle {
-    typealias Result = ConversationCompletion
-    typealias Update = Never
-
-    let conversationID: ConversationID
-    let turnID: TurgaiDomain.TurnID
-    let broadcast: @Sendable (OutboundEvent) async -> Void
-    /// What the turn is doing now, which the conversation follows from the agent's activity.
-    let phase: @Sendable () async -> ReplyPhase
-    let complete: @Sendable (ConversationCompletion) async -> Void
-    let operation: @Sendable () async throws -> ConversationCompletion
-
-    func start() async {}
-
-    func heartbeat() async {
-        await broadcast(
-            .reply(
-                .keepAlive(
-                    conversationID: conversationID,
-                    turnID: turnID,
-                    phase: await phase()
-                )
-            )
-        )
-    }
-
-    func perform(using _: PartialSink<Never>) async throws -> ConversationCompletion {
-        try await operation()
-    }
-
-    func update(_ update: Never) async {}
-
-    func finish(_ outcome: ScopeOutcome<ConversationCompletion>) async {
-        switch outcome {
-        case .completed(let completion):
-            // Persist first. A reply is delivered from the durable pending
-            // projection; a void completion publishes only the lifecycle
-            // terminal event.
-            await complete(completion)
-        case .failed(let failure):
-            await broadcast(
-                .reply(
-                    .failed(
-                        conversationID: conversationID,
-                        turnID: turnID,
-                        message: failure.message
-                    )
-                )
-            )
-        case .cancelled:
-            break
-        }
-    }
-
-}
-
 /// One durable Turgai conversation aggregate.
 ///
 /// The actor owns turn serialization and the queue. The Hail Agent owns the
@@ -372,8 +309,10 @@ public distributed actor Conversation {
 
     private let conversationID: ConversationID
     private let agentDirectoryID: AgentDirectoryID
-    private var peer: HailConversationPeer
-    private var agentRole: String
+    /// The role its agent has, unless a turn asks for another.
+    private let agentRole: String
+    /// Its agents while it's active: one for each role a turn asked for.
+    private var participants: [String: AgentParticipant] = [:]
     private var turnConfigurations: [TurgaiDomain.TurnID: TurnConfiguration] = [:]
     private var memoryExtractionConfiguration: MemoryExtractionConfiguration?
     private var connections: Set<ConversationConnection> = []
@@ -381,13 +320,8 @@ public distributed actor Conversation {
     /// Live-only echo bookkeeping: message IDs whose user-message echo was
     /// already broadcast. Bounded like `AgentInbox.acceptedMessageIDs`.
     private var echoedMessageIDs: [MessageID] = []
-    private var modelTask: Task<Void, Never>?
     /// Questions waiting for the user, live-only like the connections that ask them.
     private var approvals: [UUID: PendingApproval] = [:]
-    /// Follows the agent's activity while anyone watches this conversation.
-    private var activityTask: Task<Void, Never>?
-    /// The turn the agent is running, as its activity shows it.
-    private var followedTurn: FollowedTurn?
     private static let approvalExpiration: Duration = .seconds(300)
 
     private struct PendingApproval {
@@ -403,12 +337,7 @@ public distributed actor Conversation {
         self.state = ConversationState(
             conversationID: dependency.conversationID
         )
-        let adapter = HailAgentAdapter(
-            actorSystem: actorSystem,
-            agentRole: dependency.agentRole
-        )
         self.agentRole = dependency.agentRole
-        self.peer = try await adapter.peer(for: dependency.conversationID)
         self.memoryExtractionConfiguration = dependency.memoryExtraction
         try await actorSystem.journal.register(
             actor: self,
@@ -466,24 +395,24 @@ public distributed actor Conversation {
 
     /// The agent's past turns, step by step.
     public distributed func turns() async throws -> [ConversationTurn] {
-        try ConversationTurns.turns(of: try await peer.history())
+        try await participant(for: agentRole).turns()
     }
 
     public distributed func addConnection(_ connection: ConversationConnection) async {
         connections.insert(connection)
-        followActivity()
+        try? await participant(for: agentRole).watch(true)
         if let turnID = state.inbox.activeTurnID {
             let activity = liveState.latestActivity
-            try? await connection.broadcast(
+            try? await connection.receive(
                 .reply(.started(conversationID: conversationID, turnID: turnID))
             )
             switch activity {
             case .phase(_, _, let phase), .keepAlive(_, _, let phase):
-                try? await connection.broadcast(
+                try? await connection.receive(
                     .reply(.phase(conversationID: conversationID, turnID: turnID, phase: phase))
                 )
             case .status(_, _, let message):
-                try? await connection.broadcast(
+                try? await connection.receive(
                     .reply(.status(conversationID: conversationID, turnID: turnID, message: message))
                 )
             default:
@@ -491,7 +420,7 @@ public distributed actor Conversation {
             }
         }
         for approval in approvals.values {
-            try? await connection.broadcast(
+            try? await connection.receive(
                 .approvalRequested(conversationID: conversationID, turnID: approval.turnID, prompt: approval.prompt)
             )
         }
@@ -539,98 +468,8 @@ public distributed actor Conversation {
     public distributed func removeConnection(_ connection: ConversationConnection) async {
         connections.remove(connection)
         // Nobody watches: stop listening, so an empty room doesn't keep the agent awake.
-        if connections.isEmpty { stopFollowingActivity() }
-    }
-
-    // MARK: Following the agent's activity
-
-    /// Listens to the agent's activity while anyone watches. When the stream ends, because the
-    /// agent deactivated or moved, it subscribes again, which wakes the agent. When subscribing
-    /// fails it stops, and the next connection or turn starts it again.
-    private func followActivity() {
-        guard activityTask == nil, !connections.isEmpty else { return }
-        let peer = peer
-        let log = actorSystem.log
-        activityTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self, await self.whenLocal({ !$0.connections.isEmpty }) == true else { break }
-                do {
-                    for await event in try await peer.activities() {
-                        await self.whenLocal { await $0.follow(event) }
-                    }
-                } catch {
-                    log.debug(
-                        "Could not follow the agent's activity", metadata: ["error": .string(String(describing: error))]
-                    )
-                    break
-                }
-            }
-            await self?.whenLocal { $0.activityLoopEnded() }
-        }
-    }
-
-    private func stopFollowingActivity() {
-        activityTask?.cancel()
-    }
-
-    /// The loop ended. If it was stopped and someone joined while it wound down, or the agent
-    /// changed, it follows again.
-    private func activityLoopEnded() {
-        let stopped = activityTask?.isCancelled == true
-        activityTask = nil
-        if stopped { followActivity() }
-    }
-
-    /// One thing the agent did, shown as part of the turn it belongs to: this conversation's
-    /// running turn, or one it didn't ask for, such as a timer's.
-    private func follow(_ event: HailModelEvent) async {
-        if case .started = event {
-            followedTurn = FollowedTurn(id: state.inbox.activeTurnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
-            return
-        }
-        if case .completed = event {
-            followedTurn = nil
-            return
-        }
-        var turn = followedTurn ?? FollowedTurn(id: state.inbox.activeTurnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
-        defer { followedTurn = turn }
-        let turnID = turn.id
-        switch event {
-        case .reasoning:
-            await publish(phase: .thinking, of: &turn)
-        case .status(let message):
-            await publishLive(.reply(.status(conversationID: conversationID, turnID: turnID, message: message)))
-        case .toolCalled(let name, let arguments, let at):
-            await publishLive(
-                .reply(.status(conversationID: conversationID, turnID: turnID, message: "Using \(name)…")))
-            await publishLive(
-                .reply(
-                    .step(
-                        conversationID: conversationID, turnID: turnID,
-                        step: .toolCalled(name: name, arguments: arguments, at: at))))
-        case .toolFinished(let name, let output, let failure, let at):
-            await publishLive(
-                .reply(
-                    .step(
-                        conversationID: conversationID, turnID: turnID,
-                        step: .toolFinished(name: name, output: output, failure: failure, at: at))))
-        case .reply(let text):
-            await publish(phase: .typing, of: &turn)
-            turn.text = text
-            await publishLive(.reply(.partial(conversationID: conversationID, turnID: turnID, text: turn.text)))
-        default:
-            break
-        }
-    }
-
-    private func publish(phase: ReplyPhase, of turn: inout FollowedTurn) async {
-        guard turn.phase != phase else { return }
-        turn.phase = phase
-        await publishLive(.reply(.phase(conversationID: conversationID, turnID: turn.id, phase: phase)))
-    }
-
-    private func followedPhase() -> ReplyPhase {
-        followedTurn?.phase ?? .thinking
+        guard connections.isEmpty else { return }
+        for participant in participants.values { try? await participant.watch(false) }
     }
 
     public distributed func send(
@@ -673,7 +512,7 @@ public distributed actor Conversation {
         var failures: [String] = []
         for connection in connections {
             do {
-                try await connection.broadcast(
+                try await connection.receive(
                     .notice(
                         conversationID: conversationID,
                         turnID: nil,
@@ -712,7 +551,7 @@ public distributed actor Conversation {
     /// snapshot is read from Hail's event-sourced agent in one operation, so
     /// token usage and lifecycle data describe one coherent state.
     public distributed func showContext() async throws {
-        let snapshot = try await peer.contextSnapshot()
+        let snapshot = try await participant(for: agentRole).contextSnapshot()
         await publish(
             .notice(
                 conversationID: conversationID,
@@ -977,193 +816,39 @@ public distributed actor Conversation {
 
     }
 
-    /// Long enough for a follow-up exchange to join the same extraction batch.
-    private static let extractionQuietPeriod: TimeInterval = 240
+    /// The agent of `role` in this conversation, which runs its turns while it's active.
+    private func participant(for role: String) async throws -> AgentParticipant {
+        if let participant = participants[role] { return participant }
+        let made = try await AgentParticipant(
+            in: self, conversationID: conversationID, role: role, actorSystem: actorSystem)
+        // Another call may have made it while this one waited.
+        if let participant = participants[role] { return participant }
+        participants[role] = made
+        if !connections.isEmpty { try? await made.watch(true) }
+        return made
+    }
 
     private func startModel(for request: ConversationTurnRequest) async {
-        modelTask?.cancel()
         let turnConfiguration = turnConfigurations.removeValue(forKey: request.turnID)
-        let requestedRole = request.agentRole
-        if requestedRole != agentRole {
-            let adapter = HailAgentAdapter(
-                actorSystem: actorSystem,
-                agentRole: requestedRole
+        do {
+            try await participant(for: request.agentRole).answer(
+                request, memoryExtraction: turnConfiguration?.memoryExtraction ?? memoryExtractionConfiguration)
+        } catch {
+            actorSystem.log.error(
+                "Could not resolve agent for conversation turn",
+                metadata: [
+                    "conversationID": .string(conversationID.stableKey),
+                    "agentRole": .string(request.agentRole),
+                    "error": .string(String(describing: error)),
+                ]
             )
-            do {
-                peer = try await adapter.peer(for: conversationID)
-                agentRole = requestedRole
-                // Listen to the new agent instead.
-                stopFollowingActivity()
-            } catch {
-                actorSystem.log.error(
-                    "Could not resolve agent for conversation turn",
-                    metadata: [
-                        "conversationID": .string(conversationID.stableKey),
-                        "agentRole": .string(requestedRole),
-                        "error": .string(String(describing: error)),
-                    ]
+            await modelEvent(
+                .failed(
+                    turnID: request.turnID,
+                    kind: .model,
+                    message: "The selected agent configuration could not be activated."
                 )
-                try? await modelEvent(
-                    .failed(
-                        turnID: request.turnID,
-                        kind: .model,
-                        message: "The selected agent configuration could not be activated."
-                    )
-                )
-                return
-            }
-        }
-        let peer = self.peer
-        let actorSystem = self.actorSystem
-        let conversationID = self.conversationID
-        let extractionConfiguration: MemoryExtractionConfiguration?
-        if let turnConfiguration {
-            extractionConfiguration = turnConfiguration.memoryExtraction
-        } else {
-            extractionConfiguration = memoryExtractionConfiguration
-        }
-        let conversation = self
-        let scope = ConversationScope(
-            conversationID: conversationID,
-            turnID: request.turnID,
-            broadcast: { event in
-                try? await conversation.publishLive(event)
-            },
-            phase: {
-                await conversation.whenLocal { $0.followedPhase() } ?? .thinking
-            },
-            complete: { [weak self] completion in
-                try? await self?.modelEvent(
-                    .completed(
-                        turnID: request.turnID,
-                        completion: completion
-                    )
-                )
-            },
-            operation: {
-                // What the agent does meanwhile reaches the room through its activity; this
-                // only asks, and waits for the reply.
-                await conversation.whenLocal { $0.followActivity() }
-                // The agent's turn starts a chain of its own: what it calls comes from it.
-                let agentID = HailAgentAdapter.agentID(for: request.conversationID, role: request.agentRole)
-                let response = try await CallChain.$current.withValue(.start) {
-                    try await Agent.answering(as: agentID) { try await peer.run(to: request) }
-                }
-                let text = request.message.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty,
-                    let extractionConfiguration,
-                    extractionConfiguration.isEnabled
-                {
-                    let observation = MemoryObservation(
-                        id: ObservationID(rawValue: request.message.id.rawValue),
-                        sourceID: MemorySourceID(rawValue: request.message.id.rawValue),
-                        text: request.message.text,
-                        response: response.reply.text,
-                        observedAt: request.message.receivedAt
-                    )
-
-                    let workflowInput = MemoryExtractionWorkflowInput(
-                        userID: request.message.userID,
-                        observation: observation,
-                        configuration: extractionConfiguration,
-                        fireAt: Date().addingTimeInterval(Self.extractionQuietPeriod)
-                    )
-                    do {
-                        _ = try await actorSystem.workflows.start(
-                            type: MemoryExtractionWorkflow.self,
-                            options: WorkflowOptions(
-                                id: MemoryExtractionWorkflow.id(
-                                    userID: request.message.userID,
-                                    sourceID: observation.sourceID
-                                ),
-                                retryPolicy: MemoryExtractionWorkflow.retryPolicy
-                            ),
-                            input: workflowInput
-                        )
-                    } catch WorkflowRuntimeError.workflowInputMismatch {
-                        // A replay of this source already has a durable
-                        // timer. Its original input remains authoritative.
-                        actorSystem.log.info(
-                            "Memory extraction workflow already exists",
-                            metadata: ["source": .string(observation.sourceID.rawValue.uuidString)]
-                        )
-                    } catch {
-                        actorSystem.log.error(
-                            "Could not start memory extraction workflow",
-                            metadata: [
-                                "source": .string(observation.sourceID.rawValue.uuidString),
-                                "error": .string(String(describing: error)),
-                            ]
-                        )
-                    }
-
-                    do {
-                        let user = try await User.resolve(
-                            on: actorSystem,
-                            userID: request.message.userID
-                        )
-                        try await user.recordObservation(observation)
-                    } catch {
-                        actorSystem.log.warning(
-                            "Could not record memory observation",
-                            metadata: ["error": .string(String(describing: error))]
-                        )
-                    }
-                }
-                return .reply(response.reply)
-            }
-        )
-
-        modelTask = Task { [weak self] in
-            do {
-                _ = try await withScope(scope) { error in Self.modelFailure(for: error) }
-
-            } catch is CancellationError {
-                try? await self?.modelEvent(
-                    .failed(
-                        turnID: request.turnID,
-                        kind: .cancelled,
-                        message: "The model request was cancelled."
-                    )
-                )
-            } catch let failure as ConversationFailure {
-                actorSystem.log.error(
-                    "Model turn failed",
-                    metadata: [
-                        "conversationID": .string(conversationID.stableKey),
-                        "turnID": .string(request.turnID.rawValue.uuidString),
-                        "error": .string(failure.message),
-                    ]
-                )
-                try? await self?.modelEvent(
-                    .failed(
-                        turnID: request.turnID,
-                        kind: failure.kind,
-                        message: failure.message
-                    )
-                )
-            } catch {
-                // The scope already emitted the mapped lifecycle failure. The
-                // model event still needs the same typed failure so the
-                // durable conversation closes the turn, while the original
-                // error remains available in logs.
-                let failure = Self.modelFailure(for: error)
-                actorSystem.log.error(
-                    "Model turn failed",
-                    metadata: [
-                        "conversationID": .string(conversationID.stableKey),
-                        "turnID": .string(request.turnID.rawValue.uuidString),
-                        "error": .string(String(describing: error)),
-                    ]
-                )
-                try? await self?.modelEvent(
-                    .failed(
-                        turnID: request.turnID,
-                        kind: failure.kind,
-                        message: failure.message
-                    )
-                )
-            }
+            )
         }
     }
 
@@ -1180,13 +865,6 @@ public distributed actor Conversation {
             if let publishEvent = PublishEvent(conversationEvent: event) {
                 await publish(publishEvent)
             }
-        }
-
-        switch action {
-        case .modelCompleted, .modelFailed:
-            modelTask = nil
-        default:
-            break
         }
 
         // A model completion is journaled before this point. A reply is an
@@ -1207,8 +885,7 @@ public distributed actor Conversation {
             case .publish(let event):
                 await publish(event)
             case .cancelModel:
-                modelTask?.cancel()
-                modelTask = nil
+                for participant in participants.values { try? await participant.cancel() }
             }
         }
 
@@ -1239,7 +916,7 @@ public distributed actor Conversation {
             var delivered = false
             for connection in connections {
                 do {
-                    try await connection.broadcast(event)
+                    try await connection.receive(event)
                     delivered = true
                     break
                 } catch {
@@ -1270,13 +947,6 @@ public distributed actor Conversation {
                 failure: ConversationFailure(kind: kind, message: message)
             )
         }
-    }
-
-    private static func modelFailure(for error: any Error) -> ConversationFailure {
-        return ConversationFailure(
-            kind: .model,
-            message: HailAgentAdapter.userFacingMessage(for: error)
-        )
     }
 
     /// Publishes a live event after its durable source event has been emitted.
@@ -1329,7 +999,7 @@ public distributed actor Conversation {
         // Delivery rendezvous ends at the session's output channel, never at
         // the client: a slow or dead connection cannot stall the conversation.
         for connection in connections {
-            try? await connection.broadcast(event)
+            try? await connection.receive(event)
         }
     }
 
