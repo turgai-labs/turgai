@@ -15,6 +15,14 @@ struct ConversationReducerTests {
     )
     private let participantID = ParticipantID("user-1")
 
+    /// What `action` comes to, as the conversation runs it: its events applied, and its effects.
+    private func step(
+        _ state: ConversationState, _ action: ConversationAction
+    ) -> (ConversationState, [ConversationEffect]) {
+        let decision = ConversationDecision(action, in: state)
+        return (state.applying(decision.events), decision.effects)
+    }
+
     @Test
     func whoeverWritesJoinsTheFirstAsItsAdmin() {
         func message(from participant: String) -> InboundMessage {
@@ -26,7 +34,7 @@ struct ConversationReducerTests {
         let bob = message(from: "bob")
         var state = ConversationState(conversationID: conversationID)
         for sent in [ann, bob, message(from: "ann")] {
-            state = reduce(state, .receive(message: sent, turnID: TurnID(), agentRole: "conversation")).0
+            state = step(state, .receive(message: sent, turnID: TurnID(), agentRole: "conversation")).0
         }
 
         #expect(state.members.members == [ann.userID: .admin, bob.userID: .member])
@@ -107,7 +115,7 @@ struct ConversationReducerTests {
     func receivingMessageStartsTurnAndPersists() {
         let state = ConversationState(conversationID: conversationID)
 
-        let (next, effects) = reduce(
+        let (next, effects) = step(
             state,
             .receive(message: makeMessage(text: "  hello  "), turnID: makeTurnID(1), agentRole: "test")
         )
@@ -131,7 +139,7 @@ struct ConversationReducerTests {
     @Test
     func messagesReceivedDuringTurnAreQueuedAndProcessedInOrder() {
         let initial = ConversationState(conversationID: conversationID)
-        let (running, _) = reduce(
+        let (running, _) = step(
             initial,
             .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), agentRole: "test")
         )
@@ -140,13 +148,13 @@ struct ConversationReducerTests {
             return
         }
 
-        let (queued, _) = reduce(
+        let (queued, _) = step(
             running,
             .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
         )
         #expect(queued.pendingMessages.count == 1)
 
-        let (completed, completionEffects) = reduce(
+        let (completed, completionEffects) = step(
             queued,
             .modelCompleted(
                 turnID: firstTurnID,
@@ -173,7 +181,7 @@ struct ConversationReducerTests {
     func receivingTheSameMessageAgainIsIdempotent() {
         let message = makeMessage(text: "scheduled prompt")
         let initial = ConversationState(conversationID: conversationID)
-        let (running, _) = reduce(
+        let (running, _) = step(
             initial,
             .receive(
                 message: message,
@@ -186,14 +194,14 @@ struct ConversationReducerTests {
             return
         }
 
-        let (completed, _) = reduce(
+        let (completed, _) = step(
             running,
             .modelCompleted(
                 turnID: turnID,
                 completion: .reply(makeReply("answer"))
             )
         )
-        let (duplicate, effects) = reduce(
+        let (duplicate, effects) = step(
             completed,
             .receive(
                 message: message,
@@ -209,7 +217,7 @@ struct ConversationReducerTests {
     @Test
     func modelCompletionDoesNotPublishBecauseReplyScopeOwnsDelivery() {
         let state = ConversationState(conversationID: conversationID)
-        let (running, _) = reduce(
+        let (running, _) = step(
             state,
             .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
@@ -218,7 +226,7 @@ struct ConversationReducerTests {
             return
         }
 
-        let (completed, effects) = reduce(
+        let (completed, effects) = step(
             running,
             .modelCompleted(
                 turnID: turnID,
@@ -236,7 +244,7 @@ struct ConversationReducerTests {
             ])
         #expect(effects.isEmpty)
 
-        let (delivered, deliveryEffects) = reduce(
+        let (delivered, deliveryEffects) = step(
             completed,
             .replyDelivered(turnID: turnID)
         )
@@ -247,7 +255,7 @@ struct ConversationReducerTests {
     @Test
     func voidCompletionClosesTurnWithoutQueueingReply() {
         let state = ConversationState(conversationID: conversationID)
-        let (running, _) = reduce(
+        let (running, _) = step(
             state,
             .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1), agentRole: "test")
         )
@@ -256,7 +264,7 @@ struct ConversationReducerTests {
             return
         }
 
-        let (completed, effects) = reduce(
+        let (completed, effects) = step(
             running,
             .modelCompleted(turnID: turnID, completion: .void)
         )
@@ -289,7 +297,7 @@ struct ConversationReducerTests {
             activeMessage: pending
         )
 
-        let (recovered, effects) = reduce(running, .resume)
+        let (recovered, effects) = step(running, .resume)
 
         #expect(recovered == running)
         #expect(
@@ -317,7 +325,7 @@ struct ConversationReducerTests {
             pendingMessages: [pending]
         )
 
-        let (recovered, effects) = reduce(state, .resume)
+        let (recovered, effects) = step(state, .resume)
 
         #expect(recovered.status == .running(pending.turnID))
         #expect(recovered.activeMessage == pending)
@@ -334,13 +342,13 @@ struct ConversationReducerTests {
     @Test
     func staleModelEventsAreIgnored() {
         let state = ConversationState(conversationID: conversationID)
-        let (running, _) = reduce(
+        let (running, _) = step(
             state,
             .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
         let staleTurnID = makeTurnID(99)
 
-        let (next, effects) = reduce(
+        let (next, effects) = step(
             running,
             .modelCompleted(
                 turnID: staleTurnID,
@@ -357,16 +365,16 @@ struct ConversationReducerTests {
     @Test
     func aFailedTurnLetsTheNextQueuedMessageStart() {
         let state = ConversationState(conversationID: conversationID)
-        let (running, _) = reduce(
+        let (running, _) = step(
             state,
             .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), agentRole: "test")
         )
-        let (queued, _) = reduce(
+        let (queued, _) = step(
             running,
             .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
         )
         let failure = ConversationFailure(kind: .model, message: "Ollama unavailable")
-        let (next, effects) = reduce(queued, .modelFailed(turnID: makeTurnID(1), failure: failure))
+        let (next, effects) = step(queued, .modelFailed(turnID: makeTurnID(1), failure: failure))
 
         #expect(next.status == .running(makeTurnID(2)))
         #expect(next.pendingMessages.isEmpty)
@@ -376,17 +384,15 @@ struct ConversationReducerTests {
                 return false
             }))
 
-        let (failed, failureEffects) = reduce(next, .modelFailed(turnID: makeTurnID(2), failure: failure))
+        let (failed, failureEffects) = step(next, .modelFailed(turnID: makeTurnID(2), failure: failure))
         #expect(failed.status == .failed(failure))
         #expect(failureEffects.isEmpty)
-        let (cleared, _) = reduce(failed, .clearFailure)
-        #expect(cleared.status == .idle)
     }
 
     @Test
     func resetCancelsActiveTurnAndClearsConversation() {
         let state = ConversationState(conversationID: conversationID)
-        let (running, _) = reduce(
+        let (running, _) = step(
             state,
             .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
@@ -395,7 +401,7 @@ struct ConversationReducerTests {
             return
         }
 
-        let (reset, effects) = reduce(running, .reset)
+        let (reset, effects) = step(running, .reset)
 
         #expect(reset.status == .idle)
         #expect(reset.pendingMessages.isEmpty)
@@ -406,7 +412,7 @@ struct ConversationReducerTests {
     @Test
     func emptyInputProducesErrorWithoutChangingState() {
         let state = ConversationState(conversationID: conversationID)
-        let (next, effects) = reduce(
+        let (next, effects) = step(
             state,
             .receive(message: makeMessage(text: " \n\t "), turnID: makeTurnID(1), agentRole: "test")
         )
@@ -429,7 +435,7 @@ struct ConversationReducerTests {
     @Test
     func emptyInputDuringRunningTurnDoesNotFailTheTurn() {
         let state = ConversationState(conversationID: conversationID)
-        let (running, _) = reduce(
+        let (running, _) = step(
             state,
             .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
@@ -438,7 +444,7 @@ struct ConversationReducerTests {
             return
         }
 
-        let (next, effects) = reduce(
+        let (next, effects) = step(
             running,
             .receive(message: makeMessage(text: "  "), turnID: makeTurnID(2), agentRole: "test")
         )

@@ -795,6 +795,15 @@ public struct ConversationTurnRequest: Hashable, Codable, Sendable {
     }
 }
 
+extension ConversationTurnRequest {
+    /// The turn that answers `pending` in the conversation with `conversationID`.
+    init(_ pending: PendingConversationMessage, in conversationID: ConversationID) {
+        self.init(
+            conversationID: conversationID, turnID: pending.turnID, message: pending.message,
+            agentRole: pending.agentRole)
+    }
+}
+
 public enum ReplyPhase: String, Hashable, Codable, Sendable {
     case thinking
     case typing
@@ -918,236 +927,122 @@ public enum ConversationAction: Sendable {
     case replyDelivered(turnID: TurnID)
     case modelFailed(turnID: TurnID, failure: ConversationFailure)
     case reset
-    case clearFailure
     case resume
 }
 
-public func reduce(
-    _ state: ConversationState,
-    _ action: ConversationAction
-) -> (ConversationState, [ConversationEffect]) {
-    var next = state
-    var effects: [ConversationEffect] = []
+// MARK: Deciding
 
-    switch action {
-    case .receive(let message, let turnID, let agentRole):
-        guard message.conversationID == state.conversationID else {
-            return (state, [])
-        }
+/// What an action comes to: the events it journals, in order, and what's done once they are.
+public struct ConversationDecision: Equatable, Sendable {
+    public let events: [ConversationEvent]
+    public let effects: [ConversationEffect]
 
-        guard !state.acceptedMessageIDs.contains(message.id) else {
-            return (state, [])
-        }
+    public init(events: [ConversationEvent] = [], effects: [ConversationEffect] = []) {
+        self.events = events
+        self.effects = effects
+    }
+}
 
-        let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !message.attachments.isEmpty else {
-            // Input rejection, not a turn failure: a `nil` turn ID means no
-            // turn ended, even when another turn is currently running.
-            return (
-                state,
-                [
+extension ConversationDecision {
+    /// What `action` comes to in `state`. Only applying its events changes the conversation.
+    public init(_ action: ConversationAction, in state: ConversationState) {
+        self = Self.deciding(action, in: state)
+    }
+
+    private static func deciding(_ action: ConversationAction, in state: ConversationState) -> ConversationDecision {
+        switch action {
+        case .receive(let message, let turnID, let agentRole):
+            guard message.conversationID == state.conversationID,
+                !state.acceptedMessageIDs.contains(message.id)
+            else { return ConversationDecision() }
+            let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty || !message.attachments.isEmpty else {
+                // Input rejection, not a turn failure: a `nil` turn ID means no turn ended, even
+                // when another turn is running.
+                return ConversationDecision(effects: [
                     .publish(
                         .reply(
                             .failed(
-                                conversationID: state.conversationID,
-                                turnID: nil,
-                                message: "Message cannot be empty."
-                            )
-                        )
+                                conversationID: state.conversationID, turnID: nil, message: "Message cannot be empty."))
                     )
-                ]
-            )
-        }
-
-        let normalizedMessage = InboundMessage(
-            id: message.id,
-            conversationID: message.conversationID,
-            participantID: message.participantID,
-            userID: message.userID,
-            author: message.author,
-            text: text,
-            attachments: message.attachments,
-            receivedAt: message.receivedAt
-        )
-
-        // Whoever writes is one of its members.
-        if let joined = next.members.admitting(message.userID) {
-            next.members = next.members.applying(joined)
-        }
-
-        next.acceptedMessageIDs.append(message.id)
-        if next.acceptedMessageIDs.count > 256 {
-            next.acceptedMessageIDs.removeFirst(
-                next.acceptedMessageIDs.count - 256
-            )
-        }
-
-        switch next.status {
-        case .running:
-            next.pendingMessages.append(
-                PendingConversationMessage(
-                    message: normalizedMessage,
-                    turnID: turnID,
-                    agentRole: agentRole
-                )
-            )
-
-        case .idle, .failed:
-            next.status = .idle
-            next.pendingMessages.append(
-                PendingConversationMessage(
-                    message: normalizedMessage,
-                    turnID: turnID,
-                    agentRole: agentRole
-                )
-            )
-            effects += startNextTurn(&next)
-        }
-
-    case .modelCompleted(let turnID, let completion):
-        guard isActive(turnID, in: next.status) else {
-            return (state, [])
-        }
-
-        if case .reply(let reply) = completion {
-            next.pendingReplies.append(
-                PendingConversationReply(turnID: turnID, reply: reply)
-            )
-        }
-        next.activeMessage = nil
-        next.status = .idle
-        if case .void = completion {
-            effects.append(
-                .publish(
-                    .reply(
-                        .completed(
-                            conversationID: next.conversationID,
-                            turnID: turnID
-                        )
-                    )
-                )
-            )
-        }
-        effects += startNextTurn(&next)
-
-    case .replyDelivered(let turnID):
-        guard next.pendingReplies.contains(where: { $0.turnID == turnID }) else {
-            return (state, [])
-        }
-        next.pendingReplies.removeAll { $0.turnID == turnID }
-
-    case .modelFailed(let turnID, let failure):
-        guard isActive(turnID, in: next.status) else {
-            return (state, [])
-        }
-
-        next.status = .failed(failure)
-        next.activeMessage = nil
-        // A message already waiting is the person's next word: it starts now, as after a reply.
-        effects += startNextTurn(&next)
-
-    case .reset:
-        if let turnID = activeTurnID(in: next.status) {
-            effects.append(.cancelModel(turnID))
-        }
-        next.status = .idle
-        next.pendingMessages.removeAll(keepingCapacity: true)
-        next.pendingReplies.removeAll(keepingCapacity: true)
-        next.activeMessage = nil
-        effects.append(.publish(.reset(conversationID: next.conversationID)))
-
-    case .clearFailure:
-        guard case .failed = next.status else {
-            return (state, [])
-        }
-        next.status = .idle
-        effects += startNextTurn(&next)
-
-    case .resume:
-        switch next.status {
-        case .idle:
-            effects += startNextTurn(&next)
-        case .running:
-            guard let activeMessage = next.activeMessage else {
-                return (state, [])
+                ])
             }
-            effects.append(
-                .runReply(
-                    modelRequest(
-                        for: activeMessage,
-                        conversationID: next.conversationID
-                    )
-                )
-            )
-        case .failed:
-            guard !next.pendingMessages.isEmpty else {
-                return (state, [])
+            let pending = PendingConversationMessage(
+                message: InboundMessage(
+                    id: message.id, conversationID: message.conversationID, participantID: message.participantID,
+                    userID: message.userID, author: message.author, text: text, attachments: message.attachments,
+                    receivedAt: message.receivedAt),
+                turnID: turnID, agentRole: agentRole)
+            // Whoever writes is one of its members.
+            var events = state.members.admitting(message.userID).map { [ConversationEvent.member($0)] } ?? []
+            guard case .running = state.status else {
+                // Idle, or failed: the oldest waiting message starts, which is this one if none waits.
+                let next = state.pendingMessages.first ?? pending
+                if next != pending { events.append(.messageQueued(pending)) }
+                return ConversationDecision(
+                    events: events + [.turnStarted(next)],
+                    effects: [.runReply(ConversationTurnRequest(next, in: state.conversationID))])
             }
-            next.status = .idle
-            effects += startNextTurn(&next)
+            return ConversationDecision(events: events + [.messageQueued(pending)])
+
+        case .modelCompleted(let turnID, let completion):
+            guard state.activeTurnID == turnID else { return ConversationDecision() }
+            var events: [ConversationEvent] = []
+            var effects: [ConversationEffect] = []
+            switch completion {
+            case .reply(let reply):
+                events.append(.replyQueued(PendingConversationReply(turnID: turnID, reply: reply)))
+            case .void:
+                effects.append(.publish(.reply(.completed(conversationID: state.conversationID, turnID: turnID))))
+            }
+            events.append(.turnCompleted(turnID))
+            let next = startingNext(in: state)
+            return ConversationDecision(events: events + next.events, effects: effects + next.effects)
+
+        case .replyDelivered(let turnID):
+            guard state.pendingReplies.contains(where: { $0.turnID == turnID }) else { return ConversationDecision() }
+            return ConversationDecision(events: [.replyDelivered(turnID)])
+
+        case .modelFailed(let turnID, let failure):
+            guard state.activeTurnID == turnID else { return ConversationDecision() }
+            // A message already waiting is the person's next word: it starts now, as after a reply.
+            let next = startingNext(in: state)
+            return ConversationDecision(events: [.turnFailed(turnID, failure)] + next.events, effects: next.effects)
+
+        case .reset:
+            let cancel = state.activeTurnID.map { [ConversationEffect.cancelModel($0)] } ?? []
+            return ConversationDecision(
+                events: [.reset], effects: cancel + [.publish(.reset(conversationID: state.conversationID))])
+
+        case .resume:
+            switch state.status {
+            case .idle:
+                return startingNext(in: state)
+            case .running:
+                guard let active = state.activeMessage else { return ConversationDecision() }
+                return ConversationDecision(effects: [
+                    .runReply(ConversationTurnRequest(active, in: state.conversationID))
+                ])
+            case .failed:
+                return startingNext(in: state)
+            }
         }
     }
 
-    guard next != state || !effects.isEmpty else {
-        return (state, effects)
+    /// The oldest waiting message's turn starting, if one waits.
+    private static func startingNext(in state: ConversationState) -> ConversationDecision {
+        guard let next = state.pendingMessages.first else { return ConversationDecision() }
+        return ConversationDecision(
+            events: [.turnStarted(next)],
+            effects: [.runReply(ConversationTurnRequest(next, in: state.conversationID))])
     }
-
-    return (next, effects)
 }
 
-private func startNextTurn(_ state: inout ConversationState) -> [ConversationEffect] {
-    guard !state.pendingMessages.isEmpty else {
-        return []
+extension ConversationState {
+    /// The conversation after `events`, in order.
+    public func applying(_ events: [ConversationEvent]) -> ConversationState {
+        var next = self
+        for event in events { next.apply(event) }
+        return next
     }
-
-    let pending = state.pendingMessages.removeFirst()
-    let turnID = pending.turnID
-    state.activeMessage = pending
-    state.status = .running(turnID)
-
-    return [
-        .runReply(
-            modelRequest(
-                for: pending,
-                conversationID: state.conversationID
-            )
-        )
-    ]
-}
-
-private func modelRequest(
-    for pending: PendingConversationMessage,
-    conversationID: ConversationID
-) -> ConversationTurnRequest {
-    return ConversationTurnRequest(
-        conversationID: conversationID,
-        turnID: pending.turnID,
-        message: pending.message,
-        agentRole: pending.agentRole
-    )
-}
-
-private func activeTurnID(in status: ConversationStatus) -> TurnID? {
-    guard case .running(let turnID) = status else {
-        return nil
-    }
-    return turnID
-}
-
-private func isActive(_ turnID: TurnID, in status: ConversationStatus) -> Bool {
-    activeTurnID(in: status) == turnID
-}
-
-private func fail(
-    state: ConversationState,
-    turnID: TurnID,
-    failure: ConversationFailure
-) -> (ConversationState, [ConversationEffect]) {
-    var next = state
-    next.status = .failed(failure)
-    next.activeMessage = nil
-    return (
-        next,
-        []
-    )
 }

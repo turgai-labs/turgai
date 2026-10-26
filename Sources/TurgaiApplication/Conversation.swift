@@ -951,10 +951,6 @@ public distributed actor Conversation {
                 text: DeferredActionPresentation.reminderAction("cancelled", id: id.rawValue)))
     }
 
-    public distributed func clearFailure() async throws {
-        try await dispatch(.clearFailure)
-    }
-
     /// Receives ephemeral model output from the current turn runner. The
     /// durable state transition still happens here, in the Conversation actor.
     public distributed func modelEvent(_ event: ConversationModelEvent) async {
@@ -1178,8 +1174,9 @@ public distributed actor Conversation {
         let previous = state
         let action = requestedAction
 
-        let (next, effects) = reduce(previous, action)
-        for event in events(for: action, from: previous, to: next) {
+        let decision = ConversationDecision(action, in: previous)
+        let effects = decision.effects
+        for event in decision.events {
             try await emit(event: event)
             if let publishEvent = PublishEvent(conversationEvent: event) {
                 await publish(publishEvent)
@@ -1281,107 +1278,6 @@ public distributed actor Conversation {
             kind: .model,
             message: HailAgentAdapter.userFacingMessage(for: error)
         )
-    }
-
-    private func events(
-        for action: ConversationAction,
-        from previous: ConversationState,
-        to next: ConversationState
-    ) -> [ConversationEvent] {
-        if case .reset = action {
-            return [.reset]
-        }
-
-        var events: [ConversationEvent] = []
-
-        // Who joined, before what they said.
-        for (person, role) in next.members.members where previous.members.role(of: person) == nil {
-            events.append(.member(.joined(person, as: role)))
-        }
-
-        // Persist the terminal output before the lifecycle bookkeeping. The
-        // reply event is the recovery point if the process crashes between
-        // individual journal appends.
-        events.append(
-            contentsOf: newPendingReplies(
-                from: previous.pendingReplies,
-                to: next.pendingReplies
-            ).map(ConversationEvent.replyQueued))
-
-        if let previousTurnID = previous.activeTurnID,
-            previousTurnID != next.activeTurnID
-        {
-            // A turn failed by its failure, even when the next turn starts right after it.
-            let failure: ConversationFailure? =
-                if case .modelFailed(_, let failure) = action {
-                    failure
-                } else if case .failed(let failure) = next.status { failure } else { nil }
-            if let failure {
-                events.append(.turnFailed(previousTurnID, failure))
-            } else {
-                events.append(.turnCompleted(previousTurnID))
-            }
-        }
-
-        events.append(
-            contentsOf: newPendingMessages(
-                from: previous.pendingMessages,
-                to: next.pendingMessages
-            ).map(ConversationEvent.messageQueued))
-
-        events.append(
-            contentsOf: deliveredReplies(
-                from: previous.pendingReplies,
-                to: next.pendingReplies
-            ).map(ConversationEvent.replyDelivered))
-
-        if let activeMessage = next.activeMessage,
-            previous.activeTurnID != next.activeTurnID
-        {
-            events.append(.turnStarted(activeMessage))
-        }
-        return events
-    }
-
-    private func newPendingMessages(
-        from previous: [PendingConversationMessage],
-        to next: [PendingConversationMessage]
-    ) -> [PendingConversationMessage] {
-        var unmatchedPrevious = previous
-        var added: [PendingConversationMessage] = []
-        for pending in next {
-            if let index = unmatchedPrevious.firstIndex(of: pending) {
-                unmatchedPrevious.remove(at: index)
-            } else {
-                added.append(pending)
-            }
-        }
-        return added
-    }
-
-    private func newPendingReplies(
-        from previous: [PendingConversationReply],
-        to next: [PendingConversationReply]
-    ) -> [PendingConversationReply] {
-        var unmatchedPrevious = previous
-        var added: [PendingConversationReply] = []
-        for reply in next {
-            if let index = unmatchedPrevious.firstIndex(of: reply) {
-                unmatchedPrevious.remove(at: index)
-            } else {
-                added.append(reply)
-            }
-        }
-        return added
-    }
-
-    private func deliveredReplies(
-        from previous: [PendingConversationReply],
-        to next: [PendingConversationReply]
-    ) -> [TurgaiDomain.TurnID] {
-        previous.map(\.turnID).filter { turnID in
-            !next.contains { $0.turnID == turnID }
-        }
     }
 
     /// Publishes a live event after its durable source event has been emitted.
