@@ -59,31 +59,11 @@ struct EvalNode: Sendable {
                 // An object's Swift is written by the same model, in a session of its own.
                 let writing = try await endpoints.endpoint(
                     model: model, configuration: configuration, temperature: runtime.temperature)
-                // A task's agents, which the others can ask: never itself.
-                let offered = try await Agent.offered(
-                    agents.map(\.role).filter { $0 != context.agentID.role }, on: actorSystem)
-                let session = ObjectSession(
-                    actorSystem: actorSystem, objectCatalog: await catalog.current, scopes: [.shared],
-                    agents: offered,
-                    writer: ObjectWriter(
-                        endpoint: writing, report: { FileHandle.standardError.write(Data($0.written.utf8)) }),
-                    request: context.input.text)
-                let tools =
-                    try await ObjectTools(session: session).tools().filter { $0.name != "use_object" }
-                    + session.objectTools()
-                return TurnTools(tools: tools, pages: EvalPages(base: session, introduction: objectsPageDescription))
+                return try await Self.tools(
+                    for: context, on: actorSystem, catalog: await catalog.current, agents: agents, writing: writing,
+                    objectsPageDescription: objectsPageDescription)
             },
-            authorityProvider: { _, _ in
-                CompositeAuthority()
-                    .grantingAll(for: FindObjectsEffect.self)
-                    .grantingAll(for: ListObjectsEffect.self)
-                    .grantingAll(for: MakeObjectEffect.self)
-                    .grantingAll(for: ToolPageEffect.self)
-                    .grantingAll(for: EditObjectEffect.self)
-                    .grantingAll(for: UseObjectEffect.self)
-                    .grantingAll(for: RemoveObjectEffect.self)
-                    .grantingAll(for: InvokeObjectEffect.self)
-            }
+            authorityProvider: { _, _ in Self.authority }
         )
         let system = await ClusterSystem("eval") { settings in
             settings.bindHost = "127.0.0.1"
@@ -104,6 +84,37 @@ struct EvalNode: Sendable {
             system: system, virtualNode: await VirtualNode(actorSystem: system), workspace: workspace,
             objectCatalog: objectCatalog)
     }
+
+    /// A turn's tools: the objects, made and found, and the task's other agents, which it can ask.
+    private static func tools(
+        for context: AgentTurnContext, on actorSystem: ClusterSystem, catalog: ObjectCatalog?, agents: [EvalAgent],
+        writing: any ModelEndpoint, objectsPageDescription: String?
+    ) async throws -> TurnTools {
+        // A task's agents, which the others can ask: never itself.
+        let others: [Role] = agents.map(\.role).filter { (role: Role) -> Bool in role != context.agentID.role }
+        let offered = try await Agent.offered(others, on: actorSystem)
+        let writer = ObjectWriter(
+            endpoint: writing, report: { (event: WriterEvent) in FileHandle.standardError.write(Data(event.written.utf8)) })
+        let session = ObjectSession(
+            actorSystem: actorSystem, objectCatalog: catalog, scopes: [.shared], agents: offered, writer: writer,
+            request: context.input.text)
+        let roots: [any HailCore.Tool] = try await ObjectTools(session: session).tools().filter {
+            (tool: any HailCore.Tool) -> Bool in tool.name != "use_object"
+        }
+        let tools: [any HailCore.Tool] = roots + (await session.objectTools())
+        return TurnTools(tools: tools, pages: EvalPages(base: session, introduction: objectsPageDescription))
+    }
+
+    /// What an eval's agents may do: everything with objects, and nothing else.
+    private static let authority = CompositeAuthority()
+        .grantingAll(for: FindObjectsEffect.self)
+        .grantingAll(for: ListObjectsEffect.self)
+        .grantingAll(for: MakeObjectEffect.self)
+        .grantingAll(for: ToolPageEffect.self)
+        .grantingAll(for: EditObjectEffect.self)
+        .grantingAll(for: UseObjectEffect.self)
+        .grantingAll(for: RemoveObjectEffect.self)
+        .grantingAll(for: InvokeObjectEffect.self)
 
     /// The provider settings the app's profiles use for this model.
     static func configuration(for model: AgentModel) throws -> AgentProviderConfiguration {

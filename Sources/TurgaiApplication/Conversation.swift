@@ -192,51 +192,43 @@ private enum DeferredActionPresentation {
 enum ContextPresentation {
     static func text(for snapshot: AgentContextSnapshot) -> String {
         var lines: [String] = ["Context diagnostics", ""]
-
-        let status = snapshot.state.rawValue
-        lines.append("Status: \(status)")
-
+        lines.append("Status: \(snapshot.state.rawValue)")
         if let usage = snapshot.contextUsage {
-            let percentage =
+            let percentage: Int =
                 usage.limitTokens > 0
                 ? Int((Double(usage.usedTokens) / Double(usage.limitTokens) * 100).rounded())
                 : 0
             lines.append(
-                "Context window: \(usage.usedTokens.formatted(.number.locale(Self.numberLocale))) / \(usage.limitTokens.formatted(.number.locale(Self.numberLocale))) tokens"
-                    + " (\(percentage)%, \(render(source: usage.source)))"
-            )
+                "Context window: \(counted(usage.usedTokens)) / \(counted(usage.limitTokens)) tokens"
+                    + " (\(percentage)%, \(render(source: usage.source)))")
         } else {
             lines.append("Context window: not reported")
         }
-
-        lines.append(
-            "Turns in context: \(snapshot.historyTurnCount.formatted(.number.locale(Self.numberLocale)))")
+        lines.append("Turns in context: \(counted(snapshot.historyTurnCount))")
         lines.append("Compaction summary: \(snapshot.hasContextSummary ? "yes" : "no")")
+        let usage = snapshot.usageSummary
+        guard usage.requestCount > 0 else { return lines.joined(separator: "\n") }
+        return (lines + [""] + usageLines(usage)).joined(separator: "\n")
+    }
 
-        let usageSummary = snapshot.usageSummary
-        guard usageSummary.requestCount > 0 else {
-            return lines.joined(separator: "\n")
+    /// What the model was asked and gave, counted: each count it reported.
+    private static func usageLines(_ usage: AgentUsageSummary) -> [String] {
+        let counts: [(String, Int?)] = [
+            ("Input tokens", usage.inputTokens),
+            ("Output tokens", usage.outputTokens),
+            ("Reasoning tokens", usage.reasoningTokens),
+            ("Cached tokens read", usage.cachedReadTokens),
+            ("Total tokens", usage.totalTokens),
+        ]
+        let reported: [String] = counts.compactMap { (label: String, count: Int?) -> String? in
+            count.map { (count: Int) -> String in "\(label): \(counted(count))" }
         }
+        return ["Model usage", "Requests: \(counted(usage.requestCount))"] + reported
+    }
 
-        lines.append("")
-        lines.append("Model usage")
-        lines.append("Requests: \(usageSummary.requestCount.formatted(.number.locale(Self.numberLocale)))")
-        if let input = usageSummary.inputTokens {
-            lines.append("Input tokens: \(input.formatted(.number.locale(Self.numberLocale)))")
-        }
-        if let output = usageSummary.outputTokens {
-            lines.append("Output tokens: \(output.formatted(.number.locale(Self.numberLocale)))")
-        }
-        if let reasoning = usageSummary.reasoningTokens {
-            lines.append("Reasoning tokens: \(reasoning.formatted(.number.locale(Self.numberLocale)))")
-        }
-        if let cached = usageSummary.cachedReadTokens {
-            lines.append("Cached tokens read: \(cached.formatted(.number.locale(Self.numberLocale)))")
-        }
-        if let total = usageSummary.totalTokens {
-            lines.append("Total tokens: \(total.formatted(.number.locale(Self.numberLocale)))")
-        }
-        return lines.joined(separator: "\n")
+    /// A count, written as people read it.
+    private static func counted(_ count: Int) -> String {
+        count.formatted(.number.locale(numberLocale))
     }
 
     private static func render(source: ModelMeasurementSource) -> String {

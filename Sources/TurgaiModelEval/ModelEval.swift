@@ -48,10 +48,12 @@ struct ModelEval: AsyncParsableCommand {
             try await WriterProbe.run(model: try AgentModel(model), runs: runs, temperature: temperature)
             return
         }
-        let tasks =
+        let tasks: [EvalTask] =
             task.isEmpty
             ? EvalTask.all
-            : EvalTask.all.filter { request in task.contains { request.request.localizedCaseInsensitiveContains($0) } }
+            : EvalTask.all.filter { (request: EvalTask) -> Bool in
+                task.contains { (word: String) -> Bool in request.request.localizedCaseInsensitiveContains(word) }
+            }
         let service = ModelEvalService(
             model: try AgentModel(model), tasks: tasks, runs: runs, log: URL(fileURLWithPath: log),
             temperature: temperature,

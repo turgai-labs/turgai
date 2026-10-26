@@ -167,40 +167,48 @@ extension Uses {
     /// what it is, then its fields or its cases, each with its type as Swift writes it. Words,
     /// never declarations to copy.
     public var valuesInWords: [String] {
-        interface.valueDeclarations.compactMap { name, declaration -> String? in
-            if let structure = declaration.as(StructDeclSyntax.self) {
-                var lines = [Self.titled(name, Self.summary(structure.leadingTrivia)), "  Fields:"]
-                for member in structure.memberBlock.members {
-                    guard let variable = member.decl.as(VariableDeclSyntax.self) else { continue }
-                    for binding in variable.bindings {
-                        let type = binding.typeAnnotation?.type.trimmedDescription ?? "Any"
-                        lines.append(
-                            "    \(binding.pattern.trimmedDescription): \(type)"
-                                + Self.said(Self.summary(variable.leadingTrivia)))
-                    }
-                }
-                return lines.joined(separator: "\n")
-            }
-            if let enumeration = declaration.as(EnumDeclSyntax.self) {
-                var lines = [Self.titled(name, Self.summary(enumeration.leadingTrivia)) + " One of:"]
-                for member in enumeration.memberBlock.members {
-                    guard let cases = member.decl.as(EnumCaseDeclSyntax.self) else { continue }
-                    for element in cases.elements {
-                        let values =
-                            element.parameterClause.map { clause in
-                                "("
-                                    + clause.parameters.map { parameter in
-                                        (parameter.firstName.map { "\($0.text): " } ?? "")
-                                            + parameter.type.trimmedDescription
-                                    }.joined(separator: ", ") + ")"
-                            } ?? ""
-                        lines.append("    \(element.name.text)\(values)" + Self.said(Self.summary(cases.leadingTrivia)))
-                    }
-                }
-                return lines.joined(separator: "\n")
-            }
+        interface.valueDeclarations.compactMap { (name: String, declaration: DeclSyntax) -> String? in
+            if let structure = declaration.as(StructDeclSyntax.self) { return Self.inWords(structure, named: name) }
+            if let enumeration = declaration.as(EnumDeclSyntax.self) { return Self.inWords(enumeration, named: name) }
             return nil
         }
+    }
+
+    /// A structure: what it is, then each field with its type.
+    private static func inWords(_ structure: StructDeclSyntax, named name: String) -> String {
+        var lines: [String] = [titled(name, summary(structure.leadingTrivia)), "  Fields:"]
+        for member in structure.memberBlock.members {
+            guard let variable = member.decl.as(VariableDeclSyntax.self) else { continue }
+            let said: String = Self.said(summary(variable.leadingTrivia))
+            for binding in variable.bindings {
+                let type: String = binding.typeAnnotation?.type.trimmedDescription ?? "Any"
+                lines.append("    \(binding.pattern.trimmedDescription): \(type)\(said)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// An enumeration: what it is, then each case with its values.
+    private static func inWords(_ enumeration: EnumDeclSyntax, named name: String) -> String {
+        var lines: [String] = [titled(name, summary(enumeration.leadingTrivia)) + " One of:"]
+        for member in enumeration.memberBlock.members {
+            guard let cases = member.decl.as(EnumCaseDeclSyntax.self) else { continue }
+            let said: String = Self.said(summary(cases.leadingTrivia))
+            for element in cases.elements {
+                lines.append("    \(element.name.text)\(values(of: element))\(said)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// A case's associated values, as Swift writes them: none, or each with its label and type.
+    private static func values(of element: EnumCaseElementSyntax) -> String {
+        guard let clause = element.parameterClause else { return "" }
+        let parameters: [String] = clause.parameters.map { (parameter: EnumCaseParameterSyntax) -> String in
+            let label: String = parameter.firstName.map { (name: TokenSyntax) -> String in "\(name.text): " } ?? ""
+            return label + parameter.type.trimmedDescription
+        }
+        return "(\(parameters.joined(separator: ", ")))"
     }
 
     private static func titled(_ name: String, _ summary: String?) -> String {

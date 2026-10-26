@@ -95,45 +95,26 @@ struct TurgaiAppService: Service, Sendable {
             throw ValidationError("At least one agent must be configured.")
         }
         let configuredProfiles = await agentProfiles.profiles()
-        let modelContextWindows = configuredProfiles.reduce(into: [AgentModel: Int]()) { result, profile in
-            result[profile.model] = profile.contextWindow
+        let modelContextWindows: [AgentModel: Int] = configuredProfiles.reduce(into: [:]) {
+            (windows: inout [AgentModel: Int], profile: TurgaiAgentProfile) in
+            windows[profile.model] = profile.contextWindow
         }
         let runtimeConfiguration = HailRuntimeConfiguration(
             contextWindow: defaultAgentProfile.contextWindow,
             modelContextWindows: modelContextWindows,
             contextWindowProvider: { model, agentID in
-                let role = agentID.role.rawValue
-                let profile: TurgaiAgentProfile?
-                if role == "user-tool" {
-                    profile = await agentProfiles.defaultProfile()
-                } else {
-                    profile = await agentProfiles.profile(id: role)
+                guard let profile = await Self.profile(of: agentID, in: agentProfiles), profile.model == model else {
+                    return nil
                 }
-                guard let profile, profile.model == model else { return nil }
                 return profile.contextWindow
             }
         )
         let endpointFactory = AgentModelEndpointFactory(
             credentials: agentCredentials, transports: requestLimits.transports)
         let modelEndpointProvider: ModelEndpointProvider = { request in
-            guard let model = try? AgentModel(request.model) else {
-                return nil
-            }
-            let profile: TurgaiAgentProfile
-            if request.agentID.role.rawValue != "user-tool" {
-                guard
-                    let configuredProfile = await agentProfiles.profile(
-                        id: request.agentID.role.rawValue
-                    )
-                else {
-                    return nil
-                }
-                profile = configuredProfile
-            } else {
-                guard let currentDefault = await agentProfiles.defaultProfile() else { return nil }
-                profile = currentDefault
-            }
-            guard profile.model == model else { return nil }
+            guard let model = try? AgentModel(request.model),
+                let profile = await Self.profile(of: request.agentID, in: agentProfiles), profile.model == model
+            else { return nil }
             return try await endpointFactory.endpoint(
                 for: profile,
                 temperature: runtimeConfiguration.temperature,
@@ -152,30 +133,10 @@ struct TurgaiAppService: Service, Sendable {
         try await withThrowingTaskGroup(of: Void.self) { persistenceTasks in
             // Each store is built exactly once, here at the composition root:
             // the same instance serves boot recovery and the journal plugin.
-            let eventStore: any EventStore
-            let snapshotStore: any SnapshotStore
-            let persistedConversationIDs: [ConversationID]
-            let discoverChannelIDs: @Sendable () async throws -> [UUID]
-            let loadPersistedConversationIDs: @Sendable () async throws -> [ConversationID]
+            let stores: Stores
             switch persistence.backend {
             case .file(let client):
-                let fileEventStore = FileEventStore(client: client)
-                let fileJournalReader = FileJournalReader(client: client)
-                eventStore = fileEventStore
-                snapshotStore = FileSnapshotStore(client: client)
-                loadPersistedConversationIDs = {
-                    let ids = try await fileJournalReader.persistenceIDs(
-                        withPrefix: ConversationPersistenceID.prefix
-                    )
-                    return Self.conversationIDs(persistenceIDs: ids)
-                }
-                persistedConversationIDs = try await loadPersistedConversationIDs()
-                discoverChannelIDs = {
-                    try await fileJournalReader.persistenceIDs(
-                        withPrefix: TelegramChannel.persistencePrefix
-                    )
-                    .compactMap(TelegramChannel.channelID(from:))
-                }
+                stores = Self.stores(on: client)
             case .postgres(let client):
                 // A PostgreSQL query naturally waits until PostgresClient.run
                 // is active. The client task remains structured around the
@@ -183,41 +144,24 @@ struct TurgaiAppService: Service, Sendable {
                 persistenceTasks.addTask {
                     await client.run()
                 }
-                let postgresEventStore = PostgresEventStore(client: client)
-                let postgresSnapshotStore = PostgresSnapshotStore(client: client)
-                try await postgresEventStore.setupDatabase()
-                try await postgresSnapshotStore.setupDatabase()
-                eventStore = postgresEventStore
-                snapshotStore = postgresSnapshotStore
-                let postgresJournalReader = PostgresJournalReader(client: client)
-                loadPersistedConversationIDs = {
-                    try await postgresJournalReader.conversationIDs()
-                }
-                persistedConversationIDs = try await loadPersistedConversationIDs()
-                discoverChannelIDs = {
-                    try await postgresJournalReader.persistenceIDs(
-                        withPrefix: TelegramChannel.persistencePrefix
-                    ).compactMap(TelegramChannel.channelID(from:))
-                }
+                stores = try await Self.stores(on: client)
             }
+            let eventStore = stores.events
+            let snapshotStore = stores.snapshots
+            let loadPersistedConversationIDs = stores.conversationIDs
+            let discoverChannelIDs = stores.channelIDs
+            let persistedConversationIDs = try await loadPersistedConversationIDs()
             let userToolsDirectory =
                 turgaiDirectory
                 .appendingPathComponent("tools", isDirectory: true)
             let wasmRunnerURL = WasmRunnerLocator.executableURL(environment: environment)
             let attachmentResolver = AttachmentResolver()
             let searchBackend = try Self.makeSearchBackend(environment: environment)
-            let userToolLogger = Logger(label: "turgai.usertools")
-            let userToolRegistry = UserToolRegistry(
-                directory: userToolsDirectory
-            ) { issue in
-                userToolLogger.warning(
-                    "User tool issue",
-                    metadata: [
-                        "source": .string(issue.source.lastPathComponent),
-                        "reason": .string(String(describing: issue.reason)),
-                    ]
-                )
-            }
+            let userToolRegistry = Self.userToolRegistry(in: userToolsDirectory)
+            let turnTools = TurnToolSources(
+                agentProfiles: agentProfiles, endpointFactory: endpointFactory, runtimeConfiguration: runtimeConfiguration,
+                attachmentResolver: attachmentResolver, searchBackend: searchBackend, workspaceRoot: workspaceRoot,
+                wasmRunnerURL: wasmRunnerURL, userToolRegistry: userToolRegistry)
             let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
                 workspaceRoot: workspaceRoot,
                 // An agent is activated by identity alone, so its configuration
@@ -226,211 +170,14 @@ struct TurgaiAppService: Service, Sendable {
                 // for profile agents (a group chat's members share one by
                 // construction), fresh per spawn for helpers, whose id embeds
                 // a UUID.
-                spawnConfigProvider: { agentID in
-                    switch agentID.role.rawValue {
-                    case "user-tool":
-                        AgentSpawnConfig(
-                            agentID: agentID,
-                            interruptedTurns: .close,
-                            snapshotPolicy: .disabled
-                        )
-                    default:
-                        // Profile agents: their Conversation owns recovery and
-                        // starts exactly one model run after its own journal
-                        // replays; Hail resuming too would be a second driver.
-                        AgentSpawnConfig(agentID: agentID, interruptedTurns: .close)
-                    }
-                },
+                spawnConfigProvider: { agentID in Self.spawnConfig(for: agentID) },
                 modelEndpointProvider: modelEndpointProvider,
-                modelSelectionProvider: { request in
-                    let role = request.agentID.role.rawValue
-                    if role == "user-tool" {
-                        guard let currentDefault = await agentProfiles.defaultProfile() else {
-                            throw TurgaiModelSelectionError.missingProfile(
-                                TurgaiAgentProfileStore.defaultProfileID
-                            )
-                        }
-                        return ModelConfiguration(
-                            model: currentDefault.model,
-                            reasoningEffort: currentDefault.reasoningEffort
-                        )
-                    }
-                    guard let profile = await agentProfiles.profile(id: role) else {
-                        throw TurgaiModelSelectionError.missingProfile(role)
-                    }
-                    guard profile.availability == .enabled else {
-                        throw TurgaiModelSelectionError.disabledProfile(role)
-                    }
-                    return ModelConfiguration(
-                        model: profile.model,
-                        reasoningEffort: profile.reasoningEffort
-                    )
-                },
-                definitionProvider: { spawnConfig in
-                    let role = spawnConfig.agentID.role.rawValue
-                    let agentKind: RuntimeAgentKind = role == "user-tool" ? .userTool : .profile
-                    let profile: TurgaiAgentProfile?
-                    switch agentKind {
-                    case .userTool: profile = await agentProfiles.defaultProfile()
-                    case .profile: profile = await agentProfiles.profile(id: role)
-                    }
-                    guard let profile else {
-                        throw TurgaiModelSelectionError.missingProfile(role)
-                    }
-                    switch (agentKind, profile.availability) {
-                    case (.profile, .disabled):
-                        throw TurgaiModelSelectionError.disabledProfile(role)
-                    case (.profile, .enabled), (.userTool, _): break
-                    }
-                    let customInstructions =
-                        profile.instructions.trimmingCharacters(
-                            in: .whitespacesAndNewlines
-                        )
-                    let personaInstructions =
-                        profile.persona?.trimmingCharacters(
-                            in: .whitespacesAndNewlines
-                        ) ?? ""
-                    let systemPrompt: String
-                    switch agentKind {
-                    case .userTool:
-                        systemPrompt =
-                            "You are an isolated helper agent. Follow the supplied task, return only the useful result, and do not perform side effects."
-                    case .profile:
-                        // The profile's own instructions, blank unless its owner writes some. What the
-                        // agent can do comes with its tools and pages, not from here.
-                        systemPrompt = customInstructions
-                    }
-                    let execution: AgentExecutionPolicy
-                    switch agentKind {
-                    case .userTool:
-                        execution = AgentExecutionPolicy(
-                            sandbox: .readOnly,
-                            approvalPolicy: .onRequest
-                        )
-                    case .profile:
-                        execution = .autonomousWorkspace
-                    }
-                    return AgentDefinition(
-                        role: spawnConfig.agentID.role,
-                        behavior: .init(
-                            systemPrompt: systemPrompt,
-                            execution: execution
-                        ),
-                        persona: {
-                            switch agentKind {
-                            case .userTool: return nil
-                            case .profile:
-                                guard !personaInstructions.isEmpty else { return nil }
-                                return AgentPersona(
-                                    displayName: profile.name,
-                                    instructions: personaInstructions
-                                )
-                            }
-                        }()
-                    )
-                },
+                modelSelectionProvider: { request in try await Self.modelSelection(for: request, in: agentProfiles) },
+                definitionProvider: { spawnConfig in try await Self.definition(for: spawnConfig, in: agentProfiles) },
                 turnToolsProvider: { context, actorSystem in
-                    let objectCatalog = try await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog
-                    // An object's Swift is written by the agent's own model, in a session of its own.
-                    let writer: ObjectWriter? =
-                        if let profile = await agentProfiles.profile(id: context.agentID.role.rawValue) {
-                            ObjectWriter(
-                                endpoint: try await endpointFactory.endpoint(
-                                    for: profile,
-                                    temperature: runtimeConfiguration.temperature,
-                                    ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive
-                                ),
-                                report: { event in
-                                    let logger = Logger(label: "turgai.objectwriter")
-                                    // How big what it's asked is, and which objects it's shown: the
-                                    // prompt itself follows, in full.
-                                    if case .asked(let prompt) = event {
-                                        let objects = prompt.split(separator: "\n").filter {
-                                            $0.hasPrefix("- ") && $0.contains(": ") && !$0.hasPrefix("- The ")
-                                        }
-                                        logger.info(
-                                            "Object writer asked",
-                                            metadata: [
-                                                "characters": "\(prompt.count)",
-                                                "objects":
-                                                    "\(objects.map { $0.dropFirst(2).prefix { $0 != ":" } }.joined(separator: ", "))",
-                                            ])
-                                    }
-                                    logger.info("\(event.written)")
-                                })
-                        } else {
-                            nil
-                        }
-                    var tools = try await ConversationTools.make(
-                        context: context,
-                        attachmentResolver: attachmentResolver,
-                        searchBackend: searchBackend,
-                        workspaceRoot: workspaceRoot,
-                        wasmRunnerURL: wasmRunnerURL,
-                        userTools: userToolRegistry,
-                        approval: ChannelToolApproval(
-                            actorSystem: actorSystem, agentRole: context.agentID.role.rawValue),
-                        actorSystem: actorSystem,
-                        objectCatalog: objectCatalog,
-                        writer: writer,
-                        // Every enabled profile's agent can be asked, as an object.
-                        agents: await agentProfiles.profiles().filter { $0.availability == .enabled }.map {
-                            Role($0.id)
-                        },
-                        includeConversationTools: context.agentID.role.rawValue != "user-tool"
-                    )
-                    // Hail's files and agent messaging, for the agents granted them.
-                    if context.agentID.role.rawValue != "user-tool" {
-                        tools.tools =
-                            try await actorSystem.agentRuntime.agentTools(for: context, actorSystem: actorSystem)
-                            + tools.tools
-                    }
-                    return tools
+                    try await turnTools.tools(for: context, on: actorSystem)
                 },
-                authorityProvider: { spawnConfig, workspace in
-                    if spawnConfig.agentID.role.rawValue == "user-tool" {
-                        return CompositeAuthority()
-                            .granting(for: FileEffect.self) { _ in
-                                .denied("prompt helpers cannot access files")
-                            }
-                            .granting(for: TerminalEffect.self) { _ in
-                                .denied("prompt helpers cannot run terminal commands")
-                            }
-                            .granting(for: ProcessEffect.self) { _ in
-                                .denied("prompt helpers cannot spawn processes")
-                            }
-                            .granting(for: NetworkEffect.self) { _ in
-                                .denied("prompt helpers cannot access the network")
-                            }
-                            .granting(for: CoordinationEffect.self) { _ in
-                                .denied("prompt helpers cannot coordinate with other agents")
-                            }
-                            .grantingAll(for: ClockEffect.self)
-                    }
-                    return
-                        CompositeAuthority
-                        .workspaceDefault(root: workspace.rootPath)
-                        .grantingAll(for: UserWorkflowEffect.self)
-                        .grantingAll(for: CreateScheduleEffect.self)
-                        .grantingAll(for: ReplaceScheduleEffect.self)
-                        .grantingAll(for: CancelScheduleEffect.self)
-                        .grantingAll(for: ListSchedulesEffect.self)
-                        .grantingAll(for: TriggerScheduleEffect.self)
-                        .grantingAll(for: CreateTimerEffect.self)
-                        .grantingAll(for: ReplaceTimerEffect.self)
-                        .grantingAll(for: CancelTimerEffect.self)
-                        .grantingAll(for: ListTimersEffect.self)
-                        // Actions that aren't safe also ask the user, inside the effect.
-                        .grantingAll(for: FindObjectsEffect.self)
-                        .grantingAll(for: ListObjectsEffect.self)
-                        .grantingAll(for: MakeObjectEffect.self)
-                        .grantingAll(for: ToolPageEffect.self)
-                        .grantingAll(for: EditObjectEffect.self)
-                        .grantingAll(for: UseObjectEffect.self)
-                        .grantingAll(for: RemoveObjectEffect.self)
-                        .grantingAll(for: InvokeObjectEffect.self)
-                        .grantingAll(for: RecallEffect.self)
-                }
+                authorityProvider: { spawnConfig, workspace in Self.authority(for: spawnConfig, in: workspace) }
             )
             // The plugin is the stores' long-term owner: it receives the
             // instances built above and hosts them for every journaled actor.
@@ -513,39 +260,7 @@ struct TurgaiAppService: Service, Sendable {
                 }
             }
             let runtimeSnapshotProvider: @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = {
-                let entries = (try? await system.agentRuntime.allAgents()) ?? []
-                return await withTaskGroup(
-                    of: TurgaiAgentRuntimeSnapshot?.self, returning: [TurgaiAgentRuntimeSnapshot].self
-                ) { group in
-                    for entry in entries where entry.role.rawValue != "user-tool" {
-                        group.addTask {
-                            guard
-                                let agent: Agent = try? await system.agent(entry.agentID),
-                                let snapshot = try? await agent.contextSnapshot
-                            else {
-                                return nil
-                            }
-                            return TurgaiAgentRuntimeSnapshot(
-                                profileID: entry.role.rawValue,
-                                contextID: snapshot.agentID.contextID.rawValue,
-                                phase: snapshot.state,
-                                currentTool: nil,
-                                contextUsedTokens: snapshot.contextUsage?.usedTokens,
-                                contextLimitTokens: snapshot.contextUsage?.limitTokens,
-                                historyTurnCount: snapshot.historyTurnCount,
-                                totalTokens: snapshot.usageSummary.totalTokens
-                            )
-                        }
-                    }
-
-                    var snapshots: [TurgaiAgentRuntimeSnapshot] = []
-                    for await snapshot in group {
-                        if let snapshot { snapshots.append(snapshot) }
-                    }
-                    return snapshots.sorted {
-                        ($0.profileID, $0.contextID) < ($1.profileID, $1.contextID)
-                    }
-                }
+                await Self.runtimeSnapshots(on: system)
             }
             await runtimeSnapshotSource.setProvider(runtimeSnapshotProvider)
             let clusterService = TurgaiClusterService(
@@ -716,5 +431,339 @@ struct TurgaiClusterService: Service {
                 metadata: ["error": .string(String(describing: error))]
             )
         }
+    }
+}
+
+// MARK: How agents are built
+
+extension TurgaiAppService {
+    /// The profile an agent runs as: its own, or the default one for a helper.
+    static func profile(of agentID: AgentID, in agentProfiles: TurgaiAgentProfileStore) async -> TurgaiAgentProfile? {
+        let role = agentID.role.rawValue
+        return role == "user-tool" ? await agentProfiles.defaultProfile() : await agentProfiles.profile(id: role)
+    }
+
+    /// The user's tools in `directory`, each problem with one logged.
+    static func userToolRegistry(in directory: URL) -> UserToolRegistry {
+        let logger = Logger(label: "turgai.usertools")
+        return UserToolRegistry(directory: directory) { (issue: UserToolLoadIssue) in
+            logger.warning(
+                "User tool issue",
+                metadata: [
+                    "source": .string(issue.source.lastPathComponent),
+                    "reason": .string(String(describing: issue.reason)),
+                ]
+            )
+        }
+    }
+
+    /// An agent's durable configuration, from its identity: a helper's is fresh each time, a
+    /// profile agent's is recovered by its conversation.
+    static func spawnConfig(for agentID: AgentID) -> AgentSpawnConfig {
+        switch agentID.role.rawValue {
+        case "user-tool":
+            AgentSpawnConfig(agentID: agentID, interruptedTurns: .close, snapshotPolicy: .disabled)
+        default:
+            // Profile agents: their Conversation owns recovery and
+            // starts exactly one model run after its own journal
+            // replays; Hail resuming too would be a second driver.
+            AgentSpawnConfig(agentID: agentID, interruptedTurns: .close)
+        }
+    }
+
+    /// The model an agent's turn runs on: its profile's, or the default profile's for a helper.
+    static func modelSelection(
+        for request: ModelSelectionRequest, in agentProfiles: TurgaiAgentProfileStore
+    ) async throws -> ModelConfiguration {
+        let role = request.agentID.role.rawValue
+        if role == "user-tool" {
+            guard let currentDefault = await agentProfiles.defaultProfile() else {
+                throw TurgaiModelSelectionError.missingProfile(
+                    TurgaiAgentProfileStore.defaultProfileID
+                )
+            }
+            return ModelConfiguration(
+                model: currentDefault.model,
+                reasoningEffort: currentDefault.reasoningEffort
+            )
+        }
+        guard let profile = await agentProfiles.profile(id: role) else {
+            throw TurgaiModelSelectionError.missingProfile(role)
+        }
+        guard profile.availability == .enabled else {
+            throw TurgaiModelSelectionError.disabledProfile(role)
+        }
+        return ModelConfiguration(
+            model: profile.model,
+            reasoningEffort: profile.reasoningEffort
+        )
+    }
+
+    /// What an agent is: its profile's instructions and persona, or a helper's fixed task.
+    static func definition(
+        for spawnConfig: AgentSpawnConfig, in agentProfiles: TurgaiAgentProfileStore
+    ) async throws -> AgentDefinition? {
+        let role = spawnConfig.agentID.role.rawValue
+        let agentKind: RuntimeAgentKind = role == "user-tool" ? .userTool : .profile
+        let profile: TurgaiAgentProfile?
+        switch agentKind {
+        case .userTool: profile = await agentProfiles.defaultProfile()
+        case .profile: profile = await agentProfiles.profile(id: role)
+        }
+        guard let profile else {
+            throw TurgaiModelSelectionError.missingProfile(role)
+        }
+        switch (agentKind, profile.availability) {
+        case (.profile, .disabled):
+            throw TurgaiModelSelectionError.disabledProfile(role)
+        case (.profile, .enabled), (.userTool, _): break
+        }
+        let customInstructions =
+            profile.instructions.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+        let personaInstructions =
+            profile.persona?.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ) ?? ""
+        let systemPrompt: String
+        switch agentKind {
+        case .userTool:
+            systemPrompt =
+                "You are an isolated helper agent. Follow the supplied task, return only the useful result, and do not perform side effects."
+        case .profile:
+            // The profile's own instructions, blank unless its owner writes some. What the
+            // agent can do comes with its tools and pages, not from here.
+            systemPrompt = customInstructions
+        }
+        let execution: AgentExecutionPolicy
+        switch agentKind {
+        case .userTool:
+            execution = AgentExecutionPolicy(
+                sandbox: .readOnly,
+                approvalPolicy: .onRequest
+            )
+        case .profile:
+            execution = .autonomousWorkspace
+        }
+        return AgentDefinition(
+            role: spawnConfig.agentID.role,
+            behavior: .init(
+                systemPrompt: systemPrompt,
+                execution: execution
+            ),
+            persona: {
+                switch agentKind {
+                case .userTool: return nil
+                case .profile:
+                    guard !personaInstructions.isEmpty else { return nil }
+                    return AgentPersona(
+                        displayName: profile.name,
+                        instructions: personaInstructions
+                    )
+                }
+            }()
+        )
+    }
+
+    /// What an agent may do: a helper nothing outside, a profile agent its workspace and Turgai's
+    /// own effects.
+    static func authority(for spawnConfig: AgentSpawnConfig, in workspace: AgentWorkspace) -> any Authority {
+        if spawnConfig.agentID.role.rawValue == "user-tool" {
+            return CompositeAuthority()
+                .granting(for: FileEffect.self) { _ in
+                    .denied("prompt helpers cannot access files")
+                }
+                .granting(for: TerminalEffect.self) { _ in
+                    .denied("prompt helpers cannot run terminal commands")
+                }
+                .granting(for: ProcessEffect.self) { _ in
+                    .denied("prompt helpers cannot spawn processes")
+                }
+                .granting(for: NetworkEffect.self) { _ in
+                    .denied("prompt helpers cannot access the network")
+                }
+                .granting(for: CoordinationEffect.self) { _ in
+                    .denied("prompt helpers cannot coordinate with other agents")
+                }
+                .grantingAll(for: ClockEffect.self)
+        }
+        return
+            CompositeAuthority
+            .workspaceDefault(root: workspace.rootPath)
+            .grantingAll(for: UserWorkflowEffect.self)
+            .grantingAll(for: CreateScheduleEffect.self)
+            .grantingAll(for: ReplaceScheduleEffect.self)
+            .grantingAll(for: CancelScheduleEffect.self)
+            .grantingAll(for: ListSchedulesEffect.self)
+            .grantingAll(for: TriggerScheduleEffect.self)
+            .grantingAll(for: CreateTimerEffect.self)
+            .grantingAll(for: ReplaceTimerEffect.self)
+            .grantingAll(for: CancelTimerEffect.self)
+            .grantingAll(for: ListTimersEffect.self)
+            // Actions that aren't safe also ask the user, inside the effect.
+            .grantingAll(for: FindObjectsEffect.self)
+            .grantingAll(for: ListObjectsEffect.self)
+            .grantingAll(for: MakeObjectEffect.self)
+            .grantingAll(for: ToolPageEffect.self)
+            .grantingAll(for: EditObjectEffect.self)
+            .grantingAll(for: UseObjectEffect.self)
+            .grantingAll(for: RemoveObjectEffect.self)
+            .grantingAll(for: InvokeObjectEffect.self)
+            .grantingAll(for: RecallEffect.self)
+    }
+
+    /// What the object writer was asked and wrote, logged.
+    @Sendable static func log(_ event: WriterEvent) {
+        let logger = Logger(label: "turgai.objectwriter")
+        // How big what it's asked is, and which objects it's shown: the
+        // prompt itself follows, in full.
+        if case .asked(let prompt) = event {
+            let objects: [Substring] = prompt.split(separator: "\n").filter { (line: Substring) -> Bool in
+                line.hasPrefix("- ") && line.contains(": ") && !line.hasPrefix("- The ")
+            }
+            let names: [String] = objects.map { (line: Substring) -> String in
+                String(line.dropFirst(2).prefix { $0 != ":" })
+            }
+            logger.info(
+                "Object writer asked",
+                metadata: ["characters": "\(prompt.count)", "objects": "\(names.joined(separator: ", "))"])
+        }
+        logger.info("\(event.written)")
+    }
+
+    /// What each running profile agent is doing, for the dashboard.
+    static func runtimeSnapshots(on system: ClusterSystem) async -> [TurgaiAgentRuntimeSnapshot] {
+        let entries = (try? await system.agentRuntime.allAgents()) ?? []
+        return await withTaskGroup(
+            of: TurgaiAgentRuntimeSnapshot?.self, returning: [TurgaiAgentRuntimeSnapshot].self
+        ) { group in
+            for entry in entries where entry.role.rawValue != "user-tool" {
+                group.addTask {
+                    guard
+                        let agent: Agent = try? await system.agent(entry.agentID),
+                        let snapshot = try? await agent.contextSnapshot
+                    else {
+                        return nil
+                    }
+                    return TurgaiAgentRuntimeSnapshot(
+                        profileID: entry.role.rawValue,
+                        contextID: snapshot.agentID.contextID.rawValue,
+                        phase: snapshot.state,
+                        currentTool: nil,
+                        contextUsedTokens: snapshot.contextUsage?.usedTokens,
+                        contextLimitTokens: snapshot.contextUsage?.limitTokens,
+                        historyTurnCount: snapshot.historyTurnCount,
+                        totalTokens: snapshot.usageSummary.totalTokens
+                    )
+                }
+            }
+
+            var snapshots: [TurgaiAgentRuntimeSnapshot] = []
+            for await snapshot in group {
+                if let snapshot { snapshots.append(snapshot) }
+            }
+            return snapshots.sorted {
+                ($0.profileID, $0.contextID) < ($1.profileID, $1.contextID)
+            }
+        }
+    }
+}
+
+// MARK: Where the journal is kept
+
+extension TurgaiAppService {
+    /// The journal's stores, and how to find the conversations and channels it holds.
+    struct Stores: Sendable {
+        let events: any EventStore
+        let snapshots: any SnapshotStore
+        let conversationIDs: @Sendable () async throws -> [ConversationID]
+        let channelIDs: @Sendable () async throws -> [UUID]
+    }
+
+    /// The journal in files.
+    static func stores(on client: FileClient) -> Stores {
+        let reader = FileJournalReader(client: client)
+        return Stores(
+            events: FileEventStore(client: client),
+            snapshots: FileSnapshotStore(client: client),
+            conversationIDs: {
+                Self.conversationIDs(persistenceIDs: try await reader.persistenceIDs(withPrefix: ConversationPersistenceID.prefix))
+            },
+            channelIDs: {
+                try await reader.persistenceIDs(withPrefix: TelegramChannel.persistencePrefix)
+                    .compactMap(TelegramChannel.channelID(from:))
+            })
+    }
+
+    /// The journal in PostgreSQL, its tables set up.
+    static func stores(on client: PostgresClient) async throws -> Stores {
+        let events = PostgresEventStore(client: client)
+        let snapshots = PostgresSnapshotStore(client: client)
+        try await events.setupDatabase()
+        try await snapshots.setupDatabase()
+        let reader = PostgresJournalReader(client: client)
+        return Stores(
+            events: events,
+            snapshots: snapshots,
+            conversationIDs: { try await reader.conversationIDs() },
+            channelIDs: {
+                try await reader.persistenceIDs(withPrefix: TelegramChannel.persistencePrefix)
+                    .compactMap(TelegramChannel.channelID(from:))
+            })
+    }
+}
+
+/// What a turn's tools are built from: each turn gets them anew, for the agent taking it.
+struct TurnToolSources: Sendable {
+    let agentProfiles: TurgaiAgentProfileStore
+    let endpointFactory: AgentModelEndpointFactory
+    let runtimeConfiguration: HailRuntimeConfiguration
+    let attachmentResolver: AttachmentResolver
+    let searchBackend: WebSearchBackend
+    let workspaceRoot: String
+    let wasmRunnerURL: URL?
+    let userToolRegistry: UserToolRegistry
+
+    func tools(for context: AgentTurnContext, on actorSystem: ClusterSystem) async throws -> TurnTools {
+        let objectCatalog = try await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog
+        // An object's Swift is written by the agent's own model, in a session of its own.
+        let writer: ObjectWriter? =
+            if let profile = await agentProfiles.profile(id: context.agentID.role.rawValue) {
+                ObjectWriter(
+                    endpoint: try await endpointFactory.endpoint(
+                        for: profile,
+                        temperature: runtimeConfiguration.temperature,
+                        ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive
+                    ),
+                    report: TurgaiAppService.log(_:))
+            } else {
+                nil
+            }
+        var tools = try await ConversationTools.make(
+            context: context,
+            attachmentResolver: attachmentResolver,
+            searchBackend: searchBackend,
+            workspaceRoot: workspaceRoot,
+            wasmRunnerURL: wasmRunnerURL,
+            userTools: userToolRegistry,
+            approval: ChannelToolApproval(
+                actorSystem: actorSystem, agentRole: context.agentID.role.rawValue),
+            actorSystem: actorSystem,
+            objectCatalog: objectCatalog,
+            writer: writer,
+            // Every enabled profile's agent can be asked, as an object.
+            agents: await agentProfiles.profiles().filter { $0.availability == .enabled }.map {
+                Role($0.id)
+            },
+            includeConversationTools: context.agentID.role.rawValue != "user-tool"
+        )
+        // Hail's files and agent messaging, for the agents granted them.
+        if context.agentID.role.rawValue != "user-tool" {
+            tools.tools =
+                try await actorSystem.agentRuntime.agentTools(for: context, actorSystem: actorSystem)
+                + tools.tools
+        }
+        return tools
     }
 }

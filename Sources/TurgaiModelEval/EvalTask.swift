@@ -53,7 +53,7 @@ struct EvalTask: Sendable {
         role: Role("planner"),
         instructions: "You plan people's days. Every plan you give starts with coffee at nine.")
 
-    static let all = [
+    static let all: [EvalTask] = [
         EvalTask(
             request: "Make a counter for my coffee cups: I can add a cup, ask how many I had, and reset it.",
             followUp: "Add two cups and check how many there are.", stateAddress: "coffee-cup-counter",
@@ -126,6 +126,129 @@ struct EvalTask: Sendable {
         let transcript: String
     }
 
+    /// What the follow-up got back from the objects: each of their own replies, from one of their
+    /// actions or values, such as `coffee-counter_howMany`, and the turn's answer. Not searching,
+    /// creating, a page (named by the bare handle), or changing an object.
+    private static func replies(in followUpTurn: RecordedTurn?) -> [String] {
+        guard let followUpTurn else { return [] }
+        let notReplies: Set<String> = [
+            "search_objects", "create_object", "create_object_like", "edit_object", "remove_object", "use_object",
+        ]
+        let own: [RecordedTurn.Call] = followUpTurn.calls.filter { (call: RecordedTurn.Call) -> Bool in
+            call.completed && !call.failed && call.name.contains("_") && !notReplies.contains(call.name)
+        }
+        return own.map(\.output) + [followUpTurn.answer]
+    }
+
+    /// Whether the run did what its check asks, once nothing failed.
+    private func passes(turns: [RecordedTurn], replies: [String], stateText: String) -> Bool {
+        switch check {
+        case .followUp(_, _, let answered, let stateMatches):
+            return replies.contains(where: answered) && stateMatches(stateText)
+        case .shop:
+            return true
+        case .asks(let agent, let answered):
+            // Its tool, by the agent's id, whichever way tools are named: `planner_respond`,
+            // `object_planner_respond`.
+            let asked: Bool = turns.flatMap(\.calls).contains { (call: RecordedTurn.Call) -> Bool in
+                call.name.hasSuffix("\(agent)_respond") && call.completed && !call.failed
+            }
+            return asked && turns.last.map { (turn: RecordedTurn) -> Bool in answered(turn.answer) } == true
+        }
+    }
+
+    /// `text`'s lines, trimmed, on one line.
+    private static func inOneLine(_ text: String) -> String {
+        text.split(separator: "\n").map { (line: Substring) -> String in line.trimmingCharacters(in: .whitespaces) }
+            .filter { (line: String) -> Bool in !line.isEmpty }.joined(separator: " ")
+    }
+
+    /// The first turn's reason for failing, numbered from one, if any turn has one.
+    private static func firstFailure(in reasons: [String?]) -> String? {
+        reasons.enumerated().lazy.compactMap { (index: Int, reason: String?) -> String? in
+            reason.map { (reason: String) -> String in "turn \(index + 1): \(reason)" }
+        }.first
+    }
+
+    /// What each object at `addresses` holds now, as its page shows its current values; the first
+    /// one missing, with what the request made instead.
+    private static func state(of addresses: [String], created: [String], on node: EvalNode) async
+        -> (text: String, missing: String?)
+    {
+        let session = ObjectSession(actorSystem: node.system, objectCatalog: node.objectCatalog, scopes: [.shared])
+        let made: String = created.isEmpty ? "none" : created.joined(separator: ", ")
+        var text = ""
+        var missing: String?
+        for address in addresses {
+            let page: ToolPage
+            do {
+                page = try await session.open(ToolPageAddress(rawValue: address))
+            } catch {
+                text += "\(address): MISSING (created: \(made)).\n"
+                missing =
+                    missing ?? "Expected object `\(address)` is missing; created: \(made). Page lookup failed: \(error)"
+                continue
+            }
+            text += "\(address):\n\(currentValues(on: page.output.textRepresentation))\n"
+        }
+        return (text, missing)
+    }
+
+    /// The current values a page shows: what's between its heading and its actions.
+    private static func currentValues(on page: String) -> String {
+        guard let range = page.range(of: "Current values:\n") else { return page }
+        let values: Substring = page[range.upperBound...]
+        return String(values.split(separator: "\n\nActions:", maxSplits: 1).first ?? values)
+    }
+
+    /// The code each of the `created` objects ended with, when any has code.
+    private static func savedCode(of created: [String], on system: ClusterSystem) async throws -> String? {
+        guard !created.isEmpty else { return nil }
+        let directory = try await DynamicObjects.resolve(on: system, scope: .shared)
+        var saved: [String] = []
+        for handle in created {
+            guard let object = try? await directory.existing(ObjectIdentity(rawValue: handle)),
+                let code = try? await object.source.code
+            else { continue }
+            saved.append("\(handle):\n\(code)")
+        }
+        return saved.isEmpty ? nil : saved.joined(separator: "\n\n")
+    }
+
+    /// The request and what follows it, then the follow-up, asked of a fresh agent; then what the
+    /// objects the request made hold, and the code they ended with.
+    private func followingUp(with followUp: String, readingStateOf stateAddresses: [String], on node: EvalNode)
+        async throws -> (turns: [RecordedTurn], stateText: String, missing: String?)
+    {
+        let agent = try await node.freshAgent()
+        var turns: [RecordedTurn] = []
+        for asked in [request] + then {
+            turns.append(await RecordedTurn.send(asked, to: agent, on: node.system))
+        }
+        turns.append(await RecordedTurn.send(followUp, to: agent, on: node.system))
+        // Successful object actions return a page landing with null tool output. Read the
+        // object's actual state after the turn, so the eval measures what changed rather
+        // than whether the action's output happened to contain the answer.
+        // An object is named after the actor its code declares, so its state is read from
+        // the objects the request created, whatever they're called.
+        let handles: [String] = turns.flatMap(\.calls).compactMap(Self.createdHandle(from:))
+        let created: [String] = Array(NSOrderedSet(array: handles)) as? [String] ?? []
+        let addresses: [String] = created.isEmpty ? stateAddresses : created
+        var stateText = ""
+        var missing: String?
+        if !addresses.isEmpty {
+            let state = await Self.state(of: addresses, created: created, on: node)
+            stateText = state.text
+            missing = state.missing
+            turns.append(RecordedTurn(answer: "Object state after the request:\n" + stateText))
+        }
+        // The code each made object ended with, to read when a run fails.
+        if let saved = try await Self.savedCode(of: created, on: node.system) {
+            turns.append(RecordedTurn(answer: "Saved code:\n" + saved))
+        }
+        return (turns, stateText, missing)
+    }
+
     /// Asks a fresh agent on a fresh node, then the follow-up, and checks the objects' replies.
     func run(with model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil)
         async -> Result
@@ -142,60 +265,10 @@ struct EvalTask: Sendable {
             defer { node.stop() }
             switch check {
             case .followUp(let followUp, let stateAddresses, _, _):
-                let agent = try await node.freshAgent()
-                for asked in [request] + then {
-                    turns.append(await RecordedTurn.send(asked, to: agent, on: node.system))
-                }
-                turns.append(await RecordedTurn.send(followUp, to: agent, on: node.system))
-                // Successful object actions return a page landing with null tool output. Read the
-                // object's actual state after the turn, so the eval measures what changed rather
-                // than whether the action's output happened to contain the answer.
-                // An object is named after the actor its code declares, so its state is read from
-                // the objects the request created, whatever they're called.
-                let created =
-                    Array(NSOrderedSet(array: turns.flatMap(\.calls).compactMap(Self.createdHandle(from:))))
-                    as? [String] ?? []
-                let addresses = created.isEmpty ? stateAddresses : created
-                if !addresses.isEmpty {
-                    let session = ObjectSession(
-                        actorSystem: node.system, objectCatalog: node.objectCatalog, scopes: [.shared])
-                    for address in addresses {
-                        let page: ToolPage
-                        do {
-                            page = try await session.open(ToolPageAddress(rawValue: address))
-                        } catch {
-                            let created = turns.flatMap(\.calls).compactMap(Self.createdHandle(from:))
-                            stateText +=
-                                "\(address): MISSING (created: \(created.isEmpty ? "none" : created.joined(separator: ", "))).\n"
-                            failure =
-                                failure
-                                ?? "Expected object `\(address)` is missing; created: \(created.isEmpty ? "none" : created.joined(separator: ", ")). Page lookup failed: \(error)"
-                            continue
-                        }
-                        let pageText = page.output.textRepresentation
-                        let currentValues =
-                            pageText.range(of: "Current values:\n").map { range in
-                                let values = pageText[range.upperBound...]
-                                return String(values.split(separator: "\n\nActions:", maxSplits: 1).first ?? values)
-                            } ?? pageText
-                        stateText += "\(address):\n\(currentValues)\n"
-                    }
-                    turns.append(RecordedTurn(answer: "Object state after the request:\n" + stateText))
-                }
-                // The code each made object ended with, to read when a run fails.
-                if !created.isEmpty {
-                    let directory = try await DynamicObjects.resolve(on: node.system, scope: .shared)
-                    var saved: [String] = []
-                    for handle in created {
-                        guard let object = try? await directory.existing(ObjectIdentity(rawValue: handle)),
-                            let code = try? await object.source.code
-                        else { continue }
-                        saved.append("\(handle):\n\(code)")
-                    }
-                    if !saved.isEmpty {
-                        turns.append(RecordedTurn(answer: "Saved code:\n" + saved.joined(separator: "\n\n")))
-                    }
-                }
+                let asked = try await followingUp(with: followUp, readingStateOf: stateAddresses, on: node)
+                turns = asked.turns
+                stateText = asked.stateText
+                failure = asked.missing
             case .asks:
                 let agent = try await node.freshAgent()
                 turns.append(await RecordedTurn.send(request, to: agent, on: node.system))
@@ -210,54 +283,21 @@ struct EvalTask: Sendable {
         } catch {
             failure = String(describing: error)
         }
-        // An object's own reply, from one of its actions or its values, such as
-        // `coffee-counter_howMany`: not from searching, creating, a page (named by the bare
-        // handle), a draft's steps, or changing the object.
-        let notReplies = [
-            "search_objects", "create_object", "create_object_like", "edit_object", "remove_object", "use_object",
-        ]
-        let notActions = [String]()
         let followUpTurn = turns.dropFirst(1 + then.count).first
-        let replies =
-            (followUpTurn?.calls ?? [])
-            .filter { call in
-                call.completed && !call.failed && call.name.contains("_") && !notReplies.contains(call.name)
-                    && !notActions.contains(where: call.name.hasSuffix)
-            }
-            .map(\.output) + (followUpTurn.map { [$0.answer] } ?? [])
+        let replies: [String] = Self.replies(in: followUpTurn)
         // A turn whose refunds went otherwise than asked is why the run failed, unless it failed before.
-        failure =
-            failure
-            ?? turns.enumerated().compactMap { index, turn in
-                turn.failure.map { "turn \(index + 1): \($0)" }
-            }.first
-        failure =
-            failure ?? turnChecks.enumerated().compactMap { index, why in why.map { "turn \(index + 1): \($0)" } }.first
-        let passed =
-            switch check {
-            case .followUp(_, _, let answered, let stateMatches):
-                failure == nil && replies.contains(where: answered) && stateMatches(stateText)
-            case .shop: failure == nil
-            case .asks(let agent, let answered):
-                failure == nil
-                    // Its tool, by the agent's id, whichever way tools are named: `planner_respond`,
-                    // `object_planner_respond`.
-                    && turns.flatMap(\.calls).contains {
-                        $0.name.hasSuffix("\(agent)_respond") && $0.completed && !$0.failed
-                    }
-                    && turns.last.map { answered($0.answer) } == true
-            }
+        let turnFailures: [String?] = turns.map(\.failure)
+        failure = failure ?? Self.firstFailure(in: turnFailures) ?? Self.firstFailure(in: turnChecks)
+        let passed: Bool = failure == nil && passes(turns: turns, replies: replies, stateText: stateText)
         let marks = turnChecks.isEmpty ? "" : "turns " + turnChecks.map { $0 == nil ? "✓" : "✗" }.joined() + "  "
         // Why it failed, in a line: the error, or the state the objects ended in and the reply.
         var why = failure
         if why == nil, !passed, case .followUp(_, _, let answered, let stateMatches) = check {
-            let state = stateText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter {
-                !$0.isEmpty
-            }.joined(separator: " ")
-            let reply = (followUpTurn?.answer ?? "").replacingOccurrences(of: "\n", with: " ")
             var parts: [String] = []
-            if !stateMatches(stateText) { parts.append("state: \(state.prefix(100))") }
-            if !replies.contains(where: answered) { parts.append("reply: \(reply.prefix(80))") }
+            if !stateMatches(stateText) { parts.append("state: \(Self.inOneLine(stateText).prefix(100))") }
+            if !replies.contains(where: answered) {
+                parts.append("reply: \((followUpTurn?.answer ?? "").replacingOccurrences(of: "\n", with: " ").prefix(80))")
+            }
             why = parts.joined(separator: "; ")
         }
         let note = why.map { "  (\($0.prefix(200)))" } ?? ""

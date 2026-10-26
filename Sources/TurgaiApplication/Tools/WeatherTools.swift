@@ -499,15 +499,14 @@ public enum WeatherSupport {
                 [Int?].self,
                 forKey: .precipitationProbabilities
             )
-            guard
-                Set([
-                    dates.count,
-                    weatherCodes.count,
-                    maximumTemperatures.count,
-                    minimumTemperatures.count,
-                    precipitationProbabilities.count,
-                ]).count == 1
-            else {
+            let counts: [Int] = [
+                dates.count,
+                weatherCodes.count,
+                maximumTemperatures.count,
+                minimumTemperatures.count,
+                precipitationProbabilities.count,
+            ]
+            guard Set(counts).count == 1 else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .dates,
                     in: container,
@@ -515,7 +514,7 @@ public enum WeatherSupport {
                 )
             }
 
-            self.points = dates.indices.map { index in
+            self.points = dates.indices.map { (index: Int) -> Point in
                 Point(
                     date: dates[index],
                     weatherCode: weatherCodes[index],
@@ -571,18 +570,17 @@ public enum WeatherSupport {
             let weatherCodes = try container.decode([Int].self, forKey: .weatherCodes)
             let windSpeeds = try container.decode([Double].self, forKey: .windSpeeds)
             let windDirections = try container.decode([Double].self, forKey: .windDirections)
-            guard
-                Set([
-                    times.count,
-                    temperatures.count,
-                    apparentTemperatures.count,
-                    precipitationProbabilities.count,
-                    precipitations.count,
-                    weatherCodes.count,
-                    windSpeeds.count,
-                    windDirections.count,
-                ]).count == 1
-            else {
+            let counts: [Int] = [
+                times.count,
+                temperatures.count,
+                apparentTemperatures.count,
+                precipitationProbabilities.count,
+                precipitations.count,
+                weatherCodes.count,
+                windSpeeds.count,
+                windDirections.count,
+            ]
+            guard Set(counts).count == 1 else {
                 throw DecodingError.dataCorruptedError(
                     forKey: .times,
                     in: container,
@@ -590,7 +588,7 @@ public enum WeatherSupport {
                 )
             }
 
-            self.points = times.indices.map { index in
+            self.points = times.indices.map { (index: Int) -> Point in
                 Point(
                     time: times[index],
                     temperature: temperatures[index],
