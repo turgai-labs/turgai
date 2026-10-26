@@ -30,7 +30,7 @@ So there's one boundary, the distributed call, and one infrastructure on it:
 ### Who the chain starts with
 
 - **Whoever asked.** Bob asks his agent, the agent calls the planner, and the planner adds to Ann's calendar: Bob needs access at every step. The agent and the planner act for him, and can't do more than he can. If Cat asks the planner, it's checked against Cat.
-- **A person** starts it through their participant actor, so the chain is actors from the start.
+- **A person** starts it through their participant actor, in the group they came in through.
 - **Something running on its own,** such as a timer firing or an object's own task, starts with whoever made it.
 - **Objects can be on lists too.** The room's calendar lists the shared booking object as allowed to write it. Anyone books through the booking object, which checks for clashes, and its own right is what the calendar checks. Bob isn't on the calendar's list, so he can't write to it directly.
 
@@ -41,7 +41,8 @@ So there's one boundary, the distributed call, and one infrastructure on it:
   - **read:** the actions that read;
   - **write:** the actions that write;
   - **admin:** changes the lists, and answers requests.
-- **Lists name people, objects, or groups.** A group is a distributed actor with members and admins, journaled, so the check can ask it from any node. A role, such as a family's kids, is a group too. Someone joining a group gets its access, someone leaving loses it, and the lists that name the group don't change.
+- **Lists name people, objects, or groups.** A role, such as a family's kids, is a group too. Someone joining a group gets its access, someone leaving loses it, and the lists that name the group don't change.
+- **The call carries its scope.** Bob writes in the family chat: his participant is in the family, so the call starts as "Bob, in the family, as a parent", put on by the group where he came in. The check compares that with its lists, and never asks anyone. In another chat, Bob isn't in the family for that call. A role changed applies from the next call; a timer or an object's own task gets its group's current role when it starts.
 
 ```
 family calendar
@@ -81,7 +82,7 @@ Nothing built on 1–4 changes when these land.
 ## Order
 
 1. Stamp the caller on every call, the same on every node.
-2. Each actor's lists, whoever makes it starting as admin; actions marked read or write; groups as actors.
+2. Each actor's lists, whoever makes it starting as admin; actions marked read or write; the call's scope put on by the group it starts in.
 3. The check on the receiving side.
 4. The ToolsAPI: offering a tool as a distributed actor.
 5. Requests and answers.
