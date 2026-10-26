@@ -50,60 +50,11 @@ struct LandingPage: HTMLDocument {
         SiteBar(skylarkPath: skylarkPath)
 
         main(.class("page")) {
-            section(.class("intro"), .id(Stop.sky.id)) {
-                // two small snap points, not the whole intro: a snap area taller than the screen scrolls freely inside
-                span(.class("snap"), .init(name: "aria-hidden", value: "true")) {}
-                span(.class("snap end"), .id(Stop.headline.id), .init(name: "aria-hidden", value: "true")) {}
-                div(.class("stage")) {
-                    // one video per theme; CSS shows the one that matches, so switching theme needs no reload
-                    for sky in Sky.allCases { SkyVideo(sky: sky) }
-                    div(.class("veil")) {}
-                    div(.class("sky-copy")) {
-                        p(.class("eyebrow")) {
-                            "Turgai, an agent harness built on objects"
-                            ComingSoon()
-                        }
-                        h1 {
-                            "Turgai extends "
-                            span(.class("flag")) { "your product." }
-                        }
-                        p(.class("answer")) {
-                            "Plug AI agents into your product today. Add tools, rules and whole features tomorrow, by asking or in code, while everything keeps running."
-                        }
-                    }
-                }
-            }
+            SkyIntro()
 
             for chapter in Chapter.allCases { ChapterSection(chapter: chapter) }
 
-            section(
-                .class("finale"), .id(Stop.closing.id),
-                .init(name: "style", value: "view-timeline-name: \(Layer.constellation.timeline)")
-            ) {
-                div(.class("finale-main")) {
-                    ComingSoon()
-                    p(.class("big")) {
-                        "Small bird."
-                        br()
-                        span(.class("flag")) { "Big possibilities." }
-                    }
-                    div(.class("close")) {
-                        p(.class("belief")) { "Being independent should never mean settling for less." }
-                        p { "Turgai is in early alpha. Tell us what you’re building." }
-                        div(.class("cta")) {
-                            span(
-                                .class("button button-accent off"), .init(name: "aria-disabled", value: "true"),
-                                .title("Coming soon")
-                            ) { "See it on GitHub" }
-                            a(.class("button button-secondary"), .href("mailto:hello@turg.ai")) { "Write to us" }
-                        }
-                    }
-                }
-                footer {
-                    span { "Turgai · Apache 2.0 · early development" }
-                    span { "Turgai means skylark. Video: Pexels." }
-                }
-            }
+            Finale()
         }
     }
 }
@@ -689,5 +640,68 @@ struct TurgaiSite {
             throw CocoaError(.fileNoSuchFile)
         }
         return url
+    }
+}
+
+/// The landing page's opening: the sky, and what Turgai is.
+private struct SkyIntro: HTML {
+    var body: some HTML {
+        section(.class("intro"), .id(Stop.sky.id)) {
+            // two small snap points, not the whole intro: a snap area taller than the screen scrolls freely inside
+            span(.class("snap"), .init(name: "aria-hidden", value: "true")) {}
+            span(.class("snap end"), .id(Stop.headline.id), .init(name: "aria-hidden", value: "true")) {}
+            div(.class("stage")) {
+                // one video per theme; CSS shows the one that matches, so switching theme needs no reload
+                for sky in Sky.allCases { SkyVideo(sky: sky) }
+                div(.class("veil")) {}
+                div(.class("sky-copy")) {
+                    p(.class("eyebrow")) {
+                        "Turgai, an agent harness built on objects"
+                        ComingSoon()
+                    }
+                    h1 {
+                        "Turgai extends "
+                        span(.class("flag")) { "your product." }
+                    }
+                    p(.class("answer")) {
+                        "Plug AI agents into your product today. Add tools, rules and whole features tomorrow, by asking or in code, while everything keeps running."
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The landing page's end: the promise, and the way in.
+private struct Finale: HTML {
+    var body: some HTML {
+        section(
+            .class("finale"), .id(Stop.closing.id),
+            .init(name: "style", value: "view-timeline-name: \(Layer.constellation.timeline)")
+        ) {
+            div(.class("finale-main")) {
+                ComingSoon()
+                p(.class("big")) {
+                    "Small bird."
+                    br()
+                    span(.class("flag")) { "Big possibilities." }
+                }
+                div(.class("close")) {
+                    p(.class("belief")) { "Being independent should never mean settling for less." }
+                    p { "Turgai is in early alpha. Tell us what you’re building." }
+                    div(.class("cta")) {
+                        span(
+                            .class("button button-accent off"), .init(name: "aria-disabled", value: "true"),
+                            .title("Coming soon")
+                        ) { "See it on GitHub" }
+                        a(.class("button button-secondary"), .href("mailto:hello@turg.ai")) { "Write to us" }
+                    }
+                }
+            }
+            footer {
+                span { "Turgai · Apache 2.0 · early development" }
+                span { "Turgai means skylark. Video: Pexels." }
+            }
+        }
     }
 }

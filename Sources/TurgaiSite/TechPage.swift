@@ -48,49 +48,12 @@ struct TechPage: HTMLDocument {
         }
 
         main(.class("tech")) {
-            div(.class("tech-intro")) {
-                p(.class("eyebrow")) { "How it works" }
-                h1 {
-                    "Everything in Turgai "
-                    span(.class("nowrap")) {
-                        span(.class("flag")) { "is an object" }
-                        ","
-                    }
-                    " run by a small core."
-                }
-                p(.class("lede")) {
-                    "Agents, the tools they use, the rules a business sets and the parts of a product all run in Turgai as objects, each owning its state and working with the others by exchanging messages. You run the core where you choose, and you decide which models it uses and what every part may do."
-                }
-            }
+            TechIntro()
 
             for topic in TechTopic.allCases { TechSection(topic: topic) }
         }
         // the last part, at night like the idea page's last page: a block that covers the orbit as it scrolls in
-        section(.class("tech-night")) {
-            // built like the idea page's last page: the sticker, the big line, then what it means and the way in
-            div(.class("tech-end")) {
-                ComingSoon()
-                p(.class("big")) {
-                    "Start small."
-                    br()
-                    span(.class("flag")) { "Keep adding." }
-                }
-                div(.class("close")) {
-                    p(.class("belief")) {
-                        "An agent, a rule and a part of your product are built and changed in the same way, and new ones join while the rest keeps running."
-                    }
-                    p { "Turgai is in early alpha. If you’d like to know more or see it running, write to us." }
-                    div(.class("cta")) {
-                        a(.class("button button-accent"), .href("mailto:hello@turg.ai")) { "Write to us" }
-                        a(.class("button button-secondary"), .href("../")) { "Back to the idea" }
-                    }
-                }
-            }
-            footer(.class("tech-footer")) {
-                span { "Turgai · Apache 2.0 · early development" }
-                span { "Turgai means skylark." }
-            }
-        }
+        TechNight()
     }
 }
 
@@ -128,131 +91,18 @@ enum TechTopic: String, CaseIterable {
         }
     }
 
+    /// The part's text: each part's own.
     @HTMLBuilder var text: some HTML {
         switch self {
-        case .objects:
-            p(.class("lead")) {
-                "Turgai builds everything from objects that keep their own state and ask each other to do things, because that is the shape a model can work with: it can find what an object offers, connect objects by messages, and add new ones."
-            }
-            p {
-                "The idea is older than language models, and it has worked before. NeXT built a whole computer on it: developers assembled programs from ready objects and connected them in Interface Builder instead of writing everything, and at CERN in 1990 Tim Berners-Lee wrote the first web browser and web server that way in about two months. Steve Jobs described objects as something like people, which know how to do things and remember what happened."
-            }
-            figure(.class("photo")) {
-                picture {
-                    source(
-                        .init(name: "srcset", value: "../" + SitePath.nextcubeAVIF),
-                        .init(name: "type", value: "image/avif"))
-                    img(
-                        .src("../" + SitePath.nextcube), .alt("A black NeXTcube computer with its keyboard and mouse"),
-                        .init(name: "width", value: "1280"), .init(name: "height", value: "854"),
-                        .init(name: "loading", value: "lazy"))
-                }
-                figcaption {
-                    "A NeXTcube, the computer NeXT built around objects. Photo: "
-                    a(.href("https://commons.wikimedia.org/wiki/File:Nextcube_1_(26281984242).jpg")) {
-                        "Simon Claessen"
-                    }
-                    ", "
-                    a(.href("https://creativecommons.org/licenses/by-sa/2.0/")) { "CC BY-SA 2.0" }
-                    ", resized."
-                }
-            }
-            p {
-                "Most software since then kept objects inside single programs, joined by integrations written by hand. A model can now do what Interface Builder did for a developer, from a plain request, and because each object keeps its own state and rules, what it puts together stays readable and safe to change. Each object also describes what it offers, so a model can use one it has never seen."
-            }
-        case .actors:
-            p(.class("lead")) {
-                "A model can only use an object that is there when it is addressed, and many objects have to keep working while nobody is talking to them, so each needs a life of its own."
-            }
-            p {
-                "An object that keeps its state private and handles one message at a time is an actor, and it needs no locks, as Erlang showed. Turgai’s actors are also distributed, so calling one looks the same on this machine or another, and virtual, so an object is reached by a stable name and wakes when a message arrives. Each accepted change is journaled, and after a crash a new instance rebuilds the same object from that journal. Work left half done still needs its own rule for whether to retry it."
-            }
-        case .swift:
-            p(.class("lead")) {
-                "Everything above, objects that keep their own state, messages between them, actors on one machine or many and permissions that cannot leak, usually rests on conventions every contributor has to remember, and conventions wear away as a codebase grows. Turgai is written in Swift because the language enforces most of these rules itself."
-            }
-            p {
-                "Messages are values, so two objects never change the same data. Actors keep each object’s state out of reach, distributed actors make a call across the network as checked as a local one, and ownership lets a permission exist that cannot leave its scope. Because actors can still interleave work while they wait, Hail orders an agent’s turns itself."
-            }
-            p { "This warehouse is a complete object, and a model can discover it and call it like any other." }
-        case .agents:
-            p(.class("lead")) {
-                "Since everything else is an object, the agent needs no special treatment. In Turgai’s agent layer, Hail, each agent is a distributed virtual actor like any other object, with its own name, journal and history."
-            }
-            p {
-                "It handles a message, calls tools and goes idle, and a turn cut short by a crash or restart is issued again when it next wakes. The model sits behind one interface, so an agent can move from a cloud API to a model on your own machine and keep its name, history and rules. A different model still behaves differently and has to be evaluated before you rely on it."
-            }
-            p { "Other agents and Turgai’s conversations ask an agent for work in the same way, with one call." }
-        case .behaviors:
-            p(.class("lead")) {
-                "Because agents are objects, what an agent builds for you can be objects too, still working after the conversation that made them is over."
-            }
-            p {
-                "An agent writes them as behaviors, an idea borrowed from Erlang. A behavior is a short YAML document with an object’s fields and what it does with each message, built from a fixed set of conditions and steps with no code. That makes it safe for a model to write and lets the runtime check it before it runs, and redefining a behavior upgrades every object running it."
-            }
-            p {
-                "The trip desk from the main page is one such behavior. It confirms trips under €8,000 and sends the rest to the owner."
-            }
-        case .effects:
-            p(.class("lead")) {
-                "An agent that can build and run things needs clear permissions, and they cannot depend on the model following instructions. Hail enforces them at the point where a tool is about to act."
-            }
-            p {
-                "Each tool declares the one effect it has, such as reading files under a path, and before it runs an authority derived from who is asking decides on that effect. It denies anything it does not explicitly grant. A granted effect is a token the compiler keeps from being stored, returned or handed to another actor."
-            }
-            p {
-                "This authority allows files inside one workspace and any network access, and it denies terminal commands simply by not naming them."
-            }
-        case .control:
-            p(.class("lead")) {
-                "Permissions settle what an agent may do when a tool acts. A business, especially a public body or a regulated one, also needs to know who runs the system, where its data is kept, who sets its rules and what record it leaves."
-            }
-            p {
-                "Turgai runs where you run it, on a Mac, on your own servers or in a cloud you choose, Linux included, with no Turgai-operated service in between. Conversations, memory and journals stay in your own storage, as files or in PostgreSQL, and what leaves your machines is what you send out, such as calls to a cloud model or messages on Telegram. Each agent’s model, keys and instructions are your configuration, and so are client authentication, channels and permissions. The journal is the system’s record, and every permission decision can be reported to an audit observer you install."
-            }
-            p {
-                "An agent is described by a profile like this one, and the server starts with the authentication you require."
-            }
-        case .plugins:
-            p(.class("lead")) {
-                "Running Turgai on your own terms leaves the practical question of how it connects to a product that already has users, data and code of its own."
-            }
-            p {
-                "Turgai owns agents and conversations, while your product keeps its users, decides who may reach each conversation and talks to Turgai over a WebSocket API, so Turgai never needs your user database. Your system itself joins as an object, either a short Swift actor that calls your existing API or a behavior in YAML, and agents then use it like any other object."
-            }
-        case .status:
-            p(.class("lead")) { "Turgai is early, and below is exactly where it stands." }
-            div(.class("status")) {
-                div {
-                    p(.class("status-label")) { "Built" }
-                    ul {
-                        li { "Distributed virtual actors, journaled to files or PostgreSQL" }
-                        li {
-                            "Durable workflows with timers, so long-running work can wait for days and survive restarts"
-                        }
-                        li { "Self-hosted, with no Turgai-operated service in between" }
-                        li {
-                            "Hail agents with journaled turns, each on its own model: Apple on‑device, Ollama or llama.cpp, or OpenAI, Anthropic, Gemini and any OpenAI‑compatible endpoint"
-                        }
-                        li { "Behaviors in YAML, checked when defined and upgraded in place" }
-                        li { "Scoped effects with deny-by-default authorities, an audit hook and sealed secrets" }
-                        li {
-                            "A WebSocket conversation API with local, API-key or trusted-proxy auth, a Telegram channel and a Mac app"
-                        }
-                    }
-                }
-                div {
-                    p(.class("status-label")) { "Next" }
-                    ul {
-                        li { "A hosted option, for teams that don’t want to run their own servers" }
-                        li { "Objects compiled to WebAssembly, written in any language" }
-                        li { "Permissions on messages between agents, for many teams on one server" }
-                        li { "More channels beyond the API and Telegram, such as WhatsApp and Slack" }
-                        li { "A helper agent that prepares context handoffs for long tasks" }
-                        li { "The client app beyond the Mac" }
-                    }
-                }
-            }
+        case .objects: ObjectsText()
+        case .actors: ActorsText()
+        case .swift: SwiftText()
+        case .agents: AgentsText()
+        case .behaviors: BehaviorsText()
+        case .effects: EffectsText()
+        case .control: ControlText()
+        case .plugins: PluginsText()
+        case .status: StatusText()
         }
     }
 
@@ -449,42 +299,10 @@ struct Recovery: HTML {
     var body: some HTML {
         figure(.class("recovery")) {
             div(.class("rc-stage"), .init(name: "aria-hidden", value: "true")) {
-                p(.class("rc-head rc-head-journal")) {
-                    b { "journal" }
-                    " on disk"
-                }
-                for slot in 0..<3 { span(.class("rc-slot rc-right rc-y\(slot)")) {} }
-                for (index, change) in changes.enumerated() {
-                    span(.class("rc-row rc-entry rc-right rc-y\(index) rc-j\(index + 1)")) {
-                        span(.class("rc-n")) { "\(index + 1)" }
-                        change.entry
-                    }
-                }
-                span(.class("rc-select")) {}
-                div(.class("rc-ghost")) {
-                    for (index, change) in changes.enumerated() {
-                        span {
-                            span(.class("rc-n")) { "\(index + 1)" }
-                            change.entry
-                        }
-                    }
-                }
-                span(.class("rc-halo")) {}
-                span(.class("rc-obj")) {}
-                span(.class("rc-recovering")) { span {} }
-                span(.class("rc-broken")) { "✕" }
-                span(.class("rc-name")) { "trip desk" }
-                for (index, change) in changes.enumerated() {
-                    span(.class("rc-state rc-s\(index + 1)")) {
-                        span(.class("rc-key")) { change.trip }
-                        " "
-                        b { change.state }
-                    }
-                }
-                for index in changes.indices { span(.class("rc-pulse rc-p\(index + 1)")) {} }
-                p(.class("rc-status")) {
-                    for (index, status) in statuses.enumerated() { span(.class("rc-st\(index + 1)")) { status } }
-                }
+                RecoveryJournal(entries: changes.map(\.entry))
+                RecoveryObject(changes: changes.map { (change: Change) -> (trip: String, state: String) in
+                    (change.trip, change.state)
+                }, statuses: statuses)
             }
             figcaption {
                 "The trip desk keeps its state in memory and appends every change to its journal. A crash loses the memory, not the journal: the trip desk restarts and replays it line by line, back to where it was."
@@ -701,5 +519,283 @@ struct Orbit: HTML {
             + "<circle class=\"core\" cx=\"\(c.x)\" cy=\"\(c.y)\" r=\"52\"/>"
             + "<text class=\"core-label\" x=\"\(c.x)\" y=\"\(c.y + 8)\">core</text>"
         return permissions + core
+    }
+}
+
+/// The text of the part about objects.
+private struct ObjectsText: HTML {
+    var body: some HTML {
+        p(.class("lead")) {
+            "Turgai builds everything from objects that keep their own state and ask each other to do things, because that is the shape a model can work with: it can find what an object offers, connect objects by messages, and add new ones."
+        }
+        p {
+            "The idea is older than language models, and it has worked before. NeXT built a whole computer on it: developers assembled programs from ready objects and connected them in Interface Builder instead of writing everything, and at CERN in 1990 Tim Berners-Lee wrote the first web browser and web server that way in about two months. Steve Jobs described objects as something like people, which know how to do things and remember what happened."
+        }
+        figure(.class("photo")) {
+            picture {
+                source(
+                    .init(name: "srcset", value: "../" + SitePath.nextcubeAVIF),
+                    .init(name: "type", value: "image/avif"))
+                img(
+                    .src("../" + SitePath.nextcube), .alt("A black NeXTcube computer with its keyboard and mouse"),
+                    .init(name: "width", value: "1280"), .init(name: "height", value: "854"),
+                    .init(name: "loading", value: "lazy"))
+            }
+            figcaption {
+                "A NeXTcube, the computer NeXT built around objects. Photo: "
+                a(.href("https://commons.wikimedia.org/wiki/File:Nextcube_1_(26281984242).jpg")) {
+                    "Simon Claessen"
+                }
+                ", "
+                a(.href("https://creativecommons.org/licenses/by-sa/2.0/")) { "CC BY-SA 2.0" }
+                ", resized."
+            }
+        }
+        p {
+            "Most software since then kept objects inside single programs, joined by integrations written by hand. A model can now do what Interface Builder did for a developer, from a plain request, and because each object keeps its own state and rules, what it puts together stays readable and safe to change. Each object also describes what it offers, so a model can use one it has never seen."
+        }
+    }
+}
+
+/// The text of the part about actors.
+private struct ActorsText: HTML {
+    var body: some HTML {
+        p(.class("lead")) {
+            "A model can only use an object that is there when it is addressed, and many objects have to keep working while nobody is talking to them, so each needs a life of its own."
+        }
+        p {
+            "An object that keeps its state private and handles one message at a time is an actor, and it needs no locks, as Erlang showed. Turgai’s actors are also distributed, so calling one looks the same on this machine or another, and virtual, so an object is reached by a stable name and wakes when a message arrives. Each accepted change is journaled, and after a crash a new instance rebuilds the same object from that journal. Work left half done still needs its own rule for whether to retry it."
+        }
+    }
+}
+
+/// The text of the part about swift.
+private struct SwiftText: HTML {
+    var body: some HTML {
+        p(.class("lead")) {
+            "Everything above, objects that keep their own state, messages between them, actors on one machine or many and permissions that cannot leak, usually rests on conventions every contributor has to remember, and conventions wear away as a codebase grows. Turgai is written in Swift because the language enforces most of these rules itself."
+        }
+        p {
+            "Messages are values, so two objects never change the same data. Actors keep each object’s state out of reach, distributed actors make a call across the network as checked as a local one, and ownership lets a permission exist that cannot leave its scope. Because actors can still interleave work while they wait, Hail orders an agent’s turns itself."
+        }
+        p { "This warehouse is a complete object, and a model can discover it and call it like any other." }
+    }
+}
+
+/// The text of the part about agents.
+private struct AgentsText: HTML {
+    var body: some HTML {
+        p(.class("lead")) {
+            "Since everything else is an object, the agent needs no special treatment. In Turgai’s agent layer, Hail, each agent is a distributed virtual actor like any other object, with its own name, journal and history."
+        }
+        p {
+            "It handles a message, calls tools and goes idle, and a turn cut short by a crash or restart is issued again when it next wakes. The model sits behind one interface, so an agent can move from a cloud API to a model on your own machine and keep its name, history and rules. A different model still behaves differently and has to be evaluated before you rely on it."
+        }
+        p { "Other agents and Turgai’s conversations ask an agent for work in the same way, with one call." }
+    }
+}
+
+/// The text of the part about behaviors.
+private struct BehaviorsText: HTML {
+    var body: some HTML {
+        p(.class("lead")) {
+            "Because agents are objects, what an agent builds for you can be objects too, still working after the conversation that made them is over."
+        }
+        p {
+            "An agent writes them as behaviors, an idea borrowed from Erlang. A behavior is a short YAML document with an object’s fields and what it does with each message, built from a fixed set of conditions and steps with no code. That makes it safe for a model to write and lets the runtime check it before it runs, and redefining a behavior upgrades every object running it."
+        }
+        p {
+            "The trip desk from the main page is one such behavior. It confirms trips under €8,000 and sends the rest to the owner."
+        }
+    }
+}
+
+/// The text of the part about effects.
+private struct EffectsText: HTML {
+    var body: some HTML {
+        p(.class("lead")) {
+            "An agent that can build and run things needs clear permissions, and they cannot depend on the model following instructions. Hail enforces them at the point where a tool is about to act."
+        }
+        p {
+            "Each tool declares the one effect it has, such as reading files under a path, and before it runs an authority derived from who is asking decides on that effect. It denies anything it does not explicitly grant. A granted effect is a token the compiler keeps from being stored, returned or handed to another actor."
+        }
+        p {
+            "This authority allows files inside one workspace and any network access, and it denies terminal commands simply by not naming them."
+        }
+    }
+}
+
+/// The text of the part about control.
+private struct ControlText: HTML {
+    var body: some HTML {
+        p(.class("lead")) {
+            "Permissions settle what an agent may do when a tool acts. A business, especially a public body or a regulated one, also needs to know who runs the system, where its data is kept, who sets its rules and what record it leaves."
+        }
+        p {
+            "Turgai runs where you run it, on a Mac, on your own servers or in a cloud you choose, Linux included, with no Turgai-operated service in between. Conversations, memory and journals stay in your own storage, as files or in PostgreSQL, and what leaves your machines is what you send out, such as calls to a cloud model or messages on Telegram. Each agent’s model, keys and instructions are your configuration, and so are client authentication, channels and permissions. The journal is the system’s record, and every permission decision can be reported to an audit observer you install."
+        }
+        p {
+            "An agent is described by a profile like this one, and the server starts with the authentication you require."
+        }
+    }
+}
+
+/// The text of the part about plugins.
+private struct PluginsText: HTML {
+    var body: some HTML {
+        p(.class("lead")) {
+            "Running Turgai on your own terms leaves the practical question of how it connects to a product that already has users, data and code of its own."
+        }
+        p {
+            "Turgai owns agents and conversations, while your product keeps its users, decides who may reach each conversation and talks to Turgai over a WebSocket API, so Turgai never needs your user database. Your system itself joins as an object, either a short Swift actor that calls your existing API or a behavior in YAML, and agents then use it like any other object."
+        }
+    }
+}
+
+/// The text of the part about status.
+private struct StatusText: HTML {
+    private static let built: [String] = [
+        "Distributed virtual actors, journaled to files or PostgreSQL",
+        "Durable workflows with timers, so long-running work can wait for days and survive restarts",
+        "Self-hosted, with no Turgai-operated service in between",
+        "Hail agents with journaled turns, each on its own model: Apple on‑device, Ollama or llama.cpp, or OpenAI, Anthropic, Gemini and any OpenAI‑compatible endpoint",
+        "Behaviors in YAML, checked when defined and upgraded in place",
+        "Scoped effects with deny-by-default authorities, an audit hook and sealed secrets",
+        "A WebSocket conversation API with local, API-key or trusted-proxy auth, a Telegram channel and a Mac app",
+    ]
+    private static let next: [String] = [
+        "A hosted option, for teams that don’t want to run their own servers",
+        "Objects compiled to WebAssembly, written in any language",
+        "Permissions on messages between agents, for many teams on one server",
+        "More channels beyond the API and Telegram, such as WhatsApp and Slack",
+        "A helper agent that prepares context handoffs for long tasks",
+        "The client app beyond the Mac",
+    ]
+
+    var body: some HTML {
+        p(.class("lead")) { "Turgai is early, and below is exactly where it stands." }
+        div(.class("status")) {
+            StatusList(label: "Built", items: Self.built)
+            StatusList(label: "Next", items: Self.next)
+        }
+    }
+}
+
+/// One list of where Turgai stands, under its label.
+private struct StatusList: HTML {
+    let label: String
+    let items: [String]
+
+    var body: some HTML {
+        div {
+            p(.class("status-label")) { label }
+            ul {
+                for item in items { li { item } }
+            }
+        }
+    }
+}
+
+/// What the tech page is about, at its top.
+private struct TechIntro: HTML {
+    var body: some HTML {
+        div(.class("tech-intro")) {
+            p(.class("eyebrow")) { "How it works" }
+            h1 {
+                "Everything in Turgai "
+                span(.class("nowrap")) {
+                    span(.class("flag")) { "is an object" }
+                    ","
+                }
+                " run by a small core."
+            }
+            p(.class("lede")) {
+                "Agents, the tools they use, the rules a business sets and the parts of a product all run in Turgai as objects, each owning its state and working with the others by exchanging messages. You run the core where you choose, and you decide which models it uses and what every part may do."
+            }
+        }
+    }
+}
+
+/// The tech page's end, at night: what it means, and the way in.
+private struct TechNight: HTML {
+    var body: some HTML {
+        section(.class("tech-night")) {
+            // built like the idea page's last page: the sticker, the big line, then what it means and the way in
+            div(.class("tech-end")) {
+                ComingSoon()
+                p(.class("big")) {
+                    "Start small."
+                    br()
+                    span(.class("flag")) { "Keep adding." }
+                }
+                div(.class("close")) {
+                    p(.class("belief")) {
+                        "An agent, a rule and a part of your product are built and changed in the same way, and new ones join while the rest keeps running."
+                    }
+                    p { "Turgai is in early alpha. If you’d like to know more or see it running, write to us." }
+                    div(.class("cta")) {
+                        a(.class("button button-accent"), .href("mailto:hello@turg.ai")) { "Write to us" }
+                        a(.class("button button-secondary"), .href("../")) { "Back to the idea" }
+                    }
+                }
+            }
+            footer(.class("tech-footer")) {
+                span { "Turgai · Apache 2.0 · early development" }
+                span { "Turgai means skylark." }
+            }
+        }
+    }
+}
+
+/// The recovery figure's journal: the slots, each change appended, and the copy dragged back on restart.
+private struct RecoveryJournal: HTML {
+    let entries: [String]
+
+    var body: some HTML {
+        p(.class("rc-head rc-head-journal")) {
+            b { "journal" }
+            " on disk"
+        }
+        for slot in 0..<3 { span(.class("rc-slot rc-right rc-y\(slot)")) {} }
+        for (index, entry) in entries.enumerated() {
+            span(.class("rc-row rc-entry rc-right rc-y\(index) rc-j\(index + 1)")) {
+                span(.class("rc-n")) { "\(index + 1)" }
+                entry
+            }
+        }
+        span(.class("rc-select")) {}
+        div(.class("rc-ghost")) {
+            for (index, entry) in entries.enumerated() {
+                span {
+                    span(.class("rc-n")) { "\(index + 1)" }
+                    entry
+                }
+            }
+        }
+    }
+}
+
+/// The recovery figure's object: its dot, its value through each change, its pulses and what it's doing.
+private struct RecoveryObject: HTML {
+    let changes: [(trip: String, state: String)]
+    let statuses: [String]
+
+    var body: some HTML {
+        span(.class("rc-halo")) {}
+        span(.class("rc-obj")) {}
+        span(.class("rc-recovering")) { span {} }
+        span(.class("rc-broken")) { "✕" }
+        span(.class("rc-name")) { "trip desk" }
+        for (index, change) in changes.enumerated() {
+            span(.class("rc-state rc-s\(index + 1)")) {
+                span(.class("rc-key")) { change.trip }
+                " "
+                b { change.state }
+            }
+        }
+        for index in changes.indices { span(.class("rc-pulse rc-p\(index + 1)")) {} }
+        p(.class("rc-status")) {
+            for (index, status) in statuses.enumerated() { span(.class("rc-st\(index + 1)")) { status } }
+        }
     }
 }
