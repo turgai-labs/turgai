@@ -23,38 +23,41 @@ Every check is the caller's. An object on the Mac's node runs whatever reaches i
 So there's one boundary, the distributed call, and one infrastructure on it:
 
 1. **Who's calling.** The actor system stamps every call with its caller. Code can read it, but never set it, and it's never taken from arguments. CallChain already carries the actor ids.
-2. **Who made it.** When an actor is made, the stamp of the call that made it is recorded as its creator.
-3. **Who may find it, read it, and change it.** Each actor keeps these with it, journaled. Only its creator changes them, and changing them is a call too.
-4. **The check.** The receiving side checks the list for the action's kind, before the target runs: the call passes if whoever started the chain is on it, or if the object calling it directly is. Otherwise it's a request on behalf of whoever started the chain. It's one place in the actor system, and it covers every actor on every node.
+2. **Who may find it, read it, write it, and be its admin.** Each actor keeps these lists with it, journaled. Whoever makes it starts as its admin; after that, only the lists say anything. There's no owner.
+3. **Each action reads or writes.** The actor's own code says which. For objects, that's the authority attributes in object code. For a tool or an agent, whoever offers it through the ToolsAPI says it.
+4. **The check.** The receiving side checks the list for the action's level, before the target runs: the call passes if whoever started the chain is on it, or if the object calling it directly is. Otherwise it's a request on behalf of whoever started the chain. It's one place in the actor system, and it covers every actor on every node.
 
 ### Who the chain starts with
 
 - **Whoever asked.** Bob asks his agent, the agent calls the planner, and the planner adds to Ann's calendar: Bob needs access at every step. The agent and the planner act for him, and can't do more than he can. If Cat asks the planner, it's checked against Cat.
 - **A person** starts it through their participant actor, so the chain is actors from the start.
 - **Something running on its own,** such as a timer firing or an object's own task, starts with whoever made it.
-- **Objects can be on lists too.** The room's calendar lists the shared booking object as allowed to change it. Anyone books through the booking object, which checks for clashes, and its own right is what the calendar checks. Bob isn't on the calendar's list, so he can't write to it directly.
+- **Objects can be on lists too.** The room's calendar lists the shared booking object as allowed to write it. Anyone books through the booking object, which checks for clashes, and its own right is what the calendar checks. Bob isn't on the calendar's list, so he can't write to it directly.
 
-### Finding, reading, changing
+### Finding, and three levels
 
 - **Finding is coarse:** everyone, or only some. Something that can be found but not used is what a request is made from.
-- **Lists name people, objects, or groups:** a family, a team, a chat's members. Who's in a group is the group's own: someone joining gets access, someone leaving loses it, and the object's lists don't change.
-- **Each action either reads or changes.** The actor's own code says which. For objects, that's the authority attributes in object code. For a tool or an agent, whoever offers it through the ToolsAPI says it.
-- **Two lists:** who may read, and who may change. Changing includes reading.
+- **Three levels, each including the one before:**
+  - **read:** the actions that read;
+  - **write:** the actions that write;
+  - **admin:** changes the lists, and answers requests.
+- **Lists name people, objects, or groups.** A group is a distributed actor with members and admins, journaled, so the check can ask it from any node. A role, such as a family's kids, is a group too. Someone joining a group gets its access, someone leaving loses it, and the lists that name the group don't change.
 
 ```
-shared calendar, made by Ann
-  found by:  everyone
-  read:      everyone          → events(from:to:)
-  change:    Ann, Bob          → add(event:), remove(event:)
+family calendar
+  found by:  family
+  read:      family.kids       → events(from:to:)
+  write:     family.parents    → add(event:), remove(event:)
+  admin:     Ann, Bob
 ```
 
-Bob's agent adds an event: the action changes, Bob is on the change list, so it runs. Cat's agent finds the calendar and reads it. When it tries to add, it's refused, or it asks Ann.
+A kid's agent reads the calendar. When it tries to add an event, it's a request, and Ann or Bob answers it.
 
 That's B, the actor's own list, rather than A, where holding a reference is the right. With a list, "who may call this" is a value that can be shown, journaled, revoked, and asked to join. That last part is where access requests come in.
 
 ### Outside services
 
-Someone else's API (Google, GitHub, an MCP server) comes in through the ToolsAPI as an actor, and belongs to a group like any object. Our lists decide who may use it.
+Someone else's API (Google, GitHub, an MCP server) comes in through the ToolsAPI as an actor, with lists like any other. They decide who may use it.
 
 - **Now:** manual approval only. A call without access is a request, and the right admins answer it.
 - **Later, with the first service that has its own auth:** an admin connects it once, through the service's own OAuth, and its token is kept with the actor. Agents never see it.
@@ -73,13 +76,13 @@ Nothing built on 1–4 changes when these land.
 
 ## Open
 
-- **Requests:** asking to join an actor's list, and the creator's answer, built on 3.
+- **Requests:** asking to join an actor's list, and its admins' answer.
 
 ## Order
 
 1. Stamp the caller on every call, the same on every node.
-2. Record the creator when an actor is made.
-3. Each actor's finding, reading and changing lists; actions marked read or change; the check on the receiving side.
+2. Each actor's lists, whoever makes it starting as admin; actions marked read or write; groups as actors.
+3. The check on the receiving side.
 4. The ToolsAPI: offering a tool as a distributed actor.
 5. Requests and answers.
 6. In SDA: mTLS, and a node speaking only for its own actors.
