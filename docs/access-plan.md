@@ -54,6 +54,26 @@ A request is a call, and so is the answer. Nothing is special.
 - **A kid's agent tries to add an event:** not allowed, so it's a request on the kid's behalf, to the family's admins, the parents.
 - **A parent allows it:** a call that changes what the calendar allows. It carries "in the family, as an admin", so it passes the check like any other call.
 - **Someone outside asks,** such as Cat from the school: the same, to the admins of the group the thing belongs to. The answer allows Cat, or the school's teachers.
+- **An admin asks for their own group's thing:** the request goes to the group's admins, which includes them, so they can answer it themselves. It's still a request and an answer, so it's journaled like any change.
+
+**Once or always.**
+
+- **Once** runs what's waiting, and nothing after. What the thing allows doesn't change.
+- **Always** changes what the thing allows, for that participant or their group, until an admin takes it back.
+
+**Waiting doesn't stop the chat.**
+
+- The call returns at once, truthfully: it asked the family's parents. The agent says so and the turn ends.
+- The request holds the waiting call, not the agent. When it's allowed, the request runs the call itself, with the original scope, and the result arrives in the conversation as a message that starts a turn. A refusal arrives the same way.
+- A quick answer, such as an admin answering themselves, goes the same way: the result is just the next message.
+
+**One request per person, thing and level.** The kid asking ten times is one request. The same call again (same arguments, compared as values) joins the waiting one; different calls wait under it too, and the parents see one request with a count. The answer covers them all. Asking again after a refusal opens a new request.
+
+**It survives its node.** A request is its own virtual, event-sourced actor: asked, then allowed or refused, then ran.
+
+- Died while waiting: it replays to asked, and waits.
+- Died after allowed, before the call ran: it replays to allowed, and runs it.
+- Died while the call ran: ran was never recorded, so it runs again. The call is at least once: one that sends or pays carries its own id, so its provider can tell a repeat.
 
 ### The Mac
 
@@ -62,7 +82,9 @@ The Mac and its services (calendar, contacts, screen) belong to the group that s
 1. **Ours:** a request to that group's admins, as above.
 2. **macOS's own consent:** macOS asks once whether Turgai, the app, may use the calendar or the screen. Only someone at that Mac can answer it, in the system dialog. Until then the call can't run, and the reply says it's waiting for the Mac.
 
-macOS allows the app, not a person. Once it has, who may use the Mac's services is only ours to say.
+macOS allows the app, not a person, and has no once: allowed lasts until switched off in System Settings (checked on macOS 27.2). Once it has, who may use the Mac's services is only ours to say, and our once applies only to our layer.
+
+An admin at the Mac answers both, one after the other, on the same screen: ours in the Mac app, then the system dialog. Answering from elsewhere, ours is done there and macOS's waits for someone at the Mac.
 
 That's B, what the actor allows, rather than A, where holding a reference is the right. "Who may call this" is a value that can be shown, journaled, revoked, and asked for.
 
