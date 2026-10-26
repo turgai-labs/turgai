@@ -110,6 +110,10 @@ public actor TelegramConnection {
         case .command(let command):
             return await sendToApplication(.command(command))
 
+        case .approval(let conversationID, let approvalID, let decision, let person):
+            return await sendToApplication(
+                .approval(conversationID: conversationID, approvalID: approvalID, decision: decision, by: person))
+
         case .start(let conversationID, _, _):
             do {
                 try await publisher.sendText(
@@ -348,6 +352,10 @@ public actor TelegramBot {
         )
         let participantID = participantID(for: sender.id)
         let userID = UserID(participantID: participantID)
+        if let data = callbackQuery?.data, let answer = TelegramApprovalButton.answer(in: data) {
+            return .approval(
+                conversationID: conversationID, approvalID: answer.id, decision: answer.decision, by: userID)
+        }
         let displayName = [sender.firstName, sender.lastName]
             .compactMap { value in
                 let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -633,6 +641,7 @@ extension TelegramInboundEvent {
         case .forget(let conversationID, _, _): conversationID
         case .context(let conversationID, _, _): conversationID
         case .diagnose(let conversationID, _, _): conversationID
+        case .approval(let conversationID, _, _, _): conversationID
         case .command(let command):
             switch command {
             case .reminders(let conversationID, _, _),

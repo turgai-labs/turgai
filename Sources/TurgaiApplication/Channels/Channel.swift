@@ -58,10 +58,6 @@ public protocol ChannelProvider: Sendable {
         emit: @escaping @Sendable (Event) async throws -> Void
     ) async throws -> Runtime
     static func run(_ runtime: Runtime) async throws
-    static func decideApproval(
-        _ request: ChannelApprovalRequest,
-        using runtime: Runtime
-    ) async throws -> ApprovalDecision
 }
 
 public struct ChannelConfiguration<Provider: ChannelProvider>:
@@ -298,15 +294,6 @@ public distributed actor Channel<Provider: ChannelProvider> {
         case .deleted:
             return
         }
-    }
-
-    public distributed func decideApproval(
-        _ request: ChannelApprovalRequest
-    ) async throws -> ApprovalDecision {
-        guard case .running(_, let runtime, _) = providerRuntime else {
-            return .denied
-        }
-        return try await Provider.decideApproval(request, using: runtime)
     }
 
     public func shouldDeactivate() async -> Bool {

@@ -251,6 +251,27 @@ public enum TelegramInboundEvent: Equatable, Sendable {
         userID: UserID
     )
     case command(ConversationCommand)
+    /// Someone's answer to a question the conversation asked, by tapping its button.
+    case approval(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision, by: UserID)
+}
+
+/// The buttons a question from the conversation is answered with: each says the answer and the
+/// question's ID, and nothing else.
+public enum TelegramApprovalButton {
+    public static func data(for id: UUID, _ decision: ApprovalDecision) -> String {
+        "turgai-approval:\(decision == .granted ? "grant" : "deny"):" + id.uuidString
+    }
+
+    /// The question and answer a button's data says, if it's one of these.
+    public static func answer(in data: String) -> (id: UUID, decision: ApprovalDecision)? {
+        let parts = data.split(separator: ":", maxSplits: 2).map(String.init)
+        guard parts.count == 3, parts[0] == "turgai-approval", let id = UUID(uuidString: parts[2]) else { return nil }
+        switch parts[1] {
+        case "grant": return (id, .granted)
+        case "deny": return (id, .denied)
+        default: return nil
+        }
+    }
 }
 
 public enum TelegramPublisherError: Error, Equatable, Sendable {
@@ -500,8 +521,27 @@ public actor TelegramEventPublisher {
             }
             lastTypingActionReservation[conversationID] = nil
 
-        case .approvalRequested, .approvalResolved:
-            // Telegram asks with its own inline buttons (TelegramToolApproval).
+        case .approvalRequested(let conversationID, let turnID, let prompt):
+            // Asked in the chat; whoever taps answers, and the conversation decides whose answer counts.
+            let markup = TelegramInlineKeyboardMarkup(
+                inlineKeyboard: [
+                    [
+                        TelegramInlineKeyboardButton(
+                            text: "Approve", callbackData: TelegramApprovalButton.data(for: prompt.id, .granted)),
+                        TelegramInlineKeyboardButton(
+                            text: "Deny", callbackData: TelegramApprovalButton.data(for: prompt.id, .denied)),
+                    ]
+                ]
+            )
+            _ = try await client.sendMessageWithMarkup(
+                try chatID(for: conversationID),
+                "Turgai wants permission to run \(prompt.action).\n\nArguments: \(prompt.arguments)",
+                nil,
+                replyParameters(conversationID: conversationID, turnID: turnID),
+                markup
+            )
+
+        case .approvalResolved:
             break
         }
     }

@@ -95,9 +95,8 @@ public struct ChannelApprovalRequest: Codable, Sendable, Equatable {
     }
 }
 
-/// Asks for consent where the request came from: a Telegram chat asks through
-/// its channel's inline buttons; any other conversation, such as the web and Mac
-/// chat, asks its connected clients.
+/// Asks for consent in the conversation the request came from: each of its links shows the
+/// question, such as a Telegram chat's buttons, and the conversation decides whose answer counts.
 public struct ChannelToolApproval: ToolApproval {
     private let actorSystem: ClusterSystem
     /// The agent role of the conversation asking, used to find its actor.
@@ -112,17 +111,8 @@ public struct ChannelToolApproval: ToolApproval {
         guard let conversationID = ConversationID(stableKey: request.conversationID) else {
             return .denied
         }
-        if conversationID.channel.providerName == TelegramProvider.providerID {
-            guard let channelID = UUID(uuidString: conversationID.channel.instanceID) else {
-                return .denied
-            }
-            let channel = try await TelegramChannel.resolve(
-                on: actorSystem,
-                channelID: channelID
-            )
-            return try await channel.decideApproval(ChannelApprovalRequest(request))
-        }
-        // The conversation is running the turn that asks, so it's already active.
+        // The conversation asks, through each of its links, and decides whose answer counts.
+        // It's running the turn that asks, so it's already active.
         let conversation = try await Conversation.resolve(
             on: actorSystem,
             conversationID: conversationID,

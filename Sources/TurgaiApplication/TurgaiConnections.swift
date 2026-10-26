@@ -538,11 +538,11 @@ actor LiveSession {
                 return false
             }
 
-        case .approval(let conversationID, let approvalID, let decision):
+        case .approval(let conversationID, let approvalID, let decision, let person):
             // Only a conversation this session is attached to hears its answer.
             guard let conversation = conversations[conversationID] else { return false }
             do {
-                try await conversation.decideApproval(approvalID, decision: decision)
+                try await conversation.decideApproval(approvalID, decision: decision, by: person)
                 return true
             } catch {
                 return false

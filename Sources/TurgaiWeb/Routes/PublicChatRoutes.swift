@@ -352,7 +352,8 @@ extension TurgaiMainWebApp {
                                         input: .approval(
                                             conversationID: conversation.domainID,
                                             approvalID: id,
-                                            decision: decision.domain
+                                            decision: decision.domain,
+                                            by: userID
                                         ),
                                         receipt: receipt
                                     )
@@ -886,7 +887,8 @@ private func runHTMLChatSocket(
                             input: .approval(
                                 conversationID: conversation.domainID,
                                 approvalID: id,
-                                decision: decision.domain
+                                decision: decision.domain,
+                                by: userID
                             ),
                             receipt: receipt
                         )

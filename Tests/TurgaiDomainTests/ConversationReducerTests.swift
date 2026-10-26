@@ -16,6 +16,24 @@ struct ConversationReducerTests {
     private let participantID = ParticipantID("user-1")
 
     @Test
+    func whoeverWritesJoinsTheFirstAsItsAdmin() {
+        func message(from participant: String) -> InboundMessage {
+            InboundMessage(
+                conversationID: conversationID, participantID: ParticipantID(participant), text: "hello",
+                receivedAt: Date(timeIntervalSince1970: 1))
+        }
+        let ann = message(from: "ann")
+        let bob = message(from: "bob")
+        var state = ConversationState(conversationID: conversationID)
+        for sent in [ann, bob, message(from: "ann")] {
+            state = reduce(state, .receive(message: sent, turnID: TurnID(), agentRole: "conversation")).0
+        }
+
+        #expect(state.members.members == [ann.userID: .admin, bob.userID: .member])
+        #expect(state.members.admins == [ann.userID])
+    }
+
+    @Test
     func participantAndUserIdentityAreChannelScoped() {
         let telegram = ParticipantID(channel: ChannelID("telegram"), rawValue: "42")
         let discord = ParticipantID(channel: ChannelID("discord"), rawValue: "42")

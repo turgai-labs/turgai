@@ -9,7 +9,6 @@ public struct TelegramChannelRuntime: Sendable {
     fileprivate let configuration: TelegramChannelConfig
     fileprivate let client: TelegramAPIClient
     fileprivate let dependencies: TurgaiChannelRuntimeDependencies
-    fileprivate let approval: TelegramToolApproval
     fileprivate let readState: @Sendable () async throws -> TelegramChannelState
     fileprivate let emit: @Sendable (TelegramChannelEvent) async throws -> Void
     fileprivate let logger: Logger
@@ -38,7 +37,6 @@ extension TelegramProvider {
             configuration: configuration.provider,
             client: client,
             dependencies: dependencies,
-            approval: TelegramToolApproval(client: client),
             readState: readState,
             emit: emit,
             logger: actorSystem.log
@@ -72,17 +70,9 @@ extension TelegramProvider {
             attachmentResolver: runtime.dependencies.attachments,
             attachmentOwner: runtime.channelID,
             logger: runtime.logger,
-            persistedConversationIDs: persistedConversationIDs,
-            callbackHandler: { await runtime.approval.handle($0) }
+            persistedConversationIDs: persistedConversationIDs
         )
 
         try await service.run()
-    }
-
-    public static func decideApproval(
-        _ request: ChannelApprovalRequest,
-        using runtime: TelegramChannelRuntime
-    ) async throws -> ApprovalDecision {
-        try await runtime.approval.decide(request)
     }
 }

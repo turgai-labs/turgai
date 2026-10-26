@@ -91,7 +91,7 @@ private enum PublishEvent: Sendable {
             self = .userMessage(pending)
         case .turnStarted(let pending):
             self = .turnStarted(pending)
-        case .replyQueued, .replyDelivered, .turnCompleted, .turnFailed,
+        case .member, .replyQueued, .replyDelivered, .turnCompleted, .turnFailed,
             .memoryObservationQueued, .memoryObservationsCompleted, .reset:
             return nil
         }
@@ -522,8 +522,12 @@ public distributed actor Conversation {
         }
     }
 
-    /// A user's answer to a question from ``requestApproval(_:)``.
-    public distributed func decideApproval(_ id: UUID, decision: ApprovalDecision) async {
+    /// An answer to a question from ``requestApproval(_:)``, by `person`: only its admins decide
+    /// for it, so anyone else's answer is no answer.
+    public distributed func decideApproval(
+        _ id: UUID, decision: ApprovalDecision, by person: TurgaiDomain.UserID
+    ) async {
+        guard state.members.role(of: person) == .admin else { return }
         await resolveApproval(id, decision: decision)
     }
 
@@ -1289,6 +1293,11 @@ public distributed actor Conversation {
         }
 
         var events: [ConversationEvent] = []
+
+        // Who joined, before what they said.
+        for (person, role) in next.members.members where previous.members.role(of: person) == nil {
+            events.append(.member(.joined(person, as: role)))
+        }
 
         // Persist the terminal output before the lifecycle bookkeeping. The
         // reply event is the recovery point if the process crashes between

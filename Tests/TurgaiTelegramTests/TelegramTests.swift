@@ -11,6 +11,38 @@ import TurgaiTelegram
 
 struct TelegramTests {
     @Test
+    func anApprovalButtonIsItsTappersAnswer() {
+        let asker = TelegramUser(id: 7, firstName: "Kid")
+        let tapper = TelegramUser(id: 8, firstName: "Parent")
+        let chat = TelegramChat(id: 42)
+        let question = UUID()
+        func tap(_ decision: ApprovalDecision) -> TelegramInboundEvent? {
+            TelegramBot.event(
+                for: TelegramUpdate(
+                    updateID: 1,
+                    callbackQuery: TelegramCallbackQuery(
+                        id: "callback",
+                        from: tapper,
+                        message: TelegramMessage(messageID: 1, from: asker, chat: chat, date: 100, text: "question"),
+                        data: TelegramApprovalButton.data(for: question, decision))
+                ),
+                conversationChannel: ChannelID("telegram"),
+                messageID: MessageID(rawValue: UUID()),
+                turnID: TurnID()
+            )
+        }
+
+        // Whoever taps answers; the conversation decides whether their answer counts.
+        let parent = UserID(participantID: TelegramBot.participantID(for: tapper.id))
+        let conversationID = TelegramBot.conversationID(for: chat.id)
+        func answer(_ decision: ApprovalDecision) -> TelegramInboundEvent {
+            .approval(conversationID: conversationID, approvalID: question, decision: decision, by: parent)
+        }
+        #expect(tap(.granted) == answer(.granted))
+        #expect(tap(.denied) == answer(.denied))
+    }
+
+    @Test
     func botMapsMemoryCommandsToTheRequestingUser() {
         let user = TelegramUser(id: 7, firstName: "John")
         let chat = TelegramChat(id: 42)

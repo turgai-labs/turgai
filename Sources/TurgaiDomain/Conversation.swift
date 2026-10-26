@@ -411,7 +411,7 @@ public enum ConversationInput: Sendable, Equatable {
     )
     case connect(ConversationID)
     case reset(ConversationID)
-    case approval(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision)
+    case approval(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision, by: UserID)
     case memory(
         conversationID: ConversationID,
         participantID: ParticipantID,
@@ -524,6 +524,8 @@ public struct PendingMemoryObservation: Hashable, Codable, Sendable {
 }
 
 public enum ConversationEvent: Codable, Sendable, Equatable {
+    /// Someone became one of its members.
+    case member(GroupEvent)
     case messageQueued(PendingConversationMessage)
     case replyQueued(PendingConversationReply)
     case replyDelivered(TurnID)
@@ -600,8 +602,11 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var activeMessage: PendingConversationMessage?
     public internal(set) var history: [ConversationHistoryEntry]
+    /// The people in it: whoever writes joins, the first as its admin.
+    public internal(set) var members: Group
 
     private enum CodingKeys: String, CodingKey {
+        case members
         case conversationID
         case status
         case acceptedMessageIDs
@@ -618,9 +623,11 @@ public struct ConversationState: Hashable, Codable, Sendable {
         pendingMessages: [PendingConversationMessage] = [],
         pendingReplies: [PendingConversationReply] = [],
         activeMessage: PendingConversationMessage? = nil,
-        history: [ConversationHistoryEntry] = []
+        history: [ConversationHistoryEntry] = [],
+        members: Group = Group()
     ) {
         self.conversationID = conversationID
+        self.members = members
         self.status = status
         self.acceptedMessageIDs = acceptedMessageIDs
         self.pendingMessages = pendingMessages
@@ -632,6 +639,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
+        self.members = try container.decode(Group.self, forKey: .members)
         self.status = try container.decode(ConversationStatus.self, forKey: .status)
         self.acceptedMessageIDs = try container.decode([MessageID].self, forKey: .acceptedMessageIDs)
         self.pendingMessages = try container.decode([PendingConversationMessage].self, forKey: .pendingMessages)
@@ -650,6 +658,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(conversationID, forKey: .conversationID)
+        try container.encode(members, forKey: .members)
         try container.encode(status, forKey: .status)
         try container.encode(acceptedMessageIDs, forKey: .acceptedMessageIDs)
         try container.encode(pendingMessages, forKey: .pendingMessages)
@@ -665,6 +674,9 @@ public struct ConversationState: Hashable, Codable, Sendable {
 
     public mutating func apply(_ event: ConversationEvent) {
         switch event {
+        case .member(let event):
+            members = members.applying(event)
+
         case .messageQueued(let pending):
             rememberAcceptedMessage(pending.message.id)
             pendingMessages.append(pending)
@@ -957,6 +969,11 @@ public func reduce(
             attachments: message.attachments,
             receivedAt: message.receivedAt
         )
+
+        // Whoever writes is one of its members.
+        if let joined = next.members.admitting(message.userID) {
+            next.members = next.members.applying(joined)
+        }
 
         next.acceptedMessageIDs.append(message.id)
         if next.acceptedMessageIDs.count > 256 {
