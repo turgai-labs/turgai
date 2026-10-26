@@ -11,6 +11,8 @@ public enum DynamicObjectEvent: Codable, Sendable {
     /// The code of its type it runs from now on, first or new, with the starting values of the
     /// data new to it.
     case adopted(BehaviorID, Script, starts: [String: JSONValue], by: CallScope)
+    /// `audience` given `level` of access, or none at all.
+    case shared(with: Audience, AccessLevel?)
     /// What it's called and what it was made for, as it was asked for: an object made by name has
     /// them, one made by code doesn't.
     case described(name: String, description: String?)
@@ -135,6 +137,8 @@ public struct LiveObject: Codable, Sendable {
     /// Whoever it was made by: on whose behalf it was first given code. What it starts itself, its
     /// tasks and the events it follows, is on their behalf.
     public private(set) var maker: CallScope?
+    /// Who may read it and who may write it: its maker's alone, from when it's made, until shared.
+    public private(set) var access: ObjectAccess?
     /// What it's called and what it was made for: an object made by name has them.
     public private(set) var name: String?
     public private(set) var description: String?
@@ -158,11 +162,14 @@ public struct LiveObject: Codable, Sendable {
             next.type = type
             next.code = code
             next.maker = maker ?? scope
+            next.access = access ?? ObjectAccess(madeBy: scope)
             // New code starts again: what failed before is the old code's.
             next.health = .working
             // Data new to it starts as its code has it; the values it holds stay its own, and
             // data its code no longer has is gone.
             next.fields = starts.merging(fields.filter { starts[$0.key] != nil }) { _, held in held }
+        case .shared(let audience, let level):
+            next.access = access?.sharing(with: audience, level)
         case .described(let name, let description):
             next.name = name
             next.description = description
@@ -219,6 +226,16 @@ public struct LiveObject: Codable, Sendable {
         return .described(name: name, description: description)
     }
 
+    /// `audience` given `level` of access, or none, by a call on behalf of `scope`: only one that
+    /// may write it shares it.
+    func sharing(with audience: Audience, _ level: AccessLevel?, by scope: CallScope) throws(DynamicObjectError)
+        -> DynamicObjectEvent
+    {
+        guard let access else { throw .noCode }
+        guard access.allows(scope, .write) else { throw .notAllowed(.write) }
+        return .shared(with: audience, level)
+    }
+
     /// Whether it takes `message` in the state it's in: one its state doesn't take is refused, as
     /// gen_statem drops an event no state handles.
     func taking(_ message: String) throws(DynamicObjectError) {
@@ -270,6 +287,8 @@ public enum DynamicObjectError: Error, Codable, Equatable, Sendable, CustomStrin
     case severalNamed(String)
     /// A call made through a type this object isn't.
     case notA(String, isA: String)
+    /// A call whose scope isn't allowed to go as far as it asked.
+    case notAllowed(AccessLevel)
 
     public var description: String {
         switch self {
@@ -281,6 +300,8 @@ public enum DynamicObjectError: Error, Codable, Equatable, Sendable, CustomStrin
             "It holds no `\(name)`. It holds \(held.map { "`\($0)`" }.joined(separator: ", "))."
         case .noReference(let value): "\(value) isn't an object to call."
         case .noObjectNamed(let name): "There's no object named `\(name)`."
+        case .notAllowed(.read): "Not allowed to read this object."
+        case .notAllowed(.write): "Not allowed to write this object."
         case .severalNamed(let name): "Several objects are named `\(name)`."
         case .notA(let type, let isA): "It's a `\(isA)`, not a `\(type)`."
         }

@@ -264,6 +264,18 @@ public distributed actor DynamicObject: DiscoverableActor {
         get throws { try state.live.maker }
     }
 
+    /// Who may read it and who may write it.
+    public distributed var access: ObjectAccess? {
+        get throws { try state.live.access }
+    }
+
+    /// Gives `audience` `level` of access, or takes all of it away: only a call on behalf of
+    /// someone who may write it does.
+    public distributed func share(with audience: Audience, _ level: AccessLevel?) async throws {
+        guard let scope = CallChain.current?.scope else { throw CallOnBehalfOfNoOne(actor: objectID) }
+        try await emit(event: try state.live.sharing(with: audience, level, by: scope))
+    }
+
     /// What it's called, when it was made by name.
     public distributed var name: String? {
         get throws { try state.live.name }

@@ -538,6 +538,7 @@ struct DynamicObjectTests {
             try await withDynamicNode(joining: shop, store: store) { node in
                 let objects = try await DynamicObjects.resolve(on: node, scope: .shared)
                 #expect(try await objects.held(drinksID).maker == ann)
+                #expect(try await objects.held(drinksID).access == ObjectAccess(madeBy: ann))
                 let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
                 let made = try await DynamicObject.resolve(
                     on: node, nature: ObjectNature(identity: tea, scope: .shared))
