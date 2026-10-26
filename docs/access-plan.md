@@ -25,7 +25,7 @@ So there's one boundary, the distributed call, and one infrastructure on it:
 1. **Who's calling.** The actor system stamps every call with its caller. Code can read it, but never set it, and it's never taken from arguments. CallChain already carries the actor ids.
 2. **Who made it.** When an actor is made, the stamp of the call that made it is recorded as its creator.
 3. **Who may find it, read it, and change it.** Each actor keeps these with it, journaled. Only its creator changes them, and changing them is a call too.
-4. **The check.** The receiving side checks the stamped caller against the list for the action's kind, before the target runs. It's one place in the actor system, and it covers every actor on every node.
+4. **The check.** The receiving side checks the whole CallChain against the list for the action's kind, before the target runs: everyone the call came through must be on it. If anyone isn't, it's a request. It's one place in the actor system, and it covers every actor on every node.
 
 ### Finding, reading, changing
 
@@ -57,7 +57,6 @@ Nothing built on 1–4 changes when these land.
 
 ## Open
 
-- **Which caller is stamped:** the actor that made the call (the planner object), or who it ultimately acts for (the person at the start of the chain)? This also decides who the creator is when an agent makes an object.
 - **Requests:** asking to join an actor's list, and the creator's answer, built on 3.
 
 ## Order
