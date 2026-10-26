@@ -41,13 +41,11 @@ struct RegisterAccountPage: HTMLDocument, Sendable {
                 },
             ) {
                 section(.class("setup-content setup-content-compact")) {
-                    div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Join this Turgai" }
-                        h1 { "Make room for another voice." }
-                        p(.class("lede")) {
+                    SetupIntro(
+                        eyebrow: "Join this Turgai", title: "Make room for another voice.",
+                        lede:
                             "Create an account to chat with this Turgai installation. You can sign in immediately; an administrator can grant dashboard access later."
-                        }
-                    }
+                    )
                     div(.class("setup-form-area")) {
                         if let error { p(.class("error")) { error } }
                         if let success {
@@ -58,15 +56,7 @@ struct RegisterAccountPage: HTMLDocument, Sendable {
                                 .method(.post), .action("/register"),
                                 .init(name: "id", value: "account-register-form")
                             ) {
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Username" }
-                                    input(.type(.text), .name("username"), .autocomplete("username"), .required)
-                                }
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Password" }
-                                    input(.type(.password), .name("password"), .autocomplete("new-password"), .required)
-                                    p(.class("hint")) { "Use at least 12 characters." }
-                                }
+                                CredentialFields(password: .new, hint: "Use at least 12 characters.")
                             }
                         }
                     }

@@ -6,64 +6,42 @@ import TurgaiHail
 /// Each provider's own settings. Only the selected provider's fieldset is enabled,
 /// so the fields it shares with others, such as `apiKey`, submit only its values.
 struct ProviderConfigurationFields: HTML, Sendable {
-    let profile: TurgaiAgentProfile?
-    /// How many requests the saved profile's provider account takes at once, if it's limited.
-    var requestLimit: Int? = nil
+    /// The provider chosen, whose settings `settings` are.
+    let provider: AgentModelProvider
+    let settings: ProviderSettingsDraft
 
-    private var selectedProvider: AgentModelProvider {
-        profile?.model.provider ?? .ollama
+    private var selectedProvider: AgentModelProvider { provider }
+
+    /// The chosen provider's draft; another's starts empty.
+    private func draft(for provider: AgentModelProvider) -> ProviderSettingsDraft? {
+        provider == self.provider ? settings : nil
     }
 
-    private var endpointURL: String? {
-        guard let configuration = profile?.providerConfiguration else { return nil }
-        switch configuration {
-        case .ollama(let url, _), .openAICompatible(let url, _, _, _): return url.absoluteString
-        default: return nil
-        }
+    /// The typed endpoint when this provider is the chosen one.
+    private func endpointURL(for provider: AgentModelProvider) -> String? {
+        draft(for: provider)?.endpointURL
     }
 
     private var api: OpenAICompatibleAPI {
-        guard let configuration = profile?.providerConfiguration,
-            case .openAICompatible(_, _, let api, _) = configuration
-        else { return .chatCompletions }
-        return api
+        OpenAICompatibleAPI(rawValue: settings.compatibleAPI) ?? .chatCompletions
     }
 
-    private var modelPath: String? {
-        guard let configuration = profile?.providerConfiguration,
-            case .llamaCPP(let llama, _) = configuration
-        else { return nil }
-        return llama.modelPath
-    }
+    private var modelPath: String? { draft(for: .llamaCPP)?.modelPath }
 
-    private var gpuLayers: Int32? {
-        guard let configuration = profile?.providerConfiguration,
-            case .llamaCPP(let llama, _) = configuration
-        else { return nil }
-        return llama.gpuLayers
-    }
+    private var gpuLayers: Int32? { draft(for: .llamaCPP).flatMap { Int32($0.gpuLayers) } }
 
     private func hasCredential(for provider: AgentModelProvider) -> Bool {
-        guard let configuration = profile?.providerConfiguration else { return false }
-        switch (provider, configuration) {
-        case (.openAI, .openAI), (.anthropic, .anthropic), (.gemini, .gemini), (.openAICompatible, .openAICompatible):
-            return true
-        default:
-            return false
-        }
+        settings.savedKeyProvider == provider
     }
 
-    /// The saved limit when this provider is the saved one.
+    /// The typed limit when this provider is the chosen one.
     private func requestLimit(for provider: AgentModelProvider) -> Int? {
-        profile?.model.provider == provider ? requestLimit : nil
+        draft(for: provider).flatMap { Int($0.requestLimit) }
     }
 
-    /// The saved window when this provider is the saved one, otherwise the default.
+    /// The typed window when this provider is the chosen one, otherwise the default.
     private func contextWindow(for provider: AgentModelProvider) -> Int {
-        guard let profile, profile.model.provider == provider else {
-            return TurgaiAgentProfileStore.defaultContextWindow
-        }
-        return profile.contextWindow
+        draft(for: provider).flatMap { Int($0.contextWindow) } ?? TurgaiAgentProfileStore.defaultContextWindow
     }
 
     private func section<Content: HTML>(
@@ -76,83 +54,127 @@ struct ProviderConfigurationFields: HTML, Sendable {
     var body: some HTML {
         div(.class("provider-settings")) {
             section(.ollama) {
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "Ollama server URL" }
-                    input(
-                        .type(.url), .name("endpointURL"),
-                        .value(endpointURL ?? OllamaConfiguration.defaultBaseURL.absoluteString),
-                        .placeholder(OllamaConfiguration.defaultBaseURL.absoluteString)
-                    )
+                OllamaFields(
+                    endpoint: endpointURL(for: .ollama) ?? OllamaConfiguration.defaultBaseURL.absoluteString,
+                    window: contextWindow(for: .ollama), limit: requestLimit(for: .ollama))
+            }
+            for provider in [AgentModelProvider.openAI, .anthropic, .gemini] {
+                section(provider) {
+                    KeyedProviderFields(
+                        hasSavedKey: hasCredential(for: provider), window: contextWindow(for: provider),
+                        limit: requestLimit(for: provider))
                 }
-                ContextWindowField(tokens: contextWindow(for: .ollama))
-                RequestLimitField(limit: requestLimit(for: .ollama))
-            }
-            section(.openAI) {
-                APIKeyField(hasSavedKey: hasCredential(for: .openAI))
-                ContextWindowField(tokens: contextWindow(for: .openAI))
-                RequestLimitField(limit: requestLimit(for: .openAI))
-            }
-            section(.anthropic) {
-                APIKeyField(hasSavedKey: hasCredential(for: .anthropic))
-                ContextWindowField(tokens: contextWindow(for: .anthropic))
-                RequestLimitField(limit: requestLimit(for: .anthropic))
-            }
-            section(.gemini) {
-                APIKeyField(hasSavedKey: hasCredential(for: .gemini))
-                ContextWindowField(tokens: contextWindow(for: .gemini))
-                RequestLimitField(limit: requestLimit(for: .gemini))
             }
             section(.openAICompatible) {
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "Endpoint URL" }
-                    input(.type(.url), .name("endpointURL"), .value(endpointURL ?? ""))
-                }
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "API" }
-                    select(.name("compatibleAPI")) {
-                        if api == .chatCompletions {
-                            option(.value("chatCompletions"), .selected) { "Chat Completions" }
-                            option(.value("responses")) { "Responses" }
-                        } else {
-                            option(.value("chatCompletions")) { "Chat Completions" }
-                            option(.value("responses"), .selected) { "Responses" }
-                        }
-                    }
-                }
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "API key" }
-                    input(
-                        .type(.password), .name("apiKey"), .autocomplete(.off),
-                        .placeholder(
-                            hasCredential(for: .openAICompatible)
-                                ? "Leave blank to keep the saved key" : "Optional API key"
-                        )
-                    )
-                }
-                ContextWindowField(tokens: contextWindow(for: .openAICompatible))
-                RequestLimitField(limit: requestLimit(for: .openAICompatible))
+                CompatibleProviderFields(
+                    endpoint: endpointURL(for: .openAICompatible) ?? "", api: api,
+                    hasSavedKey: hasCredential(for: .openAICompatible),
+                    window: contextWindow(for: .openAICompatible), limit: requestLimit(for: .openAICompatible))
             }
-            section(.system) {
-                div(.class("form-field")) {
-                    span(.class("field-label")) { "Context window" }
-                    p { "\(AgentProviderConfiguration.appleSystemContextWindow.formatted()) tokens" }
-                    p(.class("hint")) { "Set by the on-device model; it can change with macOS updates." }
-                }
-            }
+            section(.system) { SystemModelFields() }
             section(.llamaCPP) {
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "GGUF model path" }
-                    input(
-                        .type(.text), .name("modelPath"), .value(modelPath ?? ""), .placeholder("/path/to/model.gguf"))
-                }
-                label(.class("form-field")) {
-                    span(.class("field-label")) { "GPU layers" }
-                    input(.type(.number), .name("gpuLayers"), .value(String(gpuLayers ?? -1)))
-                    p(.class("hint")) { "Use -1 to let llama.cpp choose automatically." }
-                }
-                ContextWindowField(tokens: contextWindow(for: .llamaCPP))
+                LlamaFields(
+                    modelPath: modelPath ?? "", gpuLayers: gpuLayers ?? -1, window: contextWindow(for: .llamaCPP))
             }
         }
+    }
+}
+
+/// A local Ollama server.
+private struct OllamaFields: HTML, Sendable {
+    let endpoint: String
+    let window: Int
+    let limit: Int?
+
+    var body: some HTML {
+        label(.class("form-field")) {
+            span(.class("field-label")) { "Ollama server URL" }
+            input(
+                .type(.url), .name("endpointURL"), .value(endpoint),
+                .placeholder(OllamaConfiguration.defaultBaseURL.absoluteString))
+        }
+        ContextWindowField(tokens: window)
+        RequestLimitField(limit: limit)
+    }
+}
+
+/// A hosted provider reached with an API key.
+private struct KeyedProviderFields: HTML, Sendable {
+    let hasSavedKey: Bool
+    let window: Int
+    let limit: Int?
+
+    var body: some HTML {
+        APIKeyField(hasSavedKey: hasSavedKey)
+        ContextWindowField(tokens: window)
+        RequestLimitField(limit: limit)
+    }
+}
+
+/// A server speaking OpenAI's API, at its own address.
+private struct CompatibleProviderFields: HTML, Sendable {
+    let endpoint: String
+    let api: OpenAICompatibleAPI
+    let hasSavedKey: Bool
+    let window: Int
+    let limit: Int?
+
+    var body: some HTML {
+        label(.class("form-field")) {
+            span(.class("field-label")) { "Endpoint URL" }
+            input(.type(.url), .name("endpointURL"), .value(endpoint))
+        }
+        label(.class("form-field")) {
+            span(.class("field-label")) { "API" }
+            select(.name("compatibleAPI")) {
+                if api == .chatCompletions {
+                    option(.value("chatCompletions"), .selected) { "Chat Completions" }
+                    option(.value("responses")) { "Responses" }
+                } else {
+                    option(.value("chatCompletions")) { "Chat Completions" }
+                    option(.value("responses"), .selected) { "Responses" }
+                }
+            }
+        }
+        label(.class("form-field")) {
+            span(.class("field-label")) { "API key" }
+            input(
+                .type(.password), .name("apiKey"), .autocomplete(.off),
+                .placeholder(hasSavedKey ? "Leave blank to keep the saved key" : "Optional API key"))
+        }
+        ContextWindowField(tokens: window)
+        RequestLimitField(limit: limit)
+    }
+}
+
+/// The on-device model, whose window is its own.
+private struct SystemModelFields: HTML, Sendable {
+    var body: some HTML {
+        div(.class("form-field")) {
+            span(.class("field-label")) { "Context window" }
+            p { "\(AgentProviderConfiguration.appleSystemContextWindow.formatted()) tokens" }
+            p(.class("hint")) { "Set by the on-device model; it can change with macOS updates." }
+        }
+    }
+}
+
+/// A GGUF model run by llama.cpp.
+private struct LlamaFields: HTML, Sendable {
+    let modelPath: String
+    let gpuLayers: Int32
+    let window: Int
+
+    var body: some HTML {
+        label(.class("form-field")) {
+            span(.class("field-label")) { "GGUF model path" }
+            input(.type(.text), .name("modelPath"), .value(modelPath), .placeholder("/path/to/model.gguf"))
+        }
+        label(.class("form-field")) {
+            span(.class("field-label")) { "GPU layers" }
+            input(.type(.number), .name("gpuLayers"), .value(String(gpuLayers)))
+            p(.class("hint")) { "Use -1 to let llama.cpp choose automatically." }
+        }
+        ContextWindowField(tokens: window)
     }
 }
 

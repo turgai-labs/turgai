@@ -47,29 +47,31 @@ struct NewChannelPage: HTMLDocument, Sendable {
                 if let error { p(.class("error page-error")) { error } }
                 div(.class("detail-layout")) {
                     section(.class("detail-main")) {
-                        form(.method(.post), .action("/channels/create")) {
-                            label(.class("form-field")) {
-                                span(.class("field-label")) { "Type" }
-                                span(.class("field-inline")) {
-                                    input(
-                                        .type(.radio),
-                                        .name("kind"),
-                                        .value("telegram")
-                                    )
-                                    .attributes(.checked, when: true)
-                                    span { "Telegram" }
-                                }
-                            }
-                            label(.class("form-field")) {
-                                span(.class("field-label")) { "Label" }
-                                input(.type(.text), .name("label"), .required)
-                                p(.class("hint")) { "A name you will recognize, like “Team Telegram”." }
-                            }
-                            button(.type(.submit), .class("button button-accent")) { "Create channel" }
-                        }
+                        NewChannelForm()
                     }
                 }
             }
+        }
+    }
+}
+
+/// A new channel: its kind, Telegram for now, and a label.
+struct NewChannelForm: HTML, Sendable {
+    var body: some HTML {
+        form(.method(.post), .action("/channels/create")) {
+            label(.class("form-field")) {
+                span(.class("field-label")) { "Type" }
+                span(.class("field-inline")) {
+                    input(.type(.radio), .name("kind"), .value("telegram")).attributes(.checked, when: true)
+                    span { "Telegram" }
+                }
+            }
+            label(.class("form-field")) {
+                span(.class("field-label")) { "Label" }
+                input(.type(.text), .name("label"), .required)
+                p(.class("hint")) { "A name you will recognize, like “Team Telegram”." }
+            }
+            button(.type(.submit), .class("button button-accent")) { "Create channel" }
         }
     }
 }

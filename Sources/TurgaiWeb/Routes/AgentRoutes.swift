@@ -12,23 +12,17 @@ import TurgaiApplication
 
 extension TurgaiMainWebApp {
     func registerAgentRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
+        registerChat(on: router.group("chat"), dependencies: dependencies)
+        registerAgents(on: router.group("agents"), dependencies: dependencies)
+    }
+
+    /// Chatting with a bot: the default one, or one chosen.
+    private func registerChat(
+        on chat: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
         let auth = dependencies.auth
         let agentProfiles = dependencies.agentProfiles
-        let agentCredentials = dependencies.agentCredentials
-        let requestLimits = dependencies.requestLimits
-        /// The limit of `profile`'s provider account, if it has one.
-        @Sendable func requestLimit(of profile: TurgaiAgentProfile) async -> Int? {
-            guard let account = profile.providerConfiguration.account(for: profile.model) else { return nil }
-            return await requestLimits.limit(for: account)
-        }
-        /// Sets the limit the form gives for `profile`'s provider account: empty lifts it.
-        @Sendable func saveRequestLimit(from form: [String: [String]], for profile: TurgaiAgentProfile) async throws {
-            guard let account = profile.providerConfiguration.account(for: profile.model) else { return }
-            let written = (form["requestLimit"]?.first ?? "").trimmingCharacters(in: .whitespaces)
-            try await requestLimits.setLimit(Int(written), for: account)
-        }
-        let runtimeSnapshots = dependencies.runtimeSnapshots
-        router.get("/chat") { request, context in
+        chat.get { request, context in
             guard let profile = await agentProfiles.defaultProfile() else {
                 return TurgaiWebSupport.redirect(to: "/onboarding")
             }
@@ -44,7 +38,8 @@ extension TurgaiMainWebApp {
             }.response(from: request, context: context)
             return response
         }
-        router.get("/chat/:id") { request, context in
+
+        chat.get(":id") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -57,20 +52,39 @@ extension TurgaiMainWebApp {
                 ChatPage(user: user, profile: profile)
             }.response(from: request, context: context)
         }
-        router.get("/agents/new") { request, context in
+    }
+
+    /// The bots: making one, looking at one, changing it, and removing it.
+    private func registerAgents(
+        on agents: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        let auth = dependencies.auth
+        let agentProfiles = dependencies.agentProfiles
+        let agentCredentials = dependencies.agentCredentials
+        let requestLimits = dependencies.requestLimits
+        /// The limit of `profile`'s provider account, if it has one.
+        @Sendable func requestLimit(of profile: TurgaiAgentProfile) async -> Int? {
+            guard let account = profile.providerConfiguration.account(for: profile.model) else { return nil }
+            return await requestLimits.limit(for: account)
+        }
+        /// Sets the limit `draft` gives for `profile`'s provider account: empty lifts it.
+        @Sendable func saveRequestLimit(of draft: AgentDraft, for profile: TurgaiAgentProfile) async throws {
+            guard let account = profile.providerConfiguration.account(for: profile.model) else { return }
+            try await requestLimits.setLimit(Int(draft.settings.requestLimit), for: account)
+        }
+        let runtimeSnapshots = dependencies.runtimeSnapshots
+        agents.get("new") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let profiles = await agentProfiles.profiles()
             let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
             return HTMLResponse {
-                NewAgentPage(
-                    user: user,
-                    modelCatalog: modelCatalog
-                )
+                NewAgentPage(user: user, modelCatalog: modelCatalog, draft: .new(named: "", in: modelCatalog))
             }.response(from: request, context: context)
         }
-        router.get("/agents/:id") { request, context in
+
+        agents.get(":id") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -84,19 +98,20 @@ extension TurgaiMainWebApp {
             let runtime = await runtimeSnapshots().filter { $0.profileID == profile.id }
             let placement: AgentDetailPage.Placement =
                 await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
-            let limit = await requestLimit(of: profile)
+            let draft = AgentDraft(profile, requestLimit: await requestLimit(of: profile))
             return HTMLResponse {
                 AgentDetailPage(
                     user: user,
                     profile: profile,
+                    draft: draft,
                     modelCatalog: modelCatalog,
                     runtime: runtime,
-                    placement: placement,
-                    requestLimit: limit
+                    placement: placement
                 )
             }.response(from: request, context: context)
         }
-        router.post("/agents/update") { request, context in
+
+        agents.post("update") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -105,18 +120,18 @@ extension TurgaiMainWebApp {
             guard let existingProfile = await agentProfiles.profile(id: id) else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
+            let draft = AgentDraft(
+                form: form, over: AgentDraft(existingProfile, requestLimit: await requestLimit(of: existingProfile)))
             var pendingCredential: AgentCredentialReference?
             do {
-                let values = BotFormValues(form: form)
                 var profile = existingProfile
-                profile.name = values.name
-                let modelValues = ModelFormValues(form: form)
-                let model = try OnboardingInput.model(from: modelValues)
-                let reasoningEffort = try OnboardingInput.reasoningEffort(from: modelValues)
+                profile.name = draft.name
+                let model = try OnboardingInput.model(from: draft)
+                let reasoningEffort = try OnboardingInput.reasoningEffort(from: draft)
                 profile.model = model
                 profile.reasoningEffort = reasoningEffort
                 let submission = try OnboardingInput.providerSubmission(
-                    from: modelValues,
+                    from: draft,
                     for: model,
                     existing: existingProfile.providerConfiguration
                 )
@@ -125,10 +140,10 @@ extension TurgaiMainWebApp {
                     try await agentCredentials.save(credential.value, for: credential.reference)
                 }
                 profile.providerConfiguration = submission.configuration
-                profile.persona = values.persona
-                profile.instructions = values.instructions
+                profile.persona = draft.persona
+                profile.instructions = draft.instructions
                 try await agentProfiles.update(profile)
-                try await saveRequestLimit(from: form, for: profile)
+                try await saveRequestLimit(of: draft, for: profile)
                 pendingCredential = nil
                 if let oldReference = existingProfile.providerConfiguration.credentialReference,
                     oldReference != submission.configuration.credentialReference
@@ -147,6 +162,7 @@ extension TurgaiMainWebApp {
                     AgentDetailPage(
                         user: user,
                         profile: existingProfile,
+                        draft: draft,
                         modelCatalog: modelCatalog,
                         runtime: runtime,
                         placement: placement,
@@ -155,7 +171,8 @@ extension TurgaiMainWebApp {
                 }.response(from: request, context: context)
             }
         }
-        router.post("/agents/default") { request, context in
+
+        agents.post("default") { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -168,50 +185,48 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/agents/\(id)")
             }
         }
-        router.post("/agents/create") { request, context in
+
+        agents.post("create") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
+            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: await agentProfiles.profiles())
+            let draft = AgentDraft(form: form, over: .new(named: "", in: modelCatalog))
             var pendingCredential: AgentCredentialReference?
             do {
-                let values = BotFormValues(form: form)
-                let modelValues = ModelFormValues(form: form)
-                let model = try OnboardingInput.model(from: modelValues)
-                let reasoningEffort = try OnboardingInput.reasoningEffort(from: modelValues)
-                let submission = try OnboardingInput.providerSubmission(
-                    from: modelValues,
-                    for: model
-                )
+                let model = try OnboardingInput.model(from: draft)
+                let reasoningEffort = try OnboardingInput.reasoningEffort(from: draft)
+                let submission = try OnboardingInput.providerSubmission(from: draft, for: model)
                 if let credential = submission.credential {
                     pendingCredential = credential.reference
                     try await agentCredentials.save(credential.value, for: credential.reference)
                 }
                 let profile = try await agentProfiles.create(
-                    name: values.name,
+                    name: draft.name,
                     model: model,
                     reasoningEffort: reasoningEffort,
                     providerConfiguration: submission.configuration,
-                    persona: values.persona,
-                    instructions: values.instructions
+                    persona: draft.persona,
+                    instructions: draft.instructions
                 )
-                try await saveRequestLimit(from: form, for: profile)
+                try await saveRequestLimit(of: draft, for: profile)
                 pendingCredential = nil
                 return TurgaiWebSupport.redirect(to: "/agents/\(profile.id)")
             } catch {
                 if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
-                let profiles = await agentProfiles.profiles()
-                let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
                 return HTMLResponse {
                     NewAgentPage(
                         user: user,
                         modelCatalog: modelCatalog,
+                        draft: draft,
                         error: TurgaiWebSupport.profileErrorMessage(error)
                     )
                 }.response(from: request, context: context)
             }
         }
-        router.post("/agents/delete") { request, context in
+
+        agents.post("delete") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -232,10 +247,12 @@ extension TurgaiMainWebApp {
                 let runtime = await runtimeSnapshots().filter { $0.profileID == profile.id }
                 let placement: AgentDetailPage.Placement =
                     await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
+                let draft = AgentDraft(profile, requestLimit: await requestLimit(of: profile))
                 return HTMLResponse {
                     AgentDetailPage(
                         user: user,
                         profile: profile,
+                        draft: draft,
                         modelCatalog: modelCatalog,
                         runtime: runtime,
                         placement: placement,

@@ -40,11 +40,9 @@ struct RegisterPage: HTMLDocument, Sendable {
                 },
             ) {
                 section(.class("setup-content")) {
-                    div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "Make it yours" }
-                        h1 { "Keep the keys." }
-                        p(.class("lede")) { "Create the account that keeps this Turgai installation in your hands." }
-                    }
+                    SetupIntro(
+                        eyebrow: "Make it yours", title: "Keep the keys.",
+                        lede: "Create the account that keeps this Turgai installation in your hands.")
                     div(.class("setup-form-area")) {
                         if let error { p(.class("error")) { error } }
                         form(
@@ -52,14 +50,7 @@ struct RegisterPage: HTMLDocument, Sendable {
                             .init(name: "id", value: "register-form")
                         ) {
                             input(.type(.hidden), .name("challenge"), .value(challenge))
-                            label(.class("form-field")) {
-                                span(.class("field-label")) { "Username" }
-                                input(.type(.text), .name("username"), .autocomplete("username"), .required)
-                            }
-                            label(.class("form-field")) {
-                                span(.class("field-label")) { "Password" }
-                                input(.type(.password), .name("password"), .autocomplete("new-password"), .required)
-                            }
+                            CredentialFields(password: .new)
                         }
                     }
                 }

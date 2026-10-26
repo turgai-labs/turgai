@@ -17,9 +17,16 @@ import TurgaiTelegram
 
 extension TurgaiMainWebApp {
     func registerToolRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
+        registerTools(on: router.group("tools"), dependencies: dependencies)
+    }
+
+    /// The tools: making one, changing it, and removing it.
+    private func registerTools(
+        on tools: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
         let auth = dependencies.auth
         let userToolRegistry = dependencies.userToolRegistry
-        router.get("/tools") { request, context in
+        tools.get { request, context in
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -30,7 +37,8 @@ extension TurgaiMainWebApp {
                 )
             }.response(from: request, context: context)
         }
-        router.get("/tools/new") { request, context in
+
+        tools.get("new") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -41,7 +49,8 @@ extension TurgaiMainWebApp {
                 )
             }.response(from: request, context: context)
         }
-        router.get("/tools/:file") { request, context in
+
+        tools.get(":file") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -58,7 +67,8 @@ extension TurgaiMainWebApp {
                 )
             }.response(from: request, context: context)
         }
-        router.post("/tools/save") { request, context in
+
+        tools.post("save") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -87,7 +97,8 @@ extension TurgaiMainWebApp {
                 }.response(from: request, context: context)
             }
         }
-        router.post("/tools/delete") { request, context in
+
+        tools.post("delete") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }

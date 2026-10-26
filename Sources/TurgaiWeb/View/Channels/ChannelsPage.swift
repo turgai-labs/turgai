@@ -44,43 +44,50 @@ struct ChannelsPage: HTMLDocument, Sendable {
                 }
                 if let error { p(.class("error page-error")) { error } }
                 if channels.isEmpty {
-                    div(.class("empty-state")) {
-                        p(.class("eyebrow")) { "No channels yet" }
-                        h2 { "Give Turgai a way to reach the world." }
-                        a(.href("/channels/new"), .class("button button-accent")) { "+ Add channel" }
-                    }
+                    NoChannels()
                 } else {
                     section(.class("channels-list"), .init(name: "aria-label", value: "Channels")) {
-                        for channel in channels {
-                            div(.class("channel-row")) {
-                                div(.class("channel-row-main")) {
-                                    div(.class("channel-row-heading")) {
-                                        div(.class("channel-name")) { channel.label }
-                                        span(.class("detail-status")) {
-                                            channel.enabled ? "Active" : "Paused"
-                                        }
-                                    }
-                                    div(.class("channel-meta")) {
-                                        span { "Telegram" }
-                                        span { channel.hasToken ? "Token set" : "No token" }
-                                        if let botName = channel.botName {
-                                            span { "Bot: \(botName)" }
-                                        }
-                                    }
-                                }
-                                div(.class("channel-row-actions")) {
-                                    a(
-                                        .href("/channels/\(channel.id.uuidString)"),
-                                        .class("button button-secondary")
-                                    ) { "Edit" }
-                                    form(.method(.post), .action("/channels/delete"), .class("channel-delete-form")) {
-                                        input(.type(.hidden), .name("id"), .value(channel.id.uuidString))
-                                        button(.type(.submit), .class("text-button text-button-danger")) { "Delete" }
-                                    }
-                                }
-                            }
-                        }
+                        for channel in channels { ChannelRow(channel: channel) }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// What the channels page shows before there are any.
+struct NoChannels: HTML, Sendable {
+    var body: some HTML {
+        div(.class("empty-state")) {
+            p(.class("eyebrow")) { "No channels yet" }
+            h2 { "Give Turgai a way to reach the world." }
+            a(.href("/channels/new"), .class("button button-accent")) { "+ Add channel" }
+        }
+    }
+}
+
+/// One channel in the list: how it's doing, and editing or deleting it.
+struct ChannelRow: HTML, Sendable {
+    let channel: ChannelListItem
+
+    var body: some HTML {
+        div(.class("channel-row")) {
+            div(.class("channel-row-main")) {
+                div(.class("channel-row-heading")) {
+                    div(.class("channel-name")) { channel.label }
+                    span(.class("detail-status")) { channel.enabled ? "Active" : "Paused" }
+                }
+                div(.class("channel-meta")) {
+                    span { "Telegram" }
+                    span { channel.hasToken ? "Token set" : "No token" }
+                    if let botName = channel.botName { span { "Bot: \(botName)" } }
+                }
+            }
+            div(.class("channel-row-actions")) {
+                a(.href("/channels/\(channel.id.uuidString)"), .class("button button-secondary")) { "Edit" }
+                form(.method(.post), .action("/channels/delete"), .class("channel-delete-form")) {
+                    input(.type(.hidden), .name("id"), .value(channel.id.uuidString))
+                    button(.type(.submit), .class("text-button text-button-danger")) { "Delete" }
                 }
             }
         }

@@ -17,7 +17,9 @@ import TurgaiTelegram
 
 struct ModelPicker: HTML, Sendable {
     let catalog: TurgaiModelCatalog
-    let selectedModel: AgentModel?
+    /// The provider chosen, and the model ID as typed.
+    let provider: AgentModelProvider
+    let modelID: String
 
     private static let providerFieldID = "turgai-model-provider"
     private static let modelFieldID = "turgai-model-id"
@@ -29,11 +31,7 @@ struct ModelPicker: HTML, Sendable {
     }
 
     private var selectedProvider: ModelProviderID? {
-        if let provider = selectedModel?.provider {
-            return ModelProviderID(rawValue: provider.rawValue)
-        }
-        if catalog.providers.contains(where: { $0.provider == .ollama }) { return .ollama }
-        return catalog.providers.first?.provider
+        ModelProviderID(rawValue: provider.rawValue)
     }
 
     private func suggestionListID(for index: Int) -> String {
@@ -81,7 +79,7 @@ struct ModelPicker: HTML, Sendable {
                 .type(.text),
                 .name("modelID"),
                 .id(Self.modelFieldID),
-                .value(selectedModel?.id.rawValue ?? ""),
+                .value(modelID),
                 .init(name: "list", value: suggestionListID(for: selectedProviderIndex)),
                 .placeholder("Enter a model ID"),
                 .required

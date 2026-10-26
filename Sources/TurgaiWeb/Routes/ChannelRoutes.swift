@@ -13,12 +13,18 @@ import TurgaiTelegram
 
 extension TurgaiMainWebApp {
     func registerChannelRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
+        registerChannels(on: router.group("channels"), dependencies: dependencies)
+    }
+
+    /// The channels: adding one, changing it, and removing it.
+    private func registerChannels(
+        on channels: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
         let auth = dependencies.auth
         let channelSecrets = dependencies.channelSecrets
         let agentProfiles = dependencies.agentProfiles
         let webChatBridge = dependencies.webChatBridge
-
-        router.get("/channels") { request, context in
+        channels.get { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -47,7 +53,8 @@ extension TurgaiMainWebApp {
                 ChannelsPage(user: user, channels: items)
             }.response(from: request, context: context)
         }
-        router.get("/channels/new") { request, context in
+
+        channels.get("new") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -55,7 +62,8 @@ extension TurgaiMainWebApp {
                 NewChannelPage(user: user)
             }.response(from: request, context: context)
         }
-        router.post("/channels/create") { request, context in
+
+        channels.post("create") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -87,7 +95,8 @@ extension TurgaiMainWebApp {
                 }.response(from: request, context: context)
             }
         }
-        router.get("/channels/:id") { request, context in
+
+        channels.get(":id") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -105,30 +114,29 @@ extension TurgaiMainWebApp {
             guard case .active(let configuration, _) = state else {
                 return TurgaiWebSupport.redirect(to: "/channels")
             }
-            let editItem = await Self.editItem(for: configuration, secrets: channelSecrets)
+            let draft = ChannelDraft(configuration, hasToken: await channelSecrets.hasToken(for: configuration.id))
             let bots = await Self.botOptions(agentProfiles: agentProfiles)
             return HTMLResponse {
-                ChannelEditPage(user: user, channel: editItem, bots: bots)
+                ChannelEditPage(user: user, channel: draft, bots: bots)
             }.response(from: request, context: context)
         }
-        router.post("/channels/update") { request, context in
+
+        channels.post("update") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let values = ChannelUpdateFormValues(form: form)
-            guard let id = UUID(uuidString: values.id),
-                (try? await webChatBridge.channelIDs().contains(id)) == true
+            guard let id = UUID(uuidString: form["id"]?.first ?? ""),
+                (try? await webChatBridge.channelIDs().contains(id)) == true,
+                case .active(let existing, _)? = try? await webChatBridge.channelState(for: id)
             else {
                 return TurgaiWebSupport.redirect(to: "/channels")
             }
+            let draft = ChannelDraft(
+                form: form, over: ChannelDraft(existing, hasToken: await channelSecrets.hasToken(for: id)))
             do {
-                let existingState = try await webChatBridge.channelState(for: id)
-                guard case .active(let existing, _) = existingState else {
-                    return TurgaiWebSupport.redirect(to: "/channels")
-                }
-                let chatIDs = try OnboardingInput.chatIDs(from: values.chatIDs)
-                if let binding = values.agentProfileID {
+                let chatIDs = try OnboardingInput.chatIDs(from: draft.chatIDs)
+                if case .profile(let binding) = draft.routing {
                     // The runtime would fall back to default routing for an
                     // unusable binding; reject here instead so the form never
                     // silently pretends a binding it cannot honor.
@@ -138,8 +146,7 @@ extension TurgaiMainWebApp {
                         throw ChannelFormError.unknownBot
                     }
                 }
-                let token = values.token?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let newToken = (token?.isEmpty == false) ? token : nil
+                let newToken = draft.token.isEmpty ? nil : draft.token
                 if let newToken {
                     // Validate the credential before persisting either part of
                     // the form. Credential storage and the channel journal are
@@ -148,10 +155,9 @@ extension TurgaiMainWebApp {
                 }
                 let updated = ChannelConfiguration<TelegramProvider>(
                     id: existing.id,
-                    label: values.label,
-                    enabled: values.enabled,
-                    agentRouting: values.agentProfileID.map(ChannelAgentRouting.profile)
-                        ?? .defaultProfile,
+                    label: draft.label,
+                    enabled: draft.enabled,
+                    agentRouting: draft.routing,
                     provider: TelegramChannelConfig(chatIDs: chatIDs)
                 )
                 let previousToken: String?
@@ -187,26 +193,22 @@ extension TurgaiMainWebApp {
                 }
                 return TurgaiWebSupport.redirect(to: "/channels/\(id.uuidString)")
             } catch {
-                let hasToken = await channelSecrets.hasToken(for: id)
+                var shown = draft
+                shown.hasToken = await channelSecrets.hasToken(for: id)
+                shown.token = ""
                 let bots = await Self.botOptions(agentProfiles: agentProfiles)
                 return HTMLResponse {
                     ChannelEditPage(
                         user: user,
-                        channel: ChannelEditItem(
-                            id: id,
-                            label: values.label,
-                            enabled: values.enabled,
-                            chatIDs: (try? OnboardingInput.chatIDs(from: values.chatIDs)) ?? [],
-                            hasToken: hasToken,
-                            agentProfileID: values.agentProfileID
-                        ),
+                        channel: shown,
                         bots: bots,
                         error: TurgaiWebSupport.channelErrorMessage(error)
                     )
                 }.response(from: request, context: context)
             }
         }
-        router.post("/channels/delete") { request, context in
+
+        channels.post("delete") { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -229,20 +231,6 @@ extension TurgaiMainWebApp {
             let id = UUID(uuidString: rawID)
         else { return nil }
         return id
-    }
-
-    private static func editItem(
-        for configuration: ChannelConfiguration<TelegramProvider>,
-        secrets: ChannelSecretStore
-    ) async -> ChannelEditItem {
-        ChannelEditItem(
-            id: configuration.id,
-            label: configuration.label,
-            enabled: configuration.enabled,
-            chatIDs: configuration.provider.chatIDs,
-            hasToken: await secrets.hasToken(for: configuration.id),
-            agentProfileID: configuration.agentRouting.profileID
-        )
     }
 
     private static func botOptions(

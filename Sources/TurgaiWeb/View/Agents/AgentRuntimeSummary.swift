@@ -22,32 +22,7 @@ struct AgentRuntimeSummary: HTML, Sendable {
         aside(.class("detail-aside")) {
             h2 { "Live" }
             if let active = runtime.first {
-                div(.class("live-state")) {
-                    span(.class("live-dot")) {}
-                    strong { active.phase.rawValue }
-                }
-                div(.class("detail-facts")) {
-                    p {
-                        span(.class("fact-label")) { "Context" }
-                        active.contextID
-                    }
-                    if let currentTool = active.currentTool {
-                        p {
-                            span(.class("fact-label")) { "Tool" }
-                            currentTool
-                        }
-                    }
-                    if let used = active.contextUsedTokens, let limit = active.contextLimitTokens {
-                        p {
-                            span(.class("fact-label")) { "Window" }
-                            "\(used.formatted()) / \(limit.formatted())"
-                        }
-                    }
-                    p {
-                        span(.class("fact-label")) { "Turns" }
-                        active.historyTurnCount.formatted()
-                    }
-                }
+                LiveTurn(snapshot: active)
             } else {
                 div(.class("live-state live-state-idle")) {
                     span(.class("live-dot")) {}
@@ -56,15 +31,45 @@ struct AgentRuntimeSummary: HTML, Sendable {
                 p(.class("section-intro")) { "No active conversation." }
             }
             div(.class("detail-facts detail-facts-bottom")) {
-                p {
-                    span(.class("fact-label")) { "Routing" }
-                    "Selected per channel"
-                }
-                p {
-                    span(.class("fact-label")) { "Context limit" }
-                    "\(profile.contextWindow.formatted()) tokens"
-                }
+                Fact(label: "Routing", value: "Selected per channel")
+                Fact(label: "Context limit", value: "\(profile.contextWindow.formatted()) tokens")
             }
+        }
+    }
+}
+
+/// What the agent is doing in the conversation it's in now.
+private struct LiveTurn: HTML, Sendable {
+    let snapshot: TurgaiAgentRuntimeSnapshot
+
+    private var window: String? {
+        guard let used = snapshot.contextUsedTokens, let limit = snapshot.contextLimitTokens else { return nil }
+        return "\(used.formatted()) / \(limit.formatted())"
+    }
+
+    var body: some HTML {
+        div(.class("live-state")) {
+            span(.class("live-dot")) {}
+            strong { snapshot.phase.rawValue }
+        }
+        div(.class("detail-facts")) {
+            Fact(label: "Context", value: snapshot.contextID)
+            if let currentTool = snapshot.currentTool { Fact(label: "Tool", value: currentTool) }
+            if let window { Fact(label: "Window", value: window) }
+            Fact(label: "Turns", value: snapshot.historyTurnCount.formatted())
+        }
+    }
+}
+
+/// One labelled fact.
+private struct Fact: HTML, Sendable {
+    let label: String
+    let value: String
+
+    var body: some HTML {
+        p {
+            span(.class("fact-label")) { label }
+            value
         }
     }
 }

@@ -17,15 +17,18 @@ import TurgaiPersistence
 struct NewAgentPage: HTMLDocument, Sendable {
     let user: AuthenticatedUser
     let modelCatalog: TurgaiModelCatalog
+    let draft: AgentDraft
     let error: String?
 
     init(
         user: AuthenticatedUser,
         modelCatalog: TurgaiModelCatalog,
+        draft: AgentDraft,
         error: String? = nil
     ) {
         self.user = user
         self.modelCatalog = modelCatalog
+        self.draft = draft
         self.error = error
     }
 
@@ -53,7 +56,8 @@ struct NewAgentPage: HTMLDocument, Sendable {
                 section(.class("detail-main new-bot-main")) {
                     AgentConfigurationForm(
                         action: "/agents/create",
-                        profile: nil,
+                        editing: .new,
+                        draft: draft,
                         modelCatalog: modelCatalog,
                         submitLabel: "Create bot"
                     )

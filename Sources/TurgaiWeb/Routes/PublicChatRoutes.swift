@@ -21,189 +21,25 @@ extension TurgaiMainWebApp {
         on router: Router<BasicWebSocketRequestContext>,
         dependencies: TurgaiRouteDependencies
     ) {
-        router.get("/api/v1/bots") { request, _ in
-            guard dependencies.apiConfiguration.authorizes(request) else {
-                return publicAPIUnauthorizedResponse()
-            }
+        // Every API call comes from a client the API's configuration lets in.
+        let api = router.group("api/v1").add(
+            middleware: PublicAPIAuthorization(configuration: dependencies.apiConfiguration))
+        api.get("bots") { _, _ in
             let bots = await dependencies.agentProfiles.profiles()
                 .filter { $0.availability == .enabled }
                 .map { TurgaiModels.Bot(id: .init(rawValue: $0.id), name: $0.name) }
             return try publicAPIResponse(bots)
         }
+        registerConversations(on: api.group("conversations"), dependencies: dependencies)
+        registerMessages(on: api.group("conversations/:id/messages"), dependencies: dependencies)
+        registerChatSocket(on: router, dependencies: dependencies)
+    }
 
-        router.get("/api/v1/conversations") { request, _ in
-            guard dependencies.apiConfiguration.authorizes(request) else {
-                return publicAPIUnauthorizedResponse()
-            }
-            let persistedIDs = await dependencies.webChatBridge.conversationIDs()
-            var conversations: [TurgaiModels.Conversation] = []
-            for domainID in persistedIDs where domainID.channel == publicAPIChannel {
-                guard
-                    let conversation = await apiConversation(
-                        from: domainID.externalAddress.rawValue,
-                        profiles: dependencies.agentProfiles
-                    )
-                else { continue }
-                conversations.append(conversation.info)
-            }
-            return try publicAPIResponse(conversations)
-        }
-
-        router.post("/api/v1/conversations") { request, context in
-            guard dependencies.apiConfiguration.authorizes(request) else {
-                return publicAPIUnauthorizedResponse()
-            }
-            let input: TurgaiModels.CreateConversationRequest
-            do {
-                input = try await JSONDecoder().decode(
-                    TurgaiModels.CreateConversationRequest.self,
-                    from: request,
-                    context: context
-                )
-            } catch {
-                return publicAPIErrorResponse(
-                    status: .badRequest,
-                    code: "invalid_request",
-                    message: "The conversation request is invalid."
-                )
-            }
-
-            let profile: TurgaiAgentProfile?
-            if let botID = input.botID {
-                profile = await dependencies.agentProfiles.profile(id: botID.rawValue)
-            } else {
-                profile = await dependencies.agentProfiles.defaultProfile()
-            }
-            guard let profile, profile.availability == .enabled else {
-                return publicAPIErrorResponse(
-                    status: .notFound,
-                    code: "bot_not_found",
-                    message: "The requested bot does not exist or is disabled."
-                )
-            }
-
-            let conversationID = apiConversationID(profileID: profile.id)
-            await dependencies.webChatBridge.rememberConversation(conversationID)
-            return try publicAPIResponse(
-                TurgaiModels.Conversation(
-                    id: publicAPIConversationID(for: conversationID),
-                    botID: .init(rawValue: profile.id)
-                ),
-                status: .created
-            )
-        }
-
-        router.get("/api/v1/conversations/:id") { request, context in
-            guard dependencies.apiConfiguration.authorizes(request) else {
-                return publicAPIUnauthorizedResponse()
-            }
-            guard
-                let conversation = await apiConversation(
-                    from: context.parameters.get("id"),
-                    profiles: dependencies.agentProfiles
-                )
-            else {
-                return publicAPIErrorResponse(
-                    status: .notFound,
-                    code: "conversation_not_found",
-                    message: "The conversation does not exist."
-                )
-            }
-            return try publicAPIResponse(conversation.info)
-        }
-
-        router.get("/api/v1/conversations/:id/messages") { request, context in
-            guard dependencies.apiConfiguration.authorizes(request) else {
-                return publicAPIUnauthorizedResponse()
-            }
-            guard
-                let conversation = await apiConversation(
-                    from: context.parameters.get("id"),
-                    profiles: dependencies.agentProfiles
-                )
-            else {
-                return publicAPIErrorResponse(
-                    status: .notFound,
-                    code: "conversation_not_found",
-                    message: "The conversation does not exist."
-                )
-            }
-            do {
-                let history = try await dependencies.webChatBridge.conversationHistory(
-                    for: conversation.domainID,
-                    role: .profile(conversation.profile.id)
-                )
-                return try publicAPIResponse(history.map(publicAPIMessage))
-            } catch {
-                return publicAPIErrorResponse(
-                    status: .serviceUnavailable,
-                    code: "runtime_unavailable",
-                    message: "The conversation runtime is unavailable."
-                )
-            }
-        }
-
-        router.post("/api/v1/conversations/:id/messages") { request, context in
-            guard dependencies.apiConfiguration.authorizes(request) else {
-                return publicAPIUnauthorizedResponse()
-            }
-            guard
-                let conversation = await apiConversation(
-                    from: context.parameters.get("id"),
-                    profiles: dependencies.agentProfiles
-                )
-            else {
-                return publicAPIErrorResponse(
-                    status: .notFound,
-                    code: "conversation_not_found",
-                    message: "The conversation does not exist."
-                )
-            }
-            let input: TurgaiModels.SendMessageRequest
-            do {
-                input = try await JSONDecoder().decode(
-                    TurgaiModels.SendMessageRequest.self,
-                    from: request,
-                    context: context
-                )
-            } catch {
-                return publicAPIErrorResponse(
-                    status: .badRequest,
-                    code: "invalid_request",
-                    message: "The message request is invalid."
-                )
-            }
-            let text = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else {
-                return publicAPIErrorResponse(
-                    status: .badRequest,
-                    code: "empty_message",
-                    message: "A message must contain text."
-                )
-            }
-            do {
-                let event = try await send(
-                    input: input,
-                    text: text,
-                    conversation: conversation,
-                    bridge: dependencies.webChatBridge
-                )
-                return try publicAPIResponse(event)
-            } catch PublicAPIChatError.runtimeUnavailable {
-                return publicAPIErrorResponse(
-                    status: .serviceUnavailable,
-                    code: "runtime_unavailable",
-                    message: "The conversation runtime is unavailable."
-                )
-            } catch {
-                return publicAPIErrorResponse(
-                    status: .conflict,
-                    code: "message_rejected",
-                    message: "The message could not be accepted."
-                )
-            }
-        }
-
+    /// The live chat, over a WebSocket. Not behind the API's middleware: a socket it refuses isn't
+    /// upgraded, rather than answered.
+    private func registerChatSocket(
+        on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
         router.ws("/api/v1/chat") { request, _ in
             guard dependencies.apiConfiguration.authorizes(request) else {
                 return .dontUpgrade
@@ -432,6 +268,178 @@ extension TurgaiMainWebApp {
                 try? await outbound.close(.goingAway, reason: "Chat connection ended")
             }
             session.input.finish()
+        }
+    }
+
+    /// The API's conversations: listing, starting and reading one.
+    private func registerConversations(
+        on conversations: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        conversations.get { _, _ in
+            let persistedIDs = await dependencies.webChatBridge.conversationIDs()
+            var conversations: [TurgaiModels.Conversation] = []
+            for domainID in persistedIDs where domainID.channel == publicAPIChannel {
+                guard
+                    let conversation = await apiConversation(
+                        from: domainID.externalAddress.rawValue,
+                        profiles: dependencies.agentProfiles
+                    )
+                else { continue }
+                conversations.append(conversation.info)
+            }
+            return try publicAPIResponse(conversations)
+        }
+
+
+        conversations.post { request, context in
+            let input: TurgaiModels.CreateConversationRequest
+            do {
+                input = try await JSONDecoder().decode(
+                    TurgaiModels.CreateConversationRequest.self,
+                    from: request,
+                    context: context
+                )
+            } catch {
+                return publicAPIErrorResponse(
+                    status: .badRequest,
+                    code: "invalid_request",
+                    message: "The conversation request is invalid."
+                )
+            }
+
+            let profile: TurgaiAgentProfile?
+            if let botID = input.botID {
+                profile = await dependencies.agentProfiles.profile(id: botID.rawValue)
+            } else {
+                profile = await dependencies.agentProfiles.defaultProfile()
+            }
+            guard let profile, profile.availability == .enabled else {
+                return publicAPIErrorResponse(
+                    status: .notFound,
+                    code: "bot_not_found",
+                    message: "The requested bot does not exist or is disabled."
+                )
+            }
+
+            let conversationID = apiConversationID(profileID: profile.id)
+            await dependencies.webChatBridge.rememberConversation(conversationID)
+            return try publicAPIResponse(
+                TurgaiModels.Conversation(
+                    id: publicAPIConversationID(for: conversationID),
+                    botID: .init(rawValue: profile.id)
+                ),
+                status: .created
+            )
+        }
+
+
+        conversations.get(":id") { _, context in
+            guard
+                let conversation = await apiConversation(
+                    from: context.parameters.get("id"),
+                    profiles: dependencies.agentProfiles
+                )
+            else {
+                return publicAPIErrorResponse(
+                    status: .notFound,
+                    code: "conversation_not_found",
+                    message: "The conversation does not exist."
+                )
+            }
+            return try publicAPIResponse(conversation.info)
+        }
+
+    }
+
+    /// A conversation's messages, through the API: reading them, and sending one.
+    private func registerMessages(
+        on messages: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        messages.get { _, context in
+            guard
+                let conversation = await apiConversation(
+                    from: context.parameters.get("id"),
+                    profiles: dependencies.agentProfiles
+                )
+            else {
+                return publicAPIErrorResponse(
+                    status: .notFound,
+                    code: "conversation_not_found",
+                    message: "The conversation does not exist."
+                )
+            }
+            do {
+                let history = try await dependencies.webChatBridge.conversationHistory(
+                    for: conversation.domainID,
+                    role: .profile(conversation.profile.id)
+                )
+                return try publicAPIResponse(history.map(publicAPIMessage))
+            } catch {
+                return publicAPIErrorResponse(
+                    status: .serviceUnavailable,
+                    code: "runtime_unavailable",
+                    message: "The conversation runtime is unavailable."
+                )
+            }
+        }
+
+
+        messages.post { request, context in
+            guard
+                let conversation = await apiConversation(
+                    from: context.parameters.get("id"),
+                    profiles: dependencies.agentProfiles
+                )
+            else {
+                return publicAPIErrorResponse(
+                    status: .notFound,
+                    code: "conversation_not_found",
+                    message: "The conversation does not exist."
+                )
+            }
+            let input: TurgaiModels.SendMessageRequest
+            do {
+                input = try await JSONDecoder().decode(
+                    TurgaiModels.SendMessageRequest.self,
+                    from: request,
+                    context: context
+                )
+            } catch {
+                return publicAPIErrorResponse(
+                    status: .badRequest,
+                    code: "invalid_request",
+                    message: "The message request is invalid."
+                )
+            }
+            let text = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                return publicAPIErrorResponse(
+                    status: .badRequest,
+                    code: "empty_message",
+                    message: "A message must contain text."
+                )
+            }
+            do {
+                let event = try await send(
+                    input: input,
+                    text: text,
+                    conversation: conversation,
+                    bridge: dependencies.webChatBridge
+                )
+                return try publicAPIResponse(event)
+            } catch PublicAPIChatError.runtimeUnavailable {
+                return publicAPIErrorResponse(
+                    status: .serviceUnavailable,
+                    code: "runtime_unavailable",
+                    message: "The conversation runtime is unavailable."
+                )
+            } catch {
+                return publicAPIErrorResponse(
+                    status: .conflict,
+                    code: "message_rejected",
+                    message: "The message could not be accepted."
+                )
+            }
         }
     }
 }
@@ -1124,5 +1132,17 @@ extension TurnRecord {
         self.init(
             id: TurnID(rawValue: turn.id.rawValue), message: turn.message, startedAt: turn.startedAt,
             steps: turn.steps.map(TurnStep.init), outcome: outcome)
+    }
+}
+
+/// Lets an API call through only from a client the API's configuration authorizes.
+struct PublicAPIAuthorization<Context: RequestContext>: RouterMiddleware {
+    let configuration: APIConfiguration
+
+    @concurrent func handle(
+        _ request: Request, context: Context, next: @concurrent (Request, Context) async throws -> Response
+    ) async throws -> Response {
+        guard configuration.authorizes(request) else { return publicAPIUnauthorizedResponse() }
+        return try await next(request, context)
     }
 }

@@ -19,21 +19,20 @@ extension TurgaiOnboardingWebApp {
     func registerOnboardingRoutes(
         on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
     ) {
+        let onboarding = router.group("onboarding")
+        registerWelcome(on: onboarding, dependencies: dependencies)
+        registerAdminStep(on: onboarding.group("register"), dependencies: dependencies)
+        registerModelStep(on: onboarding.group("model"), dependencies: dependencies)
+        registerStorageStep(on: onboarding.group("storage"), dependencies: dependencies)
+        registerFinishStep(on: onboarding.group("finish"), dependencies: dependencies)
+    }
+
+    /// Setting up: the administrator account.
+    private func registerAdminStep(
+        on step: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
         let auth = dependencies.auth
-        let setup = dependencies.setup
-        let agentProfiles = dependencies.agentProfiles
-        let agentCredentials = dependencies.agentCredentials
-        let defaultFileDirectory = dependencies.defaultFileDirectory
-        router.get("/onboarding") { request, context in
-            if await auth.hasAdmin() {
-                guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                    return TurgaiWebSupport.redirect(to: "/login")
-                }
-                return TurgaiWebSupport.redirect(to: "/onboarding/model")
-            }
-            return HTMLResponse { OnboardingPage() }.response(from: request, context: context)
-        }
-        router.get("/onboarding/register") { request, context in
+        step.get { request, context in
             guard !(await auth.hasAdmin()) else {
                 return TurgaiWebSupport.redirect(to: "/login")
             }
@@ -44,7 +43,8 @@ extension TurgaiOnboardingWebApp {
             response.setCookie(TurgaiWebSupport.bootstrapChallengeCookie(challenge))
             return response
         }
-        router.post("/onboarding/register") { request, context in
+
+        step.post { request, context in
             guard !(await auth.hasAdmin()) else {
                 return TurgaiWebSupport.redirect(to: "/login")
             }
@@ -81,31 +81,44 @@ extension TurgaiOnboardingWebApp {
                 return response
             }
         }
-        router.get("/onboarding/model") { request, context in
+    }
+
+    /// Setting up: the first bot and its model.
+    private func registerModelStep(
+        on step: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        let auth = dependencies.auth
+        let agentProfiles = dependencies.agentProfiles
+        let agentCredentials = dependencies.agentCredentials
+        step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let profiles = await agentProfiles.profiles()
             let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-            let profile = await agentProfiles.defaultProfile()
+            let draft = await agentProfiles.defaultProfile().map { AgentDraft($0, requestLimit: nil) }
             return HTMLResponse {
-                ModelPage(modelCatalog: modelCatalog, profile: profile)
+                ModelPage(modelCatalog: modelCatalog, draft: draft ?? .new(named: "Turgai", in: modelCatalog))
             }.response(from: request, context: context)
         }
-        router.post("/onboarding/model") { request, context in
+
+        step.post { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
+            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: await agentProfiles.profiles())
+            let existingProfile = await agentProfiles.defaultProfile()
+            let draft = AgentDraft(
+                form: form,
+                over: existingProfile.map { AgentDraft($0, requestLimit: nil) }
+                    ?? .new(named: "Turgai", in: modelCatalog))
             var pendingCredential: AgentCredentialReference?
             do {
-                let values = BotFormValues(form: form, nameKey: "agentName")
-                let modelValues = ModelFormValues(form: form)
-                let model = try OnboardingInput.model(from: modelValues)
-                let reasoningEffort = try OnboardingInput.reasoningEffort(from: modelValues)
-                let existingProfile = await agentProfiles.defaultProfile()
+                let model = try OnboardingInput.model(from: draft)
+                let reasoningEffort = try OnboardingInput.reasoningEffort(from: draft)
                 let submission = try OnboardingInput.providerSubmission(
-                    from: modelValues,
+                    from: draft,
                     for: model,
                     existing: existingProfile?.providerConfiguration
                 )
@@ -118,9 +131,9 @@ extension TurgaiOnboardingWebApp {
                     profile.reasoningEffort = reasoningEffort
                     let oldReference = profile.providerConfiguration.credentialReference
                     profile.providerConfiguration = submission.configuration
-                    profile.name = values.name
-                    profile.persona = values.persona
-                    profile.instructions = values.instructions
+                    profile.name = draft.name
+                    profile.persona = draft.persona
+                    profile.instructions = draft.instructions
                     try await agentProfiles.update(profile)
                     pendingCredential = nil
                     if let oldReference,
@@ -130,31 +143,37 @@ extension TurgaiOnboardingWebApp {
                     }
                 } else {
                     _ = try await agentProfiles.create(
-                        name: values.name,
+                        name: draft.name,
                         model: model,
                         reasoningEffort: reasoningEffort,
                         providerConfiguration: submission.configuration,
-                        persona: values.persona,
-                        instructions: values.instructions
+                        persona: draft.persona,
+                        instructions: draft.instructions
                     )
                     pendingCredential = nil
                 }
                 return Response(status: .seeOther, headers: [.location: "/onboarding/storage"])
             } catch {
                 if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
-                let profiles = await agentProfiles.profiles()
-                let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-                let profile = await agentProfiles.defaultProfile()
                 return HTMLResponse {
                     ModelPage(
                         modelCatalog: modelCatalog,
-                        profile: profile,
+                        draft: draft,
                         error: TurgaiWebSupport.profileErrorMessage(error)
                     )
                 }.response(from: request, context: context)
             }
         }
-        router.get("/onboarding/storage") { request, context in
+    }
+
+    /// Setting up: where memory is kept.
+    private func registerStorageStep(
+        on step: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        let auth = dependencies.auth
+        let setup = dependencies.setup
+        let defaultFileDirectory = dependencies.defaultFileDirectory
+        step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -166,7 +185,8 @@ extension TurgaiOnboardingWebApp {
                 )
             }.response(from: request, context: context)
         }
-        router.post("/onboarding/storage") { request, context in
+
+        step.post { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -192,7 +212,16 @@ extension TurgaiOnboardingWebApp {
                 }.response(from: request, context: context)
             }
         }
-        router.get("/onboarding/finish") { request, context in
+    }
+
+    /// Setting up: the last step.
+    private func registerFinishStep(
+        on step: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        let auth = dependencies.auth
+        let setup = dependencies.setup
+        let agentProfiles = dependencies.agentProfiles
+        step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -205,7 +234,8 @@ extension TurgaiOnboardingWebApp {
             return HTMLResponse { FinishPage() }
                 .response(from: request, context: context)
         }
-        router.post("/onboarding/finish") { request, context in
+
+        step.post { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
             }
@@ -214,6 +244,22 @@ extension TurgaiOnboardingWebApp {
             }
             try await setup.complete()
             return TurgaiWebSupport.redirect(to: "/")
+        }
+    }
+
+    /// Setting up: where it starts.
+    private func registerWelcome(
+        on welcome: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        let auth = dependencies.auth
+        welcome.get { request, context in
+            if await auth.hasAdmin() {
+                guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
+                    return TurgaiWebSupport.redirect(to: "/login")
+                }
+                return TurgaiWebSupport.redirect(to: "/onboarding/model")
+            }
+            return HTMLResponse { OnboardingPage() }.response(from: request, context: context)
         }
     }
 }

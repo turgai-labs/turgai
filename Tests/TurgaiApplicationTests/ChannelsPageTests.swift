@@ -38,13 +38,14 @@ struct ChannelsPageTests {
         let token = "123456:super-secret-token"
         let page = ChannelEditPage(
             user: .administrator(AccountInfo(id: UUID(), username: "admin")),
-            channel: ChannelEditItem(
+            channel: ChannelDraft(
                 id: UUID(),
                 label: "Team Telegram",
                 enabled: true,
-                chatIDs: [42, -100],
+                routing: .profile("helper"),
+                chatIDs: "42,-100",
                 hasToken: true,
-                agentProfileID: "helper"
+                token: ""
             ),
             bots: [ChannelBotOption(id: "helper", name: "Helper")]
         )

@@ -66,197 +66,76 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
                 header: PageHeader(user: user, navigation: .active(.tools)),
                 footer: PageFooter { EmptyFooterContent() }
             ) {
-                section(.class("page-intro detail-page-intro")) {
-                    div {
-                        TurgaiBreadcrumb(
-                            parentTitle: "Tools",
-                            parentHref: "/tools",
-                            currentTitle: draftLabel
-                        )
-                        h1 { heading }
-                        p(.class("lede")) {
-                            "Give it a clear purpose, choose how it works, and add steps only when they earn their place."
-                        }
-                    }
-                }
-                switch (error, issue) {
-                case (.some(let error), _):
-                    p(.class("error page-error")) { error }
-                case (.none, .some):
-                    p(.class("error page-error")) {
-                        "This tool needs attention. Repair its setup below or remove it."
-                    }
-                default:
-                    EmptyFooterContent()
-                }
+                intro
+                problem
                 div(.class("tool-editor-layout")) {
                     section(.class("tool-editor-main")) {
                         p(.class("detail-note tool-editor-note")) {
                             "Changes take effect the next time this bot is activated. Conversations already running keep their current agent."
                         }
-                        form(
-                            .method(.post),
-                            .action("/tools/save"),
-                            .class("tool-editor-form"),
-                            .init(name: "data-tool-editor", value: "")
-                        ) {
-                            input(.type(.hidden), .name("fileName"), .value(draft.fileName))
-                            input(.type(.hidden), .name("isNew"), .value(draftKindValue))
-
-                            section(.class("builder-section")) {
-                                div(.class("builder-section-intro")) {
-                                    h2 { "Name and access" }
-                                    p(.class("section-intro")) {
-                                        "Give it a clear name and tell your bot when it belongs in the conversation."
-                                    }
-                                }
-                                div(.class("builder-section-content")) {
-                                    div(.class("builder-grid builder-grid-basics")) {
-                                        label(.class("form-field")) {
-                                            span(.class("field-label")) { "Name" }
-                                            input(
-                                                .type(.text),
-                                                .name("toolName"),
-                                                .value(draft.name),
-                                                .placeholder("weather_brief"),
-                                                .required
-                                            )
-                                        }
-                                        label(.class("form-field")) {
-                                            span(.class("field-label")) { "Ask before running" }
-                                            TurgaiSelect(
-                                                name: "approval",
-                                                value: draft.approval,
-                                                options: [
-                                                    ("always", "Ask me each time"),
-                                                    ("never", "Run without asking"),
-                                                ]
-                                            )
-                                            p(.class("hint")) {
-                                                "Ask first when a tool can change files or reach outside this installation."
-                                            }
-                                        }
-                                    }
-                                    label(.class("form-field builder-wide-field")) {
-                                        span(.class("field-label")) { "What does it do?" }
-                                        textarea(
-                                            .name("toolDescription"),
-                                            .init(name: "rows", value: "3"),
-                                            .placeholder("Fetches the weather and gives a short explanation."),
-                                            .required
-                                        ) {
-                                            draft.description
-                                        }
-                                    }
-                                }
-                            }
-
-                            section(.class("builder-section")) {
-                                div(.class("builder-section-intro")) {
-                                    h2 { "Inputs (optional)" }
-                                    p(.class("section-intro")) {
-                                        "Add values the bot should ask for, such as a city or date. Use them as {{name}} later."
-                                    }
-                                }
-                                div(.class("builder-section-content")) {
-                                    div(
-                                        .class("builder-list"),
-                                        .init(
-                                            name: "data-empty",
-                                            value: draft.arguments.isEmpty ? "true" : "false"
-                                        )
-                                    ) {
-                                        for argument in draft.arguments {
-                                            TurgaiToolArgumentRow(argument: argument, kind: .visible)
-                                        }
-                                        TurgaiToolArgumentRow(
-                                            argument: TurgaiToolArgumentDraft(),
-                                            kind: .template
-                                        )
-                                    }
-                                    button(
-                                        .type(.button),
-                                        .class("builder-add"),
-                                        .init(name: "data-add-row", value: "arguments")
-                                    ) {
-                                        "+ Add input"
-                                    }
-                                }
-                            }
-
-                            section(.class("builder-section")) {
-                                div(.class("builder-section-intro")) {
-                                    h2 { "Action" }
-                                    p(.class("section-intro")) {
-                                        "Choose how this tool acts. Use Workflow when one step needs another step's result."
-                                    }
-                                }
-                                div(.class("builder-section-content")) {
-                                    label(.class("form-field builder-wide-field")) {
-                                        span(.class("field-label")) { "How it works" }
-                                        TurgaiSelect(
-                                            name: "bodyKind",
-                                            value: draft.bodyKind.rawValue,
-                                            options: [
-                                                ("workflow", "Workflow — one or more steps"),
-                                                ("process", "Run a program"),
-                                                ("prompt", "Ask another bot"),
-                                            ]
-                                                + (draft.bodyKind == .wasm
-                                                    ? [("wasm", "Run a module")]
-                                                    : []),
-                                            dataAttribute: "data-body-kind"
-                                        )
-                                    }
-                                    TurgaiWorkflowBuilder(steps: draft.workflowSteps)
-                                    TurgaiProgramBuilder(
-                                        executable: draft.processExecutable,
-                                        arguments: draft.processArguments,
-                                        environment: draft.processEnvironment
-                                    )
-                                    TurgaiPromptBuilder(instruction: draft.promptInstruction)
-                                    TurgaiWasmBuilder(module: draft.wasmModule)
-                                }
-                            }
-
-                            div(.class("form-actions")) {
-                                button(.type(.submit), .class("button button-accent")) {
-                                    "Save tool"
-                                }
-                                a(.href("/tools"), .class("button button-secondary")) {
-                                    "Cancel"
-                                }
-                            }
-                        }
-                        if case .existing = draft.kind {
-                            form(
-                                .method(.post),
-                                .action("/tools/delete"),
-                                .class("delete-form"),
-                                .init(
-                                    name: "onsubmit",
-                                    value: "return confirm('Remove this tool?');"
-                                )
-                            ) {
-                                input(.type(.hidden), .name("fileName"), .value(draft.fileName))
-                                button(.type(.submit), .class("text-button text-button-danger")) {
-                                    "Remove tool"
-                                }
-                            }
-                        }
+                        editorForm
+                        if case .existing = draft.kind { ToolRemoval(fileName: draft.fileName) }
                     }
-                    aside(.class("tool-editor-aside")) {
-                        h2 { "Quick guide" }
-                        p(.class("section-intro")) {
-                            "Start with Get information or Run a script. Reach for Workflow when one result needs to travel into the next step."
-                        }
-                        p(.class("section-intro")) {
-                            "Steps run from top to bottom. Add another only when it uses an earlier result."
-                        }
-                    }
+                    guide
                 }
             }
             HTMLRaw("<script>\(Self.editorScript)</script>")
+        }
+    }
+
+    @HTMLBuilder private var intro: some HTML & Sendable {
+        section(.class("page-intro detail-page-intro")) {
+            div {
+                TurgaiBreadcrumb(parentTitle: "Tools", parentHref: "/tools", currentTitle: draftLabel)
+                h1 { heading }
+                p(.class("lede")) {
+                    "Give it a clear purpose, choose how it works, and add steps only when they earn their place."
+                }
+            }
+        }
+    }
+
+    @HTMLBuilder private var problem: some HTML & Sendable {
+        switch (error, issue) {
+        case (.some(let error), _):
+            p(.class("error page-error")) { error }
+        case (.none, .some):
+            p(.class("error page-error")) {
+                "This tool needs attention. Repair its setup below or remove it."
+            }
+        default:
+            EmptyFooterContent()
+        }
+    }
+
+    @HTMLBuilder private var editorForm: some HTML & Sendable {
+        form(
+            .method(.post),
+            .action("/tools/save"),
+            .class("tool-editor-form"),
+            .init(name: "data-tool-editor", value: "")
+        ) {
+            input(.type(.hidden), .name("fileName"), .value(draft.fileName))
+            input(.type(.hidden), .name("isNew"), .value(draftKindValue))
+            ToolNameAndAccess(draft: draft)
+            ToolInputs(arguments: draft.arguments)
+            ToolAction(draft: draft)
+            div(.class("form-actions")) {
+                button(.type(.submit), .class("button button-accent")) { "Save tool" }
+                a(.href("/tools"), .class("button button-secondary")) { "Cancel" }
+            }
+        }
+    }
+
+    @HTMLBuilder private var guide: some HTML & Sendable {
+        aside(.class("tool-editor-aside")) {
+            h2 { "Quick guide" }
+            p(.class("section-intro")) {
+                "Start with Get information or Run a script. Reach for Workflow when one result needs to travel into the next step."
+            }
+            p(.class("section-intro")) {
+                "Steps run from top to bottom. Add another only when it uses an earlier result."
+            }
         }
     }
 

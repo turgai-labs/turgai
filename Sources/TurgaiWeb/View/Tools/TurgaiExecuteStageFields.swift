@@ -18,11 +18,10 @@ import TurgaiTelegram
 struct TurgaiExecuteStageFields: HTML, Sendable {
     let step: TurgaiWorkflowStepDraft
 
-    private var hasScriptOptions: Bool {
-        !step.writeDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !step.arguments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !step.environment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
+    private static let scriptModes: [(String, String)] = [
+        ("source", "Write it here"),
+        ("file", "Use a file next to this tool"),
+    ]
 
     var body: some HTML {
         div(
@@ -34,10 +33,7 @@ struct TurgaiExecuteStageFields: HTML, Sendable {
                 TurgaiSelect(
                     name: "stageScriptMode",
                     value: step.scriptMode.rawValue,
-                    options: [
-                        ("source", "Write it here"),
-                        ("file", "Use a file next to this tool"),
-                    ],
+                    options: Self.scriptModes,
                     dataAttribute: "data-script-mode"
                 )
             }
@@ -83,42 +79,57 @@ struct TurgaiExecuteStageFields: HTML, Sendable {
                 )
                 p(.class("hint")) { "Only needed when you write the script here." }
             }
-            details(.class("stage-details")) {
-                summary(.class("stage-details-summary")) {
-                    hasScriptOptions
-                        ? "Script options (configured)"
-                        : "Script options (optional)"
+            ScriptOptions(step: step)
+        }
+    }
+}
+
+/// Where a script may write, and what it's given: shown open when any is set.
+struct ScriptOptions: HTML, Sendable {
+    let step: TurgaiWorkflowStepDraft
+
+    private var isConfigured: Bool {
+        [step.writeDirectory, step.arguments, step.environment].contains { (value: String) -> Bool in
+            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
+    var body: some HTML {
+        details(.class("stage-details")) {
+            summary(.class("stage-details-summary")) {
+                isConfigured
+                    ? "Script options (configured)"
+                    : "Script options (optional)"
+            }
+            div(.class("builder-grid builder-grid-two")) {
+                label(.class("form-field")) {
+                    span(.class("field-label")) { "Writable folder" }
+                    input(
+                        .type(.text),
+                        .name("stageWriteDirectory"),
+                        .value(step.writeDirectory),
+                        .placeholder("data")
+                    )
+                    p(.class("hint")) { "Relative to the workspace. Leave empty for the usual location." }
                 }
-                div(.class("builder-grid builder-grid-two")) {
-                    label(.class("form-field")) {
-                        span(.class("field-label")) { "Writable folder" }
-                        input(
-                            .type(.text),
-                            .name("stageWriteDirectory"),
-                            .value(step.writeDirectory),
-                            .placeholder("data")
-                        )
-                        p(.class("hint")) { "Relative to the workspace. Leave empty for the usual location." }
+                label(.class("form-field")) {
+                    span(.class("field-label")) { "Arguments" }
+                    textarea(
+                        .name("stageArguments"),
+                        .init(name: "rows", value: "3"),
+                        .placeholder("--city\n{{city}}")
+                    ) {
+                        step.arguments
                     }
-                    label(.class("form-field")) {
-                        span(.class("field-label")) { "Arguments" }
-                        textarea(
-                            .name("stageArguments"),
-                            .init(name: "rows", value: "3"),
-                            .placeholder("--city\n{{city}}")
-                        ) {
-                            step.arguments
-                        }
-                    }
-                    label(.class("form-field")) {
-                        span(.class("field-label")) { "Environment" }
-                        textarea(
-                            .name("stageEnvironment"),
-                            .init(name: "rows", value: "3"),
-                            .placeholder("CITY={{city}}")
-                        ) {
-                            step.environment
-                        }
+                }
+                label(.class("form-field")) {
+                    span(.class("field-label")) { "Environment" }
+                    textarea(
+                        .name("stageEnvironment"),
+                        .init(name: "rows", value: "3"),
+                        .placeholder("CITY={{city}}")
+                    ) {
+                        step.environment
                     }
                 }
             }

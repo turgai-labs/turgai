@@ -17,16 +17,16 @@ import TurgaiTelegram
 
 struct ModelPage: HTMLDocument, Sendable {
     let modelCatalog: TurgaiModelCatalog
-    let profile: TurgaiAgentProfile?
+    let draft: AgentDraft
     let error: String?
 
     init(
         modelCatalog: TurgaiModelCatalog,
-        profile: TurgaiAgentProfile? = nil,
+        draft: AgentDraft,
         error: String? = nil
     ) {
         self.modelCatalog = modelCatalog
-        self.profile = profile
+        self.draft = draft
         self.error = error
     }
     var title: String { "Turgai — Model" }
@@ -54,73 +54,44 @@ struct ModelPage: HTMLDocument, Sendable {
                         }
                         div(.class("setup-form-area")) {
                             if let error { p(.class("error")) { error } }
-                            form(
-                                .method(.post), .action("/onboarding/model"),
-                                .init(name: "id", value: "model-form")
-                            ) {
-                                ModelPicker(
-                                    catalog: modelCatalog,
-                                    selectedModel: Self.selectedModel(from: profile)
-                                )
-                                ProviderConfigurationFields(profile: profile)
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Reasoning effort" }
-                                    select(.name("reasoningEffort")) {
-                                        if profile?.reasoningEffort == nil {
-                                            option(.value(""), .selected) { "Provider default" }
-                                        } else {
-                                            option(.value("")) { "Provider default" }
-                                        }
-                                        for effort in [
-                                            ReasoningEffort.none,
-                                            .minimal,
-                                            .low,
-                                            .medium,
-                                            .high,
-                                            .xhigh,
-                                            .max,
-                                        ] {
-                                            if profile?.reasoningEffort == effort {
-                                                option(.value(effort.rawValue), .selected) { effort.rawValue }
-                                            } else {
-                                                option(.value(effort.rawValue)) { effort.rawValue }
-                                            }
-                                        }
-                                    }
-                                    p(.class("hint")) {
-                                        "Leave it at provider default unless this model supports a specific level."
-                                    }
-                                }
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Bot name" }
-                                    input(
-                                        .type(.text), .name("agentName"), .value(profile?.name ?? "Turgai"),
-                                        .required
-                                    )
-                                }
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Voice" }
-                                    textarea(.name("persona"), .init(name: "rows", value: "6")) {
-                                        profile?.persona ?? ""
-                                    }
-                                    p(.class("hint")) { "Describe how you want Turgai to speak." }
-                                }
-                                label(.class("form-field")) {
-                                    span(.class("field-label")) { "Guidance" }
-                                    textarea(.name("instructions"), .init(name: "rows", value: "4")) {
-                                        profile?.instructions ?? ""
-                                    }
-                                }
-                            }
+                            modelForm
                         }
                     }
                 }
             }
         }
-
     }
 
-    private static func selectedModel(from profile: TurgaiAgentProfile?) -> AgentModel? {
-        profile?.model
+    @HTMLBuilder private var modelForm: some HTML & Sendable {
+        form(.method(.post), .action("/onboarding/model"), .init(name: "id", value: "model-form")) {
+            ModelPicker(catalog: modelCatalog, provider: draft.provider, modelID: draft.modelID)
+            ProviderConfigurationFields(provider: draft.provider, settings: draft.settings)
+            ReasoningEffortField(selected: draft.reasoningEffort)
+            AgentCharacterFields(name: draft.name, persona: draft.persona, instructions: draft.instructions)
+        }
+    }
+
+}
+
+/// The new bot's name, how it speaks, and what guides it.
+struct AgentCharacterFields: HTML, Sendable {
+    let name: String
+    let persona: String
+    let instructions: String
+
+    var body: some HTML {
+        label(.class("form-field")) {
+            span(.class("field-label")) { "Bot name" }
+            input(.type(.text), .name("name"), .value(name), .required)
+        }
+        label(.class("form-field")) {
+            span(.class("field-label")) { "Voice" }
+            textarea(.name("persona"), .init(name: "rows", value: "6")) { persona }
+            p(.class("hint")) { "Describe how you want Turgai to speak." }
+        }
+        label(.class("form-field")) {
+            span(.class("field-label")) { "Guidance" }
+            textarea(.name("instructions"), .init(name: "rows", value: "4")) { instructions }
+        }
     }
 }

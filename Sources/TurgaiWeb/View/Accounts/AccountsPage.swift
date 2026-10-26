@@ -43,40 +43,65 @@ struct AccountsPage: HTMLDocument, Sendable {
                 }
                 if let error { p(.class("error page-error")) { error } }
                 section(.class("accounts-list"), .init(name: "aria-label", value: "Accounts")) {
-                    let accountGroups: [(String, [AccountSummary])] = [
-                        ("Administrators", accounts.filter { $0.role == .administrator && $0.status != .disabled }),
-                        ("Members", accounts.filter { $0.role == .member && $0.status != .disabled }),
-                        ("Users", accounts.filter { $0.role == .user && $0.status != .disabled }),
-                        ("Disabled", accounts.filter { $0.status == .disabled }),
-                    ]
-                    for (title, groupedAccounts) in accountGroups {
-                        if !groupedAccounts.isEmpty {
-                            section(.class("account-group")) {
-                                h2(.class("account-group-heading")) {
-                                    span { title }
-                                    span(.class("account-group-count")) { "\(groupedAccounts.count)" }
-                                }
-                                for account in groupedAccounts {
-                                    div(.class("account-block")) {
-                                        div(.class("tool-row-main account-identity")) {
-                                            div(.class("account-name")) { account.username }
-                                        }
-                                        div(.class("account-block-action")) {
-                                            switch AccountRowState(account: account, currentUserID: user.id) {
-                                            case .current:
-                                                span(.class("account-self")) { "Your account" }
-                                            case .disabled:
-                                                AccountAccessAction(
-                                                    account: account, action: .enable, label: "Enable account")
-                                            case .active(let role):
-                                                AccountAccessMenu(account: account, role: role)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    for group in accountGroups where !group.accounts.isEmpty {
+                        AccountGroup(title: group.title, accounts: group.accounts, currentUserID: user.id)
                     }
+                }
+            }
+        }
+    }
+
+    /// The accounts by role, the disabled ones last whatever their role.
+    private var accountGroups: [(title: String, accounts: [AccountSummary])] {
+        func active(_ role: AccountRole) -> [AccountSummary] {
+            accounts.filter { (account: AccountSummary) -> Bool in account.role == role && account.status != .disabled }
+        }
+        return [
+            ("Administrators", active(.administrator)),
+            ("Members", active(.member)),
+            ("Users", active(.user)),
+            ("Disabled", accounts.filter { (account: AccountSummary) -> Bool in account.status == .disabled }),
+        ]
+    }
+}
+
+/// One group of accounts, with how many there are.
+private struct AccountGroup: HTML {
+    let title: String
+    let accounts: [AccountSummary]
+    let currentUserID: UUID
+
+    var body: some HTML {
+        section(.class("account-group")) {
+            h2(.class("account-group-heading")) {
+                span { title }
+                span(.class("account-group-count")) { "\(accounts.count)" }
+            }
+            for account in accounts {
+                AccountBlock(account: account, state: AccountRowState(account: account, currentUserID: currentUserID))
+            }
+        }
+    }
+}
+
+/// One account, and what can be done to it.
+private struct AccountBlock: HTML {
+    let account: AccountSummary
+    let state: AccountRowState
+
+    var body: some HTML {
+        div(.class("account-block")) {
+            div(.class("tool-row-main account-identity")) {
+                div(.class("account-name")) { account.username }
+            }
+            div(.class("account-block-action")) {
+                switch state {
+                case .current:
+                    span(.class("account-self")) { "Your account" }
+                case .disabled:
+                    AccountAccessAction(account: account, action: .enable, label: "Enable account")
+                case .active(let role):
+                    AccountAccessMenu(account: account, role: role)
                 }
             }
         }

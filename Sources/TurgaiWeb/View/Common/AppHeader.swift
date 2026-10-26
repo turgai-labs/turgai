@@ -46,43 +46,48 @@ struct PageHeader: HTML, Sendable {
                     if case .administrator = user, case .active(let section) = navigation {
                         AppHeaderLinks(section: section, scope: .administration)
                     }
-                    label(.class("theme-switch")) {
-                        input(
-                            .type(.checkbox),
-                            .class("theme-switch-input"),
-                            .init(name: "data-theme-toggle", value: ""),
-                            .init(name: "role", value: "switch"),
-                            .init(name: "aria-label", value: "Switch to dark theme"),
-                            .init(name: "aria-checked", value: "false")
-                        )
-                        span(
-                            .class("theme-switch-track"),
-                            .init(name: "aria-hidden", value: "true")
-                        ) {
-                            span(.class("theme-switch-icon")) { "☀" }
-                            span(.class("theme-switch-thumb")) {}
-                            span(.class("theme-switch-icon")) { "☾" }
-                        }
-                    }
-                    details(.class("account-menu")) {
-                        summary(
-                            .class("account-summary"),
-                            .init(name: "aria-label", value: "Account menu")
-                        ) {
-                            span(.class("account-name")) { user.username }
-                            span(.class("account-chevron")) { "▾" }
-                        }
-                        div(.class("account-dropdown")) {
-                            form(.method(.post), .action("/logout"), .class("account-logout-form")) {
-                                button(
-                                    .type(.submit),
-                                    .class("account-menu-item account-menu-item-danger")
-                                ) {
-                                    "Sign out"
-                                }
-                            }
-                        }
-                    }
+                    ThemeSwitch()
+                    AccountMenu(username: user.username)
+                }
+            }
+        }
+    }
+}
+
+/// Switches between the light and the dark theme.
+private struct ThemeSwitch: HTML, Sendable {
+    var body: some HTML {
+        label(.class("theme-switch")) {
+            input(
+                .type(.checkbox),
+                .class("theme-switch-input"),
+                .init(name: "data-theme-toggle", value: ""),
+                .init(name: "role", value: "switch"),
+                .init(name: "aria-label", value: "Switch to dark theme"),
+                .init(name: "aria-checked", value: "false")
+            )
+            span(.class("theme-switch-track"), .init(name: "aria-hidden", value: "true")) {
+                span(.class("theme-switch-icon")) { "☀" }
+                span(.class("theme-switch-thumb")) {}
+                span(.class("theme-switch-icon")) { "☾" }
+            }
+        }
+    }
+}
+
+/// The signed-in account's name, and signing out.
+private struct AccountMenu: HTML, Sendable {
+    let username: String
+
+    var body: some HTML {
+        details(.class("account-menu")) {
+            summary(.class("account-summary"), .init(name: "aria-label", value: "Account menu")) {
+                span(.class("account-name")) { username }
+                span(.class("account-chevron")) { "▾" }
+            }
+            div(.class("account-dropdown")) {
+                form(.method(.post), .action("/logout"), .class("account-logout-form")) {
+                    button(.type(.submit), .class("account-menu-item account-menu-item-danger")) { "Sign out" }
                 }
             }
         }

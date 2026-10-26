@@ -54,24 +54,26 @@ struct TurgaiPage: HTMLDocument, Sendable {
                 }
                 if let error { p(.class("error page-error")) { error } }
                 if profiles.isEmpty {
-                    div(.class("empty-state")) {
-                        p(.class("eyebrow")) { "A clear sky" }
-                        h2 { "Give Turgai its first companion." }
-                        a(.href("/agents/new"), .class("button button-accent")) { "+ New bot" }
-                    }
+                    NoBots()
                 } else {
                     section(.class("bot-grid")) {
                         for profile in profiles {
-                            AgentTile(
-                                profile: profile,
-                                runtime: runtime.filter { $0.profileID == profile.id }
-                            )
+                            AgentTile(profile: profile, runtime: runtime(of: profile))
                         }
                     }
                 }
             }
-            HTMLRaw(
-                """
+            HTMLRaw(Self.refreshScript)
+        }
+    }
+
+    /// What `profile`'s agent is running now.
+    private func runtime(of profile: BotCard) -> [TurgaiAgentRuntimeSnapshot] {
+        runtime.filter { (snapshot: TurgaiAgentRuntimeSnapshot) -> Bool in snapshot.profileID == profile.id }
+    }
+
+    /// Refreshes each bot's status every five seconds.
+    private static let refreshScript = """
                 <script>
                 (() => {
                     const refreshAgents = async () => {
@@ -97,7 +99,15 @@ struct TurgaiPage: HTMLDocument, Sendable {
                 })();
                 </script>
                 """
-            )
+}
+
+/// What the bots page shows before there are any.
+private struct NoBots: HTML, Sendable {
+    var body: some HTML {
+        div(.class("empty-state")) {
+            p(.class("eyebrow")) { "A clear sky" }
+            h2 { "Give Turgai its first companion." }
+            a(.href("/agents/new"), .class("button button-accent")) { "+ New bot" }
         }
     }
 }

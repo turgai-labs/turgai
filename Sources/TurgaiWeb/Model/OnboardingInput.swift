@@ -14,9 +14,9 @@ enum OnboardingInput {
         let configuration: AgentProviderConfiguration
         let credential: (reference: AgentCredentialReference, value: String)?
     }
-    static func model(from values: ModelFormValues) throws -> AgentModel {
-        let providerValue = values.provider
-        let modelValue = values.modelID
+    static func model(from draft: AgentDraft) throws -> AgentModel {
+        let providerValue = draft.provider.rawValue
+        let modelValue = draft.modelID
         guard !providerValue.isEmpty, !modelValue.isEmpty else {
             throw FormValidationError.invalidValue("model")
         }
@@ -35,20 +35,19 @@ enum OnboardingInput {
     }
 
     static func providerSubmission(
-        from values: ModelFormValues,
+        from draft: AgentDraft,
         for model: AgentModel,
         existing: AgentProviderConfiguration? = nil
     ) throws -> ProviderSubmission {
         /// Only providers whose window is a choice ask for one.
+        let values = draft.settings
         func contextWindow() throws -> Int {
             try positiveInteger(values.contextWindow, field: "context window")
         }
         switch model.provider {
         case .ollama:
             let rawValue =
-                values.endpointURL?.isEmpty == false
-                ? values.endpointURL!
-                : OllamaConfiguration.defaultBaseURL.absoluteString
+                values.endpointURL.isEmpty ? OllamaConfiguration.defaultBaseURL.absoluteString : values.endpointURL
             return ProviderSubmission(
                 configuration: .ollama(baseURL: try httpURL(rawValue), contextWindow: try contextWindow()),
                 credential: nil
@@ -75,10 +74,11 @@ enum OnboardingInput {
                 configuration: { [window = try contextWindow()] in .gemini(credential: $0, contextWindow: window) }
             )
         case .openAICompatible:
-            guard let endpoint = values.endpointURL, !endpoint.isEmpty else {
+            let endpoint = values.endpointURL
+            guard !endpoint.isEmpty else {
                 throw FormValidationError.invalidValue("model endpoint URL")
             }
-            guard let api = OpenAICompatibleAPI(rawValue: values.compatibleAPI ?? "chatCompletions") else {
+            guard let api = OpenAICompatibleAPI(rawValue: values.compatibleAPI) else {
                 throw FormValidationError.invalidValue("compatible API")
             }
             let existingReference: AgentCredentialReference?
@@ -87,7 +87,7 @@ enum OnboardingInput {
             } else {
                 existingReference = nil
             }
-            let reference = values.apiKey?.isEmpty == false ? .new() : (existingReference ?? .new())
+            let reference = values.apiKey.isEmpty ? (existingReference ?? .new()) : .new()
             return try submission(
                 configuration: .openAICompatible(
                     baseURL: httpURL(endpoint),
@@ -102,10 +102,11 @@ enum OnboardingInput {
         case .system:
             return ProviderSubmission(configuration: .appleSystem, credential: nil)
         case .llamaCPP:
-            guard let modelPath = values.modelPath, !modelPath.isEmpty else {
+            let modelPath = values.modelPath
+            guard !modelPath.isEmpty else {
                 throw FormValidationError.invalidValue("GGUF model path")
             }
-            let gpuLayers = values.gpuLayers.flatMap(Int32.init) ?? -1
+            let gpuLayers = Int32(values.gpuLayers) ?? -1
             return ProviderSubmission(
                 configuration: .llamaCPP(
                     .init(modelPath: modelPath, gpuLayers: gpuLayers), contextWindow: try contextWindow()),
@@ -161,8 +162,9 @@ enum OnboardingInput {
         return ProviderSubmission(configuration: configuration, credential: nil)
     }
 
-    static func reasoningEffort(from values: ModelFormValues) throws -> ReasoningEffort? {
-        guard let rawValue = values.reasoningEffort, !rawValue.isEmpty else { return nil }
+    static func reasoningEffort(from draft: AgentDraft) throws -> ReasoningEffort? {
+        let rawValue = draft.reasoningEffort
+        guard !rawValue.isEmpty else { return nil }
         guard let effort = try? ReasoningEffort(rawValue) else {
             throw FormValidationError.invalidValue("reasoning effort")
         }
