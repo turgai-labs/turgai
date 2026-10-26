@@ -1,5 +1,5 @@
 {
-  "originHash" : "15d7a5a1968cce46c5cfa0a0258ecfdc097c911dfa58cc6ee28c96ee0742503e",
+  "originHash" : "ed72958b80337684c64e5ed81f19923b5e2ae4a0abccf4cff5c75f591aa3d463",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -367,7 +367,7 @@
       "location" : "https://github.com/turgai-labs/swift-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "1aad350ac6e720f82d6faabd83f37b7b65e7bcd7"
+        "revision" : "1b56f87703a2037554b3ae130e08c371cc190347"
       }
     },
     {

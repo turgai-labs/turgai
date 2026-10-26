@@ -61,9 +61,11 @@ extension Agent: @retroactive DiscoverableActor {
             try _DiscoverySupport.validate(arguments, allowedKeys: ["request"])
             let request = try _DiscoverySupport.argument(String.self, "request", in: arguments, actorSystem: actorSystem)
             // A call that came from its own answer: it can't answer it until it has answered.
-            if CallChain.ongoing.contains(Party(agent: agentID)) { throw AgentAskError.askedByItself(agentID.role) }
+            if CallChain.ongoing.contains(Self.objectID(of: agentID)) {
+                throw AgentAskError.askedByItself(agentID.role)
+            }
             do {
-                let answer: String = try await respond(request)
+                let answer: String = try await Self.answering(as: agentID) { try await respond(request) }
                 return try _DiscoverySupport.json(answer)
             } catch AgentRuntimeError.busy(let busy) {
                 throw AgentAskError.busy(agentID.role, busy)
@@ -104,13 +106,6 @@ public enum AgentAskError: Error, Sendable, Equatable, Codable, CustomStringConv
     }
 }
 
-extension Party {
-    /// The agent with `id`, as its virtual actor is known.
-    public init(agent id: AgentID) {
-        self = .agent(ActorIdentity(rawValue: id.rawValue))
-    }
-}
-
 extension Agent {
     /// The agent of `role` asked as an object.
     static func asked(_ role: Role) -> AgentID {
@@ -119,7 +114,22 @@ extension Agent {
 
     /// The id an asked agent is listed by: its virtual actor's.
     static func objectID(_ role: Role) -> ObjectID {
-        .virtual(VirtualActorID(rawValue: asked(role).rawValue))
+        objectID(of: asked(role))
+    }
+
+    /// The id the agent with `id` is known by, as an object and in call chains: its virtual actor's.
+    public static func objectID(of id: AgentID) -> ObjectID {
+        .virtual(VirtualActorID(rawValue: id.rawValue))
+    }
+
+    /// Runs `body`, a turn of the agent with `id`, with the agent entered into the chain it's
+    /// asked in: what its turn calls comes from it, and the agent is left as the turn ends.
+    public static func answering<Value: Sendable>(
+        as id: AgentID, _ body: () async throws -> Value
+    ) async throws -> Value {
+        try await CallChain.$current.withValue(try CallChain.ongoing.entering(objectID(of: id))) {
+            try await body()
+        }
     }
 
     /// The agents of `roles`, asked as objects, as their objects are listed: each checked in where

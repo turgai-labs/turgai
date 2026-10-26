@@ -161,7 +161,6 @@ let package = Package(
             name: "TurgaiModelEval",
             dependencies: [
                 "TurgaiApplication",
-                "TurgaiDomain",
                 "TurgaiHail",
                 "TurgaiPersistence",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),

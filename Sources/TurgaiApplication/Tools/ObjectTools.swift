@@ -29,8 +29,6 @@ public actor ObjectSession {
     /// itself, which it can't ask while it answers. They're described as every agent is, so none
     /// starts to be listed.
     let agents: [ObjectEntry]
-    /// Whose calls the session makes: its agent's, which each call's chain continues from.
-    let caller: Party?
 
     /// The objects met, by id.
     private var objects: [ObjectID: DiscoverableObject] = [:]
@@ -65,7 +63,6 @@ public actor ObjectSession {
         objectCatalog: ObjectCatalog? = nil,
         scopes: [ObjectScope],
         agents: [ObjectEntry] = [],
-        caller: Party? = nil,
         writer: ObjectWriter? = nil,
         request: String? = nil
     ) {
@@ -73,7 +70,6 @@ public actor ObjectSession {
         self.objectCatalog = objectCatalog
         self.scopes = scopes
         self.agents = agents
-        self.caller = caller
         self.writer = writer
         self.request = request
     }
@@ -982,9 +978,8 @@ public actor ObjectSession {
         _ body: (DiscoverableObject) async throws -> Value
     ) async throws -> Value {
         let object = try await object(handle)
-        let chain = try caller.map { try CallChain.ongoing.continuing(from: $0) } ?? CallChain.ongoing
         do {
-            return try await CallChain.$current.withValue(chain) { try await body(object) }
+            return try await body(object)
         } catch let error as DiscoveryError {
             throw error
         } catch let error as ObjectToolError {

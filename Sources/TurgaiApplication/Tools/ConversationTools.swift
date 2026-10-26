@@ -57,7 +57,6 @@ public enum ConversationTools {
                 objectCatalog: objectCatalog,
                 scopes: owner.map(ObjectScope.visible(to:)) ?? [.shared],
                 agents: askable,
-                caller: Party(agent: context.agentID),
                 writer: writer,
                 request: context.input.text
             )

@@ -5,7 +5,6 @@ import Foundation
 import Hail
 import Synchronization
 import Testing
-import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
 
@@ -25,7 +24,6 @@ struct AskedByItselfTests {
 
     @Test(.timeLimit(.minutes(1)))
     func anAgentAskedFromItsOwnAnswerIsToldItIsItself() async throws {
-        let planner = Agent.asked(Role("planner"))
         let turn = PlannerTurn()
         let store = MemoryEventStore()
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent("turgai-itself-\(UUID())").path
@@ -48,13 +46,9 @@ struct AskedByItselfTests {
                 _ = try await DynamicObjects.resolve(on: sessionNode, scope: .shared).create(
                     name: "Relay", spec: .new(script))
 
-                // The planner's turn calls objects as its tools do: as the planner, from the other node.
-                turn.uses(
-                    ObjectSession(
-                        actorSystem: sessionNode, scopes: [.shared], agents: offered, caller: Party(agent: planner)))
-                let asking = ObjectSession(
-                    actorSystem: sessionNode, scopes: [.shared], agents: offered,
-                    caller: .agent(ActorIdentity(rawValue: "asker")))
+                // The planner's turn calls objects as its tools do, from the other node.
+                turn.uses(ObjectSession(actorSystem: sessionNode, scopes: [.shared], agents: offered))
+                let asking = ObjectSession(actorSystem: sessionNode, scopes: [.shared], agents: offered)
                 let answer = try await asking.invoke(
                     try await asking.id(written: "planner"), action: "respond", arguments: #"{"request": "plan"}"#)
 

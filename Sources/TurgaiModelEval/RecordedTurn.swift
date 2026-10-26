@@ -2,7 +2,9 @@ import AnyLanguageModel
 import DistributedCluster
 import Foundation
 import Hail
+import TurgaiApplication
 import TurgaiHail
+import TurgaiObjects
 
 /// What one turn did: its tool calls, with what each returned, and its answer.
 struct RecordedTurn: Sendable {
@@ -63,7 +65,10 @@ struct RecordedTurn: Sendable {
             return turn
         }
         do {
-            try await stream.send(text, to: agent)
+            // The eval asks as no one: the agent's turn starts the chain.
+            try await CallChain.$current.withValue(.start) {
+                try await Agent.answering(as: try await agent.agentID) { try await stream.send(text, to: agent) }
+            }
         } catch {
             // The model may fail after several useful tool calls. Keep those calls in the trace.
             stream.finish()

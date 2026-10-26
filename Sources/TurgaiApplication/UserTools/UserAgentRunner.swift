@@ -28,6 +28,6 @@ enum UserAgentRunner {
             )
         )
         let agent: Agent = try await actorSystem.agent(childID)
-        return try await agent.respond(instruction)
+        return try await Agent.answering(as: childID) { try await agent.respond(instruction) }
     }
 }

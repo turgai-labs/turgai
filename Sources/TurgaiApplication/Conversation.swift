@@ -1045,11 +1045,11 @@ public distributed actor Conversation {
                 // What the agent does meanwhile reaches the room through its activity; this
                 // only asks, and waits for the reply.
                 await conversation.whenLocal { $0.followActivity() }
-                // The person's message: their agent's calls continue a chain started by them.
-                let chain = try request.conversationID.participantUserID.map {
-                    try CallChain.start.continuing(from: .person($0))
+                // The agent's turn starts a chain of its own: what it calls comes from it.
+                let agentID = HailAgentAdapter.agentID(for: request.conversationID, role: request.agentRole)
+                let response = try await CallChain.$current.withValue(.start) {
+                    try await Agent.answering(as: agentID) { try await peer.run(to: request) }
                 }
-                let response = try await CallChain.$current.withValue(chain) { try await peer.run(to: request) }
                 let text = request.message.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !text.isEmpty,
                     let extractionConfiguration,
