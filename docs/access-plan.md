@@ -52,6 +52,14 @@ Bob's agent adds an event: the action changes, Bob is on the change list, so it 
 
 That's B, the actor's own list, rather than A, where holding a reference is the right. With a list, "who may call this" is a value that can be shown, journaled, revoked, and asked to join. That last part is where access requests come in.
 
+### Outside services
+
+Someone else's API (Google, GitHub, an MCP server) comes in through the ToolsAPI as an actor, and belongs to a group like any object. Our lists decide who may use it.
+
+- **Now:** manual approval only. A call without access is a request, and the right admins answer it.
+- **Later, with the first service that has its own auth:** an admin connects it once, through the service's own OAuth, and its token is kept with the actor. Agents never see it.
+- **No tokens of our own.** Inside, the call chain already says who's calling.
+
 ## Trust
 
 The stamp is only as good as the node that sends it.
