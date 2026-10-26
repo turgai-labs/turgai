@@ -25,12 +25,14 @@ So there's one boundary, the distributed call, and one infrastructure on it:
 1. **Who's calling.** The actor system stamps every call with its caller. Code can read it, but never set it, and it's never taken from arguments. CallChain already carries the actor ids.
 2. **Who made it.** When an actor is made, the stamp of the call that made it is recorded as its creator.
 3. **Who may find it, read it, and change it.** Each actor keeps these with it, journaled. Only its creator changes them, and changing them is a call too.
-4. **The check.** The receiving side checks who the chain started with against the list for the action's kind, before the target runs. If they aren't on it, it's a request on their behalf. It's one place in the actor system, and it covers every actor on every node.
+4. **The check.** The receiving side checks the list for the action's kind, before the target runs: the call passes if whoever started the chain is on it, or if the object calling it directly is. Otherwise it's a request on behalf of whoever started the chain. It's one place in the actor system, and it covers every actor on every node.
 
 ### Who the chain starts with
 
 - **Whoever asked.** Bob asks his agent, the agent calls the planner, and the planner adds to Ann's calendar: Bob needs access at every step. The agent and the planner act for him, and can't do more than he can. If Cat asks the planner, it's checked against Cat.
+- **A person** starts it through their participant actor, so the chain is actors from the start.
 - **Something running on its own,** such as a timer firing or an object's own task, starts with whoever made it.
+- **Objects can be on lists too.** The room's calendar lists the shared booking object as allowed to change it. Anyone books through the booking object, which checks for clashes, and its own right is what the calendar checks. Bob isn't on the calendar's list, so he can't write to it directly.
 
 ### Finding, reading, changing
 
