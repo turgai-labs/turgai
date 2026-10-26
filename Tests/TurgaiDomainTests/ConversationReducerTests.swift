@@ -120,11 +120,11 @@ struct ConversationReducerTests {
             .receive(message: makeMessage(text: "  hello  "), turnID: makeTurnID(1), agentRole: "test")
         )
 
-        guard case .running(let turnID) = next.status else {
+        guard case .running(let turnID) = next.inbox.status else {
             Issue.record("Expected a running turn")
             return
         }
-        #expect(next.pendingMessages.isEmpty)
+        #expect(next.inbox.pendingMessages.isEmpty)
         #expect(
             effects.contains(where: { effect in
                 if case .runReply(let request) = effect {
@@ -143,7 +143,7 @@ struct ConversationReducerTests {
             initial,
             .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), agentRole: "test")
         )
-        guard case .running(let firstTurnID) = running.status else {
+        guard case .running(let firstTurnID) = running.inbox.status else {
             Issue.record("Expected first turn to be running")
             return
         }
@@ -152,7 +152,7 @@ struct ConversationReducerTests {
             running,
             .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
         )
-        #expect(queued.pendingMessages.count == 1)
+        #expect(queued.inbox.pendingMessages.count == 1)
 
         let (completed, completionEffects) = step(
             queued,
@@ -162,11 +162,11 @@ struct ConversationReducerTests {
             )
         )
 
-        guard case .running(let secondTurnID) = completed.status else {
+        guard case .running(let secondTurnID) = completed.inbox.status else {
             Issue.record("Expected queued message to start a second turn")
             return
         }
-        #expect(completed.pendingMessages.isEmpty)
+        #expect(completed.inbox.pendingMessages.isEmpty)
         #expect(
             completionEffects.contains(where: { effect in
                 if case .runReply(let request) = effect {
@@ -189,7 +189,7 @@ struct ConversationReducerTests {
                 agentRole: "test"
             )
         )
-        guard case .running(let turnID) = running.status else {
+        guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected the first message to start a turn")
             return
         }
@@ -221,7 +221,7 @@ struct ConversationReducerTests {
             state,
             .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
-        guard case .running(let turnID) = running.status else {
+        guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected a running turn")
             return
         }
@@ -234,7 +234,7 @@ struct ConversationReducerTests {
             )
         )
 
-        #expect(completed.status == .idle)
+        #expect(completed.inbox.status == .idle)
         #expect(
             completed.pendingReplies == [
                 PendingConversationReply(
@@ -259,7 +259,7 @@ struct ConversationReducerTests {
             state,
             .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1), agentRole: "test")
         )
-        guard case .running(let turnID) = running.status else {
+        guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected a running turn")
             return
         }
@@ -269,7 +269,7 @@ struct ConversationReducerTests {
             .modelCompleted(turnID: turnID, completion: .void)
         )
 
-        #expect(completed.status == .idle)
+        #expect(completed.inbox.status == .idle)
         #expect(completed.pendingReplies.isEmpty)
         #expect(
             effects == [
@@ -291,11 +291,7 @@ struct ConversationReducerTests {
             turnID: makeTurnID(1),
             agentRole: "test"
         )
-        let running = ConversationState(
-            conversationID: conversationID,
-            status: .running(pending.turnID),
-            activeMessage: pending
-        )
+        let running = ConversationState(conversationID: conversationID).applying([.inbox(.turnStarted(pending))])
 
         let (recovered, effects) = step(running, .resume)
 
@@ -320,16 +316,14 @@ struct ConversationReducerTests {
             turnID: makeTurnID(1),
             agentRole: "test"
         )
-        let state = ConversationState(
-            conversationID: conversationID,
-            pendingMessages: [pending]
-        )
+        // Queued, and then the process stopped before its turn started.
+        let state = ConversationState(conversationID: conversationID).applying([.inbox(.queued(pending))])
 
         let (recovered, effects) = step(state, .resume)
 
-        #expect(recovered.status == .running(pending.turnID))
-        #expect(recovered.activeMessage == pending)
-        #expect(recovered.pendingMessages.isEmpty)
+        #expect(recovered.inbox.status == .running(pending.turnID))
+        #expect(recovered.inbox.activeMessage == pending)
+        #expect(recovered.inbox.pendingMessages.isEmpty)
         #expect(
             effects.contains(where: { effect in
                 if case .runReply(let request) = effect {
@@ -376,8 +370,8 @@ struct ConversationReducerTests {
         let failure = ConversationFailure(kind: .model, message: "Ollama unavailable")
         let (next, effects) = step(queued, .modelFailed(turnID: makeTurnID(1), failure: failure))
 
-        #expect(next.status == .running(makeTurnID(2)))
-        #expect(next.pendingMessages.isEmpty)
+        #expect(next.inbox.status == .running(makeTurnID(2)))
+        #expect(next.inbox.pendingMessages.isEmpty)
         #expect(
             effects.contains(where: { effect in
                 if case .runReply = effect { return true }
@@ -385,7 +379,7 @@ struct ConversationReducerTests {
             }))
 
         let (failed, failureEffects) = step(next, .modelFailed(turnID: makeTurnID(2), failure: failure))
-        #expect(failed.status == .failed(failure))
+        #expect(failed.inbox.status == .failed(failure))
         #expect(failureEffects.isEmpty)
     }
 
@@ -396,15 +390,15 @@ struct ConversationReducerTests {
             state,
             .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
-        guard case .running(let turnID) = running.status else {
+        guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected a running turn")
             return
         }
 
         let (reset, effects) = step(running, .reset)
 
-        #expect(reset.status == .idle)
-        #expect(reset.pendingMessages.isEmpty)
+        #expect(reset.inbox.status == .idle)
+        #expect(reset.inbox.pendingMessages.isEmpty)
         #expect(effects.contains(.cancelModel(turnID)))
         #expect(effects.contains(.publish(.reset(conversationID: conversationID))))
     }
@@ -439,7 +433,7 @@ struct ConversationReducerTests {
             state,
             .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
         )
-        guard case .running(let turnID) = running.status else {
+        guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected a running turn")
             return
         }
@@ -462,7 +456,7 @@ struct ConversationReducerTests {
                     )
                 )
             ])
-        #expect(next.status == .running(turnID))
+        #expect(next.inbox.status == .running(turnID))
     }
 
 }

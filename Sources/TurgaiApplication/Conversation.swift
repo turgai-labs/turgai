@@ -87,12 +87,11 @@ private enum PublishEvent: Sendable {
 
     init?(conversationEvent: ConversationEvent) {
         switch conversationEvent {
-        case .messageQueued(let pending):
+        case .inbox(.queued(let pending)):
             self = .userMessage(pending)
-        case .turnStarted(let pending):
+        case .inbox(.turnStarted(let pending)):
             self = .turnStarted(pending)
-        case .member, .replyQueued, .replyDelivered, .turnCompleted, .turnFailed,
-            .memoryObservationQueued, .memoryObservationsCompleted, .reset:
+        case .member, .inbox(.turnCompleted), .inbox(.turnFailed), .replyQueued, .replyDelivered, .reset:
             return nil
         }
     }
@@ -380,7 +379,7 @@ public distributed actor Conversation {
     private var connections: Set<ConversationConnection> = []
     private var liveState = ConversationLiveState()
     /// Live-only echo bookkeeping: message IDs whose user-message echo was
-    /// already broadcast. Bounded like `ConversationState.acceptedMessageIDs`.
+    /// already broadcast. Bounded like `AgentInbox.acceptedMessageIDs`.
     private var echoedMessageIDs: [MessageID] = []
     private var modelTask: Task<Void, Never>?
     /// Questions waiting for the user, live-only like the connections that ask them.
@@ -449,7 +448,7 @@ public distributed actor Conversation {
     /// on a transient Task existing.
     public func shouldDeactivate() async -> Bool {
         let noConnections = connections.isEmpty
-        return state.activeTurnID == nil
+        return state.inbox.activeTurnID == nil
             && noConnections
     }
 
@@ -462,7 +461,7 @@ public distributed actor Conversation {
     }
 
     public distributed func currentStatus() -> ConversationStatus {
-        state.status
+        state.inbox.status
     }
 
     /// The agent's past turns, step by step.
@@ -473,7 +472,7 @@ public distributed actor Conversation {
     public distributed func addConnection(_ connection: ConversationConnection) async {
         connections.insert(connection)
         followActivity()
-        if let turnID = state.activeTurnID {
+        if let turnID = state.inbox.activeTurnID {
             let activity = liveState.latestActivity
             try? await connection.broadcast(
                 .reply(.started(conversationID: conversationID, turnID: turnID))
@@ -586,14 +585,14 @@ public distributed actor Conversation {
     /// running turn, or one it didn't ask for, such as a timer's.
     private func follow(_ event: HailModelEvent) async {
         if case .started = event {
-            followedTurn = FollowedTurn(id: state.activeTurnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
+            followedTurn = FollowedTurn(id: state.inbox.activeTurnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
             return
         }
         if case .completed = event {
             followedTurn = nil
             return
         }
-        var turn = followedTurn ?? FollowedTurn(id: state.activeTurnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
+        var turn = followedTurn ?? FollowedTurn(id: state.inbox.activeTurnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
         defer { followedTurn = turn }
         let turnID = turn.id
         switch event {
@@ -652,7 +651,7 @@ public distributed actor Conversation {
                 agentRole: configuration.agentRole
             )
         )
-        if !state.acceptedMessageIDs.contains(message.id) {
+        if !state.inbox.acceptedMessageIDs.contains(message.id) {
             turnConfigurations[turnID] = nil
         }
     }
@@ -965,8 +964,8 @@ public distributed actor Conversation {
     }
 
     private func resumeAfterReplay() async throws {
-        if state.activeTurnID != nil || !state.pendingMessages.isEmpty {
-            guard state.activeMessage != nil || state.activeTurnID == nil else {
+        if state.inbox.activeTurnID != nil || !state.inbox.pendingMessages.isEmpty {
+            guard state.inbox.activeMessage != nil || state.inbox.activeTurnID == nil else {
                 actorSystem.log.error(
                     "Recovered running conversation without an active message",
                     metadata: ["conversationID": .string(conversationID.stableKey)]

@@ -504,38 +504,13 @@ public struct PendingConversationReply: Hashable, Codable, Sendable {
     }
 }
 
-/// Legacy journal payload retained only so conversations written before
-/// compaction-owned memory extraction can still replay. New conversations do
-/// not enqueue or process this value.
-public struct PendingMemoryObservation: Hashable, Codable, Sendable {
-    public let turnID: TurnID
-    public let message: InboundMessage
-    public let response: String?
-
-    public init(
-        turnID: TurnID,
-        message: InboundMessage,
-        response: String?
-    ) {
-        self.turnID = turnID
-        self.message = message
-        self.response = response
-    }
-}
-
 public enum ConversationEvent: Codable, Sendable, Equatable {
     /// Someone became one of its members.
     case member(GroupEvent)
-    case messageQueued(PendingConversationMessage)
+    /// Its agent's inbox: a message waiting, or a turn starting or ending.
+    case inbox(AgentInboxEvent)
     case replyQueued(PendingConversationReply)
     case replyDelivered(TurnID)
-    case turnStarted(PendingConversationMessage)
-    case turnCompleted(TurnID)
-    case turnFailed(TurnID, ConversationFailure)
-    // Replay-only legacy events. The current reducer ignores them; compaction
-    // will obtain extraction input from the durable model transcript instead.
-    case memoryObservationQueued(PendingMemoryObservation)
-    case memoryObservationsCompleted([TurnID])
     case reset
 }
 
@@ -594,82 +569,106 @@ public struct ConversationHistoryEntry: Hashable, Codable, Sendable, Identifiabl
     }
 }
 
-public struct ConversationState: Hashable, Codable, Sendable {
-    public let conversationID: ConversationID
-    public internal(set) var status: ConversationStatus
-    public internal(set) var acceptedMessageIDs: [MessageID]
-    public internal(set) var pendingMessages: [PendingConversationMessage]
-    public internal(set) var pendingReplies: [PendingConversationReply]
+/// One agent's inbox in a conversation: the messages waiting for it, the one it's answering, and
+/// how its last turn ended. It answers one at a time.
+public struct AgentInbox: Hashable, Codable, Sendable {
+    public internal(set) var status: ConversationStatus = .idle
+    /// The messages it took, the last 256: one sent again isn't taken twice.
+    public internal(set) var acceptedMessageIDs: [MessageID] = []
+    public internal(set) var pendingMessages: [PendingConversationMessage] = []
     public internal(set) var activeMessage: PendingConversationMessage?
-    public internal(set) var history: [ConversationHistoryEntry]
-    /// The people in it: whoever writes joins, the first as its admin.
-    public internal(set) var members: Group
 
-    private enum CodingKeys: String, CodingKey {
-        case members
-        case conversationID
-        case status
-        case acceptedMessageIDs
-        case pendingMessages
-        case pendingReplies
-        case activeMessage
-        case history
-    }
-
-    public init(
-        conversationID: ConversationID,
-        status: ConversationStatus = .idle,
-        acceptedMessageIDs: [MessageID] = [],
-        pendingMessages: [PendingConversationMessage] = [],
-        pendingReplies: [PendingConversationReply] = [],
-        activeMessage: PendingConversationMessage? = nil,
-        history: [ConversationHistoryEntry] = [],
-        members: Group = Group()
-    ) {
-        self.conversationID = conversationID
-        self.members = members
-        self.status = status
-        self.acceptedMessageIDs = acceptedMessageIDs
-        self.pendingMessages = pendingMessages
-        self.pendingReplies = pendingReplies
-        self.activeMessage = activeMessage
-        self.history = history
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
-        self.members = try container.decode(Group.self, forKey: .members)
-        self.status = try container.decode(ConversationStatus.self, forKey: .status)
-        self.acceptedMessageIDs = try container.decode([MessageID].self, forKey: .acceptedMessageIDs)
-        self.pendingMessages = try container.decode([PendingConversationMessage].self, forKey: .pendingMessages)
-        self.pendingReplies = try container.decode([PendingConversationReply].self, forKey: .pendingReplies)
-        self.activeMessage = try container.decodeIfPresent(
-            PendingConversationMessage.self,
-            forKey: .activeMessage
-        )
-        self.history =
-            try container.decodeIfPresent(
-                [ConversationHistoryEntry].self,
-                forKey: .history
-            ) ?? []
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(conversationID, forKey: .conversationID)
-        try container.encode(members, forKey: .members)
-        try container.encode(status, forKey: .status)
-        try container.encode(acceptedMessageIDs, forKey: .acceptedMessageIDs)
-        try container.encode(pendingMessages, forKey: .pendingMessages)
-        try container.encode(pendingReplies, forKey: .pendingReplies)
-        try container.encodeIfPresent(activeMessage, forKey: .activeMessage)
-        try container.encode(history, forKey: .history)
-    }
+    public init() {}
 
     public var activeTurnID: TurnID? {
         guard case .running(let turnID) = status else { return nil }
         return turnID
+    }
+
+    /// The inbox after `event`: the one place it changes.
+    public func applying(_ event: AgentInboxEvent) -> AgentInbox {
+        var next = self
+        switch event {
+        case .queued(let pending):
+            next.accept(pending.message.id)
+            next.pendingMessages.append(pending)
+        case .turnStarted(let pending):
+            next.accept(pending.message.id)
+            if let index = next.pendingMessages.firstIndex(where: { $0.turnID == pending.turnID }) {
+                next.pendingMessages.remove(at: index)
+            }
+            next.activeMessage = pending
+            next.status = .running(pending.turnID)
+        case .turnCompleted(let turnID):
+            guard activeTurnID == turnID else { return self }
+            next.activeMessage = nil
+            next.status = .idle
+        case .turnFailed(let turnID, let failure):
+            guard activeTurnID == turnID else { return self }
+            next.activeMessage = nil
+            next.status = .failed(failure)
+        }
+        return next
+    }
+
+    /// The inbox once the turn on `turnID` has its reply: the reply ends the turn, before its
+    /// completion is journaled, so a crash between the two can't lose it.
+    func answered(_ turnID: TurnID) -> AgentInbox {
+        guard activeTurnID == turnID else { return self }
+        var next = self
+        next.activeMessage = nil
+        next.status = .idle
+        return next
+    }
+
+    /// The inbox reset: nothing waiting, and no turn.
+    func emptied() -> AgentInbox {
+        var next = self
+        next.activeMessage = nil
+        next.pendingMessages.removeAll(keepingCapacity: true)
+        next.status = .idle
+        return next
+    }
+
+    private mutating func accept(_ messageID: MessageID) {
+        guard !acceptedMessageIDs.contains(messageID) else { return }
+        acceptedMessageIDs.append(messageID)
+        if acceptedMessageIDs.count > 256 {
+            acceptedMessageIDs.removeFirst(acceptedMessageIDs.count - 256)
+        }
+    }
+}
+
+/// What happened in an agent's inbox.
+public enum AgentInboxEvent: Hashable, Codable, Sendable {
+    /// A message waits while another is answered.
+    case queued(PendingConversationMessage)
+    case turnStarted(PendingConversationMessage)
+    case turnCompleted(TurnID)
+    case turnFailed(TurnID, ConversationFailure)
+}
+
+public struct ConversationState: Hashable, Codable, Sendable {
+    public let conversationID: ConversationID
+    /// The people in it: whoever writes joins, the first as its admin.
+    public internal(set) var members: Group
+    /// Its agent's inbox.
+    public internal(set) var inbox: AgentInbox
+    public internal(set) var pendingReplies: [PendingConversationReply]
+    public internal(set) var history: [ConversationHistoryEntry]
+
+    public init(
+        conversationID: ConversationID,
+        members: Group = Group(),
+        inbox: AgentInbox = AgentInbox(),
+        pendingReplies: [PendingConversationReply] = [],
+        history: [ConversationHistoryEntry] = []
+    ) {
+        self.conversationID = conversationID
+        self.members = members
+        self.inbox = inbox
+        self.pendingReplies = pendingReplies
+        self.history = history
     }
 
     public mutating func apply(_ event: ConversationEvent) {
@@ -677,22 +676,28 @@ public struct ConversationState: Hashable, Codable, Sendable {
         case .member(let event):
             members = members.applying(event)
 
-        case .messageQueued(let pending):
-            rememberAcceptedMessage(pending.message.id)
-            pendingMessages.append(pending)
-            appendUserMessage(pending.message)
+        case .inbox(let event):
+            switch event {
+            case .queued(let pending), .turnStarted(let pending):
+                appendUserMessage(pending.message)
+            case .turnFailed(let turnID, let failure) where inbox.activeTurnID == turnID:
+                appendHistory(
+                    ConversationHistoryEntry(
+                        id: "failure:\(turnID.rawValue.uuidString)",
+                        role: .assistant,
+                        text: failure.message
+                    )
+                )
+            case .turnFailed, .turnCompleted:
+                break
+            }
+            inbox = inbox.applying(event)
 
         case .replyQueued(let pending):
             if !pendingReplies.contains(pending) {
                 pendingReplies.append(pending)
             }
-            // Queueing the terminal reply is the durable completion barrier.
-            // It is deliberately applied before turnCompleted is emitted so
-            // a crash between journal writes cannot lose the reply.
-            if activeTurnID == pending.turnID {
-                activeMessage = nil
-                status = .idle
-            }
+            inbox = inbox.answered(pending.turnID)
             appendHistory(
                 ConversationHistoryEntry(
                     id: "reply:\(pending.turnID.rawValue.uuidString)",
@@ -704,59 +709,19 @@ public struct ConversationState: Hashable, Codable, Sendable {
         case .replyDelivered(let turnID):
             pendingReplies.removeAll { $0.turnID == turnID }
 
-        case .turnStarted(let pending):
-            rememberAcceptedMessage(pending.message.id)
-            appendUserMessage(pending.message)
-            if let index = pendingMessages.firstIndex(where: { $0.turnID == pending.turnID }) {
-                pendingMessages.remove(at: index)
-            }
-            activeMessage = pending
-            status = .running(pending.turnID)
-
-        case .turnCompleted(let turnID):
-            guard activeTurnID == turnID else { return }
-            activeMessage = nil
-            status = .idle
-
-        case .turnFailed(let turnID, let failure):
-            guard activeTurnID == turnID else { return }
-            activeMessage = nil
-            status = .failed(failure)
-            appendHistory(
-                ConversationHistoryEntry(
-                    id: "failure:\(turnID.rawValue.uuidString)",
-                    role: .assistant,
-                    text: failure.message
-                )
-            )
-
-        case .memoryObservationQueued, .memoryObservationsCompleted:
-            break
-
         case .reset:
-            activeMessage = nil
-            pendingMessages.removeAll(keepingCapacity: true)
+            inbox = inbox.emptied()
             pendingReplies.removeAll(keepingCapacity: true)
             history.removeAll(keepingCapacity: true)
-            status = .idle
         }
     }
 
     public var requiresRecovery: Bool {
-        switch status {
+        switch inbox.status {
         case .running:
             true
         case .idle, .failed:
-            !pendingMessages.isEmpty
-                || !pendingReplies.isEmpty
-        }
-    }
-
-    private mutating func rememberAcceptedMessage(_ messageID: MessageID) {
-        guard !acceptedMessageIDs.contains(messageID) else { return }
-        acceptedMessageIDs.append(messageID)
-        if acceptedMessageIDs.count > 256 {
-            acceptedMessageIDs.removeFirst(acceptedMessageIDs.count - 256)
+            !inbox.pendingMessages.isEmpty || !pendingReplies.isEmpty
         }
     }
 
@@ -953,7 +918,7 @@ extension ConversationDecision {
         switch action {
         case .receive(let message, let turnID, let agentRole):
             guard message.conversationID == state.conversationID,
-                !state.acceptedMessageIDs.contains(message.id)
+                !state.inbox.acceptedMessageIDs.contains(message.id)
             else { return ConversationDecision() }
             let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty || !message.attachments.isEmpty else {
@@ -975,18 +940,18 @@ extension ConversationDecision {
                 turnID: turnID, agentRole: agentRole)
             // Whoever writes is one of its members.
             var events = state.members.admitting(message.userID).map { [ConversationEvent.member($0)] } ?? []
-            guard case .running = state.status else {
+            guard case .running = state.inbox.status else {
                 // Idle, or failed: the oldest waiting message starts, which is this one if none waits.
-                let next = state.pendingMessages.first ?? pending
-                if next != pending { events.append(.messageQueued(pending)) }
+                let next = state.inbox.pendingMessages.first ?? pending
+                if next != pending { events.append(.inbox(.queued(pending))) }
                 return ConversationDecision(
-                    events: events + [.turnStarted(next)],
+                    events: events + [.inbox(.turnStarted(next))],
                     effects: [.runReply(ConversationTurnRequest(next, in: state.conversationID))])
             }
-            return ConversationDecision(events: events + [.messageQueued(pending)])
+            return ConversationDecision(events: events + [.inbox(.queued(pending))])
 
         case .modelCompleted(let turnID, let completion):
-            guard state.activeTurnID == turnID else { return ConversationDecision() }
+            guard state.inbox.activeTurnID == turnID else { return ConversationDecision() }
             var events: [ConversationEvent] = []
             var effects: [ConversationEffect] = []
             switch completion {
@@ -995,7 +960,7 @@ extension ConversationDecision {
             case .void:
                 effects.append(.publish(.reply(.completed(conversationID: state.conversationID, turnID: turnID))))
             }
-            events.append(.turnCompleted(turnID))
+            events.append(.inbox(.turnCompleted(turnID)))
             let next = startingNext(in: state)
             return ConversationDecision(events: events + next.events, effects: effects + next.effects)
 
@@ -1004,22 +969,23 @@ extension ConversationDecision {
             return ConversationDecision(events: [.replyDelivered(turnID)])
 
         case .modelFailed(let turnID, let failure):
-            guard state.activeTurnID == turnID else { return ConversationDecision() }
+            guard state.inbox.activeTurnID == turnID else { return ConversationDecision() }
             // A message already waiting is the person's next word: it starts now, as after a reply.
             let next = startingNext(in: state)
-            return ConversationDecision(events: [.turnFailed(turnID, failure)] + next.events, effects: next.effects)
+            return ConversationDecision(
+                events: [.inbox(.turnFailed(turnID, failure))] + next.events, effects: next.effects)
 
         case .reset:
-            let cancel = state.activeTurnID.map { [ConversationEffect.cancelModel($0)] } ?? []
+            let cancel = state.inbox.activeTurnID.map { [ConversationEffect.cancelModel($0)] } ?? []
             return ConversationDecision(
                 events: [.reset], effects: cancel + [.publish(.reset(conversationID: state.conversationID))])
 
         case .resume:
-            switch state.status {
+            switch state.inbox.status {
             case .idle:
                 return startingNext(in: state)
             case .running:
-                guard let active = state.activeMessage else { return ConversationDecision() }
+                guard let active = state.inbox.activeMessage else { return ConversationDecision() }
                 return ConversationDecision(effects: [
                     .runReply(ConversationTurnRequest(active, in: state.conversationID))
                 ])
@@ -1031,9 +997,9 @@ extension ConversationDecision {
 
     /// The oldest waiting message's turn starting, if one waits.
     private static func startingNext(in state: ConversationState) -> ConversationDecision {
-        guard let next = state.pendingMessages.first else { return ConversationDecision() }
+        guard let next = state.inbox.pendingMessages.first else { return ConversationDecision() }
         return ConversationDecision(
-            events: [.turnStarted(next)],
+            events: [.inbox(.turnStarted(next))],
             effects: [.runReply(ConversationTurnRequest(next, in: state.conversationID))])
     }
 }

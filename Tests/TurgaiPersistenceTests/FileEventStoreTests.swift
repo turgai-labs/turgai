@@ -111,13 +111,14 @@ struct FileEventStoreTests {
         let envelope = EventEnvelope(
             persistenceID: persistenceID,
             sequenceNumber: 1,
-            event: ConversationEvent.messageQueued(
-                PendingConversationMessage(
-                    message: message,
-                    turnID: TurnID(),
-                    agentRole: "test"
-                )
-            )
+            event: ConversationEvent.inbox(
+                .queued(
+                    PendingConversationMessage(
+                        message: message,
+                        turnID: TurnID(),
+                        agentRole: "test"
+                    )
+                ))
         )
         var data = try JSONEncoder().encode(envelope)
         data.append(0x0A)

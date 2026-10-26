@@ -42,12 +42,12 @@ struct ConversationTests {
         )
 
         var record = ConversationState(conversationID: conversationID)
-        record.apply(.turnStarted(first))
-        record.apply(.messageQueued(second))
+        record.apply(.inbox(.turnStarted(first)))
+        record.apply(.inbox(.queued(second)))
 
-        #expect(record.status == .running(first.turnID))
-        #expect(record.activeMessage == first)
-        #expect(record.pendingMessages == [second])
+        #expect(record.inbox.status == .running(first.turnID))
+        #expect(record.inbox.activeMessage == first)
+        #expect(record.inbox.pendingMessages == [second])
         #expect(record.requiresRecovery)
 
         let reply = PendingConversationReply(
@@ -55,14 +55,14 @@ struct ConversationTests {
             reply: ConversationReply("answer")!
         )
         record.apply(.replyQueued(reply))
-        #expect(record.status == .idle)
-        #expect(record.activeMessage == nil)
-        #expect(record.pendingMessages == [second])
+        #expect(record.inbox.status == .idle)
+        #expect(record.inbox.activeMessage == nil)
+        #expect(record.inbox.pendingMessages == [second])
         #expect(record.pendingReplies == [reply])
 
         // The later lifecycle event is harmless when replayed after the
         // reply queue event already closed the turn.
-        record.apply(.turnCompleted(first.turnID))
+        record.apply(.inbox(.turnCompleted(first.turnID)))
         record.apply(.replyDelivered(first.turnID))
         #expect(record.pendingReplies.isEmpty)
     }
@@ -80,12 +80,9 @@ struct ConversationTests {
             turnID: TurnID(),
             agentRole: "test"
         )
-        record.apply(.turnStarted(message))
+        record.apply(.inbox(.turnStarted(message)))
         record.apply(
-            .turnFailed(
-                message.turnID,
-                ConversationFailure(kind: .model, message: "unavailable")
-            )
+            .inbox(.turnFailed(message.turnID, ConversationFailure(kind: .model, message: "unavailable")))
         )
 
         #expect(!record.requiresRecovery)
