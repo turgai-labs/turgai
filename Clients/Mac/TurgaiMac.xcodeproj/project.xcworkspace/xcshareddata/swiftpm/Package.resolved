@@ -367,7 +367,7 @@
       "location" : "https://github.com/turgai-labs/swift-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "1b56f87703a2037554b3ae130e08c371cc190347"
+        "revision" : "3c2ebf83529e618959804e89eca0805900e14df7"
       }
     },
     {
