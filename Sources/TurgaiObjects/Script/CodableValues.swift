@@ -103,7 +103,7 @@ public enum CodableValues {
                     if let part = notCodable(argument) { return part }
                 }
                 return nil
-            case .character, .tuple, .function, .parameter, .inout, .dynamic:
+            case .character, .tuple, .function, .parameter, .inout, .dynamic, .metatype:
                 return type
             }
         }
