@@ -14,40 +14,14 @@ struct ChatView: View {
     var body: some View {
         ScrollViewReader { reader in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(state.messages) { message in
-                        Bubble(role: message.role, text: message.text)
-                            .id(message.id)
-                    }
-                    ForEach(state.pending) { request in
-                        Bubble(role: .user, text: request.text)
-                            .opacity(0.55)
-                            .id(request.id)
-                    }
-                    if let turn = state.turn {
-                        TurnView(turn: turn)
-                            .id("turn")
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
+                MessageList(messages: state.messages, pending: state.pending, turn: state.turn)
             }
             // The messages run under the floating bars, softened at the edges.
             .safeAreaInset(edge: .top, spacing: 0) { header }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(alignment: .leading, spacing: 8) {
-                    if let error = state.error {
-                        Text(error.message)
-                            .font(.callout)
-                            .foregroundStyle(Color.turgaiAccent)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .glassEffect(.regular, in: .capsule)
-                    }
-                    Composer(draft: $store.draft, isConnected: isConnected) { store.send(.sendTapped) }
+                BottomBar(error: state.error, draft: $store.draft, isConnected: isConnected) {
+                    store.send(.sendTapped)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 20)
             }
             .onChange(of: state.messages.last?.id) { scrollToEnd(reader) }
             .onChange(of: state.pending.last?.id) { scrollToEnd(reader) }
@@ -55,26 +29,12 @@ struct ChatView: View {
         }
         .background(Color.turgaiCanvas)
         .ignoresSafeArea(.container, edges: .top)
-        .alert(
-            approvalTitle,
-            isPresented: Binding(get: { state.approvals.first != nil }, set: { _ in }),
-            presenting: state.approvals.first
-        ) { approval in
-            Button("Don't Allow", role: .cancel) { store.send(.approvalAnswered(approval.id, .denied)) }
-            Button("Allow") { store.send(.approvalAnswered(approval.id, .granted)) }
-        } message: { approval in
-            Text(approval.arguments)
-        }
-        // A menu bar app sits behind other apps; come forward to ask.
-        .onChange(of: state.approvals.first?.id) { _, id in
-            if id != nil { NSApplication.shared.activate() }
-        }
+        .modifier(
+            ApprovalAlert(approval: state.approvals.first) { approval, decision in
+                store.send(.approvalAnswered(approval.id, decision))
+            })
         .task(id: session) { store.send(.connect(session)) }
         .onDisappear { store.send(.disconnect) }
-    }
-
-    private var approvalTitle: String {
-        state.approvals.first.map { "Allow Turgai to use \($0.action)?" } ?? ""
     }
 
     private var isConnected: Bool {
@@ -230,5 +190,76 @@ private struct Composer: View {
                 .disabled(!isConnected || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+    }
+}
+
+/// The conversation: what was said, what's sent but not yet taken, and the turn running now.
+private struct MessageList: View {
+    let messages: [Message]
+    let pending: [SendMessageRequest]
+    let turn: ChatFeature.Turn?
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 12) {
+            ForEach(messages) { (message: Message) in
+                Bubble(role: message.role, text: message.text).id(message.id)
+            }
+            ForEach(pending) { (request: SendMessageRequest) in
+                Bubble(role: .user, text: request.text).opacity(0.55).id(request.id)
+            }
+            if let turn {
+                TurnView(turn: turn).id("turn")
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 12)
+    }
+}
+
+/// The composer, and what went wrong above it if something did. Typing changes only this.
+private struct BottomBar: View {
+    let error: ChatError?
+    @Binding var draft: String
+    let isConnected: Bool
+    let send: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let error {
+                Text(error.message)
+                    .font(.callout)
+                    .foregroundStyle(Color.turgaiAccent)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .glassEffect(.regular, in: .capsule)
+            }
+            Composer(draft: $draft, isConnected: isConnected, send: send)
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 20)
+    }
+}
+
+/// Asks about the oldest action waiting for consent, bringing the app forward to ask: a menu bar
+/// app sits behind the others.
+private struct ApprovalAlert: ViewModifier {
+    let approval: Approval?
+    let answer: (Approval, ApprovalDecision) -> Void
+
+    private var title: String {
+        approval.map { (approval: Approval) -> String in "Allow Turgai to use \(approval.action)?" } ?? ""
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .alert(title, isPresented: .constant(approval != nil), presenting: approval) { (approval: Approval) in
+                Button("Don't Allow", role: .cancel) { answer(approval, .denied) }
+                Button("Allow") { answer(approval, .granted) }
+            } message: { (approval: Approval) in
+                Text(approval.arguments)
+            }
+            .onChange(of: approval?.id) { _, id in
+                if id != nil { NSApplication.shared.activate() }
+            }
     }
 }

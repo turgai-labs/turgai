@@ -83,40 +83,15 @@ struct LoginView: View {
                     .foregroundStyle(Color.turgaiAccent)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            VStack(alignment: .leading, spacing: 12) {
-                TextField("Username", text: $store.login.username)
-                    .textContentType(.username)
-                SecureField("Password", text: $store.login.password)
-                    .textContentType(form.mode == .register ? .newPassword : .password)
-                if form.mode == .register {
-                    Text("Letters, numbers, dots, dashes, or underscores. A password of at least 12 characters.")
-                        .font(.caption)
-                        .foregroundStyle(Color.turgaiMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+            LoginFields(
+                username: $store.login.username, password: $store.login.password, mode: form.mode
+            ) {
+                store.send(.submitTapped)
             }
-            .textFieldStyle(.roundedBorder)
-            .controlSize(.large)
-            .onSubmit { store.send(.submitTapped) }
-            HStack(spacing: 16) {
-                Button {
-                    store.send(.submitTapped)
-                } label: {
-                    if form.progress == .submitting {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text(title)
-                    }
-                }
-                .buttonStyle(.glassProminent)
-                .tint(.turgaiAccent)
-                .controlSize(.large)
-                .disabled(form.progress == .submitting || form.username.isEmpty || form.password.isEmpty)
-                Button(switchPrompt) { store.send(.modeChanged(otherMode)) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.signalBlue)
-                    .disabled(form.progress == .submitting)
-            }
+            LoginActions(
+                title: title, switchPrompt: switchPrompt, isSubmitting: form.progress == .submitting,
+                isFilled: !form.username.isEmpty && !form.password.isEmpty,
+                submit: { store.send(.submitTapped) }, switchMode: { store.send(.modeChanged(otherMode)) })
         }
         .frame(maxWidth: 360, alignment: .leading)
         .animation(.smooth, value: form.mode)
@@ -235,5 +210,62 @@ struct ColorField: View {
             }
         }
         .ignoresSafeArea()
+    }
+}
+
+/// The username and password, and what a new one needs. Typing changes only this.
+private struct LoginFields: View {
+    @Binding var username: String
+    @Binding var password: String
+    let mode: AppFeature.LoginForm.Mode
+    let submit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("Username", text: $username)
+                .textContentType(.username)
+            SecureField("Password", text: $password)
+                .textContentType(mode == .register ? .newPassword : .password)
+            if mode == .register {
+                Text("Letters, numbers, dots, dashes, or underscores. A password of at least 12 characters.")
+                    .font(.caption)
+                    .foregroundStyle(Color.turgaiMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .textFieldStyle(.roundedBorder)
+        .controlSize(.large)
+        .onSubmit(submit)
+    }
+}
+
+/// Signing in or creating the account, and switching between the two.
+private struct LoginActions: View {
+    let title: String
+    let switchPrompt: String
+    let isSubmitting: Bool
+    /// Whether both a username and a password are typed.
+    let isFilled: Bool
+    let submit: () -> Void
+    let switchMode: () -> Void
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Button(action: submit) {
+                if isSubmitting {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text(title)
+                }
+            }
+            .buttonStyle(.glassProminent)
+            .tint(.turgaiAccent)
+            .controlSize(.large)
+            .disabled(isSubmitting || !isFilled)
+            Button(switchPrompt, action: switchMode)
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.signalBlue)
+                .disabled(isSubmitting)
+        }
     }
 }
