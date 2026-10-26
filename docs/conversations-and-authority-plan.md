@@ -55,7 +55,7 @@ Hail is not changed by the split. Hail already runs one turn at a time per agent
 
 ## Authority, after the split
 
-Superseded for who may call what by [Access](access-plan.md). What follows is kept for visibility, which is still open.
+Superseded by [Access](access-plan.md).
 
 - **Party:** a person or a group. Agents and objects are owned by a party.
 - **Resource**, which has an owner:

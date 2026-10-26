@@ -1,6 +1,6 @@
 # Access
 
-Agreed: who may call what, and who decides. Visibility, what can be *found*, is the next question, and isn't settled here.
+Agreed: who may find what, who may call it, and who decides.
 
 ## Where it stands
 
@@ -24,8 +24,23 @@ So there's one boundary, the distributed call, and one infrastructure on it:
 
 1. **Who's calling.** The actor system stamps every call with its caller. Code can read it, but never set it, and it's never taken from arguments. CallChain already carries the actor ids.
 2. **Who made it.** When an actor is made, the stamp of the call that made it is recorded as its creator.
-3. **Who may call it.** Each actor keeps its own list, journaled with it. Only its creator changes it, and changing it is a call too.
-4. **The check.** The receiving side checks the stamped caller against the list, before the target runs. It's one place in the actor system, and it covers every actor on every node.
+3. **Who may find it, read it, and change it.** Each actor keeps these with it, journaled. Only its creator changes them, and changing them is a call too.
+4. **The check.** The receiving side checks the stamped caller against the list for the action's kind, before the target runs. It's one place in the actor system, and it covers every actor on every node.
+
+### Finding, reading, changing
+
+- **Finding is coarse:** everyone, or only some. Something that can be found but not used is what a request is made from.
+- **Each action either reads or changes.** The actor's own code says which. For objects, that's the authority attributes in object code. For a tool or an agent, whoever offers it through the ToolsAPI says it.
+- **Two lists:** who may read, and who may change. Changing includes reading.
+
+```
+shared calendar, made by Ann
+  found by:  everyone
+  read:      everyone          → events(from:to:)
+  change:    Ann, Bob          → add(event:), remove(event:)
+```
+
+Bob's agent adds an event: the action changes, Bob is on the change list, so it runs. Cat's agent finds the calendar and reads it. When it tries to add, it's refused, or it asks Ann.
 
 That's B, the actor's own list, rather than A, where holding a reference is the right. With a list, "who may call this" is a value that can be shown, journaled, revoked, and asked to join. That last part is where access requests come in.
 
@@ -43,14 +58,13 @@ Nothing built on 1–4 changes when these land.
 ## Open
 
 - **Which caller is stamped:** the actor that made the call (the planner object), or who it ultimately acts for (the person at the start of the chain)? This also decides who the creator is when an agent makes an object.
-- **Visibility:** what can be found, and by whom, next to who may call.
 - **Requests:** asking to join an actor's list, and the creator's answer, built on 3.
 
 ## Order
 
 1. Stamp the caller on every call, the same on every node.
 2. Record the creator when an actor is made.
-3. Each actor's list, and the check on the receiving side.
+3. Each actor's finding, reading and changing lists; actions marked read or change; the check on the receiving side.
 4. The ToolsAPI: offering a tool as a distributed actor.
 5. Requests and answers.
 6. In SDA: mTLS, and a node speaking only for its own actors.
