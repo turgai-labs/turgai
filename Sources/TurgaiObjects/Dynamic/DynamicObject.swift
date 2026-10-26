@@ -208,7 +208,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     distributed func remove() async throws {
         try await emit(event: try state.removing())
         stop()
-        try rehub()
+        rehub()
         refollow()
     }
 

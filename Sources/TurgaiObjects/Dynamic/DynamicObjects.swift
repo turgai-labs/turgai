@@ -102,7 +102,7 @@ public distributed actor DynamicObjects {
     public distributed func unmadeTypes() throws -> [String: ObjectDescription] {
         let running = Set(state.entries.map(\.type))
         var specs: [String: ObjectDescription] = [:]
-        for (name, type) in state.typeNames where !running.contains(type) {
+        for (_, type) in state.typeNames where !running.contains(type) {
             guard let source = state.types[type] else { continue }
             specs[source.type] = try source.spec(description: nil)
         }
