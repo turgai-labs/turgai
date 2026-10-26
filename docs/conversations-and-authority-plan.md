@@ -28,10 +28,11 @@ And `Conversation` does eight jobs at once (below), so there's no place that say
 
 ## The split: by who owns each rule
 
-The shape of swift-chat: a **room** plus **participants**.
+The shape of swift-chat: a **room** plus **participants**. The room is `Conversation`, under its own name: there is no new room type.
 
 1. **`Conversation`, the room.** Its own id, its members, and its messages in order.
-   - Events: `joined(Participant)`, `left`, `linked(Link)`, `unlinked`, `said(Message, by: Participant)`.
+   - Its members are a **`Group`**: who is in it, each a `member` or an `admin`. Anyone who writes joins; the first is the admin. The group is the conversation's alone for now, and becomes its own actor once something else needs it.
+   - Events: `member(GroupEvent)`, `linked(Link)`, `unlinked`, `said(Message, by: Participant)`.
    - Invariants: only members speak; messages have one order.
    - Its history is what gets delivered. A link catches up from it, so `pendingReplies` goes away.
 2. **An agent participant per agent member.** Owns B and C: its inbox, one turn at a time, failure, its configuration.
@@ -44,6 +45,11 @@ Leaving the room:
 - **D, memory:** reacts to `said`, in Memory.
 - **H, commands:** go to their owners: memory to `User`, tasks and reminders to `Schedule`, context and diagnostics to the agent participant.
 - **G, approvals:** replaced by permission requests (below).
+
+In phases, each with the same behaviour:
+1. **The domain, in today's actor.** `ConversationState` keeps the room's part and gains its group; the agent's inbox (`status`, `pending`, `active`, `accepted`) becomes its own value, with its own events and decider. Approvals go to the group's admins, through their own links.
+2. **Two actors.** The conversation and an agent participant per agent member; a conversation's id is its own, and a link maps a Telegram chat or an app session to it. A conversation may have several agents, a message going to one, as today.
+3. **Memory and commands** to their owners.
 
 Hail is not changed by the split. Hail already runs one turn at a time per agent: it chains turns, and its history refuses a second open turn. The durable inbox, delivery and failure handling are Turgai's policy.
 
@@ -84,14 +90,12 @@ Two rules, kept apart:
 
 ## Open
 
-1. Two actor kinds (room + agent participant), or one?
-2. Can a conversation have more than one agent?
-3. When B is called by A, does A's lack of a grant limit B? This also covers people asking an agent, and timers and announcements, which have no caller. Ann asking the shared planner is this case: whether the planner's calls run with Ann's grants. For now, a call is checked against the party whose code makes it.
-4. Groups: how families and companies own things and decide, beyond "a group is a party".
+1. When B is called by A, does A's lack of a grant limit B? This also covers people asking an agent, and timers and announcements, which have no caller. Ann asking the shared planner is this case: whether the planner's calls run with Ann's grants. For now, a call is checked against the party whose code makes it.
+2. Groups: how families and companies own things and decide, beyond a conversation's members.
 
 ## Order
 
-1. Settle 1–2, then extract the room and the agent participant from `Conversation` as pure domain values, with the same behaviour.
+1. Extract the agent's inbox from `Conversation` and give it its group, as pure domain values, with the same behaviour.
 2. Give the conversation its own id, members and links.
 3. Move memory and commands to their owners.
 4. Authority: Hail's gate, the requests and grants, then folders and actions, system access through the Mac, and revoking.
