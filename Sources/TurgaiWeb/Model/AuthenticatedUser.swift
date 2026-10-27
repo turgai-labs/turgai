@@ -59,7 +59,7 @@ enum AuthenticatedUser: Identifiable, Sendable, Equatable {
     /// in the dashboard's group, an admin when it's an administrator.
     var dashboardScope: CallScope {
         let role: GroupRole = if case .administrator = self { .admin } else { .member }
-        return CallScope(UserID(rawValue: "account:\(id.uuidString)"), in: .dashboard, as: role)
+        return CallScope(UserID(account: id), in: .dashboard, as: role)
     }
 
 }

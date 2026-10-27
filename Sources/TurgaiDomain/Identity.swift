@@ -23,6 +23,12 @@ public struct UserID: RawRepresentable, Hashable, Codable, Sendable {
     public init(participantID: ParticipantID) {
         self.init(rawValue: "participant:\(participantID.stableKey)")
     }
+
+    /// The person who signs in with the Turgai account `id`: the same in every chat they have with
+    /// it, with any bot, and on the dashboard.
+    public init(account id: UUID) {
+        self.init(rawValue: "account:\(id.uuidString)")
+    }
 }
 
 /// The domain view of a Turgai user. Provider-specific profile data belongs in

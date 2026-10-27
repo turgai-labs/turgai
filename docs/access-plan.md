@@ -109,12 +109,14 @@ Nothing built on 1–4 changes when these land.
 ## Open
 
 - **Who writes Turgai's own objects,** such as the Mac's services: whoever set the Mac up, rather than everyone.
+- **Linking identities.** A Turgai account is one person in all its chats and on the dashboard. A person on Telegram, or any chat without Turgai accounts, is another id until it's linked to their account.
+- **Who may change a type others' objects run.** Its new code reaches only the objects its editor may write; the others keep running the old code.
 
 ## Order
 
 1. Stamp the caller on every call, the same on every node. *Built.*
-2. What each actor allows: read, write; a new one its maker's alone; changed by whoever can write it. *Built for made objects.*
-3. The check on the receiving side. *Built for made objects:* SDA asks a filter on the object's node before any call's target runs, from another node or through a reference here; Turgai's filter checks the call chain against the object's access, by a table of what each of its methods needs, and refuses a method not in it. The directory lists only what the caller may read, from what it keeps of each object, never asking the objects. An object's own tasks and the events it follows run on its maker's behalf, and so does waking it at launch.
+2. What each actor allows: read, write; a new one its maker's alone; changed by whoever can write it. *Built:* a made object's access is part of its state, the caller its maker until it's given code; built-ins and agents are read by everyone and written by no one, until whoever runs the node, and whoever made the agent, are known.
+3. The check on the receiving side. *Built for every object:* SDA asks a filter on the object's node before any call's target runs, from another node or through a reference here. Each kind of object says its access; an object that doesn't is refused. Every call needs a person behind it who may read the object; a change is refused inside the object's own decision unless they may write it. The directory lists, and finds names among, only what the caller may read, and a type's new code reaches only the objects the caller may write. An object's own tasks, the events it follows, and waking it at launch run on its maker's behalf. A turn brings its agent's activity back through its own call; history, `/context`, the dashboard and the Mac's object list ask as the person looking.
 4. The ToolsAPI: offering a tool as a distributed actor.
 5. Requests and answers, and macOS's consent on the Mac.
 6. In SDA: mTLS, and a node speaking only for its own actors.

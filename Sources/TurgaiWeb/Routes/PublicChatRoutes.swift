@@ -43,7 +43,8 @@ extension TurgaiMainWebApp {
                     profiles: dependencies.agentProfiles)
             else { return publicAPIUnauthorizedResponse() }
             let entries = try await dependencies.webChatBridge.objects(
-                listedTo: conversation.person, in: conversation.domainID, role: .profile(conversation.profile.id))
+                listedTo: conversation.person(for: owner), in: conversation.domainID,
+                role: .profile(conversation.profile.id))
             return try publicAPIResponse(entries.map(ObjectListing.init))
         }
         registerChatSocket(on: router, dependencies: dependencies)
@@ -78,9 +79,10 @@ extension TurgaiMainWebApp {
             return .upgrade([:])
         } onUpgrade: { inbound, outbound, context in
             let query = context.request.uri.queryParameters
+            let owner = await chatOwner(from: context.request, auth: dependencies.auth)
             guard
                 let conversation = await chatConversation(
-                    owner: await chatOwner(from: context.request, auth: dependencies.auth),
+                    owner: owner,
                     conversationID: query["conversationID"].map(String.init),
                     botID: query["botID"].map(String.init),
                     profiles: dependencies.agentProfiles
@@ -102,7 +104,7 @@ extension TurgaiMainWebApp {
                 channel: conversation.domainID.channel,
                 rawValue: conversation.domainID.stableKey
             )
-            let userID = conversation.person
+            let userID = conversation.person(for: owner)
 
             do {
                 let writer = PublicChatSocketWriter(outbound: outbound)
@@ -457,11 +459,13 @@ private struct APIConversation: Sendable {
     let profile: TurgaiAgentProfile
     let publicID: TurgaiModels.ConversationID
 
-    /// Who writes in it: the account whose chat it is, or the API client the conversation is.
-    var person: TurgaiDomain.UserID {
-        TurgaiDomain.UserID(
-            rawValue: domainID.channel == accountChatChannel
-                ? "account:\(domainID.externalAddress.rawValue)" : "api:\(domainID.stableKey)")
+    /// Who writes in it for `owner`: the signed-in account, the same person in each of its chats,
+    /// or else the API client the conversation is.
+    func person(for owner: ChatOwner) -> TurgaiDomain.UserID {
+        switch owner {
+        case .account(let id): TurgaiDomain.UserID(account: id)
+        case .anonymous: TurgaiDomain.UserID(rawValue: "api:\(domainID.stableKey)")
+        }
     }
 
     var info: TurgaiModels.Conversation {
