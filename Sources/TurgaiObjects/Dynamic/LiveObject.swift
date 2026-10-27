@@ -9,8 +9,8 @@ import TurgaiDomain
 /// What happened to a dynamic object, as journaled: its code, what it holds, and what it did.
 public enum DynamicObjectEvent: Codable, Sendable {
     /// The code of its type it runs from now on, first or new, with the starting values of the
-    /// data new to it.
-    case adopted(BehaviorID, Script, starts: [String: JSONValue], by: CallScope)
+    /// data new to it, given on behalf of `by`. One that another object's code made is held by it.
+    case adopted(BehaviorID, Script, starts: [String: JSONValue], by: CallScope, heldBy: ObjectID?)
     /// `audience` given `level` of access, or none at all.
     case shared(with: Audience, AccessLevel?)
     /// What it's called and what it was made for, as it was asked for: an object made by name has
@@ -90,8 +90,8 @@ public enum DynamicObjectState: Codable, Sendable {
     /// every event is decided from the state it follows; it leaves the state as it is.
     public func applying(_ event: DynamicObjectEvent) -> DynamicObjectState {
         switch (self, event) {
-        case (.unmade, .adopted(let type, let code, let starts, let maker)):
-            .live(LiveObject(type: type, code: code, fields: starts, maker: maker))
+        case (.unmade, .adopted(let type, let code, let starts, let maker, let holder)):
+            .live(LiveObject(type: type, code: code, fields: starts, maker: maker, heldBy: holder))
         case (.unmade, _): self
         case (.live(let object), .removed): .removed(object)
         case (.live(let object), _): .live(object.applying(event))
@@ -122,17 +122,22 @@ public enum DynamicObjectState: Codable, Sendable {
     // MARK: Decisions
 
     /// Running `code` of the type `type` from now on, with `starts` for the data new to it, given
-    /// by a call through `chain`: an object not made yet becomes the caller's; a living one takes
-    /// it from a call that may write it.
+    /// by a call through `chain`: an object not made yet becomes the caller's, and the object's
+    /// whose code made it, if one did, which alone may use it; a living one takes it from a call
+    /// that may write it.
     func adopting(_ type: BehaviorID, _ code: Script, starts: [String: JSONValue], by chain: CallChain) throws
         -> DynamicObjectEvent
     {
         switch self {
-        case .unmade: break
-        case .live(let object): try object.changeable(by: chain)
-        case .removed: throw DynamicObjectError.removed
+        case .unmade:
+            let holder = chain.actors.last.flatMap { DynamicObject.identity(of: $0) == nil ? nil : $0 }
+            return .adopted(type, code, starts: starts, by: chain.scope, heldBy: holder)
+        case .live(let object):
+            try object.changeable(by: chain)
+            return .adopted(type, code, starts: starts, by: chain.scope, heldBy: nil)
+        case .removed:
+            throw DynamicObjectError.removed
         }
-        return .adopted(type, code, starts: starts, by: chain.scope)
     }
 
     /// The values it holds now, which new code keeps: none for an object not made yet.
@@ -178,20 +183,21 @@ public struct LiveObject: Codable, Sendable {
     /// How many happenings `recent` keeps.
     static let recentLimit = 10
 
-    /// An object just made by `maker`, running `code` of the type `type`, holding `fields`.
-    init(type: BehaviorID, code: Script, fields: [String: JSONValue], maker: CallScope) {
+    /// An object just made on behalf of `maker`, running `code` of the type `type`, holding
+    /// `fields`: its maker's, or, made by another object's code, its holder's alone.
+    init(type: BehaviorID, code: Script, fields: [String: JSONValue], maker: CallScope, heldBy holder: ObjectID?) {
         self.type = type
         self.code = code
         self.fields = fields
         self.maker = maker
-        self.access = ObjectAccess(madeBy: maker)
+        self.access = holder.map(ObjectAccess.init(heldBy:)) ?? ObjectAccess(madeBy: maker)
     }
 
     /// The object after `event`, which keeps living.
     func applying(_ event: DynamicObjectEvent) -> LiveObject {
         var next = self
         switch event {
-        case .adopted(let type, let code, let starts, _):
+        case .adopted(let type, let code, let starts, _, _):
             next.type = type
             next.code = code
             // New code starts again: what failed before is the old code's.

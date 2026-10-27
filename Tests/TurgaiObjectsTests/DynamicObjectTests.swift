@@ -497,11 +497,12 @@ struct DynamicObjectTests {
                 #expect(
                     "\(refused.map { String(describing: $0) } ?? "")".contains(
                         "`drinks` is a `Drinks`, not a `Counter`."))
-                // Making one by name that code made already says it's there.
+                // Making one by name that code made already says its name is taken: it's what
+                // `Drinks` holds, which only `Drinks` sees.
                 let taken = await #expect(throws: DynamicObjectsError.self) {
                     _ = try await objects.create(name: "tea", spec: .new(try Script(code: counter, type: "Counter")))
                 }
-                #expect(taken == .exists("tea", type: "Counter"))
+                #expect(taken == .nameTaken("tea"))
                 return drinksID
             }
             try await withDynamicNode(joining: shop, store: store) { node in
@@ -514,7 +515,8 @@ struct DynamicObjectTests {
     }
 
     /// An object is made on behalf of whoever's call made it, from any node, and so is one its
-    /// code makes as it starts. Both keep it across a restart.
+    /// code makes as it starts, which only the object holding it may use. Both keep it across a
+    /// restart.
     @Test(.timeLimit(.minutes(2)))
     func anObjectKeepsWhoMadeIt() async throws {
         let store = MemoryEventStore()
@@ -542,9 +544,17 @@ struct DynamicObjectTests {
                     #expect(try await objects.held(drinksID).maker == ann)
                     #expect(try await objects.held(drinksID).access == ObjectAccess(madeBy: ann))
                     let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
-                    let made = try await DynamicObject.resolve(
-                        on: node, identity: tea)
+                    let made = try await DynamicObject.resolve(on: node, identity: tea)
+                    // Not hers to call: it's what Drinks holds.
+                    await #expect(throws: NotAllowed(.read)) { _ = try await made.maker }
+                }
+                // Read as Drinks: made on Ann's behalf, and Drinks' alone.
+                let drinks = ObjectID.virtual(DynamicObject.actorID(for: drinksID))
+                try await CallChain.$current.withValue(try CallChain.start(ann).entering(drinks)) {
+                    let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
+                    let made = try await DynamicObject.resolve(on: node, identity: tea)
                     #expect(try await made.maker == ann)
+                    #expect(try await made.access == ObjectAccess(heldBy: drinks))
                 }
             }
         }

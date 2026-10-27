@@ -79,8 +79,14 @@ public distributed actor DynamicObjects {
         guard let code = state.types[id] else { throw DynamicObjectsError.unknownType(id.rawValue) }
         // One that's there already, made by name or named by code, is changed, not made again.
         let existing = try await DynamicObject.resolve(on: actorSystem, identity: identity)
-        if let code = try? await existing.source {
+        do {
+            let code = try await existing.source
             throw DynamicObjectsError.exists(identity.rawValue, type: code.type)
+        } catch is NotAllowed {
+            // It's there, but not the caller's to see: another's, or what another object holds.
+            throw DynamicObjectsError.nameTaken(name)
+        } catch is DynamicObjectError {
+            // Not made yet, or removed for good, which what follows refuses.
         }
         guard !state.identities.contains(identity), !state.removed.contains(identity),
             try await ObjectNames.object(named: identity.rawValue, using: actorSystem) == nil

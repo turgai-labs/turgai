@@ -49,6 +49,12 @@ public struct ObjectAccess: Hashable, Codable, Sendable {
         levels = [.person(maker.person): .write]
     }
 
+    /// An object another object's code made: only that object, which holds it, may use or change
+    /// it. People reach it through its holder.
+    public init(heldBy holder: ObjectID) {
+        levels = [.object(holder): .write]
+    }
+
     /// Read by everyone and written by no one: what a built-in object and an agent allow, until
     /// whoever runs the node, and whoever made the agent, are known.
     public static let readByEveryone = ObjectAccess(levels: [.everyone: .read])

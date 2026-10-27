@@ -92,6 +92,12 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         return ObjectIdentity(rawValue: String(virtual.dropFirst(actorIDPrefix.count)))
     }
 
+    /// The identity of the made object `objectID` is, if it's one.
+    static func identity(of objectID: ObjectID) -> ObjectIdentity? {
+        guard case .virtual(let id) = objectID, id.rawValue.hasPrefix(actorIDPrefix) else { return nil }
+        return ObjectIdentity(rawValue: String(id.rawValue.dropFirst(actorIDPrefix.count)))
+    }
+
     static func persistenceID(for identity: ObjectIdentity) -> String {
         "turgai-object-\(identity.rawValue)"
     }
@@ -134,11 +140,15 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// starts as the code has it, and the objects its `init()` makes there are made now.
     distributed func adopt(_ type: BehaviorID, code: Script) async throws {
         let held = try state.held
+        let chain = try caller()
         var starts = try await ScriptInstance.starts(code, as: own)
-        for (field, value) in starts where held[field] == nil {
-            starts[field] = try await Self.making(value, on: actorSystem)
+        // What its code makes as it starts is made from it, so it holds what it makes.
+        try await CallChain.$current.withValue(try chain.entering(objectID)) {
+            for (field, value) in starts where held[field] == nil {
+                starts[field] = try await Self.making(value, on: actorSystem)
+            }
         }
-        try await emit(event: try state.adopting(type, code, starts: starts, by: try caller()))
+        try await emit(event: try state.adopting(type, code, starts: starts, by: chain))
         stop()
         rehub()
         refollow()
@@ -153,14 +163,18 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         var reached = reached
         guard reached.insert(own).inserted, case .live(let live) = state else { return reached }
         if live.type == type { try await adopt(type, code: code) }
+        // It passes the code on to what it holds itself: only it may change what its code made.
+        let chain = try caller().entering(objectID)
         for value in try state.live.fields.values {
             for held in ObjectReference.all(in: value) {
                 guard case .actor(let reference, _) = held,
                     let identity = Self.identity(of: try reference.actorID(using: actorSystem)),
                     !reached.contains(identity)
                 else { continue }
-                reached = try await Self.resolve(id: try reference.actorID(using: actorSystem), using: actorSystem)
-                    .typeChanged(type, code: code, reached: reached)
+                let object = try Self.resolve(id: try reference.actorID(using: actorSystem), using: actorSystem)
+                reached = try await CallChain.$current.withValue(chain) {
+                    try await object.typeChanged(type, code: code, reached: reached)
+                }
             }
         }
         return reached

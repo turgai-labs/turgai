@@ -29,7 +29,8 @@ struct SharingTests {
             try ShareObjectTool.sharing(in: try GeneratedContent(json: json), for: "share_object")
         }
 
-        #expect(try sharing(#"{"object": "tally", "with": "this chat's members", "level": "read"}"#) == (.members, .read))
+        #expect(
+            try sharing(#"{"object": "tally", "with": "this chat's members", "level": "read"}"#) == (.members, .read))
         #expect(try sharing(#"{"object": "tally", "with": "everyone", "level": "none"}"#) == (.everyone, .none))
         #expect(throws: ObjectToolError.missingArguments("share_object", missing: ["level"], unexpected: [])) {
             try sharing(#"{"object": "tally", "with": "everyone"}"#)
@@ -66,6 +67,47 @@ struct SharingTests {
             _ = try await self.as(ann) { try await annSession.share(tally, with: .members, .none) }
             await #expect(throws: NotAllowed(.read)) {
                 try await self.as(bob) { _ = try await object.respond("add", arguments: [:]) }
+            }
+        }
+    }
+
+    /// What an object's code makes is only its to use: sharing the object is enough for others to
+    /// use what it holds through it, and never directly.
+    @Test(.timeLimit(.minutes(1)))
+    func sharingAnObjectSharesWhatItHoldsThroughIt() async throws {
+        let drinks = """
+            actor Drinks {
+                private let tea = Counter(id: "tea")
+
+                func addTea() async throws -> Int {
+                    try await tea.add()
+                }
+            }
+            """
+        let uses = Uses(
+            interface: ModuleInterface(
+                name: Uses.module,
+                source: "actor Counter {\n    init(id: String)\n    func add() async throws -> Int\n}"),
+            objects: [:])
+        try await withClusterSystem("sharing", store: MemoryEventStore(), hostsVirtualActors: true) { node in
+            let objects = try await DynamicObjects.resolve(on: node)
+            let drinksID = try await self.as(ann) {
+                _ = try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
+                return try await objects.create(
+                    name: "Drinks", spec: .new(try Script(code: drinks, type: "Drinks", uses: uses)))
+            }
+            let desk = try await objects.held(drinksID)
+            try await self.as(ann) { try await desk.share(with: .group(family), .read) }
+
+            // Bob uses Drinks, and through it the tea it holds.
+            #expect(try await self.as(bob) { try await desk.respond("addTea", arguments: [:]).reply } == .integer(1))
+            // Not the tea itself, nor does Ann: it's what Drinks holds.
+            let tea = try await DynamicObject.resolve(on: node, identity: ObjectIdentity(rawValue: "tea"))
+            await #expect(throws: NotAllowed(.read)) {
+                try await self.as(bob) { _ = try await tea.respond("add", arguments: [:]) }
+            }
+            await #expect(throws: NotAllowed(.read)) {
+                try await self.as(ann) { _ = try await tea.respond("add", arguments: [:]) }
             }
         }
     }
