@@ -9,7 +9,7 @@ import struct AnyLanguageModel.GeneratedContent
 @testable import TurgaiApplication
 @testable import TurgaiObjects
 
-/// An object is shared through edit_object, with the chat the turn came in through, by whoever may
+/// An object is shared through share_object, with the chat the turn came in through, by whoever may
 /// change it: anyone else is refused, as any change is.
 @Suite(.serialized)
 struct SharingTests {
@@ -24,23 +24,18 @@ struct SharingTests {
     }
 
     @Test
-    func anEditIsWhatItDoesOrWhoMayUseItNeverBoth() throws {
-        func edit(_ json: String) throws -> ObjectEdit {
-            try EditObjectTool.edit(in: try GeneratedContent(json: json), for: "edit_object")
+    func sharingIsWhomAndHowFarEachOneOffered() throws {
+        func sharing(_ json: String) throws -> (SharingAudience, SharingLevel) {
+            try ShareObjectTool.sharing(in: try GeneratedContent(json: json), for: "share_object")
         }
 
-        #expect(try edit(#"{"object": "tally", "edit": {"change": "count by two"}}"#) == .code("count by two"))
-        #expect(
-            try edit(#"{"object": "tally", "edit": {"with": "this chat's members", "level": "read"}}"#)
-                == .sharing(with: .members, .read))
-        #expect(
-            try edit(#"{"object": "tally", "edit": {"with": "everyone", "level": "none"}}"#)
-                == .sharing(with: .everyone, .none))
-        #expect(throws: ObjectToolError.missingArguments("edit_object", missing: [], unexpected: ["with", "level"])) {
-            try edit(#"{"object": "tally", "edit": {"change": "x", "with": "everyone", "level": "read"}}"#)
+        #expect(try sharing(#"{"object": "tally", "with": "this chat's members", "level": "read"}"#) == (.members, .read))
+        #expect(try sharing(#"{"object": "tally", "with": "everyone", "level": "none"}"#) == (.everyone, .none))
+        #expect(throws: ObjectToolError.missingArguments("share_object", missing: ["level"], unexpected: [])) {
+            try sharing(#"{"object": "tally", "with": "everyone"}"#)
         }
-        #expect(throws: ObjectToolError.missingArguments("edit_object", missing: ["level"], unexpected: [])) {
-            try edit(#"{"object": "tally", "edit": {"with": "everyone"}}"#)
+        #expect(throws: ObjectToolError.self) {
+            try sharing(#"{"object": "tally", "with": "the family", "level": "read"}"#)
         }
     }
 

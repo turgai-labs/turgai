@@ -612,6 +612,7 @@ extension TurgaiAppService {
             .grantingAll(for: MakeObjectEffect.self)
             .grantingAll(for: ToolPageEffect.self)
             .grantingAll(for: EditObjectEffect.self)
+            .grantingAll(for: ShareObjectEffect.self)
             .grantingAll(for: UseObjectEffect.self)
             .grantingAll(for: RemoveObjectEffect.self)
             .grantingAll(for: InvokeObjectEffect.self)

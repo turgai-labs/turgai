@@ -1363,32 +1363,36 @@ public struct UseObjectEffect: ScopedEffect, Sendable {
     }
 }
 
-/// Changes an object made here: what it does, as described, or who may use it.
+/// Changes an object made here as described.
 public struct EditObjectEffect: ScopedEffect, Sendable {
     public let name = "objects.edit"
     let session: ObjectSession
     let handle: ObjectID
-    let edit: ObjectEdit
+    let change: String
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
-        let (session, handle, edit) = token.withConfiguration { ($0.session, $0.handle, $0.edit) }
-        switch edit {
-        case .code(let change): return try await session.edit(handle, change: change)
-        case .sharing(let audience, let level): return try await session.share(handle, with: audience, level)
-        }
+        let (session, handle, change) = token.withConfiguration { ($0.session, $0.handle, $0.change) }
+        return try await session.edit(handle, change: change)
     }
 }
 
-/// One change to one of your objects: what it holds or does, or who may use it.
-enum ObjectEdit: Sendable, Equatable {
-    /// What to change in what it holds or does, in words: its Swift code is rewritten for it.
-    case code(String)
-    /// Whom it's shared with, and how far.
-    case sharing(with: SharingAudience, SharingLevel)
+/// Shares an object made here with an audience, as far as asked, or takes their access away.
+public struct ShareObjectEffect: ScopedEffect, Sendable {
+    public let name = "objects.share"
+    let session: ObjectSession
+    let handle: ObjectID
+    let audience: SharingAudience
+    let level: SharingLevel
+    public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
+        let (session, handle, audience, level) = token.withConfiguration {
+            ($0.session, $0.handle, $0.audience, $0.level)
+        }
+        return try await session.share(handle, with: audience, level)
+    }
 }
 
 /// Whom an object is shared with, as the model chooses it: the group the turn came in through,
 /// that group's admins, or everyone.
-enum SharingAudience: String, CaseIterable, Sendable, Equatable {
+public enum SharingAudience: String, CaseIterable, Sendable, Equatable {
     case members = "this chat's members"
     case admins = "this chat's admins"
     case everyone
@@ -1404,7 +1408,7 @@ enum SharingAudience: String, CaseIterable, Sendable, Equatable {
 }
 
 /// How far an audience may go with an object: using it, changing it too, or not at all.
-enum SharingLevel: String, CaseIterable, Sendable, Equatable {
+public enum SharingLevel: String, CaseIterable, Sendable, Equatable {
     case read
     case write
     case none
@@ -1479,6 +1483,7 @@ public struct ObjectTools: Sendable {
         return always + [
             try UseObjectTool(session: session, objects: objects),
             try EditObjectTool(session: session, objects: objects),
+            try ShareObjectTool(session: session, objects: objects),
             try RemoveObjectTool(session: session, objects: objects),
         ]
     }
@@ -1821,44 +1826,18 @@ public struct EditObjectTool: HailCore.Tool {
     /// Your objects, to choose from: the only ones it can change.
     let objects: YourObject
     public let name = "edit_object"
-    public let description = "Change one of your objects: what it holds or does, or who may use it."
-    static let editProperty = "edit"
-    static let withProperty = "with"
-    static let levelProperty = "level"
+    public let description = "Change what an object holds or does: its Swift code is rewritten for it."
     private let parameters: GenerationSchema
 
     init(session: ObjectSession, objects: [ObjectID]) throws {
         self.session = session
         self.objects = YourObject(objects: objects)
-        // One edit, of either kind: never both, and never neither.
-        let edits = DynamicGenerationSchema(
-            name: "Edit",
-            anyOf: [
-                DynamicGenerationSchema(
-                    name: "WhatItDoes", description: "What it holds or does: its Swift code is rewritten for it.",
-                    properties: [
-                        .init(
-                            name: Self.changeProperty, description: "What to change.", schema: .init(type: String.self))
-                    ]),
-                DynamicGenerationSchema(
-                    name: "WhoMayUseIt", description: "Who may use it, and how far.",
-                    properties: [
-                        .init(
-                            name: Self.withProperty, description: "Whom.",
-                            schema: .init(
-                                type: String.self, guides: [.anyOf(SharingAudience.allCases.map(\.rawValue))])),
-                        .init(
-                            name: Self.levelProperty,
-                            description: "read uses it; write also changes it and who may use it; none takes it away.",
-                            schema: .init(type: String.self, guides: [.anyOf(SharingLevel.allCases.map(\.rawValue))])),
-                    ]),
-            ])
         self.parameters = try GenerationSchema(
             root: DynamicGenerationSchema(
                 name: "EditObject",
                 properties: [
                     self.objects.property("The object to change."),
-                    .init(name: Self.editProperty, description: "What to change.", schema: edits),
+                    .init(name: Self.changeProperty, description: "What to change.", schema: .init(type: String.self)),
                 ]),
             dependencies: [])
     }
@@ -1866,48 +1845,83 @@ public struct EditObjectTool: HailCore.Tool {
     public var schema: ToolDefinition { ToolDefinition(name: name, description: description, parameters: parameters) }
 
     public func effect(for input: Input) throws -> EditObjectEffect {
-        EditObjectEffect(
-            session: session, handle: try objects.object(in: input, for: name),
-            edit: try Self.edit(in: input, for: name))
-    }
-
-    /// The edit the arguments make: what to change, in words, or whom to share it with and how far.
-    static func edit(in input: Input, for tool: String) throws -> ObjectEdit {
-        guard let edit = try? input.value(GeneratedContent.self, forProperty: Self.editProperty) else {
-            throw ObjectToolError.missingArguments(tool, missing: [Self.editProperty], unexpected: [])
+        guard let change = try input.text(Self.changeProperty) else {
+            throw ObjectToolError.missingArguments(name, missing: [Self.changeProperty], unexpected: [])
         }
-        let change = try edit.text(Self.changeProperty)
-        let with = try edit.text(Self.withProperty)
-        let level = try edit.text(Self.levelProperty)
-        switch (change, with, level) {
-        case (let change?, nil, nil):
-            return .code(change)
-        case (nil, let with?, let level?):
-            guard let audience = SharingAudience(rawValue: with) else {
-                throw ObjectToolError.failed(
-                    UnofferedChoice(
-                        given: with, offered: SharingAudience.allCases.map(\.rawValue), argument: Self.withProperty
-                    ).description)
-            }
-            guard let reach = SharingLevel(rawValue: level) else {
-                throw ObjectToolError.failed(
-                    UnofferedChoice(
-                        given: level, offered: SharingLevel.allCases.map(\.rawValue), argument: Self.levelProperty
-                    ).description)
-            }
-            return .sharing(with: audience, reach)
-        case (.some, _, _):
-            let unexpected = [with.map { _ in Self.withProperty }, level.map { _ in Self.levelProperty }]
-            throw ObjectToolError.missingArguments(tool, missing: [], unexpected: unexpected.compactMap { $0 })
-        case (nil, _, _):
-            let missing = [with == nil ? Self.withProperty : nil, level == nil ? Self.levelProperty : nil]
-            throw ObjectToolError.missingArguments(tool, missing: missing.compactMap { $0 }, unexpected: [])
-        }
+        return EditObjectEffect(session: session, handle: try objects.object(in: input, for: name), change: change)
     }
     public func run(
         _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<EditObjectEffect>
     ) async throws -> CallReturn {
         try await EditObjectEffect.run(in: token)
+    }
+}
+
+/// Changes who may use one of your objects: this chat's members, its admins, or everyone, as far
+/// as using it, changing it too, or not at all.
+public struct ShareObjectTool: HailCore.Tool {
+    public typealias Input = GeneratedContent
+    static let withProperty = "with"
+    static let levelProperty = "level"
+    let session: ObjectSession
+    /// Your objects, to choose from: the only ones it can share.
+    let objects: YourObject
+    public let name = "share_object"
+    public let description = "Change who may use an object, and how far."
+    private let parameters: GenerationSchema
+
+    init(session: ObjectSession, objects: [ObjectID]) throws {
+        self.session = session
+        self.objects = YourObject(objects: objects)
+        self.parameters = try GenerationSchema(
+            root: DynamicGenerationSchema(
+                name: "ShareObject",
+                properties: [
+                    self.objects.property("The object to share."),
+                    .init(
+                        name: Self.withProperty, description: "Whom.",
+                        schema: .init(type: String.self, guides: [.anyOf(SharingAudience.allCases.map(\.rawValue))])),
+                    .init(
+                        name: Self.levelProperty,
+                        description: "read uses it; write also changes it and who may use it; none takes it away.",
+                        schema: .init(type: String.self, guides: [.anyOf(SharingLevel.allCases.map(\.rawValue))])),
+                ]),
+            dependencies: [])
+    }
+
+    public var schema: ToolDefinition { ToolDefinition(name: name, description: description, parameters: parameters) }
+
+    public func effect(for input: Input) throws -> ShareObjectEffect {
+        let (audience, level) = try Self.sharing(in: input, for: name)
+        return ShareObjectEffect(
+            session: session, handle: try objects.object(in: input, for: name), audience: audience, level: level)
+    }
+
+    /// Whom the arguments share with, and how far, each one of those offered.
+    static func sharing(in input: Input, for tool: String) throws -> (SharingAudience, SharingLevel) {
+        let with = try input.text(withProperty)
+        let level = try input.text(levelProperty)
+        guard let with, let level else {
+            let missing = [with == nil ? withProperty : nil, level == nil ? levelProperty : nil]
+            throw ObjectToolError.missingArguments(tool, missing: missing.compactMap { $0 }, unexpected: [])
+        }
+        guard let audience = SharingAudience(rawValue: with) else {
+            throw ObjectToolError.failed(
+                UnofferedChoice(given: with, offered: SharingAudience.allCases.map(\.rawValue), argument: withProperty)
+                    .description)
+        }
+        guard let reach = SharingLevel(rawValue: level) else {
+            throw ObjectToolError.failed(
+                UnofferedChoice(given: level, offered: SharingLevel.allCases.map(\.rawValue), argument: levelProperty)
+                    .description)
+        }
+        return (audience, reach)
+    }
+
+    public func run(
+        _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<ShareObjectEffect>
+    ) async throws -> CallReturn {
+        try await ShareObjectEffect.run(in: token)
     }
 }
 

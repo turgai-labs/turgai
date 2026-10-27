@@ -3,6 +3,7 @@ import DistributedCluster
 import Foundation
 import Hail
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiObjects
 
 /// Something to ask for, and how to tell it was done.
@@ -26,6 +27,9 @@ struct EvalTask: Sendable {
         case shop([ShopTurn])
         /// One turn, in which the agent asks `agent`, and its answer must say what that agent said.
         case asks(agent: String, answered: @Sendable (String) -> Bool)
+        /// The request makes an object, and what follows shares it: who may use it then must pass
+        /// `allowed`.
+        case shared(allowed: @Sendable (ObjectAccess) -> Bool)
     }
 
     init(
@@ -42,11 +46,17 @@ struct EvalTask: Sendable {
             answered: answered, stateMatches: stateMatches)
     }
 
-    init(request: String, agents: [EvalAgent] = [], check: Check) {
+    init(request: String, then: [String] = [], agents: [EvalAgent] = [], check: Check) {
         self.request = request
+        self.then = then
         self.agents = agents
         self.check = check
     }
+
+    /// Someone else in the eval's chat, and someone outside it: whom sharing with the chat lets in,
+    /// and whom it doesn't.
+    private static let inTheChat = CallScope(UserID("eval-member"), in: EvalNode.asker.group, as: .member)
+    private static let outside = CallScope(UserID("eval-outsider"), in: GroupID(rawValue: "elsewhere"), as: .member)
 
     /// A planner, whose every plan starts the same way, so an answer can be told to be its.
     private static let planner = EvalAgent(
@@ -67,6 +77,16 @@ struct EvalTask: Sendable {
             stateMatches: { Self.itemsLeft(in: $0) == ["eggs"] },
             // The answer says what's on it.
             answered: { $0.lowercased().contains("egg") }),
+        EvalTask(
+            request: "Make a counter for my coffee cups: I can add a cup and ask how many I had.",
+            then: ["Change the coffee counter so I can also take a cup back."],
+            followUp: "Add two cups and take one back. How many cups now?",
+            stateMatches: { $0.range(of: #"(?m)^\w+:\s*1(?:\.0)?$"#, options: .regularExpression) != nil },
+            answered: has("1")),
+        EvalTask(
+            request: "Make a shopping list I can add things to and cross things off.",
+            then: ["Let everyone in this chat use the shopping list."],
+            check: .shared { access in access.allows(inTheChat, .read) && !access.allows(outside, .read) }),
         EvalTask(
             request: "Make two counters, one for coffee and one for tea, that work the same way.",
             followUp: "Count one coffee and two teas. How many teas so far?",
@@ -147,6 +167,8 @@ struct EvalTask: Sendable {
             return replies.contains(where: answered) && stateMatches(stateText)
         case .shop:
             return true
+        case .shared:
+            return true
         case .asks(let agent, let answered):
             // Its tool, by the agent's id, whichever way tools are named: `planner_respond`,
             // `object_planner_respond`.
@@ -215,6 +237,24 @@ struct EvalTask: Sendable {
         return saved.isEmpty ? nil : saved.joined(separator: "\n\n")
     }
 
+    /// The request and what follows it, asked of a fresh agent; then who may use the object the
+    /// request made, which `allowed` must accept.
+    private func sharing(checkedBy allowed: @Sendable (ObjectAccess) -> Bool, on node: EvalNode) async throws
+        -> (turns: [RecordedTurn], failure: String?)
+    {
+        let agent = try await node.freshAgent()
+        var turns: [RecordedTurn] = []
+        for asked in [request] + then {
+            turns.append(await RecordedTurn.send(asked, to: agent, on: node.system))
+        }
+        guard let made = turns.flatMap(\.calls).compactMap(Self.createdHandle(from:)).first,
+            let object = try await DynamicObjects.resolve(on: node.system).existing(ObjectIdentity(rawValue: made))
+        else { return (turns, turns.compactMap(\.failure).first ?? "No object was made.") }
+        let access = try await object.access
+        turns.append(RecordedTurn(answer: "Who may use \(made): \(access.levels)"))
+        return (turns, allowed(access) ? nil : "Shared otherwise than asked: \(access.levels)")
+    }
+
     /// The request and what follows it, then the follow-up, asked of a fresh agent; then what the
     /// objects the request made hold, and the code they ended with.
     private func followingUp(with followUp: String, readingStateOf stateAddresses: [String], on node: EvalNode)
@@ -271,6 +311,10 @@ struct EvalTask: Sendable {
                     turns = asked.turns
                     stateText = asked.stateText
                     failure = asked.missing
+                case .shared(let allowed):
+                    let shared = try await sharing(checkedBy: allowed, on: node)
+                    turns = shared.turns
+                    failure = shared.failure
                 case .asks:
                     let agent = try await node.freshAgent()
                     turns.append(await RecordedTurn.send(request, to: agent, on: node.system))
