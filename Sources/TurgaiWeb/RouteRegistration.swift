@@ -5,6 +5,7 @@ import HummingbirdElementary
 import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
@@ -23,7 +24,7 @@ struct TurgaiRouteDependencies: Sendable {
     let requestLimits: RequestLimitStore
     let channelSecrets: ChannelSecretStore
     let defaultFileDirectory: URL
-    let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
+    let runtimeSnapshots: @Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot]
     let userToolRegistry: UserToolRegistry
     let webChatBridge: TurgaiWebChatBridge
     let apiConfiguration: APIConfiguration

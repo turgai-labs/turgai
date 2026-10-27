@@ -5,6 +5,7 @@ import HummingbirdElementary
 import NIOCore
 import ServiceLifecycle
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
@@ -68,7 +69,7 @@ public struct TurgaiMainWebApp: Sendable {
     let agentCredentials: AgentCredentialStore
     let requestLimits: RequestLimitStore
     let channelSecrets: ChannelSecretStore
-    let runtimeSnapshots: @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
+    let runtimeSnapshots: @Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot]
     let webChatBridge: TurgaiWebChatBridge
     let apiConfiguration: APIConfiguration
 
@@ -79,7 +80,7 @@ public struct TurgaiMainWebApp: Sendable {
         agentCredentials: AgentCredentialStore,
         requestLimits: RequestLimitStore,
         channelSecrets: ChannelSecretStore,
-        runtimeSnapshots: @escaping @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = { [] },
+        runtimeSnapshots: @escaping @Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot] = { _ in [] },
         setup: TurgaiSetupStore,
         webChatBridge: TurgaiWebChatBridge,
         apiConfiguration: APIConfiguration = .init()

@@ -2,6 +2,7 @@ import DistributedCluster
 import Foundation
 import Hail
 import TurgaiDomain
+import TurgaiObjects
 
 public struct WebSessionID: Hashable, Sendable, Codable, Identifiable {
     public let rawValue: UUID
@@ -18,6 +19,7 @@ public struct WebSessionID: Hashable, Sendable, Codable, Identifiable {
 public actor TurgaiWebChatBridge {
     private struct Runtime {
         let connections: TurgaiConnections
+        let objectCatalog: ObjectCatalog
         let discoverChannelIDs: @Sendable () async throws -> [UUID]
         let actorSystem: ClusterSystem
     }
@@ -29,12 +31,14 @@ public actor TurgaiWebChatBridge {
 
     public func install(
         _ connections: TurgaiConnections,
+        objectCatalog: ObjectCatalog,
         discoverChannelIDs: @escaping @Sendable () async throws -> [UUID],
         actorSystem: ClusterSystem,
         persistedConversationIDs: [ConversationID]
     ) {
         self.runtime = Runtime(
             connections: connections,
+            objectCatalog: objectCatalog,
             discoverChannelIDs: discoverChannelIDs,
             actorSystem: actorSystem
         )
@@ -137,14 +141,29 @@ public actor TurgaiWebChatBridge {
         )
     }
 
+    /// The objects `person` may read, as they list them in a conversation: on their behalf, in its
+    /// group.
+    public func objects(
+        listedTo person: TurgaiDomain.UserID,
+        in conversationID: ConversationID,
+        role: TurgaiAgentRole
+    ) async throws -> [ObjectEntry] {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let scope = try await runtime.connections.scope(of: person, in: conversationID, role: role)
+        return try await CallChain.$current.withValue(.start(scope)) { try await runtime.objectCatalog.entries() }
+    }
+
     public func conversationTurns(
         for conversationID: ConversationID,
-        role: TurgaiAgentRole
+        role: TurgaiAgentRole,
+        askedBy person: TurgaiDomain.UserID
     ) async throws -> [ConversationTurn] {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        return try await runtime.connections.conversationTurns(for: conversationID, role: role)
+        return try await runtime.connections.conversationTurns(for: conversationID, role: role, askedBy: person)
     }
 
     public func conversationStatus(

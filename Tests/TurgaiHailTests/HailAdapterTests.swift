@@ -48,12 +48,12 @@ struct HailAdapterTests {
 
     @Test
     func mapsTheReplySoFarWithoutLeakingHailValues() throws {
-        let activity = AgentActivity.turn(
-            .progress(.partial(try GeneratedContent(json: #"{"text":"hel"}"#))),
+        let update = AgentRunEvent<AgentReply>.modelOutputPartialUpdated(
+            content: try AgentReply.PartiallyGenerated(try GeneratedContent(json: #"{"text":"hel"}"#)),
             at: Date(timeIntervalSince1970: 1)
         )
 
-        let events = HailActivityMapper.map(activity)
+        let events = HailRunMapper.map(update)
         try #require(events.count == 1)
         guard case .reply(let text) = events[0] else {
             Issue.record("Expected the reply so far, got \(events)")
@@ -157,14 +157,9 @@ struct HailAdapterTests {
             externalAddress: ExternalConversationAddress("chat")
         )
         let peer = HailConversationPeer(
-            run: { request in
-                try HailResponse(AgentReply(text: request.message.text))
-            },
-            activities: {
-                AsyncStream {
-                    $0.yield(.reply("partial"))
-                    $0.finish()
-                }
+            run: { request, events in
+                await events(.reply("partial"))
+                return try HailResponse(AgentReply(text: request.message.text))
             }
         )
         let request = ConversationTurnRequest(
@@ -181,10 +176,10 @@ struct HailAdapterTests {
             scope: CallScope(UserID("user"), in: GroupID(conversationID), as: .admin)
         )
 
-        let response = try await peer.run(to: request)
+        let received = Received()
+        let response = try await peer.run(to: request) { event in await received.append(event) }
         #expect(response.content == "hello")
-        var events: [HailModelEvent] = []
-        for await event in try await peer.activities() { events.append(event) }
+        let events = await received.events
         try #require(events.count == 1)
         guard case .reply(let text) = events[0] else {
             Issue.record("Expected the reply so far, got \(events)")
@@ -294,5 +289,14 @@ struct HailAdapterTests {
         #expect(data.body == Data([1, 2, 3]))
         #expect(data.contentType == "image/jpeg")
         #expect(data.source == nil)
+    }
+}
+
+/// What a turn brought back, in the order it came.
+private actor Received {
+    private(set) var events: [HailModelEvent] = []
+
+    func append(_ event: HailModelEvent) {
+        events.append(event)
     }
 }

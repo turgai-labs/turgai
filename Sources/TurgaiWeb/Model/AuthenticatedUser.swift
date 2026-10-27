@@ -1,4 +1,5 @@
 import Foundation
+import TurgaiDomain
 
 struct AccountInfo: Identifiable, Sendable, Equatable {
     let id: UUID
@@ -52,6 +53,13 @@ enum AuthenticatedUser: Identifiable, Sendable, Equatable {
         case .user(let account): account.username
         case .member(let account), .administrator(let account): account.username
         }
+    }
+
+    /// Whom what the dashboard asks for, as this account looks at it, is on behalf of: the account,
+    /// in the dashboard's group, an admin when it's an administrator.
+    var dashboardScope: CallScope {
+        let role: GroupRole = if case .administrator = self { .admin } else { .member }
+        return CallScope(UserID(rawValue: "account:\(id.uuidString)"), in: .dashboard, as: role)
     }
 
 }

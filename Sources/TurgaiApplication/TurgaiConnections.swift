@@ -276,10 +276,29 @@ public actor TurgaiConnections: Service {
         return try await conversation.history()
     }
 
-    /// The agent's past turns in a conversation, step by step.
+    /// Whom a call `person` makes in a conversation is on behalf of.
+    public func scope(
+        of person: TurgaiDomain.UserID,
+        in conversationID: ConversationID,
+        role: TurgaiAgentRole
+    ) async throws -> CallScope {
+        let conversation = try await Conversation.resolve(
+            on: actorSystem,
+            conversationID: conversationID,
+            agentDirectoryID: "agent-directory",
+            agentRole: role.rawValue,
+            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+                forProfileID: role.rawValue
+            )
+        )
+        return try await conversation.scope(of: person)
+    }
+
+    /// The agent's past turns in a conversation, step by step, as `person` asks for them.
     public func conversationTurns(
         for conversationID: ConversationID,
-        role: TurgaiAgentRole
+        role: TurgaiAgentRole,
+        askedBy person: TurgaiDomain.UserID
     ) async throws -> [ConversationTurn] {
         let conversation = try await Conversation.resolve(
             on: actorSystem,
@@ -290,7 +309,7 @@ public actor TurgaiConnections: Service {
                 forProfileID: role.rawValue
             )
         )
-        return try await conversation.turns()
+        return try await conversation.turns(askedBy: person)
     }
 
     public func conversationStatus(
@@ -664,7 +683,7 @@ actor LiveSession {
             case .forget:
                 try await conversation.forgetMemory(for: userID)
             case .context:
-                try await conversation.showContext()
+                try await conversation.showContext(for: userID)
             case .diagnose:
                 try await conversation.showDiagnostics(for: userID)
             case .reminders:

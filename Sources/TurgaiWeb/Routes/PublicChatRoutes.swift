@@ -6,6 +6,7 @@ import NIOCore
 import TurgaiApplication
 import TurgaiDomain
 import TurgaiModels
+import TurgaiObjects
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -32,6 +33,19 @@ extension TurgaiMainWebApp {
         }
         registerConversations(on: api.group("conversations"), dependencies: dependencies)
         registerMessages(on: api.group("conversations/:id/messages"), dependencies: dependencies)
+        // What the signed-in account may read, listed on its behalf in its chat with a bot: the
+        // default one, or `botID`'s.
+        api.get("objects") { request, _ in
+            let owner = await chatOwner(from: request, auth: dependencies.auth)
+            guard case .account = owner,
+                let conversation = await chatConversation(
+                    owner: owner, conversationID: nil, botID: request.uri.queryParameters["botID"].map(String.init),
+                    profiles: dependencies.agentProfiles)
+            else { return publicAPIUnauthorizedResponse() }
+            let entries = try await dependencies.webChatBridge.objects(
+                listedTo: conversation.person, in: conversation.domainID, role: .profile(conversation.profile.id))
+            return try publicAPIResponse(entries.map(ObjectListing.init))
+        }
         registerChatSocket(on: router, dependencies: dependencies)
     }
 
@@ -88,13 +102,7 @@ extension TurgaiMainWebApp {
                 channel: conversation.domainID.channel,
                 rawValue: conversation.domainID.stableKey
             )
-            let participantUserID =
-                conversation.domainID.channel == accountChatChannel
-                ? "account:\(conversation.domainID.externalAddress.rawValue)"
-                : "api:\(conversation.domainID.stableKey)"
-            let userID = TurgaiDomain.UserID(
-                rawValue: participantUserID
-            )
+            let userID = conversation.person
 
             do {
                 let writer = PublicChatSocketWriter(outbound: outbound)
@@ -162,7 +170,7 @@ extension TurgaiMainWebApp {
                 // The agent's turns, step by step; the chat works without them.
                 let turns =
                     (try? await dependencies.webChatBridge.conversationTurns(
-                        for: conversation.domainID, role: .profile(conversation.profile.id))) ?? []
+                        for: conversation.domainID, role: .profile(conversation.profile.id), askedBy: userID)) ?? []
                 try await writer.write(
                     .init(payload: .turns(conversationID: conversation.publicID, turns: turns.map(TurnRecord.init)))
                 )
@@ -448,6 +456,13 @@ private struct APIConversation: Sendable {
     let domainID: TurgaiDomain.ConversationID
     let profile: TurgaiAgentProfile
     let publicID: TurgaiModels.ConversationID
+
+    /// Who writes in it: the account whose chat it is, or the API client the conversation is.
+    var person: TurgaiDomain.UserID {
+        TurgaiDomain.UserID(
+            rawValue: domainID.channel == accountChatChannel
+                ? "account:\(domainID.externalAddress.rawValue)" : "api:\(domainID.stableKey)")
+    }
 
     var info: TurgaiModels.Conversation {
         .init(
@@ -1144,5 +1159,15 @@ struct PublicAPIAuthorization<Context: RequestContext>: RouterMiddleware {
     ) async throws -> Response {
         guard configuration.authorizes(request) else { return publicAPIUnauthorizedResponse() }
         return try await next(request, context)
+    }
+}
+
+extension ObjectListing {
+    /// An object as the API lists it.
+    fileprivate init(_ entry: ObjectEntry) {
+        let endpoint = entry.object.id.node.endpoint
+        self.init(
+            id: entry.object.id.description, title: entry.id.description, summary: entry.description,
+            actions: entry.actions, events: entry.events, node: "\(endpoint.host):\(endpoint.port)")
     }
 }

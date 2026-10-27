@@ -95,7 +95,7 @@ extension TurgaiMainWebApp {
             }
             let profiles = await agentProfiles.profiles()
             let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-            let runtime = await runtimeSnapshots().filter { $0.profileID == profile.id }
+            let runtime = await runtimeSnapshots(user.dashboardScope).filter { $0.profileID == profile.id }
             let placement: AgentDetailPage.Placement =
                 await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
             let draft = AgentDraft(profile, requestLimit: await requestLimit(of: profile))
@@ -155,7 +155,7 @@ extension TurgaiMainWebApp {
                 if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
                 let profiles = await agentProfiles.profiles()
                 let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-                let runtime = await runtimeSnapshots().filter { $0.profileID == existingProfile.id }
+                let runtime = await runtimeSnapshots(user.dashboardScope).filter { $0.profileID == existingProfile.id }
                 let placement: AgentDetailPage.Placement =
                     await agentProfiles.isDefaultProfile(id: existingProfile.id) ? .default : .additional
                 return HTMLResponse {
@@ -244,7 +244,7 @@ extension TurgaiMainWebApp {
             } catch {
                 let profiles = await agentProfiles.profiles()
                 let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-                let runtime = await runtimeSnapshots().filter { $0.profileID == profile.id }
+                let runtime = await runtimeSnapshots(user.dashboardScope).filter { $0.profileID == profile.id }
                 let placement: AgentDetailPage.Placement =
                     await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
                 let draft = AgentDraft(profile, requestLimit: await requestLimit(of: profile))

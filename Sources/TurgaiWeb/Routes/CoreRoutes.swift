@@ -39,7 +39,7 @@ extension TurgaiMainWebApp {
             let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
             if isComplete && isReady && hasDefaultProfile {
                 let profiles = await agentProfiles.profiles()
-                let runtime = await runtimeSnapshots()
+                let runtime = await runtimeSnapshots(user.dashboardScope)
                 return HTMLResponse {
                     TurgaiPage(
                         title: "Turgai",
@@ -61,11 +61,11 @@ extension TurgaiMainWebApp {
             return try TurgaiWebSupport.jsonResponse(TurgaiServerStatus(setup: complete ? .complete : .pending))
         }
         router.get("/api/agents") { request, _ in
-            guard await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) != nil else {
+            guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
                 return Response(status: .unauthorized)
             }
             let profiles = await agentProfiles.profiles()
-            let runtime = await runtimeSnapshots()
+            let runtime = await runtimeSnapshots(user.dashboardScope)
             return try TurgaiWebSupport.jsonResponse(
                 TurgaiDashboardSnapshot(
                     profiles: profiles.map {

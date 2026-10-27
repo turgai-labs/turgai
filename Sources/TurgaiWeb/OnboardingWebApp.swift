@@ -45,7 +45,7 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
             requestLimits: requestLimits,
             channelSecrets: channelSecrets,
             defaultFileDirectory: directory,
-            runtimeSnapshots: { [] },
+            runtimeSnapshots: { _ in [] },
             userToolRegistry: UserToolRegistry(
                 directory: directory.appendingPathComponent("tools", isDirectory: true)
             ),

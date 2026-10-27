@@ -73,8 +73,8 @@ struct HailConversationInput: ConvertibleToGeneratedContent, Codable, Sendable {
     var generatedContent: GeneratedContent { GeneratedContent(content) }
 }
 
-/// Hail activity translated into values that can be consumed by the
-/// application layer. The Hail `AgentActivity` type stays inside this target.
+/// What an agent does in a turn, translated into values that can be consumed by the application
+/// layer. Hail's own run events stay inside this target.
 public enum HailModelEvent: Sendable {
     case started
     case status(String)
@@ -85,13 +85,10 @@ public enum HailModelEvent: Sendable {
     case toolCalled(name: String, arguments: String, at: Date)
     /// A tool call's result; `failure` says why it failed, when it did.
     case toolFinished(name: String, output: String, failure: String?, at: Date)
-    case usage(inputTokens: Int?, outputTokens: Int?, totalTokens: Int?)
-    case contextUsage(usedTokens: Int, limitTokens: Int)
-    case compaction(output: GeneratedContent, context: GeneratedContent)
     case completed
 }
 
-public enum HailActivityMapper {
+public enum HailRunMapper {
     private static func text(_ content: GeneratedContent) -> String {
         if case .string(let value) = content.kind {
             return value
@@ -99,74 +96,50 @@ public enum HailActivityMapper {
         return content.jsonString
     }
 
-    public static func map(_ activity: AgentActivity) -> [HailModelEvent] {
-        switch activity {
-        // A conversation's agent is asked one message at a time; what it's doing isn't shown.
-        case .status:
-            return []
-        case .turn(.started, _):
-            return [.started]
-        case .turn(.completed, _):
-            return [.completed]
-        case .turn(.progress(let progress), let at):
-            switch progress {
-            case .status(let message):
-                return [.status(text(message))]
-            case .reasoning(let text):
-                return [.reasoning(self.text(text))]
-            case .partial(let content):
-                guard let reply = try? AgentReply.PartiallyGenerated(content), let text = reply.text else {
-                    return []
-                }
-                return [.reply(text)]
-            case .toolCalled(let call):
-                return [.toolCalled(name: call.name, arguments: call.arguments.jsonString, at: at)]
-            case .toolFinished(let result):
-                return [
-                    .toolFinished(
-                        name: result.name, output: result.output.textRepresentation,
-                        failure: result.failureKind?.rawValue, at: at)
-                ]
-            case .usage(let usage):
-                return [
-                    .usage(
-                        inputTokens: usage.inputTokens,
-                        outputTokens: usage.outputTokens,
-                        totalTokens: usage.totalTokens
-                    )
-                ]
-            case .contextUsage(let usage):
-                return [
-                    .contextUsage(
-                        usedTokens: usage.usedTokens,
-                        limitTokens: usage.limitTokens
-                    )
-                ]
-            case .compaction(let output, let context):
-                return [.compaction(output: output, context: context)]
-            }
+    /// What the agent did in a turn, as the turn's call brought it back.
+    public static func map(_ update: AgentRunEvent<AgentReply>) -> [HailModelEvent] {
+        switch update {
+        case .runStarted:
+            [.started]
+        case .runCompleted, .runFailed:
+            [.completed]
+        case .status(let message, _):
+            [.status(text(message))]
+        case .reasoning(let fragment, _):
+            [.reasoning(text(fragment))]
+        case .modelOutputPartialUpdated(let reply, _):
+            reply.text.map { [.reply($0)] } ?? []
+        case .toolRequested(let call, let at):
+            [.toolCalled(name: call.name, arguments: call.arguments.jsonString, at: at)]
+        case .toolCompleted(let result, let at):
+            [
+                .toolFinished(
+                    name: result.name, output: result.output.textRepresentation,
+                    failure: result.failureKind?.rawValue, at: at)
+            ]
+        case .received, .modelOutputGenerated, .responseRecorded:
+            []
         }
     }
 }
 
-/// A small value boundary around one Hail agent. Talking is request and response; listening is
-/// the agent's activity stream, which whoever watches subscribes to for as long as it watches.
+/// A small value boundary around one Hail agent. A turn is a request and its reply; what the agent
+/// does meanwhile comes back with it, as it does it.
 public struct HailConversationPeer: Sendable {
-    public typealias RunHandler = @Sendable (ConversationTurnRequest) async throws -> HailResponse
-    public typealias ActivitiesHandler = @Sendable () async throws -> AsyncStream<HailModelEvent>
+    public typealias RunHandler =
+        @Sendable (ConversationTurnRequest, _ events: @escaping @Sendable (HailModelEvent) async -> Void) async throws
+        -> HailResponse
     public typealias ContextHandler = @Sendable () async throws -> AgentContextSnapshot
     public typealias HistoryHandler = @Sendable () async throws -> AgentHistory
     public typealias DeactivationHandler = @Sendable () async throws -> Void
 
     private let runHandler: RunHandler
-    private let activitiesHandler: ActivitiesHandler
     private let contextHandler: ContextHandler
     private let historyHandler: HistoryHandler
     private let deactivationHandler: DeactivationHandler
 
     public init(
         run: @escaping RunHandler,
-        activities: @escaping ActivitiesHandler = { AsyncStream { $0.finish() } },
         context: @escaping ContextHandler = {
             throw HailAdapterError.contextUnavailable
         },
@@ -174,21 +147,17 @@ public struct HailConversationPeer: Sendable {
         deactivate: @escaping DeactivationHandler = {}
     ) {
         self.runHandler = run
-        self.activitiesHandler = activities
         self.contextHandler = context
         self.historyHandler = history
         self.deactivationHandler = deactivate
     }
 
-    /// Asks the agent, and waits for its reply.
-    public func run(to request: ConversationTurnRequest) async throws -> HailResponse {
-        try await runHandler(request)
-    }
-
-    /// What the agent does, as it does it, in any turn: a subscription that lasts until the
-    /// stream is no longer consumed, or the agent stops.
-    public func activities() async throws -> AsyncStream<HailModelEvent> {
-        try await activitiesHandler()
+    /// Asks the agent, and waits for its reply: what it does meanwhile reaches `events`, as it does
+    /// it.
+    public func run(
+        to request: ConversationTurnRequest, events: @escaping @Sendable (HailModelEvent) async -> Void
+    ) async throws -> HailResponse {
+        try await runHandler(request, events)
     }
 
     public func contextSnapshot() async throws -> AgentContextSnapshot {
@@ -208,14 +177,8 @@ public struct HailConversationPeer: Sendable {
 public enum HailAdapterError: Error, Hashable, Sendable {
     case conversationMismatch
     case missingUserMessage
-    case activityStreamEnded
     case emptyResponse
     case contextUnavailable
-}
-
-private enum HailRunResult: Sendable {
-    case response(HailResponse)
-    case activityStreamEnded
 }
 
 /// Resolves one durable Hail agent per normalized Turgai conversation.
@@ -238,31 +201,34 @@ public struct HailAgentAdapter: Sendable {
         for conversationID: ConversationID
     ) async throws -> HailConversationPeer {
         return HailConversationPeer(
-            run: { request in
+            run: { request, events in
                 guard request.conversationID == conversationID else {
                     throw HailAdapterError.conversationMismatch
                 }
                 let message = request.message
                 let input = HailConversationInput(message: message)
                 let agent = try await self.agent(for: conversationID)
-                // Attachments remain opaque references unless the model fetches one. The reply so
-                // far reaches whoever watches through the agent's activity.
-                let reply: AgentReply = try await agent.respond(input)
-                return try HailResponse(reply)
-            },
-            activities: {
-                let agent = try await self.agent(for: conversationID)
-                return AsyncStream { continuation in
-                    let subscription = Task {
-                        for await activity in agent {
-                            for event in HailActivityMapper.map(activity) {
-                                continuation.yield(event)
-                            }
-                        }
-                        continuation.finish()
+                // Attachments remain opaque references unless the model fetches one. What the agent
+                // does comes back through the turn's own call, the reply so far among it.
+                let stream = AgentStream<AgentReply>(actorSystem: actorSystem)
+                let following = Task<AgentReply?, Never> {
+                    var reply: AgentReply?
+                    for await update in stream.updates {
+                        if case .responseRecorded(let content, _) = update { reply = content }
+                        for event in HailRunMapper.map(update) { await events(event) }
                     }
-                    continuation.onTermination = { _ in subscription.cancel() }
+                    return reply
                 }
+                do {
+                    try await stream.send(input, to: agent)
+                } catch {
+                    stream.finish()
+                    _ = await following.value
+                    throw error
+                }
+                stream.finish()
+                guard let reply = await following.value else { throw HailAdapterError.emptyResponse }
+                return try HailResponse(reply)
             },
             context: {
                 try await self.agent(for: conversationID).contextSnapshot
@@ -320,8 +286,6 @@ public struct HailAgentAdapter: Sendable {
                 return "The conversation identity did not match the requested agent."
             case .missingUserMessage:
                 return "The model request did not contain a user message."
-            case .activityStreamEnded:
-                return "The model activity stream ended before the response was available."
             case .emptyResponse:
                 return "I couldn’t produce a reply to that message. Please try again."
             case .contextUnavailable:

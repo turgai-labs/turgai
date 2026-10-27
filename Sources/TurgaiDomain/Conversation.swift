@@ -767,15 +767,19 @@ public struct ConversationTurnRequest: Hashable, Codable, Sendable {
 }
 
 extension ConversationTurnRequest {
-    /// The turn that answers `pending` in the conversation `state` is of: on behalf of its sender,
-    /// with the role they have in its members now. Whoever wrote joined as a member.
+    /// The turn that answers `pending` in the conversation `state` is of: on behalf of its sender.
     init(_ pending: PendingConversationMessage, in state: ConversationState) {
-        let sender = pending.message.userID
         self.init(
             conversationID: state.conversationID, turnID: pending.turnID, message: pending.message,
-            agentRole: pending.agentRole,
-            scope: CallScope(
-                sender, in: GroupID(state.conversationID), as: state.members.role(of: sender) ?? .member))
+            agentRole: pending.agentRole, scope: state.scope(of: pending.message.userID))
+    }
+}
+
+extension ConversationState {
+    /// Whom a call `person` makes here is on behalf of: them, in this conversation's group, with the
+    /// role they have in its members now. Whoever writes joins as a member.
+    public func scope(of person: UserID) -> CallScope {
+        CallScope(person, in: GroupID(conversationID), as: members.role(of: person) ?? .member)
     }
 }
 

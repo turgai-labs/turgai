@@ -385,14 +385,20 @@ public distributed actor Conversation {
         state.inbox.status
     }
 
-    /// The agent's past turns, step by step.
-    public distributed func turns() async throws -> [ConversationTurn] {
-        try await participant(for: agentRole).turns()
+    /// Whom a call `person` makes here is on behalf of: them, in this conversation's group, with
+    /// their role in it.
+    public distributed func scope(of person: TurgaiDomain.UserID) -> CallScope {
+        state.scope(of: person)
+    }
+
+    /// The agent's past turns, step by step, as `person` asks for them.
+    public distributed func turns(askedBy person: TurgaiDomain.UserID) async throws -> [ConversationTurn] {
+        let participant = try await participant(for: agentRole)
+        return try await CallChain.$current.withValue(.start(state.scope(of: person))) { try await participant.turns() }
     }
 
     public distributed func addConnection(_ connection: ConversationConnection) async {
         connections.insert(connection)
-        try? await participant(for: agentRole).watch(true)
         if let turnID = state.inbox.activeTurnID {
             let activity = liveState.latestActivity
             try? await connection.receive(
@@ -459,9 +465,6 @@ public distributed actor Conversation {
 
     public distributed func removeConnection(_ connection: ConversationConnection) async {
         connections.remove(connection)
-        // Nobody watches: stop listening, so an empty room doesn't keep the agent awake.
-        guard connections.isEmpty else { return }
-        for participant in participants.values { try? await participant.watch(false) }
     }
 
     public distributed func send(
@@ -547,8 +550,11 @@ public distributed actor Conversation {
     /// Shows durable runtime diagnostics without opening a model turn. The
     /// snapshot is read from Hail's event-sourced agent in one operation, so
     /// token usage and lifecycle data describe one coherent state.
-    public distributed func showContext() async throws {
-        let snapshot = try await participant(for: agentRole).contextSnapshot()
+    public distributed func showContext(for person: TurgaiDomain.UserID) async throws {
+        let participant = try await participant(for: agentRole)
+        let snapshot = try await CallChain.$current.withValue(.start(state.scope(of: person))) {
+            try await participant.contextSnapshot()
+        }
         await publish(
             .notice(
                 conversationID: conversationID,
@@ -821,7 +827,6 @@ public distributed actor Conversation {
         // Another call may have made it while this one waited.
         if let participant = participants[role] { return participant }
         participants[role] = made
-        if !connections.isEmpty { try? await made.watch(true) }
         return made
     }
 

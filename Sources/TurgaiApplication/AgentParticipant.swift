@@ -28,10 +28,7 @@ public distributed actor AgentParticipant {
     private let peer: HailConversationPeer
     /// The turn it's running, if one is.
     private var running: (turnID: TurgaiDomain.TurnID, task: Task<Void, Never>)?
-    /// Follows the agent's activity while anyone watches the conversation.
-    private var activityTask: Task<Void, Never>?
-    private var watched = false
-    /// The turn the agent is running, as its activity shows it.
+    /// The turn the agent is running, as what it does in it shows it.
     private var followedTurn: FollowedTurn?
 
     init(
@@ -66,14 +63,16 @@ public distributed actor AgentParticipant {
                 try? await conversation?.modelEvent(.completed(turnID: request.turnID, completion: completion))
             },
             operation: {
-                // What the agent does meanwhile reaches the conversation through its activity;
-                // this only asks, and waits for the reply.
-                await participant.whenLocal { $0.followActivity() }
                 // The agent's turn starts a chain of its own, on behalf of whoever it answers: what
-                // it calls comes from it.
+                // it calls comes from it. What it does meanwhile comes back with it, and reaches
+                // whoever watches the conversation.
                 let agentID = HailAgentAdapter.agentID(for: request.conversationID, role: request.agentRole)
                 let response = try await CallChain.$current.withValue(.start(request.scope)) {
-                    try await Agent.answering(as: agentID) { try await peer.run(to: request) }
+                    try await Agent.answering(as: agentID) {
+                        try await peer.run(to: request) { event in
+                            await participant.whenLocal { await $0.follow(event, of: request.turnID) }
+                        }
+                    }
                 }
                 await Self.remember(request, answered: response.reply.text, with: memoryExtraction, on: actorSystem)
                 return .reply(response.reply)
@@ -109,12 +108,6 @@ public distributed actor AgentParticipant {
         running = nil
     }
 
-    /// Whether anyone watches the conversation: while someone does, it shows what the agent does.
-    distributed func watch(_ watched: Bool) {
-        self.watched = watched
-        if watched { followActivity() } else { activityTask?.cancel() }
-    }
-
     /// The agent's past turns, step by step.
     distributed func turns() async throws -> [ConversationTurn] {
         try ConversationTurns.turns(of: try await peer.history())
@@ -129,55 +122,20 @@ public distributed actor AgentParticipant {
         if running?.turnID == turnID { running = nil }
     }
 
-    // MARK: Following the agent's activity
+    // MARK: Following the agent's turn
 
-    /// Listens to the agent's activity while anyone watches. When the stream ends, because the
-    /// agent deactivated or moved, it subscribes again, which wakes the agent. When subscribing
-    /// fails it stops, and the next watcher or turn starts it again.
-    private func followActivity() {
-        guard activityTask == nil, watched else { return }
-        let peer = peer
-        let log = actorSystem.log
-        activityTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self, await self.whenLocal({ $0.watched }) == true else { break }
-                do {
-                    for await event in try await peer.activities() {
-                        await self.whenLocal { await $0.follow(event) }
-                    }
-                } catch {
-                    log.debug(
-                        "Could not follow the agent's activity", metadata: ["error": .string(String(describing: error))]
-                    )
-                    break
-                }
-            }
-            await self?.whenLocal { $0.activityLoopEnded() }
-        }
-    }
-
-    /// The loop ended. If it was stopped and someone watched again while it wound down, it
-    /// follows again.
-    private func activityLoopEnded() {
-        let stopped = activityTask?.isCancelled == true
-        activityTask = nil
-        if stopped { followActivity() }
-    }
-
-    /// One thing the agent did, shown as part of the turn it belongs to: the turn it's running,
-    /// or one the conversation didn't ask for, such as a timer's.
-    private func follow(_ event: HailModelEvent) async {
+    /// One thing the agent did in the turn `turnID`, shown as part of it.
+    private func follow(_ event: HailModelEvent, of turnID: TurgaiDomain.TurnID) async {
         if case .started = event {
-            followedTurn = FollowedTurn(id: running?.turnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
+            followedTurn = FollowedTurn(id: turnID)
             return
         }
         if case .completed = event {
             followedTurn = nil
             return
         }
-        var turn = followedTurn ?? FollowedTurn(id: running?.turnID ?? TurgaiDomain.TurnID(rawValue: UUID()))
+        var turn = followedTurn ?? FollowedTurn(id: turnID)
         defer { followedTurn = turn }
-        let turnID = turn.id
         switch event {
         case .reasoning:
             await publish(phase: .thinking, of: &turn)
@@ -201,7 +159,7 @@ public distributed actor AgentParticipant {
             await publish(phase: .typing, of: &turn)
             turn.text = text
             await publishLive(.reply(.partial(conversationID: conversationID, turnID: turnID, text: turn.text)))
-        default:
+        case .started, .completed:
             break
         }
     }

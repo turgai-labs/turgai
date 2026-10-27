@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import TurgaiModels
 import TurgaiObjects
 import TurgaiServer
 
@@ -15,7 +16,7 @@ struct ObjectRow: Equatable, Identifiable, Sendable {
     let node: String
 }
 
-/// The machine's objects in the cluster, following the runtime's object catalog.
+/// The objects the signed-in account may read, following the runtime's object catalog.
 @DependencyClient
 struct ObjectsClient: Sendable {
     /// The current objects, then the whole list again whenever one joins or leaves.
@@ -41,8 +42,7 @@ extension ObjectsClient: TestDependencyKey {
                         return continuation.finish()
                     }
                     for await _ in changes {
-                        let entries = (try? await catalog.entries()) ?? []
-                        continuation.yield(entries.map(ObjectRow.init))
+                        continuation.yield(await listed())
                     }
                     continuation.finish()
                 }
@@ -52,17 +52,25 @@ extension ObjectsClient: TestDependencyKey {
     }
 }
 
+extension ObjectsClient {
+    /// The objects the signed-in account may read, as the server lists them on its behalf in its
+    /// chat: none when no one is signed in.
+    fileprivate static func listed() async -> [ObjectRow] {
+        guard let session = SessionStore.liveValue.load() else { return [] }
+        var request = URLRequest(url: LocalServer.baseURL.appending(path: "api/v1/objects"))
+        request.setValue("\(LocalServer.sessionCookieName)=\(session.token)", forHTTPHeaderField: "Cookie")
+        guard let (data, _) = try? await URLSession.shared.data(for: request),
+            let listings = try? JSONDecoder().decode([ObjectListing].self, from: data)
+        else { return [] }
+        return listings.map(ObjectRow.init)
+    }
+}
+
 extension ObjectRow {
-    fileprivate init(_ entry: ObjectEntry) {
-        let endpoint = entry.object.id.node.endpoint
+    fileprivate init(_ listing: ObjectListing) {
         self.init(
-            id: entry.object.id.description,
-            title: entry.id.description,
-            summary: entry.description,
-            actions: entry.actions,
-            events: entry.events,
-            node: "\(endpoint.host):\(endpoint.port)"
-        )
+            id: listing.id, title: listing.title, summary: listing.summary, actions: listing.actions,
+            events: listing.events, node: listing.node)
     }
 }
 

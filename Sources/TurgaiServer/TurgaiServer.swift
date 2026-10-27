@@ -56,7 +56,7 @@ public struct TurgaiServer: Sendable {
             agentCredentials: agentCredentials,
             requestLimits: requestLimits,
             channelSecrets: channelSecrets,
-            runtimeSnapshots: { await runtimeSnapshotSource.snapshots() },
+            runtimeSnapshots: { await runtimeSnapshotSource.snapshots(as: $0) },
             setup: setup,
             webChatBridge: webChatBridge,
             apiConfiguration: api

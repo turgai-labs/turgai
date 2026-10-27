@@ -25,17 +25,18 @@ import VirtualActors
 #endif
 
 actor TurgaiRuntimeSnapshotSource {
-    private var provider: (@Sendable () async -> [TurgaiAgentRuntimeSnapshot])?
+    private var provider: (@Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot])?
 
     func setProvider(
-        _ provider: @escaping @Sendable () async -> [TurgaiAgentRuntimeSnapshot]
+        _ provider: @escaping @Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot]
     ) {
         self.provider = provider
     }
 
-    func snapshots() async -> [TurgaiAgentRuntimeSnapshot] {
+    /// What each running agent is doing, as whoever asks on behalf of `scope` may see it.
+    func snapshots(as scope: CallScope) async -> [TurgaiAgentRuntimeSnapshot] {
         guard let provider else { return [] }
-        return await provider()
+        return await provider(scope)
     }
 }
 
@@ -245,6 +246,7 @@ struct TurgaiAppService: Service, Sendable {
             await objectCatalogSource.set(channelRuntime.objectCatalog)
             await webChatBridge.install(
                 connections,
+                objectCatalog: channelRuntime.objectCatalog,
                 discoverChannelIDs: discoverChannelIDs,
                 actorSystem: system,
                 persistedConversationIDs: persistedConversationIDs
@@ -262,8 +264,8 @@ struct TurgaiAppService: Service, Sendable {
                     )
                 }
             }
-            let runtimeSnapshotProvider: @Sendable () async -> [TurgaiAgentRuntimeSnapshot] = {
-                await Self.runtimeSnapshots(on: system)
+            let runtimeSnapshotProvider: @Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot] = {
+                await Self.runtimeSnapshots(on: system, as: $0)
             }
             await runtimeSnapshotSource.setProvider(runtimeSnapshotProvider)
             let clusterService = TurgaiClusterService(
@@ -635,10 +637,16 @@ extension TurgaiAppService {
         logger.info("\(event.written)")
     }
 
-    /// What each running profile agent is doing, for the dashboard.
-    static func runtimeSnapshots(on system: ClusterSystem) async -> [TurgaiAgentRuntimeSnapshot] {
+    /// What each running profile agent is doing, for the dashboard, asked on behalf of `scope`.
+    static func runtimeSnapshots(on system: ClusterSystem, as scope: CallScope) async -> [TurgaiAgentRuntimeSnapshot] {
         let entries = (try? await system.agentRuntime.allAgents()) ?? []
-        return await withTaskGroup(
+        return await CallChain.$current.withValue(.start(scope)) { await snapshots(of: entries, on: system) }
+    }
+
+    private static func snapshots(of entries: [AgentDirectoryEntry], on system: ClusterSystem) async
+        -> [TurgaiAgentRuntimeSnapshot]
+    {
+        await withTaskGroup(
             of: TurgaiAgentRuntimeSnapshot?.self, returning: [TurgaiAgentRuntimeSnapshot].self
         ) { group in
             for entry in entries where entry.role.rawValue != "user-tool" {

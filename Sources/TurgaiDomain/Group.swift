@@ -76,6 +76,9 @@ public struct GroupID: RawRepresentable, Hashable, Codable, Sendable {
     public init(_ id: ConversationID) {
         self.init(rawValue: id.stableKey)
     }
+
+    /// The dashboard's group: the accounts that sign in to it, its administrators as its admins.
+    public static let dashboard = GroupID(rawValue: "dashboard")
 }
 
 /// Who a call is on behalf of: the person who started its chain, in the group they came in
