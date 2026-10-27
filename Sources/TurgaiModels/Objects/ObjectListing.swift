@@ -12,13 +12,46 @@ public struct ObjectListing: Codable, Hashable, Sendable {
     public let events: [String]
     /// The node it lives on, such as `127.0.0.1:52034`.
     public let node: String
+    /// Its identity, when it's an object made here, which whoever may change it can share: none for
+    /// one Turgai offers.
+    public let made: MadeObjectID?
 
-    public init(id: String, title: String, summary: String?, actions: [String], events: [String], node: String) {
+    public init(
+        id: String, title: String, summary: String?, actions: [String], events: [String], node: String,
+        made: MadeObjectID?
+    ) {
         self.id = id
         self.title = title
         self.summary = summary
         self.actions = actions
         self.events = events
         self.node = node
+        self.made = made
+    }
+}
+
+/// An object made here, by its identity: what `POST /api/v1/objects/:id/share` names it by.
+public struct MadeObjectID: RawRepresentable, Codable, Hashable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+}
+
+/// How far everyone may go with an object, as `POST /api/v1/objects/:id/share` sets it: using it,
+/// changing it too, or not at all.
+public enum ObjectSharing: String, Codable, CaseIterable, Sendable {
+    case read
+    case write
+    case none
+}
+
+/// The body of `POST /api/v1/objects/:id/share`.
+public struct ObjectSharingRequest: Codable, Hashable, Sendable {
+    public let everyone: ObjectSharing
+
+    public init(everyone: ObjectSharing) {
+        self.everyone = everyone
     }
 }

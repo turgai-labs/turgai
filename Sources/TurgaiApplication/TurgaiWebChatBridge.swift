@@ -155,6 +155,20 @@ public actor TurgaiWebChatBridge {
         return try await CallChain.$current.withValue(.start(scope)) { try await runtime.objectCatalog.entries() }
     }
 
+    /// Shares the object made here as `identity` with everyone, as far as `level`, or takes their
+    /// access away, on behalf of `person` in a conversation: refused unless they may change it.
+    public func share(
+        _ identity: ObjectIdentity, withEveryone level: AccessLevel?,
+        by person: TurgaiDomain.UserID, in conversationID: ConversationID, role: TurgaiAgentRole
+    ) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let scope = try await runtime.connections.scope(of: person, in: conversationID, role: role)
+        let object = try await DynamicObject.resolve(on: runtime.actorSystem, identity: identity)
+        try await CallChain.$current.withValue(.start(scope)) { try await object.share(with: .everyone, level) }
+    }
+
     public func conversationTurns(
         for conversationID: ConversationID,
         role: TurgaiAgentRole,

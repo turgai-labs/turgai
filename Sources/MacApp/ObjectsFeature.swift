@@ -8,6 +8,8 @@ import TurgaiServer
 struct ObjectRow: Equatable, Identifiable, Sendable {
     let id: String
     let title: String
+    /// Its identity, when it's an object made here, which can be shared.
+    let made: MadeObjectID?
     let summary: String?
     let actions: [String]
     /// What it announces, such as `RefundRequested`.
@@ -21,6 +23,8 @@ struct ObjectRow: Equatable, Identifiable, Sendable {
 struct ObjectsClient: Sendable {
     /// The current objects, then the whole list again whenever one joins or leaves.
     var live: @Sendable () -> AsyncStream<[ObjectRow]> = { .finished }
+    /// Shares an object made here with everyone, as far as asked, or takes that back.
+    var share: @Sendable (MadeObjectID, ObjectSharing) async throws -> Void
 }
 
 extension AsyncStream {
@@ -31,24 +35,36 @@ extension ObjectsClient: TestDependencyKey {
     static let testValue = ObjectsClient()
 
     /// No runtime, so no objects.
-    static let unavailable = ObjectsClient(live: { .finished })
+    static let unavailable = ObjectsClient(live: { .finished }, share: { _, _ in })
 
     static func live(_ source: TurgaiObjectCatalogSource) -> ObjectsClient {
-        ObjectsClient(live: {
-            AsyncStream { continuation in
-                let task = Task {
-                    let catalog = await source.catalog()
-                    guard let changes = await catalog.whenLocal({ $0.changes() }) else {
-                        return continuation.finish()
+        ObjectsClient(
+            live: {
+                AsyncStream { continuation in
+                    let task = Task {
+                        let catalog = await source.catalog()
+                        guard let changes = await catalog.whenLocal({ $0.changes() }) else {
+                            return continuation.finish()
+                        }
+                        for await _ in changes {
+                            continuation.yield(await listed())
+                        }
+                        continuation.finish()
                     }
-                    for await _ in changes {
-                        continuation.yield(await listed())
-                    }
-                    continuation.finish()
+                    continuation.onTermination = { _ in task.cancel() }
                 }
-                continuation.onTermination = { _ in task.cancel() }
-            }
-        })
+            },
+            share: { made, sharing in
+                guard let session = SessionStore.liveValue.load() else { return }
+                var request = URLRequest(
+                    url: LocalServer.baseURL.appending(path: "api/v1/objects/\(made.rawValue)/share"))
+                request.httpMethod = "POST"
+                request.setValue("\(LocalServer.sessionCookieName)=\(session.token)", forHTTPHeaderField: "Cookie")
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.httpBody = try JSONEncoder().encode(ObjectSharingRequest(everyone: sharing))
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard (response as? HTTPURLResponse)?.statusCode == 204 else { throw ObjectSharingRefused() }
+            })
     }
 }
 
@@ -69,8 +85,8 @@ extension ObjectsClient {
 extension ObjectRow {
     fileprivate init(_ listing: ObjectListing) {
         self.init(
-            id: listing.id, title: listing.title, summary: listing.summary, actions: listing.actions,
-            events: listing.events, node: listing.node)
+            id: listing.id, title: listing.title, made: listing.made, summary: listing.summary,
+            actions: listing.actions, events: listing.events, node: listing.node)
     }
 }
 
@@ -92,12 +108,18 @@ struct ObjectsFeature {
         }
 
         var listing = Listing.waiting
+        /// Why sharing an object was refused, while it's shown.
+        var refusal: String?
     }
 
     enum Action {
         /// The window appeared: follow the catalog while it's open.
         case appeared
         case changed([ObjectRow])
+        /// Share an object made here with everyone, as far as asked, or take that back.
+        case share(MadeObjectID, ObjectSharing)
+        case shareRefused
+        case refusalDismissed
     }
 
     @Dependency(\.objects) var objects
@@ -118,7 +140,27 @@ struct ObjectsFeature {
             case .changed(let rows):
                 state.listing = .live(IdentifiedArray(uniqueElements: rows))
                 return .none
+
+            case .share(let made, let sharing):
+                return .run { send in
+                    do {
+                        try await objects.share(made, sharing)
+                    } catch {
+                        await send(.shareRefused)
+                    }
+                }
+
+            case .shareRefused:
+                state.refusal = "Only someone who may change it can share it."
+                return .none
+
+            case .refusalDismissed:
+                state.refusal = nil
+                return .none
             }
         }
     }
 }
+
+/// Sharing an object wasn't done: the server refused it, or couldn't be reached.
+private struct ObjectSharingRefused: Error {}

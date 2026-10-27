@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Testing
+import TurgaiModels
 
 @testable import MacApp
 
@@ -8,6 +9,7 @@ struct ObjectsFeatureTests {
     let mac = ObjectRow(
         id: "mac",
         title: "Mac",
+        made: nil,
         summary: "This computer.",
         actions: ["status"],
         events: [],
@@ -16,6 +18,7 @@ struct ObjectsFeatureTests {
     let reminders = ObjectRow(
         id: "reminders",
         title: "Reminders",
+        made: nil,
         summary: nil,
         actions: ["add", "list"],
         events: ["ReminderAdded"],
@@ -39,5 +42,19 @@ struct ObjectsFeatureTests {
         continuation.yield([reminders])
         await store.receive(\.changed) { $0.listing = .live([self.reminders]) }
         await task.cancel()
+    }
+
+    @Test
+    func aRefusedShareSaysWhoMayShare() async {
+        struct Refused: Error {}
+        let store = TestStore(initialState: ObjectsFeature.State()) {
+            ObjectsFeature()
+        } withDependencies: {
+            $0.objects.share = { _, _ in throw Refused() }
+        }
+
+        await store.send(.share(MadeObjectID(rawValue: "tally"), .read))
+        await store.receive(\.shareRefused) { $0.refusal = "Only someone who may change it can share it." }
+        await store.send(.refusalDismissed) { $0.refusal = nil }
     }
 }

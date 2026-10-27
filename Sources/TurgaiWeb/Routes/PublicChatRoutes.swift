@@ -47,6 +47,34 @@ extension TurgaiMainWebApp {
                 role: .profile(conversation.profile.id))
             return try publicAPIResponse(entries.map(ObjectListing.init))
         }
+        // Shares one of the signed-in account's objects with everyone, or takes that back: only
+        // one who may change it does.
+        api.post("objects/:id/share") { request, context in
+            let owner = await chatOwner(from: request, auth: dependencies.auth)
+            guard case .account = owner,
+                let conversation = await chatConversation(
+                    owner: owner, conversationID: nil, botID: nil, profiles: dependencies.agentProfiles),
+                let id = context.parameters.get("id")
+            else { return publicAPIUnauthorizedResponse() }
+            guard
+                let sharing = try? await JSONDecoder().decode(
+                    ObjectSharingRequest.self, from: request, context: context)
+            else { return Response(status: .badRequest) }
+            let level: AccessLevel? =
+                switch sharing.everyone {
+                case .read: .read
+                case .write: .write
+                case .none: nil
+                }
+            do {
+                try await dependencies.webChatBridge.share(
+                    ObjectIdentity(rawValue: id), withEveryone: level, by: conversation.person(for: owner),
+                    in: conversation.domainID, role: .profile(conversation.profile.id))
+            } catch is NotAllowed {
+                return Response(status: .forbidden)
+            }
+            return Response(status: .noContent)
+        }
         registerChatSocket(on: router, dependencies: dependencies)
     }
 
@@ -1172,6 +1200,7 @@ extension ObjectListing {
         let endpoint = entry.object.id.node.endpoint
         self.init(
             id: entry.object.id.description, title: entry.id.description, summary: entry.description,
-            actions: entry.actions, events: entry.events, node: "\(endpoint.host):\(endpoint.port)")
+            actions: entry.actions, events: entry.events, node: "\(endpoint.host):\(endpoint.port)",
+            made: DynamicObject.identity(of: entry.object.id).map { MadeObjectID(rawValue: $0.rawValue) })
     }
 }
