@@ -46,6 +46,10 @@ public struct CallChain: Codable, Sendable, Equatable {
 public struct CallOnBehalfOfNoOne: Error, Codable, Sendable, Equatable, CustomStringConvertible {
     public let actor: ObjectID
 
+    public init(actor: ObjectID) {
+        self.actor = actor
+    }
+
     public var description: String { "a call to \(actor) is on behalf of no one" }
 }
 
