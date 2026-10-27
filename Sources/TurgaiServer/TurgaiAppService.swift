@@ -222,11 +222,9 @@ struct TurgaiAppService: Service, Sendable {
             // virtual-actor actions serve every effect type.
             ActorSystemDependency<CreateTimerEffect>.prepare(.live(on: system))
             let virtualNode = await VirtualNode(actorSystem: system)
-            // The objects models made: started, so they're findable again after a restart.
-            // Waking them is Turgai's own doing.
-            try await CallChain.$current.withValue(.start(.runtime)) {
-                try await DynamicObjects.resolve(on: system, scope: .shared).start()
-            }
+            // The objects models made: started again after a restart, each on behalf of whoever
+            // made it, so what they follow and run keeps going.
+            try await DynamicObjects.resolve(on: system, scope: .shared).start()
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
                 activities: ScheduleActivities()

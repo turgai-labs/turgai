@@ -331,7 +331,7 @@ struct ConversationReducerTests {
                         turnID: pending.turnID,
                         message: pending.message,
                         agentRole: pending.agentRole,
-                        scope: .person(pending.message.userID, in: GroupID(conversationID), as: .member)
+                        scope: CallScope(pending.message.userID, in: GroupID(conversationID), as: .member)
                     )
                 )
             ])

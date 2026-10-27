@@ -774,7 +774,7 @@ extension ConversationTurnRequest {
         self.init(
             conversationID: state.conversationID, turnID: pending.turnID, message: pending.message,
             agentRole: pending.agentRole,
-            scope: .person(
+            scope: CallScope(
                 sender, in: GroupID(state.conversationID), as: state.members.role(of: sender) ?? .member))
     }
 }

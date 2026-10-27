@@ -6,9 +6,9 @@ import TurgaiDomain
 @Suite("Who may read and write an object")
 struct AccessTests {
     private let family = GroupID(rawValue: "family")
-    private var dad: CallScope { .person(UserID("dad"), in: family, as: .admin) }
-    private var mom: CallScope { .person(UserID("mom"), in: family, as: .admin) }
-    private var kid: CallScope { .person(UserID("kid"), in: family, as: .member) }
+    private var dad: CallScope { CallScope(UserID("dad"), in: family, as: .admin) }
+    private var mom: CallScope { CallScope(UserID("mom"), in: family, as: .admin) }
+    private var kid: CallScope { CallScope(UserID("kid"), in: family, as: .member) }
 
     @Test
     func aNewObjectIsItsMakersAlone() {
@@ -18,7 +18,7 @@ struct AccessTests {
         #expect(!access.allows(mom, .read))
         #expect(!access.allows(kid, .read))
         // In another chat, still his.
-        #expect(access.allows(.person(UserID("dad"), in: GroupID(rawValue: "work"), as: .member), .write))
+        #expect(access.allows(CallScope(UserID("dad"), in: GroupID(rawValue: "work"), as: .member), .write))
     }
 
     @Test
@@ -31,16 +31,7 @@ struct AccessTests {
         #expect(!access.allows(kid, .write))
         #expect(access.allows(mom, .write))
         // Someone not in the family's chat, for that call, isn't in it.
-        #expect(!access.allows(.person(UserID("kid"), in: GroupID(rawValue: "school"), as: .member), .read))
-    }
-
-    @Test
-    func whatTurgaiMakesIsEveryonesToRead() {
-        let access = ObjectAccess(madeBy: .runtime)
-
-        #expect(access.allows(kid, .read))
-        #expect(!access.allows(kid, .write))
-        #expect(access.allows(.runtime, .write))
+        #expect(!access.allows(CallScope(UserID("kid"), in: GroupID(rawValue: "school"), as: .member), .read))
     }
 
     @Test

@@ -280,21 +280,21 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     // MARK: Who may call it
 
-    /// What a call to it needs, by the method it's for: reading it, writing it, or being Turgai
-    /// itself. A method not here is refused, so a new one is closed until it's said what it needs.
-    private static let needs: [String: CallNeed] = {
+    /// What a call to it needs, by the method it's for: reading it, or writing it. A method not
+    /// here is refused, so a new one is closed until it's said what it needs.
+    private static let needs: [String: AccessLevel] = {
         let reads = [
             "respond(_:arguments:through:)", "invoke(_:arguments:through:)", "describe()", "read(property:)",
             "_subscribe(_:to:)", "_nextEvent(for:)", "_unsubscribe(_:)", "identity()", "stableReference()",
-            "source()", "type()", "maker()", "access()", "name()", "health()", "recent()",
+            "source()", "type()", "maker()", "access()", "name()", "health()", "recent()", "start()",
         ]
         let writes = [
             "adopt(_:code:)", "typeChanged(_:code:reached:)", "describe(name:description:)", "set(values:)",
             "remove()", "share(with:_:)",
         ]
-        var needs: [String: CallNeed] = ["start()": .turgai]
-        for method in reads { needs[method] = .access(.read) }
-        for method in writes { needs[method] = .access(.write) }
+        var needs: [String: AccessLevel] = [:]
+        for method in reads { needs[method] = .read }
+        for method in writes { needs[method] = .write }
         return needs
     }()
 
@@ -306,15 +306,10 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// Refuses a call to `method`, before it runs, that the chain it came through may not make. Before
     /// it has code it's no one's yet, and the call that gives it code makes it its maker's.
     func check(_ method: String) throws {
-        guard let need = Self.needs[method] else { throw DynamicObjectError.notAllowed(.write) }
+        guard let level = Self.needs[method] else { throw DynamicObjectError.notAllowed(.write) }
         guard case .live(let live) = state, let access = live.access else { return }
         guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: objectID) }
-        switch need {
-        case .turgai:
-            guard case .runtime = chain.scope else { throw DynamicObjectError.notAllowed(.write) }
-        case .access(let level):
-            guard access.allows(chain, level) else { throw DynamicObjectError.notAllowed(level) }
-        }
+        guard access.allows(chain, level) else { throw DynamicObjectError.notAllowed(level) }
     }
 
     /// What it's called, when it was made by name.
@@ -803,14 +798,6 @@ extension ObjectIdentity: Describable {
     public static var jsonSchema: JSONValue {
         ["type": "string", "description": "An object's identity."]
     }
-}
-
-/// What a call to an object needs.
-enum CallNeed: Sendable {
-    /// Reading or writing it, by its access.
-    case access(AccessLevel)
-    /// Being Turgai itself: what only the runtime does to it, such as waking it.
-    case turgai
 }
 
 extension ClusterSystemSettings {

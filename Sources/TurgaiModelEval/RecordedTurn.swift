@@ -65,10 +65,7 @@ struct RecordedTurn: Sendable {
             return turn
         }
         do {
-            // The eval asks as Turgai itself: the agent's turn starts the chain.
-            try await CallChain.$current.withValue(.start(.runtime)) {
-                try await Agent.answering(as: try await agent.agentID) { try await stream.send(text, to: agent) }
-            }
+            try await Agent.answering(as: try await agent.agentID) { try await stream.send(text, to: agent) }
         } catch {
             // The model may fail after several useful tool calls. Keep those calls in the trace.
             stream.finish()

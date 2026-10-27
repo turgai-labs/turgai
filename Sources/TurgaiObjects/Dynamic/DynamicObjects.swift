@@ -2,6 +2,7 @@ import DiscoverableActors
 import Distributed
 import DistributedCluster
 import EventSourcing
+import TurgaiDomain
 import VirtualActors
 
 /// One owner's types and the objects made by name, the way an Erlang node holds its modules and a
@@ -93,8 +94,10 @@ public distributed actor DynamicObjects {
         try await made.adopt(id, code: code)
         try await made.describe(name: name, description: description)
         if !start.isEmpty { try await made.set(values: start) }
-        guard let access = try await made.access else { throw DynamicObjectsError.unknownObject(identity) }
-        try await emit(event: .added(identity, type: id, description: description, access: access))
+        guard let access = try await made.access, let maker = try await made.maker else {
+            throw DynamicObjectsError.unknownObject(identity)
+        }
+        try await emit(event: .added(identity, type: id, description: description, access: access, maker: maker))
         return identity
     }
 
@@ -122,9 +125,11 @@ public distributed actor DynamicObjects {
     /// The objects made here by name that the call may read, as they're listed and found: each as
     /// its type and what it was made for say, without asking the objects.
     public distributed func held() async throws -> [ObjectEntry] {
-        let reader = CallChain.current
+        guard let reader = CallChain.current else {
+            throw CallOnBehalfOfNoOne(actor: .virtual(Self.actorID(for: scope)))
+        }
         var held: [ObjectEntry] = []
-        for entry in state.entries where entry.access.allowsReading(reader) {
+        for entry in state.entries where entry.access.allows(reader, .read) {
             guard let code = state.types[entry.type] else { continue }
             let spec = try code.spec(description: entry.description)
             let object = try await object(entry.identity)
@@ -234,10 +239,12 @@ public distributed actor DynamicObjects {
         try await emit(event: .removed(identity))
     }
 
-    /// Starts every object here. The server does this when it starts.
+    /// Starts every object here, each on behalf of whoever made it, as what it does by itself is.
+    /// The server does this when it starts.
     public distributed func start() async throws {
-        for identity in state.identities {
-            try await object(identity).start()
+        for entry in state.entries {
+            let object = try await object(entry.identity)
+            try await CallChain.$current.withValue(.start(entry.maker)) { try await object.start() }
         }
     }
 
@@ -297,9 +304,9 @@ public enum DynamicObjectsEvent: Codable, Sendable {
     case typeWritten(BehaviorID, Script)
     /// A type named, with no object of its own.
     case typeNamed(String, BehaviorID)
-    /// An object made by name, of a type: listed and found by the name it holds, to whoever may
-    /// read it.
-    case added(ObjectIdentity, type: BehaviorID, description: String?, access: ObjectAccess)
+    /// An object made by name, of a type, by `maker`: listed and found by the name it holds, to
+    /// whoever may read it.
+    case added(ObjectIdentity, type: BehaviorID, description: String?, access: ObjectAccess, maker: CallScope)
     /// Who may read and write an object changed, as the object says.
     case accessChanged(ObjectIdentity, ObjectAccess)
     case removed(ObjectIdentity)
@@ -313,6 +320,8 @@ public struct DynamicObjectsState: Codable, Sendable {
         public let description: String?
         /// Who may read and write it, as it last said: who it's listed to.
         public var access: ObjectAccess
+        /// Whoever made it, on whose behalf it's started.
+        public let maker: CallScope
     }
 
     /// Each type as it is now.
@@ -350,8 +359,9 @@ public struct DynamicObjectsState: Codable, Sendable {
             types[id] = code
         case .typeNamed(let name, let id):
             typeNames[name] = id
-        case .added(let identity, let type, let description, let access):
-            entries.append(Entry(identity: identity, type: type, description: description, access: access))
+        case .added(let identity, let type, let description, let access, let maker):
+            entries.append(
+                Entry(identity: identity, type: type, description: description, access: access, maker: maker))
         case .accessChanged(let identity, let access):
             if let index = entries.firstIndex(where: { $0.identity == identity }) { entries[index].access = access }
         case .removed(let identity):

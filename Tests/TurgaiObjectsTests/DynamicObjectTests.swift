@@ -12,7 +12,7 @@ import struct AnyLanguageModel.GeneratedContent
 @testable import TurgaiApplication
 @testable import TurgaiObjects
 
-@Suite(.serialized, .asTheRuntime)
+@Suite(.serialized, .asAPerson)
 struct DynamicObjectTests {
     @Test
     func objectSearchRanksIdentityActionsAndPrefixes() {
@@ -518,7 +518,7 @@ struct DynamicObjectTests {
     @Test(.timeLimit(.minutes(2)))
     func anObjectKeepsWhoMadeIt() async throws {
         let store = MemoryEventStore()
-        let ann = CallScope.person(UserID("ann"), in: GroupID(rawValue: "family"), as: .admin)
+        let ann = CallScope(UserID("ann"), in: GroupID(rawValue: "family"), as: .admin)
         let counter = "actor Counter {\n    var count = 0\n}"
         let drinks = "actor Drinks {\n    private let tea = Counter(id: \"tea\")\n}"
         let uses = Uses(

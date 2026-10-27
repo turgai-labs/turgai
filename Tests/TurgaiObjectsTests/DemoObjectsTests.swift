@@ -34,7 +34,7 @@ distributed actor Customer {
     }
 }
 
-@Suite(.serialized, .asTheRuntime)
+@Suite(.serialized, .asAPerson)
 struct DemoObjectsTests {
     @Test
     func modelRunsTheRefundStoryByHand() async throws {

@@ -258,26 +258,29 @@ struct EvalTask: Sendable {
         var failure: String?
         var turnChecks: [String?] = []
         var stateText = ""
+        // Everything the eval does, it does as the person asking.
         do {
-            let node = try await EvalNode.start(
-                model: model, temperature: temperature, instructions: instructions,
-                objectsPageDescription: objectsPageDescription, agents: agents)
-            defer { node.stop() }
-            switch check {
-            case .followUp(let followUp, let stateAddresses, _, _):
-                let asked = try await followingUp(with: followUp, readingStateOf: stateAddresses, on: node)
-                turns = asked.turns
-                stateText = asked.stateText
-                failure = asked.missing
-            case .asks:
-                let agent = try await node.freshAgent()
-                turns.append(await RecordedTurn.send(request, to: agent, on: node.system))
-            case .shop(let shopTurns):
-                let floor = try await ShopFloor(on: node.system)
-                let agent = try await node.freshAgent()
-                for turn in shopTurns {
-                    turns.append(await RecordedTurn.send(turn.prompt, to: agent, on: node.system))
-                    turnChecks.append(try await turn.check(floor))
+            try await CallChain.$current.withValue(.start(EvalNode.asker)) {
+                let node = try await EvalNode.start(
+                    model: model, temperature: temperature, instructions: instructions,
+                    objectsPageDescription: objectsPageDescription, agents: agents)
+                defer { node.stop() }
+                switch check {
+                case .followUp(let followUp, let stateAddresses, _, _):
+                    let asked = try await followingUp(with: followUp, readingStateOf: stateAddresses, on: node)
+                    turns = asked.turns
+                    stateText = asked.stateText
+                    failure = asked.missing
+                case .asks:
+                    let agent = try await node.freshAgent()
+                    turns.append(await RecordedTurn.send(request, to: agent, on: node.system))
+                case .shop(let shopTurns):
+                    let floor = try await ShopFloor(on: node.system)
+                    let agent = try await node.freshAgent()
+                    for turn in shopTurns {
+                        turns.append(await RecordedTurn.send(turn.prompt, to: agent, on: node.system))
+                        turnChecks.append(try await turn.check(floor))
+                    }
                 }
             }
         } catch {
@@ -451,12 +454,9 @@ struct ShopFloor: Sendable {
     /// `endings`, or what they are instead after ten seconds.
     func refunds(of amounts: [Decimal], endingAs endings: [[ShopOrderStatus]]) async throws -> String? {
         let first = try await demo.shop.orders.count + 1
-        // The eval orders and asks as Turgai itself.
-        try await CallChain.$current.withValue(.start(.runtime)) {
-            for amount in amounts { _ = try await demo.shop.placeOrder(item: "Lamp", amount: amount) }
-            for number in first..<(first + amounts.count) {
-                _ = try await demo.shop.requestRefund(number: number, replyTo: replyTo)
-            }
+        for amount in amounts { _ = try await demo.shop.placeOrder(item: "Lamp", amount: amount) }
+        for number in first..<(first + amounts.count) {
+            _ = try await demo.shop.requestRefund(number: number, replyTo: replyTo)
         }
         func statuses() async throws -> [ShopOrderStatus] {
             try await demo.shop.orders.dropFirst(first - 1).map(\.status)

@@ -5,6 +5,7 @@ import EventSourcing
 import Foundation
 import Hail
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
 import TurgaiPersistence
@@ -125,6 +126,9 @@ struct EvalNode: Sendable {
         default: throw UnsupportedModel(model: model)
         }
     }
+
+    /// Who the eval asks as: one person, in a group of their own.
+    static let asker = CallScope(UserID("eval"), in: GroupID(rawValue: "eval"), as: .admin)
 
     /// An agent no one has talked to.
     func freshAgent() async throws -> Agent {

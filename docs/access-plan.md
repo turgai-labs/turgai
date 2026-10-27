@@ -36,7 +36,7 @@ So there's one boundary, the distributed call, and one infrastructure on it:
 ### Groups, scope, reading and writing
 
 - **Two levels, writing including reading:** reading it is using it, calling its actions; writing it is changing it, its code, its name, removing it, and who may do what. Who can see it exists is visibility, a separate question.
-- **A new object is its maker's alone:** only they read and write it, until they share it. Dad's object for adults stays his. One Turgai makes itself, such as the Mac's or a demo's, is read by everyone.
+- **A new object is its maker's alone:** only they read and write it, until they share it. Dad's object for adults stays his. Turgai is never a caller: every chain starts with a person.
 - **Whoever can write it shares it:** with everyone, a group, a group's admins, a person, or an object. A group's admins have no say over a member's object unless it's shared with them. A role, such as a family's kids, is a group too; someone joining a group gets its access, and someone leaving loses it.
 - **The call carries its scope:** who started it, the group they came in through, and their role there. Bob writes in the family chat, so the call starts as "Bob, in the family, as a parent", put on by the group where he came in. The check compares that with what the actor allows, and never asks anyone. In another chat, Bob isn't in the family for that call. A role changed applies from the next call; a timer or an object's own task gets its group's current role when it starts.
 
@@ -114,7 +114,7 @@ Nothing built on 1–4 changes when these land.
 
 1. Stamp the caller on every call, the same on every node. *Built.*
 2. What each actor allows: read, write; a new one its maker's alone; changed by whoever can write it. *Built for made objects.*
-3. The check on the receiving side. *Built for made objects:* SDA asks a filter on the object's node before any call's target runs, from another node or through a reference here; Turgai's filter checks the call chain against the object's access, by a table of what each of its methods needs, and refuses a method not in it. The directory lists only what the caller may read, from what it keeps of each object, never asking the objects. An object's own tasks and the events it follows run on its maker's behalf; waking objects at launch is Turgai's.
+3. The check on the receiving side. *Built for made objects:* SDA asks a filter on the object's node before any call's target runs, from another node or through a reference here; Turgai's filter checks the call chain against the object's access, by a table of what each of its methods needs, and refuses a method not in it. The directory lists only what the caller may read, from what it keeps of each object, never asking the objects. An object's own tasks and the events it follows run on its maker's behalf, and so does waking it at launch.
 4. The ToolsAPI: offering a tool as a distributed actor.
 5. Requests and answers, and macOS's consent on the Mac.
 6. In SDA: mTLS, and a node speaking only for its own actors.

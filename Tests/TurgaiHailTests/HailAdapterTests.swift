@@ -178,7 +178,7 @@ struct HailAdapterTests {
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
             agentRole: "test",
-            scope: .runtime
+            scope: CallScope(UserID("user"), in: GroupID(conversationID), as: .admin)
         )
 
         let response = try await peer.run(to: request)

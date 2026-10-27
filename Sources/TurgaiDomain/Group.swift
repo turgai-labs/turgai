@@ -78,11 +78,16 @@ public struct GroupID: RawRepresentable, Hashable, Codable, Sendable {
     }
 }
 
-/// Who a call is on behalf of: whoever started its chain, as they came in.
-public enum CallScope: Hashable, Codable, Sendable {
-    /// A person, in the group they came in through, with the role they have there as the chain starts.
-    case person(UserID, in: GroupID, as: GroupRole)
-    /// Turgai itself, with no person behind it: what it starts as it launches or recovers. Only
-    /// Turgai's own code starts a chain this way, never a chat.
-    case runtime
+/// Who a call is on behalf of: the person who started its chain, in the group they came in
+/// through, with the role they have there as the chain starts.
+public struct CallScope: Hashable, Codable, Sendable {
+    public let person: UserID
+    public let group: GroupID
+    public let role: GroupRole
+
+    public init(_ person: UserID, in group: GroupID, as role: GroupRole) {
+        self.person = person
+        self.group = group
+        self.role = role
+    }
 }

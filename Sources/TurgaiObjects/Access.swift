@@ -24,18 +24,15 @@ public enum Audience: Hashable, Codable, Sendable {
     case person(UserID)
     /// An object, when it's the one calling directly.
     case object(ObjectID)
-    /// Turgai itself, with no person behind it.
-    case turgai
 
     /// Whether a call on behalf of `scope` is for this audience.
     func includes(_ scope: CallScope) -> Bool {
-        switch (self, scope) {
-        case (.everyone, _): true
-        case (.group(let group), .person(_, let scopeGroup, _)): group == scopeGroup
-        case (.admins(let group), .person(_, let scopeGroup, let role)): group == scopeGroup && role == .admin
-        case (.person(let person), .person(let scopePerson, _, _)): person == scopePerson
-        case (.turgai, .runtime): true
-        case (.group, .runtime), (.admins, .runtime), (.person, .runtime), (.object, _), (.turgai, .person): false
+        switch self {
+        case .everyone: true
+        case .group(let group): group == scope.group
+        case .admins(let group): group == scope.group && scope.role == .admin
+        case .person(let person): person == scope.person
+        case .object: false
         }
     }
 }
@@ -44,12 +41,9 @@ public enum Audience: Hashable, Codable, Sendable {
 public struct ObjectAccess: Hashable, Codable, Sendable {
     public private(set) var levels: [Audience: AccessLevel]
 
-    /// A new object's access: its maker's alone. One Turgai makes itself is everyone's to read.
+    /// A new object's access: its maker's alone.
     public init(madeBy maker: CallScope) {
-        switch maker {
-        case .person(let person, _, _): levels = [.person(person): .write]
-        case .runtime: levels = [.turgai: .write, .everyone: .read]
-        }
+        levels = [.person(maker.person): .write]
     }
 
     /// How far a call on behalf of `scope` may go, if at all.
@@ -68,13 +62,6 @@ public struct ObjectAccess: Hashable, Codable, Sendable {
         if allows(chain.scope, level) { return true }
         guard let caller = chain.actors.last, let callerLevel = self.level(for: caller) else { return false }
         return callerLevel >= level
-    }
-
-    /// Whether a call through `chain`, or one in no chain, may read it: one in no chain only what
-    /// everyone may read.
-    public func allowsReading(_ chain: CallChain?) -> Bool {
-        guard let chain else { return levels[.everyone] != nil }
-        return allows(chain, .read)
     }
 
     /// Whether a call on behalf of `scope` may go as far as `level`.
