@@ -159,7 +159,8 @@ struct TurgaiAppService: Service, Sendable {
             let searchBackend = try Self.makeSearchBackend(environment: environment)
             let userToolRegistry = Self.userToolRegistry(in: userToolsDirectory)
             let turnTools = TurnToolSources(
-                agentProfiles: agentProfiles, endpointFactory: endpointFactory, runtimeConfiguration: runtimeConfiguration,
+                agentProfiles: agentProfiles, endpointFactory: endpointFactory,
+                runtimeConfiguration: runtimeConfiguration,
                 attachmentResolver: attachmentResolver, searchBackend: searchBackend, workspaceRoot: workspaceRoot,
                 wasmRunnerURL: wasmRunnerURL, userToolRegistry: userToolRegistry)
             let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
@@ -208,6 +209,7 @@ struct TurgaiAppService: Service, Sendable {
                 settings.plugins.install(plugin: virtualActorsPlugin)
                 settings.plugins.install(plugin: DiscoveryPlugin())
                 settings.propagateCallChain()
+                settings.checkObjectAccess()
                 settings.plugins.install(plugin: journalPlugin)
                 settings.plugins.install(plugin: runtimePlugin)
                 settings.plugins.install(plugin: workflowsPlugin)
@@ -221,7 +223,10 @@ struct TurgaiAppService: Service, Sendable {
             ActorSystemDependency<CreateTimerEffect>.prepare(.live(on: system))
             let virtualNode = await VirtualNode(actorSystem: system)
             // The objects models made: started, so they're findable again after a restart.
-            try await DynamicObjects.resolve(on: system, scope: .shared).start()
+            // Waking them is Turgai's own doing.
+            try await CallChain.$current.withValue(.start(.runtime)) {
+                try await DynamicObjects.resolve(on: system, scope: .shared).start()
+            }
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
                 activities: ScheduleActivities()
@@ -688,7 +693,8 @@ extension TurgaiAppService {
             events: FileEventStore(client: client),
             snapshots: FileSnapshotStore(client: client),
             conversationIDs: {
-                Self.conversationIDs(persistenceIDs: try await reader.persistenceIDs(withPrefix: ConversationPersistenceID.prefix))
+                Self.conversationIDs(
+                    persistenceIDs: try await reader.persistenceIDs(withPrefix: ConversationPersistenceID.prefix))
             },
             channelIDs: {
                 try await reader.persistenceIDs(withPrefix: TelegramChannel.persistencePrefix)

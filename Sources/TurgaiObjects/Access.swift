@@ -62,6 +62,21 @@ public struct ObjectAccess: Hashable, Codable, Sendable {
         [levels[.object(caller)], levels[.everyone]].compactMap { $0 }.max()
     }
 
+    /// Whether a call coming through `chain` may go as far as `level`: whoever started it may, or
+    /// the object calling directly may.
+    public func allows(_ chain: CallChain, _ level: AccessLevel) -> Bool {
+        if allows(chain.scope, level) { return true }
+        guard let caller = chain.actors.last, let callerLevel = self.level(for: caller) else { return false }
+        return callerLevel >= level
+    }
+
+    /// Whether a call through `chain`, or one in no chain, may read it: one in no chain only what
+    /// everyone may read.
+    public func allowsReading(_ chain: CallChain?) -> Bool {
+        guard let chain else { return levels[.everyone] != nil }
+        return allows(chain, .read)
+    }
+
     /// Whether a call on behalf of `scope` may go as far as `level`.
     public func allows(_ scope: CallScope, _ level: AccessLevel) -> Bool {
         self.level(for: scope).map { $0 >= level } ?? false

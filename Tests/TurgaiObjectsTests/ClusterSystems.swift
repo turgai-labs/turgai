@@ -47,5 +47,6 @@ private func configure(_ settings: inout ClusterSystemSettings, store: MemoryEve
     settings.plugins.install(plugin: virtualActors)
     settings.plugins.install(plugin: DiscoveryPlugin())
     settings.propagateCallChain()
+    settings.checkObjectAccess()
     settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
 }

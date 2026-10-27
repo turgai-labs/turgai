@@ -112,9 +112,9 @@ Nothing built on 1–4 changes when these land.
 
 ## Order
 
-1. Stamp the caller on every call, the same on every node.
-2. What each actor allows: read, write; a new one its maker's alone; changed by whoever can write it.
-3. The check on the receiving side.
+1. Stamp the caller on every call, the same on every node. *Built.*
+2. What each actor allows: read, write; a new one its maker's alone; changed by whoever can write it. *Built for made objects.*
+3. The check on the receiving side. *Built for made objects:* SDA asks a filter on the object's node before any call's target runs, from another node or through a reference here; Turgai's filter checks the call chain against the object's access, by a table of what each of its methods needs, and refuses a method not in it. The directory lists only what the caller may read, from what it keeps of each object, never asking the objects. An object's own tasks and the events it follows run on its maker's behalf; waking objects at launch is Turgai's.
 4. The ToolsAPI: offering a tool as a distributed actor.
 5. Requests and answers, and macOS's consent on the Mac.
 6. In SDA: mTLS, and a node speaking only for its own actors.

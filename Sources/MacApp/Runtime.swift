@@ -101,6 +101,7 @@ actor MacObjectsService: Service {
             settings.plugins.install(plugin: virtualActors)
             settings.plugins.install(plugin: DiscoveryPlugin())
             settings.propagateCallChain()
+            settings.checkObjectAccess()
         }
         defer { _ = try? system.shutdown() }
         try await withGracefulShutdownHandler {

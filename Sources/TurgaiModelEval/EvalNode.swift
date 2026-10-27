@@ -74,6 +74,7 @@ struct EvalNode: Sendable {
             settings.plugins.install(plugin: virtualActors)
             settings.plugins.install(plugin: DiscoveryPlugin())
             settings.propagateCallChain()
+            settings.checkObjectAccess()
             settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
             settings.plugins.install(plugin: plugin)
         }

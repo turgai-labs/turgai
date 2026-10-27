@@ -274,6 +274,47 @@ public distributed actor DynamicObject: DiscoverableActor {
     public distributed func share(with audience: Audience, _ level: AccessLevel?) async throws {
         guard let scope = CallChain.current?.scope else { throw CallOnBehalfOfNoOne(actor: objectID) }
         try await emit(event: try state.live.sharing(with: audience, level, by: scope))
+        // Who it's listed to follows who may read it.
+        try await DynamicObjects.resolve(on: actorSystem, scope: nature.scope).accessChanged(nature.identity)
+    }
+
+    // MARK: Who may call it
+
+    /// What a call to it needs, by the method it's for: reading it, writing it, or being Turgai
+    /// itself. A method not here is refused, so a new one is closed until it's said what it needs.
+    private static let needs: [String: CallNeed] = {
+        let reads = [
+            "respond(_:arguments:through:)", "invoke(_:arguments:through:)", "describe()", "read(property:)",
+            "_subscribe(_:to:)", "_nextEvent(for:)", "_unsubscribe(_:)", "identity()", "stableReference()",
+            "source()", "type()", "maker()", "access()", "name()", "health()", "recent()",
+        ]
+        let writes = [
+            "adopt(_:code:)", "typeChanged(_:code:reached:)", "describe(name:description:)", "set(values:)",
+            "remove()", "share(with:_:)",
+        ]
+        var needs: [String: CallNeed] = ["start()": .turgai]
+        for method in reads { needs[method] = .access(.read) }
+        for method in writes { needs[method] = .access(.write) }
+        return needs
+    }()
+
+    /// The method a call is for, as the needs name it: `respond(_:arguments:through:)`.
+    static func method(of target: RemoteCallTarget) -> String {
+        target.description.split(separator: ".").dropFirst(2).joined(separator: ".")
+    }
+
+    /// Refuses a call to `method`, before it runs, that the chain it came through may not make. Before
+    /// it has code it's no one's yet, and the call that gives it code makes it its maker's.
+    func check(_ method: String) throws {
+        guard let need = Self.needs[method] else { throw DynamicObjectError.notAllowed(.write) }
+        guard case .live(let live) = state, let access = live.access else { return }
+        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: objectID) }
+        switch need {
+        case .turgai:
+            guard case .runtime = chain.scope else { throw DynamicObjectError.notAllowed(.write) }
+        case .access(let level):
+            guard access.allows(chain, level) else { throw DynamicObjectError.notAllowed(level) }
+        }
     }
 
     /// What it's called, when it was made by name.
@@ -540,6 +581,16 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// each, until they end: whether it should follow again, which a source that's gone, or not
     /// there yet, should be.
     private func follow(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
+        // Following is its own doing, as its tasks are: on behalf of whoever made it.
+        guard let maker = try? state.live.startedBy, let chain = try? CallChain.start(maker).entering(objectID) else {
+            return false
+        }
+        return await CallChain.$current.withValue(chain) {
+            await following(field, holding: reference, handlers: handlers)
+        }
+    }
+
+    private func following(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
         do {
             _ = try state.live
             let source = try await Self.discoverable(
@@ -751,5 +802,25 @@ extension DynamicObject: Describable {
 extension ObjectIdentity: Describable {
     public static var jsonSchema: JSONValue {
         ["type": "string", "description": "An object's identity."]
+    }
+}
+
+/// What a call to an object needs.
+enum CallNeed: Sendable {
+    /// Reading or writing it, by its access.
+    case access(AccessLevel)
+    /// Being Turgai itself: what only the runtime does to it, such as waking it.
+    case turgai
+}
+
+extension ClusterSystemSettings {
+    /// Checks every call to a made object against who may read and write it, before it runs, on
+    /// whichever node it lives: a call from another node, or one through a reference here.
+    public mutating func checkObjectAccess() {
+        remoteCall.incomingCallFilter = { actor, target in
+            guard let object = actor as? DynamicObject else { return }
+            let method = DynamicObject.method(of: target)
+            try await object.whenLocal { try $0.check(method) }
+        }
     }
 }
