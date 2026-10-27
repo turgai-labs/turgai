@@ -14,7 +14,7 @@ public distributed actor Website {
     private let port: Int
 
     /// Starts serving on `port`, showing the page it starts with, and checks in.
-    public init(actorSystem: ActorSystem, port: Int, scope: ObjectScope = .shared) async throws {
+    public init(actorSystem: ActorSystem, port: Int) async throws {
         self.actorSystem = actorSystem
         let host = PageHost()
         self.host = host
@@ -27,7 +27,7 @@ public distributed actor Website {
             }
         }
         let object = try DiscoverableObject.resolve(id: self.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
+        await actorSystem.receptionist.checkIn(object, with: .objects)
     }
 
     deinit {

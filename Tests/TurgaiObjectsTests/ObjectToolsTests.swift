@@ -103,7 +103,7 @@ struct ObjectToolsTests {
             ])
             let reminders = try await Reminders(actorSystem: objectsNode, client: makeClient(memory: memory))
             let session = ObjectSession(
-                actorSystem: sessionNode, scopes: [.shared])
+                actorSystem: sessionNode)
 
             let roots = try await waitForRoots(1, in: session)
             guard case .array(let entries) = roots, let root = entries.first else {
@@ -154,7 +154,7 @@ struct ObjectToolsTests {
                 ReminderListRecord(id: .init(rawValue: "home"), title: "Home"),
             ])
             let reminders = try await Reminders(actorSystem: objectsNode, client: makeClient(memory: memory))
-            let session = ObjectSession(actorSystem: sessionNode, scopes: [.shared])
+            let session = ObjectSession(actorSystem: sessionNode)
             _ = try await waitForRoots(1, in: session)
             #expect(await session.actionTools(of: try await session.id(written: "reminders")).map(\.name).contains("reminders_lists"))
 
@@ -185,7 +185,7 @@ struct ObjectToolsTests {
             let memory = MemoryReminders(lists: [ReminderListRecord(id: .init(rawValue: "work"), title: "Work")])
             let reminders = try await Reminders(actorSystem: objectsNode, client: makeClient(memory: memory))
             let session = ObjectSession(
-                actorSystem: sessionNode, scopes: [.shared])
+                actorSystem: sessionNode)
             _ = try await waitForRoots(1, in: session)
             let list = try #require(
                 try await ids(
@@ -230,7 +230,7 @@ struct ObjectToolsTests {
         try await withObjectNodes { objectsNode, sessionNode in
             let memory = MemoryReminders(lists: [ReminderListRecord(id: .init(rawValue: "work"), title: "Work")])
             let reminders = try await Reminders(actorSystem: objectsNode, client: makeClient(memory: memory))
-            let session = ObjectSession(actorSystem: sessionNode, scopes: [.shared])
+            let session = ObjectSession(actorSystem: sessionNode)
             _ = try await waitForRoots(1, in: session)
 
             // Finding an object links to its first page, which links to its actions.
@@ -320,7 +320,7 @@ struct ObjectToolsTests {
                 ReminderListRecord(id: .init(rawValue: "groceries"), title: "Groceries"),
             ])
             let reminders = try await Reminders(actorSystem: objectsNode, client: makeClient(memory: memory))
-            let session = ObjectSession(actorSystem: sessionNode, scopes: [.shared])
+            let session = ObjectSession(actorSystem: sessionNode)
             _ = try await waitForRoots(1, in: session)
 
             _ = try await id(
@@ -360,7 +360,7 @@ struct ObjectToolsTests {
             let reminders = try await Reminders(actorSystem: objectsNode, client: denied)
 
             let session = ObjectSession(
-                actorSystem: sessionNode, scopes: [.shared])
+                actorSystem: sessionNode)
             _ = try await waitForRoots(1, in: session)
 
             await #expect(throws: ObjectToolError.failed(ReminderError.accessDenied.description)) {
@@ -378,7 +378,7 @@ struct ObjectToolsTests {
                 actorSystem: objectsNode, client: makeClient(memory: MemoryReminders(lists: [])))
 
             let session = ObjectSession(
-                actorSystem: sessionNode, scopes: [.shared])
+                actorSystem: sessionNode)
             _ = try await waitForRoots(2, in: session)
 
             func found(_ query: String) async throws -> [String] {
@@ -402,7 +402,7 @@ struct ObjectToolsTests {
             // The runtime keeps one catalog following the receptionist, as here. The objects page
             // says what objects are for, lists the roots by handle, and links them directly.
             let catalog = await ObjectCatalog(actorSystem: sessionNode)
-            let listing = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog, scopes: [.shared])
+            let listing = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog)
             var lines: [String] = []
             var links: [String] = []
             for _ in 0..<50 {
@@ -428,28 +428,9 @@ struct ObjectToolsTests {
 
             // A new session, as a later turn gets: the listed handle works straight away.
             let session = ObjectSession(
-                actorSystem: sessionNode, objectCatalog: catalog, scopes: [.shared])
+                actorSystem: sessionNode, objectCatalog: catalog)
             #expect(try await session.describe(try await session.id(written: "reminders"))["type"] == "Reminders")
             _ = (mac, reminders)
-        }
-    }
-
-    @Test
-    func scopesLimitWhatIsListed() async throws {
-        try await withObjectNodes { objectsNode, sessionNode in
-            let ada = try await Reminders(
-                actorSystem: objectsNode, client: makeClient(memory: MemoryReminders(lists: [])),
-                scope: .owned(by: .init(rawValue: "ada")))
-            let grace = try await Reminders(
-                actorSystem: objectsNode, client: makeClient(memory: MemoryReminders(lists: [])),
-                scope: .owned(by: .init(rawValue: "grace")))
-
-            let session = ObjectSession(
-                actorSystem: sessionNode, scopes: ObjectScope.visible(to: .init(rawValue: "ada")))
-            let roots = try await waitForRoots(1, in: session)
-            try await Task.sleep(for: .milliseconds(500))
-            #expect(try await session.list() == roots)
-            _ = (ada, grace)
         }
     }
 
@@ -458,7 +439,7 @@ struct ObjectToolsTests {
         await #expect(throws: ObjectToolError.unknownHandle("h9")) {
             try await withObjectNodes { _, sessionNode in
                 let session = ObjectSession(
-                    actorSystem: sessionNode, scopes: [.shared])
+                    actorSystem: sessionNode)
                 _ = try await session.describe(try await session.id(written: "h9"))
             }
         }

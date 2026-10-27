@@ -27,7 +27,7 @@ struct AccessCheckTests {
     func anObjectIsItsMakersUntilShared() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem("objects", store: store, hostsVirtualActors: true) { node in
-            let objects = try await DynamicObjects.resolve(on: node, scope: .shared)
+            let objects = try await DynamicObjects.resolve(on: node)
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
             }
@@ -58,7 +58,7 @@ struct AccessCheckTests {
     func aCallOnBehalfOfNoOneIsRefused() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem("objects", store: store, hostsVirtualActors: true) { node in
-            let objects = try await DynamicObjects.resolve(on: node, scope: .shared)
+            let objects = try await DynamicObjects.resolve(on: node)
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
             }
@@ -66,6 +66,44 @@ struct AccessCheckTests {
 
             await #expect(throws: CallOnBehalfOfNoOne.self) {
                 _ = try await object.respond("add", arguments: [:])
+            }
+        }
+    }
+
+    /// One directory holds everyone's objects: another's, which Bob may not read, is never in his
+    /// way, and its name is still taken.
+    @Test(.timeLimit(.minutes(1)))
+    func anothersObjectIsNotInTheWay() async throws {
+        let store = MemoryEventStore()
+        try await withClusterSystem("objects", store: store, hostsVirtualActors: true) { node in
+            let objects = try await DynamicObjects.resolve(on: node)
+            let annID = try await self.as(ann) {
+                try await objects.create(name: "Tally", spec: .new(try Script(code: counter, type: "Counter")))
+            }
+            let bobID = try await self.as(bob) {
+                try await objects.create(name: "Notes", spec: .new(try Script(code: counter, type: "Counter")))
+            }
+
+            // Found by name among what he may read.
+            #expect(try await self.as(bob) { try await objects.object(named: "Notes") } == bobID)
+            #expect(try await self.as(bob) { try await objects.object(named: "Tally") } == nil)
+            #expect(try await self.as(ann) { try await objects.object(named: "Tally") } == annID)
+            // His type changes for his object alone.
+            let changed = counter.replacingOccurrences(of: "count += 1", with: "count += 2")
+            try await self.as(bob) {
+                try await objects.update(bobID, source: try Script(code: changed, type: "Counter"))
+            }
+            #expect(
+                try await self.as(bob) { try await objects.held(bobID).respond("add", arguments: [:]).reply }
+                    == .integer(2))
+            #expect(
+                try await self.as(ann) { try await objects.held(annID).respond("add", arguments: [:]).reply }
+                    == .integer(1))
+            // Her name is still hers.
+            await #expect(throws: DynamicObjectsError.nameTaken("Tally")) {
+                try await self.as(bob) {
+                    _ = try await objects.create(name: "Tally", spec: .new(try Script(code: counter, type: "Counter")))
+                }
             }
         }
     }

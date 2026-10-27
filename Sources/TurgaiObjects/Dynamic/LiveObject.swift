@@ -28,18 +28,6 @@ public enum DynamicObjectEvent: Codable, Sendable {
     case removed
 }
 
-/// Which dynamic object this is, and whose: what every reference to it carries, so wherever and
-/// whenever it starts, it starts as itself, from its own journal.
-public struct ObjectNature: Codable, Sendable, Hashable {
-    public let identity: ObjectIdentity
-    public let scope: ObjectScope
-
-    public init(identity: ObjectIdentity, scope: ObjectScope) {
-        self.identity = identity
-        self.scope = scope
-    }
-}
-
 /// An event an object announced: which, with its values.
 public struct Announcement: Codable, Sendable, Equatable {
     public let event: String

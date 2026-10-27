@@ -5,9 +5,8 @@ import EventSourcing
 import TurgaiDomain
 import VirtualActors
 
-/// One owner's types and the objects made by name, the way an Erlang node holds its modules and a
-/// supervisor its top processes. There's one per scope, reached by the scope alone. It makes those
-/// objects, gives a type's new code to them, and starts them again after a restart: each restores
+/// The types and the objects made by name, the way an Erlang node holds its modules and a
+/// supervisor its top processes. There's one, reached by its id alone. It makes those objects, gives a type's new code to them, and starts them again after a restart: each restores
 /// itself from its own journal. An object code makes is its maker's, which holds it: a type's new
 /// code reaches it through its maker, as down a tree, and nothing here knows it.
 ///
@@ -19,32 +18,31 @@ import VirtualActors
 @VirtualActor
 public distributed actor DynamicObjects {
     public typealias ActorSystem = ClusterSystem
-    public typealias Dependency = ObjectScope
     public typealias Event = DynamicObjectsEvent
     public typealias State = DynamicObjectsState
 
     public var state = DynamicObjectsState()
-    private let scope: ObjectScope
     /// References to its objects, resolved once each.
     private var resolved: [ObjectIdentity: DynamicObject] = [:]
 
-    public init(actorSystem: ClusterSystem, dependency scope: ObjectScope) async throws {
+    public init(actorSystem: ClusterSystem) async throws {
         self.actorSystem = actorSystem
-        self.scope = scope
-        try await actorSystem.journal.register(actor: self, with: Self.persistenceID(for: scope))
+        try await actorSystem.journal.register(actor: self, with: Self.persistenceID)
     }
 
-    /// The objects of `scope`.
-    public static func resolve(on system: ClusterSystem, scope: ObjectScope) async throws -> DynamicObjects {
-        try await system.virtualActors.getActor(identifiedBy: actorID(for: scope), dependency: scope)
+    /// The objects made by name, and their types.
+    public static func resolve(on system: ClusterSystem) async throws -> DynamicObjects {
+        try await system.virtualActors.getActor(identifiedBy: actorID, dependency: None())
     }
 
-    static func actorID(for scope: ObjectScope) -> VirtualActorID {
-        VirtualActorID(rawValue: "dynamic-objects:\(scope.name)")
-    }
+    static var actorID: VirtualActorID { VirtualActorID(rawValue: "dynamic-objects") }
 
-    static func persistenceID(for scope: ObjectScope) -> String {
-        "turgai-objects-\(scope.name)"
+    static var persistenceID: String { "turgai-objects" }
+
+    /// The chain the current call came through: every call is on someone's behalf.
+    private func caller() throws -> CallChain {
+        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .virtual(Self.actorID)) }
+        return chain
     }
 
     // MARK: Objects
@@ -57,7 +55,7 @@ public distributed actor DynamicObjects {
     ) async throws
         -> ObjectIdentity
     {
-        guard try await object(named: name) == nil, state.type(named: name) == nil else {
+        guard try object(named: name) == nil, state.type(named: name) == nil else {
             throw DynamicObjectsError.nameTaken(name)
         }
         // Its id is its name, as tools and code write it: stored, unique here, never another's.
@@ -80,17 +78,14 @@ public distributed actor DynamicObjects {
         }
         guard let code = state.types[id] else { throw DynamicObjectsError.unknownType(id.rawValue) }
         // One that's there already, made by name or named by code, is changed, not made again.
-        let existing = try await DynamicObject.resolve(
-            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        let existing = try await DynamicObject.resolve(on: actorSystem, identity: identity)
         if let code = try? await existing.source {
             throw DynamicObjectsError.exists(identity.rawValue, type: code.type)
         }
         guard !state.identities.contains(identity), !state.removed.contains(identity),
-            try await ObjectNames.object(
-                named: identity.rawValue, in: DynamicObject.scopes(around: scope), using: actorSystem) == nil
+            try await ObjectNames.object(named: identity.rawValue, using: actorSystem) == nil
         else { throw DynamicObjectsError.nameTaken(name) }
-        let made = try await DynamicObject.resolve(
-            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        let made = try await DynamicObject.resolve(on: actorSystem, identity: identity)
         try await made.adopt(id, code: code)
         try await made.describe(name: name, description: description)
         if !start.isEmpty { try await made.set(values: start) }
@@ -125,9 +120,7 @@ public distributed actor DynamicObjects {
     /// The objects made here by name that the call may read, as they're listed and found: each as
     /// its type and what it was made for say, without asking the objects.
     public distributed func held() async throws -> [ObjectEntry] {
-        guard let reader = CallChain.current else {
-            throw CallOnBehalfOfNoOne(actor: .virtual(Self.actorID(for: scope)))
-        }
+        let reader = try caller()
         var held: [ObjectEntry] = []
         for entry in state.entries where entry.access.allows(reader, .read) {
             guard let code = state.types[entry.type] else { continue }
@@ -135,10 +128,9 @@ public distributed actor DynamicObjects {
             let object = try await object(entry.identity)
             held.append(
                 ObjectEntry(
-                    id: .virtual(DynamicObject.actorID(for: ObjectNature(identity: entry.identity, scope: scope))),
+                    id: .virtual(DynamicObject.actorID(for: entry.identity)),
                     object: try DiscoverableObject.resolve(id: object.id, using: actorSystem), type: spec.type,
                     description: spec.description,
-                    scope: scope,
                     actions: spec.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }.sorted(),
                     events: spec.events.keys.sorted()))
         }
@@ -152,12 +144,12 @@ public distributed actor DynamicObjects {
         try await emit(event: .accessChanged(identity, access))
     }
 
-    /// The object made here under `name`, by its name or its handle.
-    public distributed func object(named name: String) async throws -> ObjectNature? {
-        for entry in state.entries where ObjectNames.matches(name, title: try await object(entry.identity).name ?? "") {
-            return ObjectNature(identity: entry.identity, scope: scope)
-        }
-        return nil
+    /// The object made here under `name`, by its name or its handle, among those the call may read:
+    /// its id is its name's handle.
+    public distributed func object(named name: String) throws -> ObjectIdentity? {
+        let reader = try caller()
+        let handle = ObjectNames.handle(for: name)
+        return state.entries.first { $0.identity.rawValue == handle && $0.access.allows(reader, .read) }?.identity
     }
 
     /// The object made here as `identity`.
@@ -167,16 +159,19 @@ public distributed actor DynamicObjects {
 
     /// Which of the objects made here the actor `id` is, if it's one of them.
     public distributed func identity(of id: ClusterSystem.ActorID) -> ObjectIdentity? {
-        DynamicObject.identity(of: id, in: scope).flatMap { state.identities.contains($0) ? $0 : nil }
+        DynamicObject.identity(of: id).flatMap { state.identities.contains($0) ? $0 : nil }
     }
 
-    /// The other objects made here running the same type as the object `identity`, by name.
+    /// The other objects made here running the same type as the object `identity`, by name: those
+    /// the call may read.
     public distributed func sharing(_ identity: ObjectIdentity) async throws -> [String] {
         guard let entry = state.entries.first(where: { $0.identity == identity }) else {
             throw DynamicObjectsError.unknownObject(identity)
         }
+        let reader = try caller()
         var names: [String] = []
-        for other in state.entries where other.type == entry.type && other.identity != identity {
+        for other in state.entries
+        where other.type == entry.type && other.identity != identity && other.access.allows(reader, .read) {
             if let name = try await object(other.identity).name { names.append(name) }
         }
         return names
@@ -189,19 +184,16 @@ public distributed actor DynamicObjects {
             try await rewrite(entry.type, as: source)
             return
         }
-        let named = try await DynamicObject.resolve(
-            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        let named = try await DynamicObject.resolve(on: actorSystem, identity: identity)
         guard let type = try? await named.type else { throw DynamicObjectsError.unknownObject(identity) }
         try await rewrite(type, as: source)
         // It may be held by nothing made here by name, so it's told itself too.
         _ = try await named.typeChanged(type, code: source, reached: [])
     }
 
-    /// The object of this scope with `identity`, made here by name or named by code with its id,
-    /// if there's one.
+    /// The object with `identity`, made here by name or named by code with its id, if there's one.
     public distributed func existing(_ identity: ObjectIdentity) async throws -> DynamicObject? {
-        let object = try await DynamicObject.resolve(
-            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        let object = try await DynamicObject.resolve(on: actorSystem, identity: identity)
         return (try? await object.source) == nil ? nil : object
     }
 
@@ -212,7 +204,7 @@ public distributed actor DynamicObjects {
             try await rewrite(id, as: source)
             return
         }
-        guard try await object(named: name) == nil else { throw DynamicObjectsError.nameTaken(name) }
+        guard try object(named: name) == nil else { throw DynamicObjectsError.nameTaken(name) }
         // No object is of it yet: its code is checked as each object adopts it.
         try await check(source, as: nil)
         let id = BehaviorID.new()
@@ -220,14 +212,16 @@ public distributed actor DynamicObjects {
         try await emit(event: .typeNamed(name, id))
     }
 
-    /// Gives the type `id` a new version, checked as a new one is: each object made here is given
-    /// it, runs it if it's of the type, and passes it on to the objects it holds, as down a tree.
+    /// Gives the type `id` a new version, checked as a new one is: each object made here that the
+    /// call may write is given it, runs it if it's of the type, and passes it on to the objects it
+    /// holds, as down a tree.
     private func rewrite(_ id: BehaviorID, as source: Script) async throws {
         guard state.types[id] != nil else { throw DynamicObjectsError.unknownType(id.rawValue) }
+        let writer = try caller()
         try await check(source, as: state.entries.first { $0.type == id }?.identity)
         try await emit(event: .typeWritten(id, source))
         var reached: Set<ObjectIdentity> = []
-        for entry in state.entries {
+        for entry in state.entries where entry.access.allows(writer, .write) {
             reached = try await object(entry.identity).typeChanged(id, code: source, reached: reached)
         }
     }
@@ -254,8 +248,7 @@ public distributed actor DynamicObjects {
         guard let entry = state.entries.first(where: { $0.identity == identity }) else {
             throw DynamicObjectsError.unknownObject(identity)
         }
-        let object = try await DynamicObject.resolve(
-            on: actorSystem, nature: ObjectNature(identity: identity, scope: scope))
+        let object = try await DynamicObject.resolve(on: actorSystem, identity: identity)
         resolved[identity] = object
         return object
     }
@@ -328,7 +321,7 @@ public struct DynamicObjectsState: Codable, Sendable {
     public var types: [BehaviorID: Script] = [:]
     /// The named types, with no object of their own.
     public var typeNames: [String: BehaviorID] = [:]
-    /// The objects this scope holds, made by name, oldest first: what's listed and found here. An
+    /// The objects made by name, oldest first: what's listed and found here. An
     /// object that code made with `Type()` isn't one of them: it's reached through what holds it.
     public var entries: [Entry] = []
     /// The objects removed from here: their ids are theirs for good, never given to another.
@@ -388,16 +381,6 @@ public enum DynamicObjectsError: Error, Codable, Equatable, Sendable, CustomStri
             "An object or type named \(name) already exists. To change it, write it with its id, or choose another name."
         case .unknownType(let name):
             "There's no object or type \(name) here."
-        }
-    }
-}
-
-extension ObjectScope {
-    /// A name for keys and journals: `shared`, or `owned.<user>`.
-    var name: String {
-        switch self {
-        case .shared: "shared"
-        case .owned(let user): "owned.\(user.rawValue)"
         }
     }
 }

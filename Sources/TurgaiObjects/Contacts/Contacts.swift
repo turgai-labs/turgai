@@ -11,11 +11,11 @@ public distributed actor Contacts {
     private let client: ContactsClient
     private var known: [ContactID: Contact] = [:]
 
-    public init(actorSystem: ActorSystem, client: ContactsClient, scope: ObjectScope = .shared) async throws {
+    public init(actorSystem: ActorSystem, client: ContactsClient) async throws {
         self.actorSystem = actorSystem
         self.client = client
         let object = try DiscoverableObject.resolve(id: self.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
+        await actorSystem.receptionist.checkIn(object, with: .objects)
     }
 
     /// Search names, email addresses, and phone numbers.

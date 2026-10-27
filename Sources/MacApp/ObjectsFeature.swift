@@ -41,7 +41,7 @@ extension ObjectsClient: TestDependencyKey {
                         return continuation.finish()
                     }
                     for await _ in changes {
-                        let entries = (try? await catalog.entries(in: [.shared])) ?? []
+                        let entries = (try? await catalog.entries()) ?? []
                         continuation.yield(entries.map(ObjectRow.init))
                     }
                     continuation.finish()

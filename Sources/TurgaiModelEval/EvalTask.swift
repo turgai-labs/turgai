@@ -175,7 +175,7 @@ struct EvalTask: Sendable {
     private static func state(of addresses: [String], created: [String], on node: EvalNode) async
         -> (text: String, missing: String?)
     {
-        let session = ObjectSession(actorSystem: node.system, objectCatalog: node.objectCatalog, scopes: [.shared])
+        let session = ObjectSession(actorSystem: node.system, objectCatalog: node.objectCatalog)
         let made: String = created.isEmpty ? "none" : created.joined(separator: ", ")
         var text = ""
         var missing: String?
@@ -204,7 +204,7 @@ struct EvalTask: Sendable {
     /// The code each of the `created` objects ended with, when any has code.
     private static func savedCode(of created: [String], on system: ClusterSystem) async throws -> String? {
         guard !created.isEmpty else { return nil }
-        let directory = try await DynamicObjects.resolve(on: system, scope: .shared)
+        let directory = try await DynamicObjects.resolve(on: system)
         var saved: [String] = []
         for handle in created {
             guard let object = try? await directory.existing(ObjectIdentity(rawValue: handle)),

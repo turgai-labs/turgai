@@ -10,11 +10,11 @@ public distributed actor Calendar {
     private let client: CalendarClient
     private var known: [CalendarID: EventCalendar] = [:]
 
-    public init(actorSystem: ActorSystem, client: CalendarClient, scope: ObjectScope = .shared) async throws {
+    public init(actorSystem: ActorSystem, client: CalendarClient) async throws {
         self.actorSystem = actorSystem
         self.client = client
         let object = try DiscoverableObject.resolve(id: self.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
+        await actorSystem.receptionist.checkIn(object, with: .objects)
     }
 
     /// The calendars available in the user's account.

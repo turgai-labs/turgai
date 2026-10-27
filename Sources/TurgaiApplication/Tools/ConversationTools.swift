@@ -55,7 +55,6 @@ public enum ConversationTools {
             let session = ObjectSession(
                 actorSystem: actorSystem,
                 objectCatalog: objectCatalog,
-                scopes: owner.map(ObjectScope.visible(to:)) ?? [.shared],
                 agents: askable,
                 writer: writer,
                 request: context.input.text

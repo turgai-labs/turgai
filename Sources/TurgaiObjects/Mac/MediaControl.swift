@@ -12,7 +12,7 @@ public distributed actor MediaControl {
     private var current: NowPlaying?
     private var watching: Task<Void, Never>?
 
-    public init(actorSystem: ActorSystem, scope: ObjectScope = .shared) async throws {
+    public init(actorSystem: ActorSystem) async throws {
         self.actorSystem = actorSystem
         watching = Task { [weak self] in
             for await heard in NowPlayingWatcher.changes() {
@@ -21,7 +21,7 @@ public distributed actor MediaControl {
             }
         }
         let object = try DiscoverableObject.resolve(id: self.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
+        await actorSystem.receptionist.checkIn(object, with: .objects)
     }
 
     deinit {

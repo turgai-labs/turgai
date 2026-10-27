@@ -40,15 +40,15 @@ struct AskedByItselfTests {
                 // Each node offers the agents, as each node's sessions do.
                 _ = try await Agent.offered([Role("planner")], on: objects)
                 let offered = try await Agent.offered([Role("planner")], on: sessionNode)
-                let writing = ObjectSession(actorSystem: sessionNode, scopes: [.shared], agents: offered)
+                let writing = ObjectSession(actorSystem: sessionNode, agents: offered)
                 let script = try Script(
                     code: Self.relay, type: "Relay", uses: await writing.others(except: "Relay").uses)
-                _ = try await DynamicObjects.resolve(on: sessionNode, scope: .shared).create(
+                _ = try await DynamicObjects.resolve(on: sessionNode).create(
                     name: "Relay", spec: .new(script))
 
                 // The planner's turn calls objects as its tools do, from the other node.
-                turn.uses(ObjectSession(actorSystem: sessionNode, scopes: [.shared], agents: offered))
-                let asking = ObjectSession(actorSystem: sessionNode, scopes: [.shared], agents: offered)
+                turn.uses(ObjectSession(actorSystem: sessionNode, agents: offered))
+                let asking = ObjectSession(actorSystem: sessionNode, agents: offered)
                 let answer = try await asking.invoke(
                     try await asking.id(written: "planner"), action: "respond", arguments: #"{"request": "plan"}"#)
 

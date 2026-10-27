@@ -24,7 +24,6 @@ typealias DiscoveryJSON = DiscoverableActors.JSONValue
 public actor ObjectSession {
     let actorSystem: ClusterSystem
     private var objectCatalog: ObjectCatalog?
-    let scopes: [ObjectScope]
     /// The agents its own agent can ask: the other agents working for the same person, never
     /// itself, which it can't ask while it answers. They're described as every agent is, so none
     /// starts to be listed.
@@ -61,14 +60,12 @@ public actor ObjectSession {
     public init(
         actorSystem: ClusterSystem,
         objectCatalog: ObjectCatalog? = nil,
-        scopes: [ObjectScope],
         agents: [ObjectEntry] = [],
         writer: ObjectWriter? = nil,
         request: String? = nil
     ) {
         self.actorSystem = actorSystem
         self.objectCatalog = objectCatalog
-        self.scopes = scopes
         self.agents = agents
         self.writer = writer
         self.request = request
@@ -141,15 +138,13 @@ public actor ObjectSession {
         try await runtimeObjects().sorted()
     }
 
-    /// The objects this session's scopes hold, by handle.
+    /// The objects made by name that this turn's person may read, by handle.
     private func runtimeObjects() async throws -> [ObjectID] {
         var out: [DynamicObject] = []
-        for scope in scopes {
-            let objects = try await DynamicObjects.resolve(on: actorSystem, scope: scope)
-            for entry in try await objects.held() {
-                guard let identity = try await objects.identity(of: entry.object.id) else { continue }
-                out.append(try await objects.held(identity))
-            }
+        let objects = try await DynamicObjects.resolve(on: actorSystem)
+        for entry in try await objects.held() {
+            guard let identity = try await objects.identity(of: entry.object.id) else { continue }
+            out.append(try await objects.held(identity))
         }
         return try await names(of: out)
     }
@@ -320,7 +315,7 @@ public actor ObjectSession {
         showing(entry.id, entry.object)
     }
 
-    /// The objects listed in this session's scopes, as the catalog last listed them, by id.
+    /// The objects listed, as the catalog last listed them, by id.
     private var checkedIn: [ClusterSystem.ActorID: ObjectID] = [:]
 
     /// The type of the object an action returned with `id`, if one did.
@@ -340,7 +335,7 @@ public actor ObjectSession {
         if objectCatalog == nil { objectCatalog = await ObjectCatalog(actorSystem: actorSystem) }
         guard let objectCatalog else { return [] }
         // By id, as the catalog lists its own, so each is in the same place every time.
-        let entries = (try await objectCatalog.entries(in: scopes) + agents).sorted { $0.id < $1.id }
+        let entries = (try await objectCatalog.entries() + agents).sorted { $0.id < $1.id }
         checkedIn = Dictionary(entries.map { ($0.object.id, $0.id) }) { first, _ in first }
         return entries
     }
@@ -361,22 +356,18 @@ public actor ObjectSession {
         return id
     }
 
-    /// The object code named `name`: one met or listed here, or one code made under it, which its
-    /// scope's directory doesn't list.
+    /// The object code named `name`: one met or listed here, or one code made under it, which the
+    /// directory doesn't list.
     private func id(named name: String) async throws -> ObjectID {
         let written = ObjectNames.handle(for: name)
         if let id = try? await id(written: written) { return id }
-        for scope in scopes {
-            guard
-                let made = try await DynamicObjects.resolve(on: actorSystem, scope: scope).existing(
-                    ObjectIdentity(rawValue: written)),
-                let virtual = made.id.virtualActorID
-            else { continue }
-            let id = ObjectID.virtual(virtual)
-            self.made[id] = made
-            return showing(id, try DiscoverableObject.resolve(id: made.id, using: actorSystem))
-        }
-        throw ObjectToolError.unknownHandle(written)
+        guard
+            let made = try await DynamicObjects.resolve(on: actorSystem).existing(ObjectIdentity(rawValue: written)),
+            let virtual = made.id.virtualActorID
+        else { throw ObjectToolError.unknownHandle(written) }
+        let id = ObjectID.virtual(virtual)
+        self.made[id] = made
+        return showing(id, try DiscoverableObject.resolve(id: made.id, using: actorSystem))
     }
 
     /// The object met with `id`.
@@ -801,7 +792,7 @@ public actor ObjectSession {
 
     /// Runs `body` on the directory where objects are made, with its errors as the model reads them.
     private func making<Result: Sendable>(_ body: (DynamicObjects) async throws -> Result) async throws -> Result {
-        let directory = try await DynamicObjects.resolve(on: actorSystem, scope: .shared)
+        let directory = try await DynamicObjects.resolve(on: actorSystem)
         do {
             return try await body(directory)
         } catch let error as CodeProblem {
@@ -820,11 +811,10 @@ public actor ObjectSession {
     private func dynamicObject(_ handle: ObjectID) async throws -> DynamicObject {
         // One code named by its id is reached by it too.
         if (try? await madeObject(handle)) == nil, case .virtual = handle {
-            let identity = ObjectIdentity(rawValue: handle.name)
-            for scope in scopes {
-                if let named = try await DynamicObjects.resolve(on: actorSystem, scope: scope).existing(identity) {
-                    return named
-                }
+            if let named = try await DynamicObjects.resolve(on: actorSystem).existing(
+                ObjectIdentity(rawValue: handle.name))
+            {
+                return named
             }
         }
         guard let made = try await madeObject(handle) else {
@@ -838,16 +828,12 @@ public actor ObjectSession {
     func madeObject(_ handle: ObjectID) async throws -> DynamicObject? {
         if let known = made[handle] { return known }
         let object = try await object(handle)
-        // One that its scopes hold, made there by name.
-        for scope in scopes {
-            let directory = try await DynamicObjects.resolve(on: actorSystem, scope: scope)
-            if let identity = try await directory.identity(of: object.id) {
-                let made = try await directory.held(identity)
-                self.made[handle] = made
-                return made
-            }
-        }
-        return nil
+        // One the directory holds, made by name.
+        let directory = try await DynamicObjects.resolve(on: actorSystem)
+        guard let identity = try await directory.identity(of: object.id) else { return nil }
+        let made = try await directory.held(identity)
+        self.made[handle] = made
+        return made
     }
 
     // MARK: Actions as tools
@@ -1021,13 +1007,9 @@ public actor ObjectSession {
         return .string(minted.description)
     }
 
-    /// Whether one of this session's scopes holds `object`, made there by name.
+    /// Whether the directory holds `object`, made by name.
     private func isHeld(_ object: DiscoverableObject) async throws -> Bool {
-        for scope in scopes
-        where try await DynamicObjects.resolve(on: actorSystem, scope: scope).identity(of: object.id) != nil {
-            return true
-        }
-        return false
+        try await DynamicObjects.resolve(on: actorSystem).identity(of: object.id) != nil
     }
 
     /// An object another holds, as its holder shows it: its type, and what it holds.

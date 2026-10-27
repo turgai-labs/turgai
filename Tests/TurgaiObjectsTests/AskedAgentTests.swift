@@ -20,7 +20,7 @@ struct AskedAgentTests {
         try await withAgentNodes(started) { objects, sessionNode in
             _ = try await Agent.offered([Role("conversation")], on: objects)
             let offered = try await Agent.offered([Role("planner"), Role("chef")], on: sessionNode)
-            let session = ObjectSession(actorSystem: sessionNode, scopes: [.shared], agents: offered)
+            let session = ObjectSession(actorSystem: sessionNode, agents: offered)
 
             var page = ""
             for _ in 0..<50 {
@@ -42,7 +42,7 @@ struct AskedAgentTests {
             #expect(await started.roles.isEmpty)
 
             // Code in a shared object finds one by its name; two of one type never collide.
-            let found = try #require(try await ObjectNames.object(named: "chef", in: [.shared], using: sessionNode))
+            let found = try #require(try await ObjectNames.object(named: "chef", using: sessionNode))
             #expect(found.object.id.virtualActorID.map { ObjectID.virtual($0) } == Agent.objectID(Role("chef")))
             #expect(await started.roles == ["chef"])
         }

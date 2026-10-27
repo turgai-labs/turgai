@@ -14,10 +14,10 @@ public distributed actor Shop {
     /// Refunds waiting for a manager's decision, by order number.
     private var openRefunds: [Int: OpenRefund] = [:]
 
-    public init(actorSystem: ActorSystem, scope: ObjectScope = .shared) async throws {
+    public init(actorSystem: ActorSystem) async throws {
         self.actorSystem = actorSystem
         let object = try DiscoverableObject.resolve(id: self.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
+        await actorSystem.receptionist.checkIn(object, with: .objects)
     }
 
     /// The shop's orders, oldest first.

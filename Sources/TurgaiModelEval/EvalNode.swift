@@ -98,7 +98,7 @@ struct EvalNode: Sendable {
         let writer = ObjectWriter(
             endpoint: writing, report: { (event: WriterEvent) in FileHandle.standardError.write(Data(event.written.utf8)) })
         let session = ObjectSession(
-            actorSystem: actorSystem, objectCatalog: catalog, scopes: [.shared], agents: offered, writer: writer,
+            actorSystem: actorSystem, objectCatalog: catalog, agents: offered, writer: writer,
             request: context.input.text)
         let roots: [any HailCore.Tool] = try await ObjectTools(session: session).tools().filter {
             (tool: any HailCore.Tool) -> Bool in tool.name != "use_object"

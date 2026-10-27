@@ -9,10 +9,10 @@ public distributed actor Warehouse {
 
     private var received: [WarehouseNote] = []
 
-    public init(actorSystem: ActorSystem, scope: ObjectScope = .shared) async throws {
+    public init(actorSystem: ActorSystem) async throws {
         self.actorSystem = actorSystem
         let object = try DiscoverableObject.resolve(id: self.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
+        await actorSystem.receptionist.checkIn(object, with: .objects)
     }
 
     /// What the warehouse has been told, oldest first.

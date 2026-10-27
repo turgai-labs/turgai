@@ -224,7 +224,7 @@ struct TurgaiAppService: Service, Sendable {
             let virtualNode = await VirtualNode(actorSystem: system)
             // The objects models made: started again after a restart, each on behalf of whoever
             // made it, so what they follow and run keeps going.
-            try await DynamicObjects.resolve(on: system, scope: .shared).start()
+            try await DynamicObjects.resolve(on: system).start()
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
                 activities: ScheduleActivities()

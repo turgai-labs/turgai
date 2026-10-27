@@ -136,16 +136,15 @@ extension Agent {
     /// made objects are, where code finds it by its name, and described as every agent is. None
     /// starts until it's asked.
     public static func offered(_ roles: [Role], on system: ClusterSystem) async throws -> [ObjectEntry] {
-        let scope = ObjectScope.shared
         var entries: [ObjectEntry] = []
         for role in roles {
             let agent = try await system.agent(asked(role))
             let object = try DiscoverableObject.resolve(id: agent.id, using: system)
-            await system.receptionist.checkIn(object, with: scope.virtualReceptionistKey)
+            await system.receptionist.checkIn(object, with: .virtualObjects)
             entries.append(
                 ObjectEntry(
                     id: objectID(role), object: object, type: objectType,
-                    description: objectDescription.description, scope: scope,
+                    description: objectDescription.description,
                     actions: objectDescription.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
                         .sorted()))
         }

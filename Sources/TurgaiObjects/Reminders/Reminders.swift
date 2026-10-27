@@ -15,12 +15,12 @@ public distributed actor Reminders {
     private let client: RemindersClient
     private var known: [ReminderListID: ReminderList] = [:]
 
-    public init(actorSystem: ActorSystem, client: RemindersClient, scope: ObjectScope = .shared) async throws {
+    public init(actorSystem: ActorSystem, client: RemindersClient) async throws {
         self.actorSystem = actorSystem
         self.client = client
         let id = self.id
         let object = try DiscoverableObject.resolve(id: id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: scope.receptionistKey)
+        await actorSystem.receptionist.checkIn(object, with: .objects)
     }
 
     /// The reminder lists, such as "Groceries" or "Work".

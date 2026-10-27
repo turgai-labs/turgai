@@ -12,8 +12,8 @@ public enum ObjectID: Hashable, Codable, Sendable, CustomStringConvertible, Comp
     /// it's the one of its kind checked in here.
     case actor(ClusterSystem.ActorID, type: String?)
 
-    /// What it's called: a virtual actor's id within its scope, the part after it; the type of the
-    /// one of its kind checked in here. One an action returned, of a type there can be many of, is
+    /// What it's called: the last part of a virtual actor's id; the type of the one of its kind
+    /// checked in here. One an action returned, of a type there can be many of, is
     /// called by its id.
     public var name: String {
         switch self {
@@ -39,7 +39,6 @@ public struct ObjectEntry: Codable, Sendable {
     /// The type it is of.
     public let type: String
     public let description: String?
-    public let scope: ObjectScope
     /// Each action with its arguments, such as `play(query)`.
     public let actions: [String]
     /// What the object announces, such as `RefundRequested`.
@@ -50,7 +49,6 @@ public struct ObjectEntry: Codable, Sendable {
         object: DiscoverableObject,
         type: String,
         description: String?,
-        scope: ObjectScope,
         actions: [String],
         events: [String] = []
     ) {
@@ -58,14 +56,13 @@ public struct ObjectEntry: Codable, Sendable {
         self.object = object
         self.type = type
         self.description = description
-        self.scope = scope
         self.actions = actions
         self.events = events
     }
 }
 
-/// Lists the objects of each scope: the ones its directory holds, and the ones that check in
-/// with the cluster receptionist themselves, whose descriptions it follows and caches.
+/// Lists the objects: the ones the directory holds, and the ones that check in with the cluster
+/// receptionist themselves, whose descriptions it follows and caches.
 /// Actor references are resolved from IDs when requested, so the catalog doesn't
 /// keep root actors alive.
 public distributed actor ObjectCatalog: LifecycleWatch {
@@ -79,17 +76,17 @@ public distributed actor ObjectCatalog: LifecycleWatch {
         public let events: [String]
     }
 
-    private var records: [ObjectScope: [ClusterSystem.ActorID: Record]] = [:]
-    private var listingTasks: [ObjectScope: Task<Void, Never>] = [:]
+    private var records: [ClusterSystem.ActorID: Record] = [:]
+    private var listing: Task<Void, Never>?
     private var observers: [AsyncStream<Void>.Continuation] = []
 
     public init(actorSystem: ActorSystem) async {
         self.actorSystem = actorSystem
-        self.startListing(for: .shared)
+        self.startListing()
     }
 
     public func terminated(actor id: ActorID) async {
-        for scope in Array(self.records.keys) { self.records[scope]?.removeValue(forKey: id) }
+        self.records.removeValue(forKey: id)
         self.notifyObservers()
     }
 
@@ -101,7 +98,7 @@ public distributed actor ObjectCatalog: LifecycleWatch {
         return changes
     }
 
-    /// An object a scope holds was made, changed or removed: whoever follows changes looks again.
+    /// An object the directory holds was made, changed or removed: whoever follows changes looks again.
     public distributed func changed() {
         notifyObservers()
     }
@@ -113,27 +110,25 @@ public distributed actor ObjectCatalog: LifecycleWatch {
     }
 
     deinit {
-        for task in self.listingTasks.values { task.cancel() }
+        self.listing?.cancel()
     }
 
-    private func startListing(for scope: ObjectScope) {
-        guard self.listingTasks[scope] == nil else { return }
+    private func startListing() {
         let system = actorSystem
-        let key = scope.receptionistKey
-        self.listingTasks[scope] = Task { [weak self] in
-            for await object in await system.receptionist.listing(of: key) {
+        self.listing = Task { [weak self] in
+            for await object in await system.receptionist.listing(of: .objects) {
                 guard !Task.isCancelled else { return }
-                try? await self?.record(object, in: scope)
+                try? await self?.record(object)
             }
         }
     }
 
     /// Records an object as it is now: what the receptionist lists, and what was just made or
     /// changed, which its listing only shows later.
-    public distributed func record(_ object: DiscoverableObject, in scope: ObjectScope) async {
+    public distributed func record(_ object: DiscoverableObject) async {
         do {
             let description = try await object.describe()
-            self.records[scope, default: [:]][object.id] = Record(
+            self.records[object.id] = Record(
                 id: object.id,
                 type: description.type,
                 description: description.description,
@@ -175,34 +170,28 @@ public distributed actor ObjectCatalog: LifecycleWatch {
         return "\(name)(\(written.joined(separator: ", ")))"
     }
 
-    /// The objects in `scopes`: those each scope holds, from its own directory, and the objects
-    /// that checked in there themselves, from the receptionist.
-    public distributed func entries(in scopes: [ObjectScope]) async throws -> [ObjectEntry] {
-        for scope in scopes { startListing(for: scope) }
+    /// The objects: those the directory holds, and the objects that checked in themselves, from
+    /// the receptionist.
+    public distributed func entries() async throws -> [ObjectEntry] {
         var entries: [ObjectEntry] = []
         var seen: Set<ClusterSystem.ActorID> = []
-        for scope in scopes {
-            for held in try await DynamicObjects.resolve(on: actorSystem, scope: scope).held()
-            where seen.insert(held.object.id).inserted {
-                entries.append(held)
-            }
+        let made = try await DynamicObjects.resolve(on: actorSystem).held()
+        for held in made where seen.insert(held.object.id).inserted {
+            entries.append(held)
         }
-        for scope in scopes {
-            for record in self.records[scope, default: [:]].values where seen.insert(record.id).inserted {
-                guard let object = try? DiscoverableObject.resolve(id: record.id, using: actorSystem) else { continue }
-                entries.append(
-                    ObjectEntry(
-                        // A virtual actor by its id; any other, the one of its kind here, by its
-                        // id with its type, which it's found by.
-                        id: record.id.virtualActorID.map(ObjectID.virtual) ?? .actor(record.id, type: record.type),
-                        object: object,
-                        type: record.type,
-                        description: record.description,
-                        scope: scope,
-                        actions: record.actions,
-                        events: record.events
-                    ))
-            }
+        for record in self.records.values where seen.insert(record.id).inserted {
+            guard let object = try? DiscoverableObject.resolve(id: record.id, using: actorSystem) else { continue }
+            entries.append(
+                ObjectEntry(
+                    // A virtual actor by its id; any other, the one of its kind here, by its id with
+                    // its type, which it's found by.
+                    id: record.id.virtualActorID.map(ObjectID.virtual) ?? .actor(record.id, type: record.type),
+                    object: object,
+                    type: record.type,
+                    description: record.description,
+                    actions: record.actions,
+                    events: record.events
+                ))
         }
         // By id, which is the same in every run, as an actor's path isn't.
         return entries.sorted { $0.id < $1.id }

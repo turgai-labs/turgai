@@ -13,7 +13,7 @@ public distributed actor Mac {
         self.actorSystem = actorSystem
         let id = self.id
         let object = try DiscoverableObject.resolve(id: id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: ObjectScope.shared.receptionistKey)
+        await actorSystem.receptionist.checkIn(object, with: .objects)
     }
 
     /// The computer's name, such as "Ada's MacBook Pro".

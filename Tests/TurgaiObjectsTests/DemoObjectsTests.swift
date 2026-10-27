@@ -45,9 +45,9 @@ struct DemoObjectsTests {
             let customer = Customer(actorSystem: sessionNode)
             await sessionNode.receptionist.checkIn(
                 try DiscoverableObject.resolve(id: customer.id, using: sessionNode),
-                with: ObjectScope.shared.receptionistKey)
+                with: .objects)
             let catalog = await ObjectCatalog(actorSystem: sessionNode)
-            let session = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog, scopes: [.shared])
+            let session = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog)
 
             let roots = try await waitForRoots(3, in: session)
             guard case .array(let entries) = roots else {
@@ -83,7 +83,7 @@ struct DemoObjectsTests {
         try await withObjectNodes { objectsNode, sessionNode in
             let shop = try await Shop(actorSystem: objectsNode)
             let catalog = await ObjectCatalog(actorSystem: sessionNode)
-            let session = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog, scopes: [.shared])
+            let session = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog)
 
             let roots = try await waitForRoots(1, in: session)
             guard case .array(let entries) = roots, let entry = entries.first else {

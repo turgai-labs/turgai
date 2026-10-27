@@ -27,32 +27,24 @@ public enum ObjectNames {
         return type.first?.isLetter == true ? type : "Object" + type
     }
 
-    /// Whether `name` refers to the object titled `title`: its title, ignoring case, or its handle.
-    public static func matches(_ name: String, title: String) -> Bool {
-        title.lowercased() == name.lowercased() || handle(for: title) == handle(for: name)
-    }
-
-    /// The object named `name` among those checked in to `scopes`, if one is: a virtual actor by its
-    /// id, the one of its kind by its type. Two of one name are refused: neither is the one meant.
-    /// A virtual actor checked in by its id is only asked what it is once it's the one.
-    public static func object(
-        named name: String, in scopes: [ObjectScope], using system: ClusterSystem
-    ) async throws -> (object: DiscoverableObject, description: ObjectDescription)? {
+    /// The object named `name` among those checked in, if one is: a virtual actor by its id, the
+    /// one of its kind by its type. Two of one name are refused: neither is the one meant. A virtual
+    /// actor checked in by its id is only asked what it is once it's the one.
+    public static func object(named name: String, using system: ClusterSystem) async throws
+        -> (object: DiscoverableObject, description: ObjectDescription)?
+    {
         var found: [DiscoverableObject] = []
         var described: [ClusterSystem.ActorID: ObjectDescription] = [:]
-        for scope in scopes {
-            for object in await system.receptionist.lookup(scope.virtualReceptionistKey) {
-                if object.id.virtualActorID.map({ ObjectID.virtual($0).name }) == handle(for: name) {
-                    found.append(object)
-                }
-            }
-            for object in await system.receptionist.lookup(scope.receptionistKey) {
-                guard let description = try? await object.describe() else { continue }
-                let id = object.id.virtualActorID.map(ObjectID.virtual) ?? .actor(object.id, type: description.type)
-                if id.name == handle(for: name) {
-                    found.append(object)
-                    described[object.id] = description
-                }
+        for object in await system.receptionist.lookup(.virtualObjects)
+        where object.id.virtualActorID.map({ ObjectID.virtual($0).name }) == handle(for: name) {
+            found.append(object)
+        }
+        for object in await system.receptionist.lookup(.objects) {
+            guard let description = try? await object.describe() else { continue }
+            let id = object.id.virtualActorID.map(ObjectID.virtual) ?? .actor(object.id, type: description.type)
+            if id.name == handle(for: name) {
+                found.append(object)
+                described[object.id] = description
             }
         }
         guard found.count < 2 else { throw DynamicObjectError.severalNamed(name) }
