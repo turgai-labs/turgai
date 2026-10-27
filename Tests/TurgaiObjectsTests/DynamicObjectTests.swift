@@ -986,3 +986,13 @@ distributed actor Board {
         shown = card
     }
 }
+
+/// Read by everyone and written by no one, as any built-in object.
+extension Player: AccessControlled {
+    func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}
+
+/// Read by everyone and written by no one, as any built-in object.
+extension Board: AccessControlled {
+    func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}

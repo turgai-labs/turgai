@@ -83,3 +83,13 @@ public struct ContactRecord: Codable, Sendable, Equatable {
         self.phoneNumbers = phoneNumbers
     }
 }
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension Contacts: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension Contact: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}

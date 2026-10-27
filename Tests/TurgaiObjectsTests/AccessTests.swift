@@ -36,15 +36,31 @@ struct AccessTests {
 
     @Test
     func onlyWhoMayWriteItShares() throws {
-        var object = LiveObject()
+        var object = DynamicObjectState.unmade
         object = object.applying(
-            .adopted(
-                BehaviorID(rawValue: "List"), try Script(code: "actor List {}", type: "List"), starts: [:], by: dad))
+            try object.adopting(
+                BehaviorID(rawValue: "List"), try Script(code: "actor List {}", type: "List"), starts: [:],
+                by: .start(dad)))
 
-        #expect(throws: DynamicObjectError.notAllowed(.write)) {
-            try object.sharing(with: .group(family), .read, by: kid)
+        #expect(throws: NotAllowed(.write)) {
+            try object.live.sharing(with: .group(family), .read, by: .start(kid))
         }
-        object = object.applying(try object.sharing(with: .group(family), .read, by: dad))
-        #expect(object.access?.allows(kid, .read) == true)
+        object = object.applying(try object.live.sharing(with: .group(family), .read, by: .start(dad)))
+        #expect(try object.live.access.allows(kid, .read))
+    }
+
+    @Test
+    func anObjectNotMadeYetIsTheCallersToMake() throws {
+        let object = DynamicObjectState.unmade
+
+        #expect(object.access(for: .start(kid)).allows(kid, .write))
+        #expect(!object.access(for: .start(kid)).allows(dad, .read))
+        // Whoever gives it code first is its maker.
+        let made = object.applying(
+            try object.adopting(
+                BehaviorID(rawValue: "List"), try Script(code: "actor List {}", type: "List"), starts: [:],
+                by: .start(kid)))
+        #expect(try made.live.maker == kid)
+        #expect(!made.access(for: .start(dad)).allows(dad, .read))
     }
 }

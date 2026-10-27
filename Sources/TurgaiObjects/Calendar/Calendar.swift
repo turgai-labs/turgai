@@ -166,3 +166,18 @@ public struct CalendarEventRecord: Codable, Sendable, Equatable {
         self.notes = notes
     }
 }
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension Calendar: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension EventCalendar: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension CalendarEvent: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}

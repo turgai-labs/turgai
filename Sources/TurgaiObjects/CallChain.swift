@@ -43,7 +43,7 @@ public struct CallChain: Codable, Sendable, Equatable {
 }
 
 /// A call that no chain carried, so on behalf of no one: every call starts with someone.
-public struct CallOnBehalfOfNoOne: Error, Sendable, Equatable, CustomStringConvertible {
+public struct CallOnBehalfOfNoOne: Error, Codable, Sendable, Equatable, CustomStringConvertible {
     public let actor: ObjectID
 
     public var description: String { "a call to \(actor) is on behalf of no one" }

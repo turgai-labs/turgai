@@ -110,3 +110,8 @@ public enum MediaControlError: Error, Codable, Equatable, Sendable, CustomString
         }
     }
 }
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension MediaControl: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}

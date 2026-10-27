@@ -19,13 +19,13 @@ import VirtualActors
 /// through it, as down a tree.
 @EventSourced
 @VirtualActor
-public distributed actor DynamicObject: DiscoverableActor {
+public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     public typealias ActorSystem = ClusterSystem
     public typealias Dependency = ObjectIdentity
     public typealias Event = DynamicObjectEvent
     public typealias State = DynamicObjectState
 
-    public var state = DynamicObjectState.new
+    public var state = DynamicObjectState.unmade
     /// Which object it is, kept across restarts.
     private let own: ObjectIdentity
     /// Its code: stopped, or running as an instance started from what's journaled. It stops when
@@ -133,13 +133,12 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// way a new module reaches an Erlang process. What it holds stays its own; data new to it
     /// starts as the code has it, and the objects its `init()` makes there are made now.
     distributed func adopt(_ type: BehaviorID, code: Script) async throws {
-        let live = try state.live
-        guard let scope = CallChain.current?.scope else { throw CallOnBehalfOfNoOne(actor: objectID) }
+        let held = try state.held
         var starts = try await ScriptInstance.starts(code, as: own)
-        for (field, value) in starts where live.fields[field] == nil {
+        for (field, value) in starts where held[field] == nil {
             starts[field] = try await Self.making(value, on: actorSystem)
         }
-        try await emit(event: live.adopting(type, code, starts: starts, by: scope))
+        try await emit(event: try state.adopting(type, code, starts: starts, by: try caller()))
         stop()
         rehub()
         refollow()
@@ -169,12 +168,12 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     /// Gives it its name and what it was made for, once: what an object made by name has.
     distributed func describe(name: String, description: String?) async throws {
-        try await emit(event: try state.live.describing(name: name, description: description))
+        try await emit(event: try state.live.describing(name: name, description: description, by: try caller()))
     }
 
     /// Sets values of its own data, for it alone: other objects of its type keep theirs.
     public distributed func set(values: [String: JSONValue]) async throws {
-        try await emit(event: try state.live.setting(values))
+        try await emit(event: try state.live.setting(values, by: try caller()))
         stop()
         refollow()
     }
@@ -191,7 +190,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// Ends the object for good: it answers nothing from now on, and the next idle sweep stops
     /// it, which takes it out of the catalog.
     distributed func remove() async throws {
-        try await emit(event: try state.removing())
+        try await emit(event: try state.removing(by: try caller()))
         stop()
         rehub()
         refollow()
@@ -233,65 +232,44 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     /// Its code, for changing it.
     public distributed var source: Script {
-        get throws { try state.live.running }
+        get throws { try state.live.code }
     }
 
     /// The type it runs.
-    public distributed var type: BehaviorID? {
+    public distributed var type: BehaviorID {
         get throws { try state.live.type }
     }
 
     /// Whoever it was made by: on whose behalf it was first given code.
-    public distributed var maker: CallScope? {
+    public distributed var maker: CallScope {
         get throws { try state.live.maker }
     }
 
     /// Who may read it and who may write it.
-    public distributed var access: ObjectAccess? {
+    public distributed var access: ObjectAccess {
         get throws { try state.live.access }
     }
 
     /// Gives `audience` `level` of access, or takes all of it away: only a call on behalf of
     /// someone who may write it does.
     public distributed func share(with audience: Audience, _ level: AccessLevel?) async throws {
-        guard let scope = CallChain.current?.scope else { throw CallOnBehalfOfNoOne(actor: objectID) }
-        try await emit(event: try state.live.sharing(with: audience, level, by: scope))
+        try await emit(event: try state.live.sharing(with: audience, level, by: try caller()))
         // Who it's listed to follows who may read it.
         try await DynamicObjects.resolve(on: actorSystem).accessChanged(own)
     }
 
     // MARK: Who may call it
 
-    /// What a call to it needs, by the method it's for: reading it, or writing it. A method not
-    /// here is refused, so a new one is closed until it's said what it needs.
-    private static let needs: [String: AccessLevel] = {
-        let reads = [
-            "respond(_:arguments:through:)", "invoke(_:arguments:through:)", "describe()", "read(property:)",
-            "_subscribe(_:to:)", "_nextEvent(for:)", "_unsubscribe(_:)", "identity()", "stableReference()",
-            "source()", "type()", "maker()", "access()", "name()", "health()", "recent()", "start()",
-        ]
-        let writes = [
-            "adopt(_:code:)", "typeChanged(_:code:reached:)", "describe(name:description:)", "set(values:)",
-            "remove()", "share(with:_:)",
-        ]
-        var needs: [String: AccessLevel] = [:]
-        for method in reads { needs[method] = .read }
-        for method in writes { needs[method] = .write }
-        return needs
-    }()
-
-    /// The method a call is for, as the needs name it: `respond(_:arguments:through:)`.
-    static func method(of target: RemoteCallTarget) -> String {
-        target.description.split(separator: ".").dropFirst(2).joined(separator: ".")
+    /// Who may read it and who may write it, for a call through `chain`: one not made yet is the
+    /// caller's to make.
+    public func access(for chain: CallChain) -> ObjectAccess {
+        state.access(for: chain)
     }
 
-    /// Refuses a call to `method`, before it runs, that the chain it came through may not make. Before
-    /// it has code it's no one's yet, and the call that gives it code makes it its maker's.
-    func check(_ method: String) throws {
-        guard let level = Self.needs[method] else { throw DynamicObjectError.notAllowed(.write) }
-        guard case .live(let live) = state, let access = live.access else { return }
+    /// The chain the call it's handling came through: every call is on someone's behalf.
+    private func caller() throws -> CallChain {
         guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: objectID) }
-        guard access.allows(chain, level) else { throw DynamicObjectError.notAllowed(level) }
+        return chain
     }
 
     /// What it's called, when it was made by name.
@@ -311,7 +289,7 @@ public distributed actor DynamicObject: DiscoverableActor {
 
     public distributed func describe() async throws -> ObjectDescription {
         let object = try state.live
-        let code = try object.running
+        let code = object.code
         return try code.spec(description: object.description, holding: object.fields)
     }
 
@@ -351,7 +329,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// that isn't living.
     private func rehub() {
         let announced: Set<String> =
-            if case .live(let object) = state, let code = object.code, let shape = try? ObjectShape(code) {
+            if case .live(let object) = state, let shape = try? ObjectShape(object.code) {
                 Set(shape.events.map(\.name))
             } else { [] }
         hub = _DiscoveryEventHub(events: announced)
@@ -376,7 +354,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     public distributed func respond(
         _ action: String, arguments: JSONValue, through type: String? = nil
     ) async throws -> ObjectReply {
-        let code = try state.live.running
+        let code = try state.live.code
         if let type, !type.hasPrefix("any "), type != code.type {
             throw DynamicObjectError.notA(type, isA: code.type)
         }
@@ -409,7 +387,7 @@ public distributed actor DynamicObject: DiscoverableActor {
         try await announce(reply.announced)
         refollow()
         return ObjectReply(
-            reply: try Self.replacingSelf(in: reply.reply, with: try await me(), as: try state.live.running.type),
+            reply: try Self.replacingSelf(in: reply.reply, with: try await me(), as: try state.live.code.type),
             printed: reply.printed,
             announced: reply.announced)
     }
@@ -429,7 +407,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     private func running() async throws -> ScriptInstance {
         if case .running(let instance, _, _) = process { return instance }
         let object = try state.live
-        let code = try object.running
+        let code = object.code
         let me = try await me()
         let system = actorSystem
         let generation = process.generation + 1
@@ -485,7 +463,7 @@ public distributed actor DynamicObject: DiscoverableActor {
             do {
                 // A task's starter doesn't wait on it: its calls start a chain of their own, on
                 // behalf of whoever made it.
-                let chain = try CallChain.start(try state.live.startedBy).entering(objectID)
+                let chain = try CallChain.start(try state.live.maker).entering(objectID)
                 let announced = try await CallChain.$current.withValue(chain) {
                     try await instance.runTask(id)
                 }
@@ -520,7 +498,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// Follows the objects its `@Subscribed` fields hold now: a field holding another object than
     /// before follows that one instead, and one that's gone, or a removed object, follows nothing.
     private func refollow() {
-        guard case .live(let object) = state, let code = object.code, let shape = try? ObjectShape(code) else {
+        guard case .live(let object) = state, let shape = try? ObjectShape(object.code) else {
             for follower in followers.values { follower.task.cancel() }
             followers = [:]
             return
@@ -557,7 +535,7 @@ public distributed actor DynamicObject: DiscoverableActor {
     /// there yet, should be.
     private func follow(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
         // Following is its own doing, as its tasks are: on behalf of whoever made it.
-        guard let maker = try? state.live.startedBy, let chain = try? CallChain.start(maker).entering(objectID) else {
+        guard let maker = try? state.live.maker, let chain = try? CallChain.start(maker).entering(objectID) else {
             return false
         }
         return await CallChain.$current.withValue(chain) {
@@ -613,7 +591,7 @@ public distributed actor DynamicObject: DiscoverableActor {
         do {
             // An event it follows starts a chain of its own, as a task does, on behalf of whoever
             // made it: its handling enters it.
-            _ = try await CallChain.$current.withValue(.start(try state.live.startedBy)) {
+            _ = try await CallChain.$current.withValue(.start(try state.live.maker)) {
                 try await handling(handler, arguments: values, origin: origin)
             }
         } catch {
@@ -766,17 +744,5 @@ extension DynamicObject: Describable {
 extension ObjectIdentity: Describable {
     public static var jsonSchema: JSONValue {
         ["type": "string", "description": "An object's identity."]
-    }
-}
-
-extension ClusterSystemSettings {
-    /// Checks every call to a made object against who may read and write it, before it runs, on
-    /// whichever node it lives: a call from another node, or one through a reference here.
-    public mutating func checkObjectAccess() {
-        remoteCall.incomingCallFilter = { actor, target in
-            guard let object = actor as? DynamicObject else { return }
-            let method = DynamicObject.method(of: target)
-            try await object.whenLocal { try $0.check(method) }
-        }
     }
 }

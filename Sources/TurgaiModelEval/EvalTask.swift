@@ -487,3 +487,8 @@ struct ShopFloor: Sendable {
         return numbers
     }
 }
+
+/// Read by everyone and written by no one, as a built-in object.
+extension EvalCustomer: AccessControlled {
+    func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}

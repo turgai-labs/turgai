@@ -90,6 +90,12 @@ extension Agent: @retroactive DiscoverableActor {
     public distributed func _unsubscribe(_ subscriber: _SubscriberID) async throws {}
 }
 
+/// Every agent is read by everyone and written by no one, until agents have makers: every call to
+/// one is on someone's behalf.
+extension Agent: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}
+
 /// Why an agent asked as an object didn't answer.
 public enum AgentAskError: Error, Sendable, Equatable, Codable, CustomStringConvertible {
     /// It was busy, with what it was doing: it does one thing at a time.

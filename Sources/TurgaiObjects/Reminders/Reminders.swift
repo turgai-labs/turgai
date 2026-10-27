@@ -275,3 +275,18 @@ public enum ReminderError: Error, Codable, Equatable, Sendable, CustomStringConv
         }
     }
 }
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension Reminders: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension ReminderList: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension Reminder: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}

@@ -74,3 +74,8 @@ public enum WebsiteError: Error, Codable, Equatable, Sendable, CustomStringConve
         }
     }
 }
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension Website: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}

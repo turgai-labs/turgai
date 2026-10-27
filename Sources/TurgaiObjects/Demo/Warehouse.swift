@@ -44,3 +44,8 @@ public enum WarehouseInstruction: String, Codable, Sendable, CaseIterable {
     /// A refund was approved: the item is coming back.
     case expectReturn
 }
+
+/// Read by everyone and written by no one, until whoever runs its node is known.
+extension Warehouse: AccessControlled {
+    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}

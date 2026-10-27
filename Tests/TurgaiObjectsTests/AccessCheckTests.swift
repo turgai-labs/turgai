@@ -35,7 +35,7 @@ struct AccessCheckTests {
 
             // Hers: she uses it and sees it; Bob does neither.
             #expect(try await self.as(ann) { try await object.respond("add", arguments: [:]).reply } == .integer(1))
-            await #expect(throws: DynamicObjectError.notAllowed(.read)) {
+            await #expect(throws: NotAllowed(.read)) {
                 try await self.as(bob) { _ = try await object.respond("add", arguments: [:]) }
             }
             #expect(try await listed(objects, to: ann) == ["counter"])
@@ -45,10 +45,10 @@ struct AccessCheckTests {
             try await self.as(ann) { try await object.share(with: .group(family), .read) }
             #expect(try await self.as(bob) { try await object.respond("add", arguments: [:]).reply } == .integer(2))
             #expect(try await listed(objects, to: bob) == ["counter"])
-            await #expect(throws: DynamicObjectError.notAllowed(.write)) {
+            await #expect(throws: NotAllowed(.write)) {
                 try await self.as(bob) { try await object.share(with: .everyone, .read) }
             }
-            await #expect(throws: DynamicObjectError.notAllowed(.write)) {
+            await #expect(throws: NotAllowed(.write)) {
                 try await self.as(bob) { try await objects.remove(id) }
             }
         }

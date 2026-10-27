@@ -62,21 +62,13 @@ public struct ObjectEntry: Codable, Sendable {
 }
 
 /// Lists the objects: the ones the directory holds, and the ones that check in with the cluster
-/// receptionist themselves, whose descriptions it follows and caches.
-/// Actor references are resolved from IDs when requested, so the catalog doesn't
-/// keep root actors alive.
+/// receptionist themselves, each described on behalf of whoever lists them. Actor references are
+/// resolved from IDs when requested, so the catalog doesn't keep root actors alive.
 public distributed actor ObjectCatalog: LifecycleWatch {
     public typealias ActorSystem = ClusterSystem
 
-    public struct Record: Sendable {
-        public let id: ClusterSystem.ActorID
-        public let type: String
-        public let description: String?
-        public let actions: [String]
-        public let events: [String]
-    }
-
-    private var records: [ClusterSystem.ActorID: Record] = [:]
+    /// The objects that checked in, until each is gone.
+    private var checkedIn: Set<ClusterSystem.ActorID> = []
     private var listing: Task<Void, Never>?
     private var observers: [AsyncStream<Void>.Continuation] = []
 
@@ -86,7 +78,7 @@ public distributed actor ObjectCatalog: LifecycleWatch {
     }
 
     public func terminated(actor id: ActorID) async {
-        self.records.removeValue(forKey: id)
+        self.checkedIn.remove(id)
         self.notifyObservers()
     }
 
@@ -118,31 +110,16 @@ public distributed actor ObjectCatalog: LifecycleWatch {
         self.listing = Task { [weak self] in
             for await object in await system.receptionist.listing(of: .objects) {
                 guard !Task.isCancelled else { return }
-                try? await self?.record(object)
+                await self?.whenLocal { $0.checkIn(object) }
             }
         }
     }
 
-    /// Records an object as it is now: what the receptionist lists, and what was just made or
-    /// changed, which its listing only shows later.
-    public distributed func record(_ object: DiscoverableObject) async {
-        do {
-            let description = try await object.describe()
-            self.records[object.id] = Record(
-                id: object.id,
-                type: description.type,
-                description: description.description,
-                actions: description.actions.map { Self.signature($0.key, input: $0.value.input) }.sorted(),
-                events: description.events.keys.sorted()
-            )
-            self.watchTermination(of: object)
-            self.notifyObservers()
-        } catch {
-            actorSystem.log.warning(
-                "Could not add object to the catalog",
-                metadata: ["error": .string(String(describing: error))]
-            )
-        }
+    /// An object that checked in: listed from now on, until it's gone.
+    private func checkIn(_ object: DiscoverableObject) {
+        guard checkedIn.insert(object.id).inserted else { return }
+        watchTermination(of: object)
+        notifyObservers()
     }
 
     /// An action with its argument names, such as `add(title, notes?)`, so a model
@@ -179,18 +156,21 @@ public distributed actor ObjectCatalog: LifecycleWatch {
         for held in made where seen.insert(held.object.id).inserted {
             entries.append(held)
         }
-        for record in self.records.values where seen.insert(record.id).inserted {
-            guard let object = try? DiscoverableObject.resolve(id: record.id, using: actorSystem) else { continue }
+        // Each described on behalf of whoever lists: one they may not read isn't listed to them.
+        for id in checkedIn where seen.insert(id).inserted {
+            guard let object = try? DiscoverableObject.resolve(id: id, using: actorSystem),
+                let description = try? await object.describe()
+            else { continue }
             entries.append(
                 ObjectEntry(
                     // A virtual actor by its id; any other, the one of its kind here, by its id with
                     // its type, which it's found by.
-                    id: record.id.virtualActorID.map(ObjectID.virtual) ?? .actor(record.id, type: record.type),
+                    id: id.virtualActorID.map(ObjectID.virtual) ?? .actor(id, type: description.type),
                     object: object,
-                    type: record.type,
-                    description: record.description,
-                    actions: record.actions,
-                    events: record.events
+                    type: description.type,
+                    description: description.description,
+                    actions: description.actions.map { Self.signature($0.key, input: $0.value.input) }.sorted(),
+                    events: description.events.keys.sorted()
                 ))
         }
         // By id, which is the same in every run, as an actor's path isn't.

@@ -89,9 +89,8 @@ public distributed actor DynamicObjects {
         try await made.adopt(id, code: code)
         try await made.describe(name: name, description: description)
         if !start.isEmpty { try await made.set(values: start) }
-        guard let access = try await made.access, let maker = try await made.maker else {
-            throw DynamicObjectsError.unknownObject(identity)
-        }
+        let access = try await made.access
+        let maker = try await made.maker
         try await emit(event: .added(identity, type: id, description: description, access: access, maker: maker))
         return identity
     }
@@ -140,8 +139,8 @@ public distributed actor DynamicObjects {
     /// The object `identity` changed who may read and write it: its listing follows, read from the
     /// object itself, which is what's true.
     distributed func accessChanged(_ identity: ObjectIdentity) async throws {
-        guard state.identities.contains(identity), let access = try await object(identity).access else { return }
-        try await emit(event: .accessChanged(identity, access))
+        guard state.identities.contains(identity) else { return }
+        try await emit(event: .accessChanged(identity, try await object(identity).access))
     }
 
     /// The object made here under `name`, by its name or its handle, among those the call may read:

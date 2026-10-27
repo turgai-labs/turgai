@@ -126,3 +126,8 @@ struct DemoObjectsTests {
         }
     }
 }
+
+/// Read by everyone and written by no one, as any built-in object.
+extension Customer: AccessControlled {
+    func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+}
