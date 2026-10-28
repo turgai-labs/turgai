@@ -40,9 +40,11 @@ public distributed actor AgentParticipant {
         self.peer = try await HailAgentAdapter(actorSystem: actorSystem, agentRole: role).peer(for: conversationID)
     }
 
-    /// Runs the turn that answers `request`: the agent's reply, or why there's none, goes back to
-    /// the conversation. A turn it was running is cancelled first.
-    distributed func answer(_ request: ConversationTurnRequest, memoryExtraction: MemoryExtractionConfiguration?) {
+    /// Runs the turn that answers `request`, on behalf of `turnScope`: the agent's reply, or why
+    /// there's none, goes back to the conversation. A turn it was running is cancelled first.
+    distributed func answer(
+        _ request: ConversationTurnRequest, as turnScope: CallScope, memoryExtraction: MemoryExtractionConfiguration?
+    ) {
         running?.task.cancel()
         let peer = self.peer
         let actorSystem = self.actorSystem
@@ -67,7 +69,7 @@ public distributed actor AgentParticipant {
                 // it calls comes from it. What it does meanwhile comes back with it, and reaches
                 // whoever watches the conversation.
                 let agentID = HailAgentAdapter.agentID(for: request.conversationID, role: request.agentRole)
-                let response = try await CallChain.$current.withValue(.start(request.scope)) {
+                let response = try await CallChain.$current.withValue(.start(turnScope)) {
                     try await Agent.answering(as: agentID) {
                         try await peer.run(to: request) { event in
                             await participant.whenLocal { await $0.follow(event, of: request.turnID) }
@@ -159,6 +161,16 @@ public distributed actor AgentParticipant {
             await publish(phase: .typing, of: &turn)
             turn.text = text
             await publishLive(.reply(.partial(conversationID: conversationID, turnID: turnID, text: turn.text)))
+        case .needed(let request):
+            // The turn's scope didn't allow it: the conversation that opened it asks its group, in
+            // the turn's own chain.
+            do {
+                try await conversation?.needed(request)
+            } catch {
+                actorSystem.log.error(
+                    "Could not ask for what a turn needed",
+                    metadata: ["request": .string("\(request)"), "error": .string("\(error)")])
+            }
         case .started, .completed:
             break
         }

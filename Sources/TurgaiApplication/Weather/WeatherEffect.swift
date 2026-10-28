@@ -1,4 +1,4 @@
-import AnyLanguageModel
+import DiscoverableActors
 import Hail
 
 #if canImport(FoundationEssentials)
@@ -35,7 +35,7 @@ public struct WeatherEffect: CompositeScopedEffect, Sendable {
 
     public static func run(
         in token: borrowing EffectToken<WeatherEffect>
-    ) async throws -> WeatherSupport.WeatherReport {
+    ) async throws -> WeatherReport {
         let configuration = token.withConfiguration { $0 }
         let places = try await token.withChild(configuration.geocoding) { locationToken in
             try await LocationEffect.run(in: locationToken)
@@ -67,8 +67,7 @@ public struct WeatherEffect: CompositeScopedEffect, Sendable {
     }
 }
 
-/// Shared weather pipeline used by the weather commands. Presentation belongs
-/// to the model-facing conversation, not to this provider adapter.
+/// The weather pipeline the Weather object's actions share: Open-Meteo's requests and answers.
 public enum WeatherSupport {
     static let maximumResponseBytes = 512 * 1024
     static let userAgent = "Turgai/1.0 (+https://github.com/akbashev/turgai)"
@@ -273,16 +272,12 @@ public enum WeatherSupport {
         in timeZone: TimeZone
     ) throws -> WeatherHourlyPoint {
         WeatherHourlyPoint(
-            time: point.time,
             localTime: try localDateTime(point.time, in: timeZone),
             temperatureCelsius: point.temperature,
             apparentTemperatureCelsius: point.apparentTemperature,
             precipitationProbabilityPercent: point.precipitationProbability,
-            precipitationMillimeters: point.precipitation,
-            weatherCode: point.weatherCode,
             condition: condition(point.weatherCode),
             windSpeedKilometersPerHour: point.windSpeed,
-            windDirectionDegrees: point.windDirection,
             windDirection: compassDirection(point.windDirection)
         )
     }
@@ -368,100 +363,6 @@ public enum WeatherSupport {
             case windSpeed = "wind_speed_10m"
             case windDirection = "wind_direction_10m"
         }
-    }
-
-    /// Data returned to the model.
-    public struct WeatherReport: Encodable, Sendable {
-        public let location: WeatherLocation
-        public let timezone: String
-        public let toolNow: Date
-        public let localNow: LocalDateTime
-        public let requestedDays: Int
-        public let fromLocalHour: Int?
-        public let current: WeatherCurrent
-        public let hourly: [WeatherHourlyPoint]
-        public let daily: [WeatherDailyPoint]
-        public let source: String
-    }
-
-    public struct WeatherLocation: Encodable, Sendable {
-        public let name: String
-        public let region: String?
-        public let country: String?
-        public let latitude: Double
-        public let longitude: Double
-    }
-
-    public struct WeatherCurrent: Encodable, Sendable {
-        public let temperatureCelsius: Double
-        public let apparentTemperatureCelsius: Double
-        public let relativeHumidityPercent: Double
-        public let precipitationMillimeters: Double
-        public let weatherCode: Int
-        public let condition: String
-        public let windSpeedKilometersPerHour: Double
-        public let windDirectionDegrees: Double
-        public let windDirection: String
-    }
-
-    public struct WeatherHourlyPoint: Encodable, Sendable {
-        public let time: Date
-        public let localTime: LocalDateTime
-        public let temperatureCelsius: Double
-        public let apparentTemperatureCelsius: Double
-        public let precipitationProbabilityPercent: Int?
-        public let precipitationMillimeters: Double
-        public let weatherCode: Int
-        public let condition: String
-        public let windSpeedKilometersPerHour: Double
-        public let windDirectionDegrees: Double
-        public let windDirection: String
-
-        // `time` is the UTC instant returned by Open-Meteo. Encoding it next
-        // to `localTime` invites consumers to display the UTC value and causes
-        // an apparent timezone shift. The report already carries its IANA
-        // timezone, so expose the unambiguous local representation only.
-        private enum CodingKeys: String, CodingKey {
-            case localTime
-            case temperatureCelsius
-            case apparentTemperatureCelsius
-            case precipitationProbabilityPercent
-            case condition
-            case windSpeedKilometersPerHour
-            case windDirection
-        }
-
-        public func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(localTime, forKey: .localTime)
-            try container.encode(temperatureCelsius, forKey: .temperatureCelsius)
-            try container.encode(apparentTemperatureCelsius, forKey: .apparentTemperatureCelsius)
-            try container.encodeIfPresent(
-                precipitationProbabilityPercent,
-                forKey: .precipitationProbabilityPercent
-            )
-            try container.encode(condition, forKey: .condition)
-            try container.encode(windSpeedKilometersPerHour, forKey: .windSpeedKilometersPerHour)
-            try container.encode(windDirection, forKey: .windDirection)
-        }
-    }
-
-    public struct WeatherDailyPoint: Encodable, Sendable {
-        public let date: String
-        public let weatherCode: Int
-        public let condition: String
-        public let maximumTemperatureCelsius: Double
-        public let minimumTemperatureCelsius: Double
-        public let precipitationProbabilityPercent: Int?
-    }
-
-    public struct LocalDateTime: Encodable, Sendable {
-        public let year: Int
-        public let month: Int
-        public let day: Int
-        public let hour: Int
-        public let minute: Int
-        public let weekday: Int
     }
 
     struct Daily: Decodable {
@@ -614,126 +515,113 @@ extension WeatherEffect.Horizon {
     }
 }
 
-/// Looks up a place and returns weather from Open-Meteo. Each command
-/// authorizes one ``WeatherEffect``; the pipeline (geocode, clock, forecast)
-/// is shared.
-@Tool(
-    "weather",
-    description:
-        "Get live weather for a place from Open-Meteo. Commands: weather_current (conditions now), weather_hourly (rest of today as an hourly table), weather_daily (multi-day outlook). Every report's localNow field is the authoritative current date and time at the location — trust it as a time anchor over your own sense of time. Pass a city, place name, or postal code, and use region or country when the name is ambiguous. Never infer a place from Turgai's fixed operating timezone, server locale, IP address, language, or current date/time. If the user has not provided or explicitly saved a location, ask for it before calling this tool."
-)
-public struct WeatherTools: Sendable {
-    public init() {}
-
-    @Command(
-        "current",
-        description: "Get the current weather conditions for a place."
-    )
-    public func current(_ input: WeatherToolsCurrentInput) throws -> WeatherEffect {
-        try WeatherEffect(
-            geocoding: WeatherSupport.geocodingEffect(
-                place: WeatherSupport.validatedPlace(input.place),
-                region: WeatherSupport.validatedRegion(input.region),
-                country: WeatherSupport.validatedCountry(input.country)
-            ),
-            clock: ClockEffect(),
-            horizon: .current
-        )
-    }
-
-    @Command(
-        "hourly",
-        description:
-            "Get the remaining hours of today's weather for a place as an hourly table. The table starts at the current hour and never includes past hours."
-    )
-    public func hourly(_ input: WeatherToolsHourlyInput) throws -> WeatherEffect {
-        try WeatherEffect(
-            geocoding: WeatherSupport.geocodingEffect(
-                place: WeatherSupport.validatedPlace(input.place),
-                region: WeatherSupport.validatedRegion(input.region),
-                country: WeatherSupport.validatedCountry(input.country)
-            ),
-            clock: ClockEffect(),
-            horizon: .hourly
-        )
-    }
-
-    @Command(
-        "daily",
-        description:
-            "Get a multi-day weather outlook for a place: per-day high and low temperatures, conditions, and precipitation chance."
-    )
-    public func daily(_ input: WeatherToolsDailyInput) throws -> WeatherEffect {
-        guard (1...7).contains(input.days) else {
-            throw ToolError.invalidArgument("days", value: String(input.days))
-        }
-        return try WeatherEffect(
-            geocoding: WeatherSupport.geocodingEffect(
-                place: WeatherSupport.validatedPlace(input.place),
-                region: WeatherSupport.validatedRegion(input.region),
-                country: WeatherSupport.validatedCountry(input.country)
-            ),
-            clock: ClockEffect(),
-            horizon: .daily(days: input.days)
-        )
-    }
-
-    public func render(_ output: WeatherSupport.WeatherReport) -> ToolOutput {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(output) else {
-            return .text("{}")
-        }
-        return .text(String(decoding: data, as: UTF8.self))
-    }
+/// The weather at a place: now, and the hours or days ahead that were asked for.
+@Describable
+public struct WeatherReport: Codable, Sendable {
+    /// The place it's for.
+    public let location: WeatherLocation
+    /// The place's IANA time zone.
+    public let timezone: String
+    /// The instant it was made.
+    public let toolNow: Date
+    /// The date and time at the place as it was made.
+    public let localNow: LocalDateTime
+    /// The days of outlook asked for.
+    public let requestedDays: Int
+    /// The local hour the hours start from, when hours were asked for.
+    public let fromLocalHour: Int?
+    /// The conditions now.
+    public let current: WeatherCurrent
+    /// The rest of today, hour by hour, when hours were asked for.
+    public let hourly: [WeatherHourlyPoint]
+    /// The days ahead, when days were asked for.
+    public let daily: [WeatherDailyPoint]
+    /// Where the weather comes from.
+    public let source: String
 }
 
-@Generable
-public struct WeatherToolsCurrentInput: Sendable {
-    @Guide(
-        description:
-            "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
-    )
-    public let place: String
-    @Guide(
-        description:
-            "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+/// A place, as the weather found it.
+@Describable
+public struct WeatherLocation: Codable, Sendable {
+    /// Its name.
+    public let name: String
+    /// Its state, province or county.
     public let region: String?
-    @Guide(description: "An optional country name used to disambiguate the place.")
+    /// Its country.
     public let country: String?
+    /// Its latitude, in degrees.
+    public let latitude: Double
+    /// Its longitude, in degrees.
+    public let longitude: Double
 }
 
-// Formerly WeatherTools.HourlyInput; renamed during the no-nested-Generable sweep.
-@Generable
-public struct WeatherToolsHourlyInput: Sendable {
-    @Guide(
-        description:
-            "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
-    )
-    public let place: String
-    @Guide(
-        description:
-            "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
-    public let region: String?
-    @Guide(description: "An optional country name used to disambiguate the place.")
-    public let country: String?
+/// The conditions now.
+@Describable
+public struct WeatherCurrent: Codable, Sendable {
+    /// The temperature, in °C.
+    public let temperatureCelsius: Double
+    /// What it feels like, in °C.
+    public let apparentTemperatureCelsius: Double
+    /// The relative humidity, in percent.
+    public let relativeHumidityPercent: Double
+    /// The precipitation, in mm.
+    public let precipitationMillimeters: Double
+    /// Open-Meteo's weather code.
+    public let weatherCode: Int
+    /// The conditions, in words.
+    public let condition: String
+    /// The wind's speed, in km/h.
+    public let windSpeedKilometersPerHour: Double
+    /// Where the wind comes from, in degrees.
+    public let windDirectionDegrees: Double
+    /// Where the wind comes from, as a compass point.
+    public let windDirection: String
 }
 
-// Formerly WeatherTools.DailyInput; renamed during the no-nested-Generable sweep.
-@Generable
-public struct WeatherToolsDailyInput: Sendable {
-    @Guide(
-        description:
-            "The actual city, town, or place name, such as Haar or Munich. Do not include a district or full address."
-    )
-    public let place: String
-    @Guide(
-        description:
-            "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
-    public let region: String?
-    @Guide(description: "An optional country name used to disambiguate the place.")
-    public let country: String?
-    @Guide(description: "Number of days in the outlook, from 1 through 7.")
-    public let days: Int
+/// One hour of today. It's in local time only: the UTC instant beside it reads as a shift.
+@Describable
+public struct WeatherHourlyPoint: Codable, Sendable {
+    /// The hour, at the place.
+    public let localTime: LocalDateTime
+    /// The temperature, in °C.
+    public let temperatureCelsius: Double
+    /// What it feels like, in °C.
+    public let apparentTemperatureCelsius: Double
+    /// The chance of precipitation, in percent.
+    public let precipitationProbabilityPercent: Int?
+    /// The conditions, in words.
+    public let condition: String
+    /// The wind's speed, in km/h.
+    public let windSpeedKilometersPerHour: Double
+    /// Where the wind comes from, as a compass point.
+    public let windDirection: String
+}
+
+/// One day ahead.
+@Describable
+public struct WeatherDailyPoint: Codable, Sendable {
+    /// The day, at the place.
+    public let date: String
+    /// Open-Meteo's weather code.
+    public let weatherCode: Int
+    /// The conditions, in words.
+    public let condition: String
+    /// The day's high, in °C.
+    public let maximumTemperatureCelsius: Double
+    /// The day's low, in °C.
+    public let minimumTemperatureCelsius: Double
+    /// The chance of precipitation, in percent.
+    public let precipitationProbabilityPercent: Int?
+}
+
+/// A date and time at a place.
+@Describable
+public struct LocalDateTime: Codable, Sendable {
+    public let year: Int
+    public let month: Int
+    public let day: Int
+    public let hour: Int
+    public let minute: Int
+    /// The day of the week, from 1 for Sunday.
+    public let weekday: Int
 }

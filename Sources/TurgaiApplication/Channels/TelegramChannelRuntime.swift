@@ -67,8 +67,7 @@ extension TelegramProvider {
             },
             connections: runtime.dependencies.connections,
             channelID: runtime.channelID,
-            attachmentResolver: runtime.dependencies.attachments,
-            attachmentOwner: runtime.channelID,
+            files: runtime.dependencies.telegramFiles,
             logger: runtime.logger,
             persistedConversationIDs: persistedConversationIDs
         )

@@ -112,9 +112,9 @@ public enum DynamicObjectState: Codable, Sendable {
 
     /// Who may read it and who may write it, for a call through `chain`: an object not made yet is
     /// the caller's to make.
-    func access(for chain: CallChain) -> ObjectAccess {
+    func access(for chain: CallChain) -> Access {
         switch self {
-        case .unmade: ObjectAccess(madeBy: chain.scope)
+        case .unmade: Access(madeBy: chain.scope)
         case .live(let object), .removed(let object): object.access
         }
     }
@@ -169,7 +169,7 @@ public struct LiveObject: Codable, Sendable {
     /// tasks and the events it follows, is on their behalf.
     public let maker: CallScope
     /// Who may read it and who may write it: its maker's alone, from when it's made, until shared.
-    public private(set) var access: ObjectAccess
+    public private(set) var access: Access
     /// What it's called and what it was made for: an object made by name has them.
     public private(set) var name: String?
     public private(set) var description: String?
@@ -190,7 +190,7 @@ public struct LiveObject: Codable, Sendable {
         self.code = code
         self.fields = fields
         self.maker = maker
-        self.access = holder.map(ObjectAccess.init(heldBy:)) ?? ObjectAccess(madeBy: maker)
+        self.access = holder.map(Access.init(heldBy:)) ?? Access(madeBy: maker)
     }
 
     /// The object after `event`, which keeps living.

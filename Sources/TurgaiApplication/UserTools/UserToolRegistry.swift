@@ -312,7 +312,6 @@ struct UserToolSpec: Decodable {
     var name: String
     var description: String
     var version: Int?
-    var approval: UserTool.ApprovalPolicy?
     /// JSON Schema in the dialect `@Generable` emits; decoded directly into
     /// `GenerationSchema`. Absent means a no-argument tool.
     var arguments: GenerationSchema?
@@ -364,7 +363,6 @@ struct UserToolSpec: Decodable {
         let arguments = arguments ?? Self.emptyArguments
         let argumentNames = Self.argumentNames(of: arguments)
 
-        let resolvedApproval: UserTool.ApprovalPolicy
         let body: UserTool.Body
         switch self.body {
         case .process(let process):
@@ -386,7 +384,6 @@ struct UserToolSpec: Decodable {
                     }
                 }
             }
-            resolvedApproval = approval ?? .always
             body = .process(
                 UserTool.NativeProcess(
                     argv: process.argv,
@@ -414,7 +411,6 @@ struct UserToolSpec: Decodable {
             guard moduleURL.path.hasPrefix(root) else {
                 try fail("wasm module must stay inside the tool directory.")
             }
-            resolvedApproval = approval ?? .always
             body = .wasm(UserTool.Wasm(module: moduleURL))
         case .prompt(let prompt):
             guard !prompt.instruction.isEmpty else { try fail("prompt instruction must not be empty.") }
@@ -429,21 +425,18 @@ struct UserToolSpec: Decodable {
                     )
                 }
             }
-            resolvedApproval = approval ?? .never
             body = .prompt(UserTool.Prompt(instruction: prompt.instruction, agentRole: prompt.agentRole))
         case .workflow(let workflow):
             try Self.validate(workflow, toolName: name)
             // A workflow may contain a fetch or execute stage even when the
             // first version of the UI only displays a harmless-looking name.
             // Keep the safe default at the whole-tool boundary.
-            resolvedApproval = approval ?? .always
             body = .workflow(workflow)
         }
 
         return UserTool(
             name: name,
             description: description,
-            approval: resolvedApproval,
             arguments: arguments,
             body: body,
             source: source

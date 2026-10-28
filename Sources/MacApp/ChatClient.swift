@@ -8,7 +8,7 @@ struct ChatClient: Sendable {
     /// Opens the signed-in account's conversation with the default bot. The
     /// stream ends when the socket closes.
     var connect: @Sendable (Session) async -> AsyncThrowingStream<ChatEvent, any Error> = { _ in .finished() }
-    /// Sends a message or an approval answer on the open socket.
+    /// Sends a message or an answer to an access request on the open socket.
     var send: @Sendable (ChatCommand) async throws -> Void
     var disconnect: @Sendable () async -> Void
 }

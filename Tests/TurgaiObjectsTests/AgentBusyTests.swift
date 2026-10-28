@@ -26,7 +26,8 @@ struct AgentBusyTests {
             workspaceRoot: workspace,
             spawnConfigProvider: { AgentSpawnConfig(agentID: $0) },
             modelEndpointProvider: { _ in endpoint },
-            modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) })
+            modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
+            authority: { _ in TurgaiAuthority() })
         try await withClusterSystem(
             "probe", store: MemoryEventStore(), hostsVirtualActors: true, installing: { $0.plugins.install(plugin: agents) }
         ) { node in

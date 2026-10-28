@@ -68,7 +68,8 @@ private func withAgentNodes(
             await started.start(agentID)
             return AgentSpawnConfig(agentID: agentID)
         },
-        modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) })
+        modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
+        authority: { _ in TurgaiAuthority() })
     try await withClusterSystem(
         "objects", store: store, hostsVirtualActors: true, installing: { $0.plugins.install(plugin: agents) }
     ) { objects in

@@ -144,6 +144,8 @@ let package = Package(
                 .product(name: "Yams", package: "Yams"),
                 .product(name: "Parsing", package: "swift-parsing"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+                // A refusal, as what code's tool calls and an object's own doing come back with.
+                .product(name: "ScopedEffect", package: "hail"),
                 .product(name: "Doppel", package: "doppel"),
                 .product(name: "DoppelRuntime", package: "doppel"),
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
@@ -253,6 +255,7 @@ let package = Package(
         .target(
             name: "MacApp",
             dependencies: [
+                "TurgaiApplication",
                 "TurgaiModels",
                 "TurgaiObjects",
                 "TurgaiServer",
@@ -289,7 +292,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TurgaiHailTests",
-            dependencies: ["TurgaiDomain", "TurgaiHail", "TurgaiApplication"]
+            dependencies: ["TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiTelegram"]
         ),
         .testTarget(
             name: "TurgaiApplicationTests",

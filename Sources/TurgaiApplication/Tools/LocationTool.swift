@@ -15,20 +15,17 @@ import Hail
 // Formerly LocationTool.Input; renamed during the no-nested-Generable sweep.
 @Generable
 public struct LocationToolInput: Sendable {
-    @Guide(description: "The actual city, town, or place name, such as Haar or Munich.")
+    @Guide(description: "The place's name.")
     public let place: String
-    @Guide(
-        description:
-            "An optional state, province, county, or Landkreis used to distinguish places with the same name.")
+    @Guide(description: "Its state, province or county, for a name places share.")
     public let region: String?
-    @Guide(description: "An optional country name used to disambiguate the place.")
+    @Guide(description: "Its country, for a name places share.")
     public let country: String?
 }
 
 @Tool(
     "location",
-    description:
-        "Resolve a city, town, or place name into coordinates and its IANA time zone. Pass the actual place name separately from optional region and country fields; use region for a state, province, county, or Landkreis such as Landkreis München. Use the returned time_zone with now, weather, timers, or schedules; this tool does not save the location."
+    description: "A place's coordinates and IANA time zone, by its name."
 )
 public struct LocationTool {
     public typealias Effect = LocationEffect

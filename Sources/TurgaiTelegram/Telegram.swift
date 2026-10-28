@@ -253,25 +253,34 @@ public enum TelegramInboundEvent: Equatable, Sendable {
     case command(ConversationCommand)
     /// Who the chat's admins are now: a group's administrators, or a private chat's one person.
     case admins(conversationID: ConversationID, Set<UserID>)
-    /// Someone's answer to a question the conversation asked, by tapping its button.
-    case approval(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision, by: UserID)
+    /// Someone's answer to an access request of the chat's group, by tapping its button.
+    case answer(conversationID: ConversationID, AccessRequestID, AccessAnswer, by: UserID)
 }
 
-/// The buttons a question from the conversation is answered with: each says the answer and the
-/// question's ID, and nothing else.
-public enum TelegramApprovalButton {
-    public static func data(for id: UUID, _ decision: ApprovalDecision) -> String {
-        "turgai-approval:\(decision == .granted ? "grant" : "deny"):" + id.uuidString
+/// The buttons an access request is answered with in its chat: each says the answer and the
+/// request's ID, and nothing else.
+public enum TelegramAnswerButton {
+    private static let prefix = "turgai-access"
+
+    public static func data(for id: AccessRequestID, _ answer: AccessAnswer) -> String {
+        "\(prefix):\(word(for: answer)):\(id.rawValue.uuidString)"
     }
 
-    /// The question and answer a button's data says, if it's one of these.
-    public static func answer(in data: String) -> (id: UUID, decision: ApprovalDecision)? {
+    /// The request and the answer a button's data says, if it's one of these.
+    public static func answer(in data: String) -> (id: AccessRequestID, answer: AccessAnswer)? {
         let parts = data.split(separator: ":", maxSplits: 2).map(String.init)
-        guard parts.count == 3, parts[0] == "turgai-approval", let id = UUID(uuidString: parts[2]) else { return nil }
-        switch parts[1] {
-        case "grant": return (id, .granted)
-        case "deny": return (id, .denied)
-        default: return nil
+        guard parts.count == 3, parts[0] == prefix, let id = UUID(uuidString: parts[2]),
+            let answer = [AccessAnswer.once, .always, .everyone, .no].first(where: { word(for: $0) == parts[1] })
+        else { return nil }
+        return (AccessRequestID(id), answer)
+    }
+
+    private static func word(for answer: AccessAnswer) -> String {
+        switch answer {
+        case .once: "once"
+        case .always: "always"
+        case .everyone: "everyone"
+        case .no: "no"
         }
     }
 }
@@ -523,28 +532,35 @@ public actor TelegramEventPublisher {
             }
             lastTypingActionReservation[conversationID] = nil
 
-        case .approvalRequested(let conversationID, let turnID, let prompt):
-            // Asked in the chat; whoever taps answers, and the conversation decides whose answer counts.
+        case .asked(let conversationID, let request):
+            // Asked in the chat; whoever taps answers, and its group decides whose answer counts.
             let markup = TelegramInlineKeyboardMarkup(
                 inlineKeyboard: [
                     [
                         TelegramInlineKeyboardButton(
-                            text: "Approve", callbackData: TelegramApprovalButton.data(for: prompt.id, .granted)),
+                            text: "Once", callbackData: TelegramAnswerButton.data(for: request.id, .once)),
                         TelegramInlineKeyboardButton(
-                            text: "Deny", callbackData: TelegramApprovalButton.data(for: prompt.id, .denied)),
+                            text: "Always", callbackData: TelegramAnswerButton.data(for: request.id, .always)),
+                        TelegramInlineKeyboardButton(
+                            text: "Everyone", callbackData: TelegramAnswerButton.data(for: request.id, .everyone)),
+                        TelegramInlineKeyboardButton(
+                            text: "No", callbackData: TelegramAnswerButton.data(for: request.id, .no)),
                     ]
                 ]
             )
             _ = try await client.sendMessageWithMarkup(
-                try chatID(for: conversationID),
-                "Turgai wants permission to run \(prompt.action).\n\nArguments: \(prompt.arguments)",
-                nil,
-                replyParameters(conversationID: conversationID, turnID: turnID),
-                markup
-            )
+                try chatID(for: conversationID), "Allow this?\n\n\(request.request)", nil, nil, markup)
 
-        case .approvalResolved:
-            break
+        case .answered(let conversationID, let request, let answer, _):
+            let said =
+                switch answer {
+                case .once: "Allowed once"
+                case .always: "Allowed from now on"
+                case .everyone: "Allowed for everyone here from now on"
+                case .no: "Not allowed"
+                }
+            _ = try await sendMessage(
+                text: "\(said):\n\n\(request.request)", chatID: try chatID(for: conversationID), replyParameters: nil)
         }
     }
 

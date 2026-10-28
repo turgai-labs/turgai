@@ -16,12 +16,11 @@ import TurgaiObjects
 public enum ConversationTools {
     public static func make(
         context: AgentTurnContext,
-        attachmentResolver: AttachmentResolver,
-        searchBackend: WebSearchBackend = .duckDuckGo,
+        telegramFiles: TelegramFiles,
+        nodeTools: NodeTools,
         workspaceRoot: String,
         wasmRunnerURL: URL? = nil,
         userTools: UserToolRegistry? = nil,
-        approval: any ToolApproval = DenyAllApproval(),
         actorSystem: ClusterSystem? = nil,
         objectCatalog: ObjectCatalog? = nil,
         writer: ObjectWriter? = nil,
@@ -30,22 +29,21 @@ public enum ConversationTools {
     ) async throws -> TurnTools {
         guard includeConversationTools else { return TurnTools() }
         let working = AgentContext(context.agentID.contextID)
-        var tools: [any Tool] = [
-            WebSearchTool(backend: searchBackend),
-            FetchURLTool(),
-            LocationTool(),
-            NowTool(),
-            FetchAttachmentTool(resolver: attachmentResolver),
-        ]
+        // The node's tools, which object code calls too.
+        var tools: [any Tool] =
+            nodeTools.turn + [
+                LocationTool(),
+                NowTool(),
+            ]
+        // A Telegram chat's attachments, got through the bot the chat is with, while it runs.
+        if case .conversation(let conversation)? = working, await telegramFiles.serves(conversation.channel) {
+            tools += Telegram(chat: conversation.channel, files: telegramFiles).tools
+        }
         // Schedules and timers reply in a conversation: an agent asked as an object has none.
         if case .conversation? = working {
             tools += ScheduleTools(context: context).tools
             tools += TimerTools(context: context).tools
         }
-        // Tools that belong together and say what they're for are a page: the turn starts from
-        // their link, and the page says the rest.
-        let groups: [ToolGroup] = [WeatherTools().group]
-
         var pages: any ToolPages = NoToolPages()
         // The person the agent works for.
         let owner = working?.person
@@ -69,24 +67,19 @@ public enum ConversationTools {
 
         if let userTools {
             tools += Self.userTools(
-                from: userTools, besides: Set(tools.map(\.name)), context: context, person: owner,
-                workspaceRoot: workspaceRoot, wasmRunnerURL: wasmRunnerURL, approval: approval, actorSystem: actorSystem)
+                from: userTools, besides: Set(tools.map(\.name)), context: context, workspaceRoot: workspaceRoot,
+                wasmRunnerURL: wasmRunnerURL, actorSystem: actorSystem)
         }
-        return TurnTools(tools: tools, groups: groups, pages: pages)
+        return TurnTools(tools: tools, pages: pages)
     }
 
     /// The user's tools a turn may use: each one built for this turn, those named like a built-in
     /// one or that can't run here reported instead.
     private static func userTools(
         from userTools: UserToolRegistry, besides builtinNames: Set<String>, context: AgentTurnContext,
-        person owner: TurgaiDomain.UserID?, workspaceRoot: String, wasmRunnerURL: URL?, approval: any ToolApproval,
-        actorSystem: ClusterSystem?
+        workspaceRoot: String, wasmRunnerURL: URL?, actorSystem: ClusterSystem?
     ) -> [any Tool] {
         var tools: [any Tool] = []
-        // Asked on behalf of the person whose conversation this is.
-        let requesterID = owner?.rawValue ?? ""
-        let conversationID = context.agentID.contextID.rawValue
-        let turnID = context.turnID.rawValue
         for tool in userTools.load() {
             guard !builtinNames.contains(tool.name) else {
                 userTools.reportIssue(
@@ -101,11 +94,7 @@ public enum ConversationTools {
                 tools.append(
                     UserProcessTool(
                         tool: tool,
-                        workspaceRoot: workspaceRoot,
-                        approval: approval,
-                        conversationID: conversationID,
-                        requesterID: requesterID,
-                        turnID: turnID
+                        workspaceRoot: workspaceRoot
                     ))
             case .wasm:
                 guard let wasmRunnerURL else {
@@ -122,11 +111,7 @@ public enum ConversationTools {
                     UserWasmTool(
                         tool: tool,
                         runnerURL: wasmRunnerURL,
-                        workspaceRoot: workspaceRoot,
-                        approval: approval,
-                        conversationID: conversationID,
-                        requesterID: requesterID,
-                        turnID: turnID
+                        workspaceRoot: workspaceRoot
                     ))
             case .prompt:
                 guard let actorSystem else {
@@ -143,11 +128,7 @@ public enum ConversationTools {
                     UserPromptTool(
                         tool: tool,
                         actorSystem: actorSystem,
-                        sourceAgentID: context.agentID,
-                        approval: approval,
-                        conversationID: conversationID,
-                        requesterID: requesterID,
-                        turnID: turnID
+                        sourceAgentID: context.agentID
                     ))
             case .workflow(let workflow):
                 guard !workflow.steps.isEmpty else {
@@ -177,11 +158,7 @@ public enum ConversationTools {
                         tool: tool,
                         workspaceRoot: workspaceRoot,
                         actorSystem: actorSystem,
-                        sourceAgentID: context.agentID,
-                        approval: approval,
-                        conversationID: conversationID,
-                        requesterID: requesterID,
-                        turnID: turnID
+                        sourceAgentID: context.agentID
                     ))
             }
         }

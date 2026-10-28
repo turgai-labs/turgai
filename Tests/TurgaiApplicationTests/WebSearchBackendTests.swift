@@ -74,7 +74,7 @@ struct WebSearchBackendTests {
     }
 
     @Test func jsonBackendsRejectInvalidJSON() {
-        #expect(throws: WebSearchTool.Error.invalidResponse) {
+        #expect(throws: Search.Error.invalidResponse) {
             try WebSearchBackend.searxng(baseURL: URL(string: "http://127.0.0.1:8080")!)
                 .parseSearchResults("not json")
         }
@@ -88,7 +88,7 @@ struct WebSearchBackendTests {
                 snippet: String(repeating: "word ", count: 100)
             )
         }
-        let text = WebSearchTool.searchResult(query: "q", results: results)
+        let text = Search.searchResult(query: "q", results: results)
         #expect(text.hasPrefix("Web results for \"q\":"))
         #expect(!text.contains("6. Result"))
         #expect(text.count <= 1_200)

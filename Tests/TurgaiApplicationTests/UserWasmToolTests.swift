@@ -31,7 +31,6 @@ private struct WasmFixture {
 }
 
 private func makeWasmTool(
-    approval: any ToolApproval = NoOpApproval(),
     runnerPath: String = "/bin/sh"
 ) throws -> (tool: UserWasmTool, fixture: WasmFixture) {
     let fixture = try WasmFixture()
@@ -42,7 +41,6 @@ private func makeWasmTool(
     let userTool = UserTool(
         name: "shout",
         description: "Runs a Wasm module.",
-        approval: .always,
         arguments: arguments,
         body: .wasm(UserTool.Wasm(module: fixture.module)),
         source: fixture.source
@@ -51,21 +49,10 @@ private func makeWasmTool(
         UserWasmTool(
             tool: userTool,
             runnerURL: URL(fileURLWithPath: runnerPath),
-            workspaceRoot: fixture.directory.path,
-            approval: approval
+            workspaceRoot: fixture.directory.path
         ),
         fixture
     )
-}
-
-private struct DenyingApproval: ToolApproval {
-    func decide(_ request: ApprovalRequest) async throws -> ApprovalDecision { .denied }
-}
-
-private struct ThrowingApproval: ToolApproval {
-    func decide(_ request: ApprovalRequest) async throws -> ApprovalDecision {
-        throw ToolError.unauthorized("approval transport down")
-    }
 }
 
 private final class ProcessCapture: Sendable {
@@ -104,27 +91,7 @@ struct UserWasmToolTests {
         #expect(effect.sandbox?.readWritePaths.isEmpty == true)
     }
 
-    @Test("a declined approval returns a decline message without running")
-    func declinedApproval() async throws {
-        let (tool, _) = try makeWasmTool(approval: DenyingApproval())
-        let output = try await tool.runOutput(
-            input: arguments(#"{"words":"hi"}"#),
-            authority: FullAuthority()
-        )
-        #expect(output.result.textRepresentation == "The user declined to run shout.")
-    }
-
-    @Test("a broken approval transport is reported, not fatal")
-    func throwingApproval() async throws {
-        let (tool, _) = try makeWasmTool(approval: ThrowingApproval())
-        let output = try await tool.runOutput(
-            input: arguments(#"{"words":"hi"}"#),
-            authority: FullAuthority()
-        )
-        #expect(output.result.textRepresentation.contains("Could not ask for approval"))
-    }
-
-    @Test("an approved run sends the JSON request to the process dependency")
+    @Test("a run sends the JSON request to the process dependency")
     func approvedRun() async throws {
         let (tool, fixture) = try makeWasmTool()
         let capture = ProcessCapture()
@@ -145,31 +112,21 @@ struct UserWasmToolTests {
         #expect(requests[0].arguments == ["--module", fixture.module.path])
     }
 
-    @Test("an ungranted authority denies the run before approval is asked")
+    @Test("an ungranted authority denies the run")
     func ungrantedAuthority() async throws {
         struct DenyAll: Authority {
             func decision<Effect: ScopedEffect>(on effect: Effect) -> EffectDecision {
                 .denied("closed")
             }
         }
-        final class CountingApproval: ToolApproval, Sendable {
-            let asked = Mutex(0)
 
-            func decide(_ request: ApprovalRequest) async throws -> ApprovalDecision {
-                asked.withLock { $0 += 1 }
-                return .granted
-            }
-        }
-
-        let approval = CountingApproval()
-        let (tool, _) = try makeWasmTool(approval: approval)
+        let (tool, _) = try makeWasmTool()
         await #expect(throws: (any Error).self) {
             try await tool.runOutput(
                 input: arguments(#"{"words":"hi"}"#),
                 authority: DenyAll()
             )
         }
-        #expect(approval.asked.withLock { $0 } == 0)
     }
 
     @Test("a removed module is not started after the effect was authorized")

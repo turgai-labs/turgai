@@ -113,9 +113,8 @@ public actor TelegramConnection {
         case .admins(let conversationID, let admins):
             return await sendToApplication(.admins(conversationID: conversationID, admins))
 
-        case .approval(let conversationID, let approvalID, let decision, let person):
-            return await sendToApplication(
-                .approval(conversationID: conversationID, approvalID: approvalID, decision: decision, by: person))
+        case .answer(let conversationID, let id, let answer, let person):
+            return await sendToApplication(.answer(conversationID: conversationID, id, answer, by: person))
 
         case .start(let conversationID, _, _):
             do {
@@ -358,9 +357,8 @@ public actor TelegramBot {
         )
         let participantID = participantID(for: sender.id)
         let userID = UserID(participantID: participantID)
-        if let data = callbackQuery?.data, let answer = TelegramApprovalButton.answer(in: data) {
-            return .approval(
-                conversationID: conversationID, approvalID: answer.id, decision: answer.decision, by: userID)
+        if let data = callbackQuery?.data, let answer = TelegramAnswerButton.answer(in: data) {
+            return .answer(conversationID: conversationID, answer.id, answer.answer, by: userID)
         }
         let displayName = [sender.firstName, sender.lastName]
             .compactMap { value in
@@ -580,10 +578,7 @@ public actor TelegramBot {
         }) {
             attachments.append(
                 Attachment(
-                    id: AttachmentID(
-                        channel: conversationChannel,
-                        externalID: photo.fileID
-                    ),
+                    id: AttachmentID(rawValue: photo.fileID),
                     kind: .image,
                     mimeType: "image/jpeg"
                 )
@@ -593,10 +588,7 @@ public actor TelegramBot {
         if let document = message.document {
             attachments.append(
                 Attachment(
-                    id: AttachmentID(
-                        channel: conversationChannel,
-                        externalID: document.fileID
-                    ),
+                    id: AttachmentID(rawValue: document.fileID),
                     kind: document.mimeType?.hasPrefix("image/") == true ? .image : .file,
                     filename: document.filename,
                     mimeType: document.mimeType
@@ -675,7 +667,7 @@ extension TelegramInboundEvent {
         case .forget(let conversationID, _, _): conversationID
         case .context(let conversationID, _, _): conversationID
         case .diagnose(let conversationID, _, _): conversationID
-        case .approval(let conversationID, _, _, _): conversationID
+        case .answer(let conversationID, _, _, _): conversationID
         case .admins(let conversationID, _): conversationID
         case .command(let command):
             switch command {

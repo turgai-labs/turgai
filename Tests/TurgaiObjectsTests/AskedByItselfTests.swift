@@ -31,7 +31,8 @@ struct AskedByItselfTests {
             workspaceRoot: workspace,
             spawnConfigProvider: { AgentSpawnConfig(agentID: $0) },
             modelEndpointProvider: { _ in turn },
-            modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) })
+            modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
+            authority: { _ in TurgaiAuthority() })
         let installing: @Sendable (inout ClusterSystemSettings) -> Void = { $0.plugins.install(plugin: agents) }
         try await withClusterSystem("objects", store: store, hostsVirtualActors: true, installing: installing) {
             objects in

@@ -22,30 +22,18 @@ public struct UserWasmTool: HailCore.Tool {
     public let tool: UserTool
     public let runnerURL: URL
     public let workspaceRoot: String
-    public let approval: any ToolApproval
     public let maximumOutputCharacters: Int
-    public let conversationID: String
-    public let requesterID: String
-    public let turnID: String
 
     public init(
         tool: UserTool,
         runnerURL: URL,
         workspaceRoot: String,
-        approval: any ToolApproval,
-        maximumOutputCharacters: Int = 4096,
-        conversationID: String = "unknown",
-        requesterID: String = "unknown",
-        turnID: String = "unknown"
+        maximumOutputCharacters: Int = 4096
     ) {
         self.tool = tool
         self.runnerURL = runnerURL
         self.workspaceRoot = workspaceRoot
-        self.approval = approval
         self.maximumOutputCharacters = max(1, maximumOutputCharacters)
-        self.conversationID = conversationID
-        self.requesterID = requesterID
-        self.turnID = turnID
     }
 
     public var name: String { tool.name }
@@ -86,31 +74,8 @@ public struct UserWasmTool: HailCore.Tool {
     public func run(
         _ input: GeneratedContent, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<ProcessEffect>
     ) async throws -> CallReturn {
-        if tool.approval == .always {
-            let request = token.withConfiguration { effect in
-                ApprovalRequest(
-                    toolName: name,
-                    arguments: input,
-                    command: [effect.executable] + effect.arguments,
-                    workingDirectory: effect.cwd,
-                    conversationID: conversationID,
-                    requesterID: requesterID,
-                    turnID: turnID
-                )
-            }
-            let decision: ApprovalDecision
-            do {
-                decision = try await approval.decide(request)
-            } catch {
-                return .text("Could not ask for approval to run \(name): \(error)")
-            }
-            guard decision == .granted else {
-                return .text("The user declined to run \(name).")
-            }
-        }
-
-        // A spec or module can be removed while Telegram approval is pending.
-        // Re-check the data boundary immediately before the process starts.
+        // A spec or module can be removed after the tool was offered: re-check the data boundary
+        // immediately before the process starts.
         guard FileManager.default.fileExists(atPath: tool.source.path) else {
             return .text("The user tool \(name) is no longer available.")
         }

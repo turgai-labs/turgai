@@ -21,15 +21,14 @@ struct EvalTask: Sendable {
         case followUp(
             String, stateAddresses: [String], answered: @Sendable (String) -> Bool,
             stateMatches: @Sendable (String) -> Bool)
-        /// The demo shop is there from the start. The request is the first turn, and these turns
-        /// follow it in the same conversation; after each, customers ask the shop for refunds,
-        /// which the managers on duty must decide as asked.
-        case shop([ShopTurn])
         /// One turn, in which the agent asks `agent`, and its answer must say what that agent said.
         case asks(agent: String, answered: @Sendable (String) -> Bool)
         /// The request makes an object, and what follows shares it: who may use it then must pass
         /// `allowed`.
-        case shared(allowed: @Sendable (ObjectAccess) -> Bool)
+        case shared(allowed: @Sendable (Access) -> Bool)
+        /// One turn, in which the agent sends HTTP requests itself, and its answer must say what
+        /// came back.
+        case sends(answered: @Sendable (String) -> Bool)
     }
 
     init(
@@ -55,8 +54,9 @@ struct EvalTask: Sendable {
 
     /// Someone else in the eval's chat, and someone outside it: whom sharing with the chat lets in,
     /// and whom it doesn't.
-    private static let inTheChat = CallScope(UserID("eval-member"), in: EvalNode.asker.group, as: .member)
-    private static let outside = CallScope(UserID("eval-outsider"), in: GroupID(rawValue: "elsewhere"), as: .member)
+    private static let inTheChat = CallScope(UserID("eval-member"), in: EvalNode.group, as: .member, allowed: [])
+    private static let outside = CallScope(
+        UserID("eval-outsider"), in: GroupID(rawValue: "elsewhere"), as: .member, allowed: [])
 
     /// A planner, whose every plan starts the same way, so an answer can be told to be its.
     private static let planner = EvalAgent(
@@ -121,12 +121,20 @@ struct EvalTask: Sendable {
             },
             answered: has("3200")),
         EvalTask(
-            request: ShopTurn.all[0].prompt,
-            check: .shop(ShopTurn.all)),
-        EvalTask(
             request: "Ask the planner what I should do first on Saturday, and tell me.",
             agents: [planner],
             check: .asks(agent: "planner", answered: has("coffee"))),
+        EvalTask(
+            request: "What's the heading of the page at https://example.com?",
+            check: .sends(answered: has("example domain"))),
+        EvalTask(
+            request:
+                "Ask https://httpbin.org/headers with the header X-Turgai-Check set to blue-kettle, and tell me what it says that header was.",
+            check: .sends(answered: has("blue-kettle"))),
+        EvalTask(
+            request:
+                #"Post the JSON {"name": "Ann", "cups": 3} to https://httpbin.org/post and tell me what JSON it says it got."#,
+            check: .sends(answered: has("ann", "3"))),
         EvalTask(
             request:
                 "Make a day planner that, when I ask it for a plan, asks the planner agent for one and keeps the latest plan.",
@@ -165,8 +173,6 @@ struct EvalTask: Sendable {
         switch check {
         case .followUp(_, _, let answered, let stateMatches):
             return replies.contains(where: answered) && stateMatches(stateText)
-        case .shop:
-            return true
         case .shared:
             return true
         case .asks(let agent, let answered):
@@ -176,6 +182,11 @@ struct EvalTask: Sendable {
                 call.name.hasSuffix("\(agent)_respond") && call.completed && !call.failed
             }
             return asked && turns.last.map { (turn: RecordedTurn) -> Bool in answered(turn.answer) } == true
+        case .sends(let answered):
+            let sent: Bool = turns.flatMap(\.calls).contains { (call: RecordedTurn.Call) -> Bool in
+                call.name == "http_send" && call.completed && !call.failed
+            }
+            return sent && turns.last.map { (turn: RecordedTurn) -> Bool in answered(turn.answer) } == true
         }
     }
 
@@ -239,7 +250,7 @@ struct EvalTask: Sendable {
 
     /// The request and what follows it, asked of a fresh agent; then who may use the object the
     /// request made, which `allowed` must accept.
-    private func sharing(checkedBy allowed: @Sendable (ObjectAccess) -> Bool, on node: EvalNode) async throws
+    private func sharing(checkedBy allowed: @Sendable (Access) -> Bool, on node: EvalNode) async throws
         -> (turns: [RecordedTurn], failure: String?)
     {
         let agent = try await node.freshAgent()
@@ -296,15 +307,15 @@ struct EvalTask: Sendable {
         let started = Date()
         var turns: [RecordedTurn] = []
         var failure: String?
-        var turnChecks: [String?] = []
         var stateText = ""
-        // Everything the eval does, it does as the person asking.
         do {
-            try await CallChain.$current.withValue(.start(EvalNode.asker)) {
-                let node = try await EvalNode.start(
-                    model: model, temperature: temperature, instructions: instructions,
-                    objectsPageDescription: objectsPageDescription, agents: agents)
-                defer { node.stop() }
+            let node = try await EvalNode.start(
+                model: model, temperature: temperature, instructions: instructions,
+                objectsPageDescription: objectsPageDescription, agents: agents,
+                sendsRequests: { if case .sends = check { true } else { false } }())
+            defer { node.stop() }
+            // Everything the eval does, it does as the person asking.
+            try await CallChain.$current.withValue(.start(try await node.asker())) {
                 switch check {
                 case .followUp(let followUp, let stateAddresses, _, _):
                     let asked = try await followingUp(with: followUp, readingStateOf: stateAddresses, on: node)
@@ -315,16 +326,9 @@ struct EvalTask: Sendable {
                     let shared = try await sharing(checkedBy: allowed, on: node)
                     turns = shared.turns
                     failure = shared.failure
-                case .asks:
+                case .asks, .sends:
                     let agent = try await node.freshAgent()
                     turns.append(await RecordedTurn.send(request, to: agent, on: node.system))
-                case .shop(let shopTurns):
-                    let floor = try await ShopFloor(on: node.system)
-                    let agent = try await node.freshAgent()
-                    for turn in shopTurns {
-                        turns.append(await RecordedTurn.send(turn.prompt, to: agent, on: node.system))
-                        turnChecks.append(try await turn.check(floor))
-                    }
                 }
             }
         } catch {
@@ -332,11 +336,10 @@ struct EvalTask: Sendable {
         }
         let followUpTurn = turns.dropFirst(1 + then.count).first
         let replies: [String] = Self.replies(in: followUpTurn)
-        // A turn whose refunds went otherwise than asked is why the run failed, unless it failed before.
+        // A turn that failed is why the run failed, unless it failed before.
         let turnFailures: [String?] = turns.map(\.failure)
-        failure = failure ?? Self.firstFailure(in: turnFailures) ?? Self.firstFailure(in: turnChecks)
+        failure = failure ?? Self.firstFailure(in: turnFailures)
         let passed: Bool = failure == nil && passes(turns: turns, replies: replies, stateText: stateText)
-        let marks = turnChecks.isEmpty ? "" : "turns " + turnChecks.map { $0 == nil ? "✓" : "✗" }.joined() + "  "
         // Why it failed, in a line: the error, or the state the objects ended in and the reply.
         var why = failure
         if why == nil, !passed, case .followUp(_, _, let answered, let stateMatches) = check {
@@ -354,11 +357,10 @@ struct EvalTask: Sendable {
         return Result(
             passed: passed,
             line:
-                "\(passed ? "PASS" : "FAIL")  \(Int(Date().timeIntervalSince(started)))s  \(marks)\(request.prefix(45))\(note)\(noticed)",
+                "\(passed ? "PASS" : "FAIL")  \(Int(Date().timeIntervalSince(started)))s  \(request.prefix(45))\(note)\(noticed)",
             transcript: (failure.map { "failed: \($0)\n" } ?? "")
                 + turns.enumerated().map { index, turn in
                     "=== turn \(index + 1)\n" + turn.transcript
-                        + (turnChecks.indices.contains(index) ? "=== check: \(turnChecks[index] ?? "PASS")\n" : "")
                 }.joined()
         )
     }
@@ -406,133 +408,4 @@ struct EvalTask: Sendable {
         else { return nil }
         return String(word).trimmingCharacters(in: CharacterSet(charactersIn: ".:,`"))
     }
-}
-
-/// A customer of the demo shop, told how their refunds end.
-@Discoverable
-distributed actor EvalCustomer {
-    typealias ActorSystem = ClusterSystem
-
-    init(actorSystem: ActorSystem) {
-        self.actorSystem = actorSystem
-    }
-
-    /// Your refund was paid out.
-    /// - Parameter number: The order's number.
-    distributed func refunded(number: Int) {}
-
-    /// Your refund was refused.
-    /// - Parameter number: The order's number.
-    distributed func refundDenied(number: Int) {}
-}
-
-/// One turn of the shop task: what's asked, and how the shop's refunds must go after it.
-struct ShopTurn: Sendable {
-    let prompt: String
-    /// What went wrong, or `nil` when the shop's refunds went as asked.
-    let check: @Sendable (ShopFloor) async throws -> String?
-
-    static let all = [
-        // Managers on duty take refunds in turn, so whichever started first, 15 is approved, and
-        // of the 40s Ann approves one and Bob keeps the other.
-        ShopTurn(
-            prompt:
-                "I need two refund managers for the shop, Ann and Bob. They can approve small refunds on their own — Ann up to 50, Bob up to 20 — and keep anything bigger for me to decide later. Put them both on shift.",
-            check: { floor in
-                guard try await floor.managers.count == 2 else {
-                    return "\(try await floor.managers.count) managers on duty, not 2"
-                }
-                return try await floor.refunds(
-                    of: [15, 40, 40],
-                    endingAs: [[.refunded, .refundRequested, .refunded], [.refunded, .refunded, .refundRequested]])
-            }),
-        // One refund of 300 goes to each: Ann denies hers, Bob keeps his.
-        ShopTurn(
-            prompt: "Ann should deny any refund over 200 straight away.",
-            check: { floor in
-                try await floor.refunds(
-                    of: [300, 300], endingAs: [[.refundDenied, .refundRequested], [.refundRequested, .refundDenied]])
-            }),
-        // A counter doesn't take what the shop sends a manager, so it can't go on shift.
-        ShopTurn(
-            prompt: "Make a coffee counter I can add cups to, and put it on shift at the shop too.",
-            check: { floor in
-                let managers = try await floor.managers.count
-                return managers == 2 ? nil : "\(managers) managers on duty, not 2"
-            }),
-        // Both count, being the same behavior: each approves one of two small refunds.
-        ShopTurn(
-            prompt: "Ann and Bob should also count how many refunds they approved.",
-            check: { floor in
-                let before = try await floor.managerNumbers()
-                if let wrong = try await floor.refunds(of: [10, 10], endingAs: [[.refunded, .refunded]]) {
-                    return wrong
-                }
-                let after = try await floor.managerNumbers()
-                for (manager, numbers) in after {
-                    let counted = numbers.contains { name, value in value == (before[manager]?[name] ?? 0) + 1 }
-                    guard counted else { return "\(manager) counted nothing: \(numbers)" }
-                }
-                return nil
-            }),
-    ]
-}
-
-/// The demo shop and a customer of it, for checking how refunds go.
-struct ShopFloor: Sendable {
-    let demo: DemoObjects
-    let customer: EvalCustomer
-    let replyTo: DiscoverableObject
-
-    init(on system: ClusterSystem) async throws {
-        demo = try await DemoObjects(actorSystem: system)
-        customer = EvalCustomer(actorSystem: system)
-        replyTo = try DiscoverableObject.resolve(id: customer.id, using: system)
-    }
-
-    var managers: [DynamicObject] {
-        get async throws { try await demo.shop.managers }
-    }
-
-    /// New orders of `amounts`, each refund asked for; `nil` once their statuses are one of
-    /// `endings`, or what they are instead after ten seconds.
-    func refunds(of amounts: [Decimal], endingAs endings: [[ShopOrderStatus]]) async throws -> String? {
-        let first = try await demo.shop.orders.count + 1
-        for amount in amounts { _ = try await demo.shop.placeOrder(item: "Lamp", amount: amount) }
-        for number in first..<(first + amounts.count) {
-            _ = try await demo.shop.requestRefund(number: number, replyTo: replyTo)
-        }
-        func statuses() async throws -> [ShopOrderStatus] {
-            try await demo.shop.orders.dropFirst(first - 1).map(\.status)
-        }
-        for _ in 0..<50 {
-            if endings.contains(try await statuses()) { return nil }
-            try await Task.sleep(for: .milliseconds(200))
-        }
-        return "refunds of \(amounts) ended as \(try await statuses().map(\.rawValue))"
-    }
-
-    /// Each manager's numbers, by name, by manager.
-    func managerNumbers() async throws -> [String: [String: Double]] {
-        var numbers: [String: [String: Double]] = [:]
-        for manager in try await managers {
-            let description = try await manager.describe()
-            let id = DynamicObject.identity(of: manager.id)?.rawValue ?? description.type
-            // A manager holding no numbers is listed too, so it's checked like the others.
-            numbers[id] = [:]
-            for name in description.properties.keys {
-                switch try await manager.read(property: name) {
-                case .integer(let value): numbers[id, default: [:]][name] = Double(value)
-                case .number(let value): numbers[id, default: [:]][name] = value
-                default: break
-                }
-            }
-        }
-        return numbers
-    }
-}
-
-/// Read by everyone and written by no one, as a built-in object.
-extension EvalCustomer: AccessControlled {
-    func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
 }

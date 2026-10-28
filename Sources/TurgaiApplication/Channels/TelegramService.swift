@@ -267,9 +267,7 @@ enum TelegramDelivery {
             turnID
         case .noticeWithActions(_, let turnID, _, _):
             turnID
-        case .approvalRequested(_, let turnID, _):
-            turnID
-        case .reset, .approvalResolved:
+        case .reset, .asked, .answered:
             nil
         }
     }
@@ -285,8 +283,9 @@ actor TelegramService: Service {
     private let client: TelegramAPIClient
     private let connections: TurgaiConnections
     private let channelID: UUID
-    private let attachmentResolver: AttachmentResolver
-    private let attachmentOwner: UUID
+    /// The channel this bot's chats are in.
+    private let conversationChannel: ChannelID
+    private let files: TelegramFiles
     private let logger: Logger
     private let deliveryConfiguration: TelegramDeliveryConfiguration
     private let persistedConversationIDs: [ConversationID]
@@ -298,19 +297,16 @@ actor TelegramService: Service {
         checkpointOffset: @escaping @Sendable (Int64) async throws -> Void,
         connections: TurgaiConnections,
         channelID: UUID,
-        attachmentResolver: AttachmentResolver,
-        attachmentOwner: UUID,
+        files: TelegramFiles,
         logger: Logger,
         delivery: TelegramDeliveryConfiguration = TelegramDeliveryConfiguration(),
         persistedConversationIDs: [ConversationID] = [],
         callbackHandler: @escaping TelegramBot.CallbackHandler = { _ in false }
     ) {
+        let conversationChannel = ChannelID(provider: "telegram", instanceID: channelID.uuidString)
         self.bot = TelegramBot(
             client: client,
-            conversationChannel: ChannelID(
-                provider: "telegram",
-                instanceID: channelID.uuidString
-            ),
+            conversationChannel: conversationChannel,
             allowedChatIDs: allowedChatIDs,
             initialOffset: initialOffset,
             checkpointOffset: checkpointOffset,
@@ -321,35 +317,16 @@ actor TelegramService: Service {
         self.client = client
         self.connections = connections
         self.channelID = channelID
-        self.attachmentResolver = attachmentResolver
-        self.attachmentOwner = attachmentOwner
+        self.conversationChannel = conversationChannel
+        self.files = files
         self.logger = logger
         self.deliveryConfiguration = delivery
         self.persistedConversationIDs = persistedConversationIDs
     }
 
     public func run() async throws {
-        let client = self.client
-        await attachmentResolver.register(
-            channel: AttachmentChannel(
-                "telegram/\(attachmentOwner.uuidString)"
-            ),
-            owner: attachmentOwner
-        ) {
-            externalID,
-            expectedContentType in
-            let file = try await client.downloadFile(externalID)
-            let responseContentType = file.contentType?.lowercased()
-            let contentType: String?
-            if responseContentType == nil
-                || responseContentType == "application/octet-stream"
-            {
-                contentType = expectedContentType?.lowercased() ?? responseContentType
-            } else {
-                contentType = responseContentType
-            }
-            return ToolData(body: file.body, contentType: contentType)
-        }
+        // Its chats' attachments are got through it while it runs.
+        await files.register(conversationChannel, client.downloadFile)
 
         let telegramConnections = try await bot.connections()
 
@@ -379,16 +356,10 @@ actor TelegramService: Service {
                 }
             )
         } catch {
-            await attachmentResolver.unregister(
-                channel: AttachmentChannel("telegram/\(attachmentOwner.uuidString)"),
-                owner: attachmentOwner
-            )
+            await files.unregister(conversationChannel)
             throw error
         }
-        await attachmentResolver.unregister(
-            channel: AttachmentChannel("telegram/\(attachmentOwner.uuidString)"),
-            owner: attachmentOwner
-        )
+        await files.unregister(conversationChannel)
     }
 
     private func consume(

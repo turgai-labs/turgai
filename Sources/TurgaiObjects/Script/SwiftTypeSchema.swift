@@ -107,6 +107,7 @@ enum SwiftTypeSchema {
             case "Decimal": return Decimal.jsonSchema
             case "UUID": return UUID.jsonSchema
             case "URL": return URL.jsonSchema
+            case "Data": return Data.jsonSchema
             default: break
             }
             guard let declaration = declarations[name], !writing.contains(name) else {

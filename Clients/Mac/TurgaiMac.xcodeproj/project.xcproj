@@ -69,10 +69,7 @@
         "DEVELOPMENT_TEAM": "DXBKK92C5A",
         "GENERATE_INFOPLIST_FILE": "YES",
         "INFOPLIST_KEY_LSUIElement": "YES",
-        "INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription": "Turgai lets your assistant find and manage calendar events when you ask.",
-        "INFOPLIST_KEY_NSContactsUsageDescription": "Turgai lets your assistant find contact details when you ask.",
         "INFOPLIST_KEY_NSHumanReadableCopyright": "",
-        "INFOPLIST_KEY_NSRemindersFullAccessUsageDescription": "Turgai lets your assistant find and manage reminders when you ask.",
         "LD_RUNPATH_SEARCH_PATHS": [
           "$(inherited)",
           "@executable_path/../Frameworks",

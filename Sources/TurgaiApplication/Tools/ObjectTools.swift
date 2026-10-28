@@ -393,8 +393,8 @@ public actor ObjectSession {
         var handle: ObjectID?
         let others = await others(except: type)
         let outcome = try await writer.write(
-            type: type, task: task, current: nil, others: others.declarations, values: others.uses.valuesInWords,
-            request: request
+            type: type, task: task, current: nil, others: others.declarations, tools: others.tools,
+            values: others.uses.valuesInWords, request: request
         ) { code in
             do {
                 let source = try Script(code: code, type: type, uses: others.uses)
@@ -451,7 +451,7 @@ public actor ObjectSession {
         let failure = if case .failing(let failure) = try await object.health { failure.written } else { String?.none }
         let outcome = try await writer.write(
             type: current.type, task: change, current: current.code, failure: failure, others: others.declarations,
-            values: others.uses.valuesInWords, request: request
+            tools: others.tools, values: others.uses.valuesInWords, request: request
         ) { code in
             do {
                 let source = try Script(code: code, type: current.type, uses: others.uses)
@@ -485,6 +485,8 @@ public actor ObjectSession {
         var declarations: [String] = []
         /// The spec, as the module the code imports, and the names objects are reached by.
         var uses = Uses.nothing
+        /// Each tool function code can call, in a few lines: as code calls it, and what it does.
+        var tools: [String] = []
     }
 
     func others(except type: String) async -> Others {
@@ -519,8 +521,18 @@ public actor ObjectSession {
             summaries[unmade] = Self.given(description.description)
         }
         // The object being written declares its own types: they aren't declared for it again.
-        let interface = Uses.interface(of: objects, except: type)
+        // The tools this node has, which code calls as `Tools.<tool>.<function>`.
+        let tools = actorSystem.toolsAPI.tools
+        let interface = Uses.interface(of: objects, tools: tools, except: type)
         var others = Others(uses: Uses(interface: interface, objects: existing))
+        for tool in tools.sorted(by: { $0.name < $1.name }) {
+            for function in tool.functions.sorted(by: { $0.name < $1.name }) {
+                guard let call = Uses.call(of: function) else { continue }
+                var lines = ["- \(Uses.tools).\(tool.name).\(call)"]
+                if let description = function.description { lines.append("  \(description)") }
+                others.tools.append(lines.joined(separator: "\n"))
+            }
+        }
         // In words, from the spec itself.
         for actor in interface.actors(events: [RuntimeMacros.event]) {
             // Each as the code that reaches it; a type no object is of yet, as the code that makes one.

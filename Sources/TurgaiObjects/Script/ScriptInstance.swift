@@ -2,6 +2,7 @@ import DiscoverableActors
 import Doppel
 import DoppelRuntime
 import Foundation
+import ScopedEffect
 import Synchronization
 
 /// An object's Swift, running: an instance of its actor, live in an interpreter of its own, as an
@@ -21,6 +22,10 @@ public final class ScriptInstance {
     /// The object of `type` with `id`, which the code named with `Type(id:)`: the reference to
     /// it, which is made if it isn't there yet.
     public typealias Makes = (_ type: ObjectTypeName, _ id: ObjectIdentity) async throws -> ObjectReference
+
+    /// Runs the tool function the code called, `Tools.Http.send`, with the value it gave, and gives
+    /// back the value it answered.
+    public typealias CallsTool = (_ function: ToolFunctionName, _ input: JSONValue) async throws -> JSONValue
 
     /// What code asks of another object: to take a message, with its arguments by label (`_0`, `_1`
     /// for unlabeled ones), through the type the code holds it as (`nil` for any object), or what
@@ -52,10 +57,11 @@ public final class ScriptInstance {
     public static func start(
         _ source: Script, as identity: ObjectIdentity, holding fields: [String: JSONValue] = [:],
         reaches: @escaping Reaches,
-        makes: @escaping Makes, schedules: @escaping @Sendable (Int) -> Void, cancels: @escaping @Sendable (Int) -> Void
+        makes: @escaping Makes, tools: @escaping CallsTool, schedules: @escaping @Sendable (Int) -> Void,
+        cancels: @escaping @Sendable (Int) -> Void
     ) async throws(CodeProblem) -> ScriptInstance {
         let shape = try ObjectShape(source)
-        let host = Host(source, reaches: reaches, makes: makes, schedules: schedules, cancels: cancels)
+        let host = Host(source, reaches: reaches, makes: makes, tools: tools, schedules: schedules, cancels: cancels)
         do {
             // Made as every object is, with its id.
             let object = try await LiveActor(
@@ -122,19 +128,21 @@ public final class ScriptInstance {
                 }
             },
             makes: { type, _ in throw CodeProblem("An object reaches no `\(type)` before it starts.") },
+            tools: { function, _ in throw CodeProblem("An object calls no tool as it's made: `\(function)`.") },
             schedules: { _ in }, cancels: { _ in }
         ).fields()
     }
 
     /// Runs the `Task { … }` its code started as `id`, and gives back the events it announced.
-    public func runTask(_ id: Int) async throws(CodeProblem) -> [Announcement] {
+    /// A refusal of what its scope didn't allow comes back as itself: it isn't its code's problem.
+    public func runTask(_ id: Int) async throws -> [Announcement] {
         let run = Run()
         do {
             try await Run.$current.withValue(run) { try await object.runTask(id) }
             try await check()
             return run.announced
         } catch {
-            throw Self.problem(error)
+            throw Self.passed(error)
         }
     }
 
@@ -152,8 +160,9 @@ public final class ScriptInstance {
     /// Handles `message` with `arguments`, by parameter name, label or position: its method runs
     /// on the instance, and its reply comes back with what it printed. Its arguments are read as
     /// their types, and what isn't of its type is refused with where it is in the value. A message
-    /// that fails leaves the instance as it failed: its object starts it again from the journal.
-    public func handle(_ name: String, arguments: JSONValue) async throws(CodeProblem) -> ObjectReply {
+    /// that fails leaves the instance as it failed: its object starts it again from the journal. A
+    /// refusal of what its scope didn't allow comes back as itself: it isn't its code's problem.
+    public func handle(_ name: String, arguments: JSONValue) async throws -> ObjectReply {
         let given = arguments.objectValue ?? [:]
         guard let message = shape.message(name, given: given) else {
             let named = shape.messages.filter { $0.name == ActionKeys.baseName(of: name) }
@@ -182,7 +191,7 @@ public final class ScriptInstance {
                 reply: message.replyType == nil ? .null : try host.json(reply), printed: run.printed,
                 announced: run.announced)
         } catch {
-            throw Self.problem(error)
+            throw Self.passed(error)
         }
     }
 
@@ -215,6 +224,11 @@ public final class ScriptInstance {
         }
     }
 
+    /// A refusal as itself, and anything else as its code's problem.
+    private static func passed(_ error: any Error) -> any Error {
+        error as? EffectDenied ?? problem(error)
+    }
+
     private static func problem(_ error: any Error) -> CodeProblem {
         switch error {
         case let problem as CodeProblem: return problem
@@ -234,6 +248,7 @@ public final class ScriptInstance {
         let itself: ObjectHandle
         private let reaches: Reaches
         private let makes: Makes
+        private let tools: CallsTool
         /// Whether its `init()` is running: what it makes then is its object's to make.
         private var building = true
         private let schedules: @Sendable (Int) -> Void
@@ -242,12 +257,13 @@ public final class ScriptInstance {
         private var references: [(handle: ObjectHandle, reference: ObjectReference)] = []
 
         init(
-            _ source: Script, reaches: @escaping Reaches, makes: @escaping Makes,
+            _ source: Script, reaches: @escaping Reaches, makes: @escaping Makes, tools: @escaping CallsTool,
             schedules: @escaping @Sendable (Int) -> Void, cancels: @escaping @Sendable (Int) -> Void
         ) {
             itself = ObjectHandle("itself", type: source.type)
             self.reaches = reaches
             self.makes = makes
+            self.tools = tools
             self.schedules = schedules
             self.cancels = cancels
         }
@@ -288,6 +304,13 @@ public final class ScriptInstance {
         }
 
         func call(_ function: String, arguments: [(label: String?, value: Portable)]) async throws -> Portable {
+            // A tool's function, which the node runs: `Tools.Http.send`, with the one value it takes.
+            if let tool = ToolFunctionName(qualified: function) {
+                guard let input = arguments.first?.value, arguments.count == 1 else {
+                    throw CodeProblem("`\(function)` takes one value.")
+                }
+                return portable(try await tools(tool, try json(input)))
+            }
             guard function == RuntimeMacros.announce, arguments.count == 2, case .string(let event) = arguments[0].value
             else {
                 throw CodeProblem("`\(function)` isn't the runtime's.")

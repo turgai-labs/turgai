@@ -27,9 +27,7 @@ private struct ProcessFixture {
     }
 }
 
-private func makeProcessTool(
-    approval: any ToolApproval = NoOpApproval()
-) throws -> (tool: UserProcessTool, fixture: ProcessFixture) {
+private func makeProcessTool() throws -> (tool: UserProcessTool, fixture: ProcessFixture) {
     let fixture = try ProcessFixture()
     let arguments = try JSONDecoder().decode(
         GenerationSchema.self,
@@ -38,7 +36,6 @@ private func makeProcessTool(
     let userTool = UserTool(
         name: "native_echo",
         description: "Runs a native program.",
-        approval: .always,
         arguments: arguments,
         body: .process(
             UserTool.NativeProcess(
@@ -50,15 +47,10 @@ private func makeProcessTool(
     return (
         UserProcessTool(
             tool: userTool,
-            workspaceRoot: fixture.directory.path,
-            approval: approval
+            workspaceRoot: fixture.directory.path
         ),
         fixture
     )
-}
-
-private struct DenyingProcessApproval: ToolApproval {
-    func decide(_ request: ApprovalRequest) async throws -> ApprovalDecision { .denied }
 }
 
 private final class ProcessCapture: Sendable {
@@ -108,7 +100,7 @@ struct UserProcessToolTests {
         #expect(effect.sandbox?.readWritePaths == [fixture.directory.path])
     }
 
-    @Test("an approved run invokes the process dependency")
+    @Test("a run invokes the process dependency")
     func approvedRun() async throws {
         let (tool, _) = try makeProcessTool()
         let input = arguments(#"{"value":"hello"}"#)
@@ -126,13 +118,4 @@ struct UserProcessToolTests {
         #expect(requests[0].standardInput == nil)
     }
 
-    @Test("a declined approval does not invoke the process")
-    func declinedApproval() async throws {
-        let (tool, _) = try makeProcessTool(approval: DenyingProcessApproval())
-        let output = try await tool.runOutput(
-            input: arguments(#"{"value":"hello"}"#),
-            authority: FullAuthority()
-        )
-        #expect(output.result.textRepresentation == "The user declined to run native_echo.")
-    }
 }

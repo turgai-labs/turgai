@@ -3,6 +3,7 @@ import Distributed
 import DistributedCluster
 import EventSourcing
 import Foundation
+import ScopedEffect
 import TurgaiDomain
 import VirtualActors
 
@@ -260,7 +261,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     }
 
     /// Who may read it and who may write it.
-    public distributed var access: ObjectAccess {
+    public distributed var access: Access {
         get throws { try state.live.access }
     }
 
@@ -276,7 +277,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     /// Who may read it and who may write it, for a call through `chain`: one not made yet is the
     /// caller's to make.
-    public func access(for chain: CallChain) -> ObjectAccess {
+    public func access(for chain: CallChain) -> Access {
         state.access(for: chain)
     }
 
@@ -392,6 +393,11 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                 try await instance.handle(action, arguments: arguments)
             }
             after = try await instance.fields()
+        } catch let refusal as EffectDenied {
+            // Its scope didn't allow what its code needed: that isn't the code failing. What the
+            // message did is undone, as for any message that doesn't finish.
+            stop()
+            throw refusal
         } catch {
             stop()
             try await emit(event: .failed(origin, problem: String(describing: error)))
@@ -450,6 +456,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             makes: { type, id in
                 .actor(try await DynamicObject.make(type, id: id, on: system), type: type.rawValue)
             },
+            // A tool's function, run here, in the chain of the call its code is handling.
+            tools: { function, input in try await system.toolsAPI.call(function, with: input, on: system) },
             schedules: { [self] id in Task { await self.whenLocal { $0.startTask(id, of: generation) } } },
             cancels: { [self] id in Task { await self.whenLocal { $0.cancelTask(id, of: generation) } } })
         // Another message may have started it while this one waited.
@@ -477,15 +485,30 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             do {
                 // A task's starter doesn't wait on it: its calls start a chain of their own, on
                 // behalf of whoever made it.
-                let chain = try CallChain.start(try state.live.maker).entering(objectID)
+                let chain = try CallChain.start(try await makersScope()).entering(objectID)
+                let system = actorSystem
                 let announced = try await CallChain.$current.withValue(chain) {
-                    try await instance.runTask(id)
+                    do {
+                        return try await instance.runTask(id)
+                    } catch let refusal as EffectDenied {
+                        // It opened this scope: what it needed that the scope didn't allow, it asks
+                        // the scope's group for.
+                        if let request = ExactRequest(refusal: refusal.refusal) {
+                            _ = try await Group.resolve(on: system, id: chain.scope.group).needed(request)
+                        }
+                        throw refusal
+                    }
                 }
                 let after = try await instance.fields()
                 taskEnded(id, of: generation)
                 if let event = try state.live.handling(origin, holding: after) { try await emit(event: event) }
                 try await announce(announced)
                 refollow()
+            } catch is EffectDenied {
+                // Not its code failing: what the task did is undone.
+                taskEnded(id, of: generation)
+                guard case .running(_, generation, _) = process else { return }
+                stop()
             } catch {
                 taskEnded(id, of: generation)
                 guard case .running(_, generation, _) = process else { return }
@@ -544,12 +567,18 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         }
     }
 
+    /// The scope of a chain its own doing starts: whoever made it, as their group settles it now.
+    private func makersScope() async throws -> CallScope {
+        let maker = try state.live.maker
+        return try await Group.resolve(on: actorSystem, id: maker.group).opening(scopeOf: maker.person)
+    }
+
     /// Delivers the events of the object `field` holds that the code has a method for, named like
     /// each, until they end: whether it should follow again, which a source that's gone, or not
     /// there yet, should be.
     private func follow(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
         // Following is its own doing, as its tasks are: on behalf of whoever made it.
-        guard let maker = try? state.live.maker, let chain = try? CallChain.start(maker).entering(objectID) else {
+        guard let scope = try? await makersScope(), let chain = try? CallChain.start(scope).entering(objectID) else {
             return false
         }
         return await CallChain.$current.withValue(chain) {
@@ -605,7 +634,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         do {
             // An event it follows starts a chain of its own, as a task does, on behalf of whoever
             // made it: its handling enters it.
-            _ = try await CallChain.$current.withValue(.start(try state.live.maker)) {
+            _ = try await CallChain.$current.withValue(.start(try await makersScope())) {
                 try await handling(handler, arguments: values, origin: origin)
             }
         } catch {

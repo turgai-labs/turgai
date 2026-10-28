@@ -35,7 +35,6 @@ struct ToolNameAndAccess: HTML, Sendable {
                             .type(.text), .name("toolName"), .value(draft.name), .placeholder("weather_brief"),
                             .required)
                     }
-                    ToolApprovalField(approval: draft.approval)
                 }
                 label(.class("form-field builder-wide-field")) {
                     span(.class("field-label")) { "What does it do?" }
@@ -49,24 +48,6 @@ struct ToolNameAndAccess: HTML, Sendable {
                     }
                 }
             }
-        }
-    }
-}
-
-/// Whether running the tool asks first.
-struct ToolApprovalField: HTML, Sendable {
-    let approval: String
-
-    private static let approvalOptions: [(String, String)] = [
-        ("always", "Ask me each time"),
-        ("never", "Run without asking"),
-    ]
-
-    var body: some HTML {
-        label(.class("form-field")) {
-            span(.class("field-label")) { "Ask before running" }
-            TurgaiSelect(name: "approval", value: approval, options: Self.approvalOptions)
-            p(.class("hint")) { "Ask first when a tool can change files or reach outside this installation." }
         }
     }
 }

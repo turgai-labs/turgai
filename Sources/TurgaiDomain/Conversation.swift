@@ -209,45 +209,22 @@ public enum AttachmentKind: String, Codable, Sendable {
     case file
 }
 
-/// A durable, channel-qualified reference to attached content.
-///
-/// The value is intentionally opaque outside the channel adapter. For
-/// example, Telegram uses its non-secret `file_id`; credentials and temporary
-/// download URLs never become part of the conversation model.
+/// What a conversation's channel calls something attached to one of its messages: Telegram's
+/// non-secret `file_id`. It names it only through the channel that conversation is in; credentials
+/// and temporary download URLs never become part of it.
 public struct AttachmentID: RawRepresentable, Hashable, Codable, Sendable {
     public let rawValue: String
 
     public init(rawValue: String) {
         self.rawValue = rawValue
     }
-
-    public init(channel: ChannelID, externalID: String) {
-        self.rawValue = "\(channel.rawValue):\(externalID)"
-    }
-
-    public var channel: ChannelID? {
-        guard let separator = rawValue.firstIndex(of: ":"),
-            separator != rawValue.startIndex
-        else {
-            return nil
-        }
-        return ChannelID(String(rawValue[..<separator]))
-    }
-
-    public var externalID: String? {
-        guard let separator = rawValue.firstIndex(of: ":") else {
-            return nil
-        }
-        let value = rawValue[rawValue.index(after: separator)...]
-        return value.isEmpty ? nil : String(value)
-    }
 }
 
 /// A media reference attached to a conversation message.
 ///
-/// Messages persist only an opaque reference and descriptive metadata. The
-/// channel adapter resolves the reference if an agent explicitly fetches it;
-/// neither credentials, temporary URLs, nor bytes are persisted here.
+/// Messages persist only its id and descriptive metadata. The conversation's
+/// channel gets it when the agent asks for it; neither credentials, temporary
+/// URLs, nor bytes are persisted here.
 public struct Attachment: Hashable, Codable, Sendable {
     public let id: AttachmentID
     public let kind: AttachmentKind
@@ -411,7 +388,8 @@ public enum ConversationInput: Sendable, Equatable {
     )
     case connect(ConversationID)
     case reset(ConversationID)
-    case approval(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision, by: UserID)
+    /// Someone answered an access request of its group, as the link they answered through says.
+    case answer(conversationID: ConversationID, AccessRequestID, AccessAnswer, by: UserID)
     case memory(
         conversationID: ConversationID,
         participantID: ParticipantID,
@@ -507,10 +485,13 @@ public struct PendingConversationReply: Hashable, Codable, Sendable {
 }
 
 public enum ConversationEvent: Codable, Sendable, Equatable {
-    /// Someone became one of its members.
-    case member(GroupEvent)
     /// Its agent's inbox: a message waiting, or a turn starting or ending.
     case inbox(AgentInboxEvent)
+    /// The turn answering `message` needed what its scope didn't allow, which its group's admins
+    /// are asked for: the answer continues it.
+    case awaiting(AccessRequestID, PendingConversationMessage)
+    /// The answer to it came, and continues the turn that waited.
+    case answered(AccessRequestID)
     case replyQueued(PendingConversationReply)
     case replyDelivered(TurnID)
     case reset
@@ -652,31 +633,34 @@ public enum AgentInboxEvent: Hashable, Codable, Sendable {
 
 public struct ConversationState: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
-    /// The people in it: whoever writes joins, the first as its admin.
-    public internal(set) var members: Group
     /// Its agent's inbox.
     public internal(set) var inbox: AgentInbox
+    /// The turns that wait for an answer from its group's admins, by what each asked for.
+    public internal(set) var awaiting: [AccessRequestID: PendingConversationMessage]
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var history: [ConversationHistoryEntry]
 
     public init(
         conversationID: ConversationID,
-        members: Group = Group(),
         inbox: AgentInbox = AgentInbox(),
+        awaiting: [AccessRequestID: PendingConversationMessage] = [:],
         pendingReplies: [PendingConversationReply] = [],
         history: [ConversationHistoryEntry] = []
     ) {
         self.conversationID = conversationID
-        self.members = members
         self.inbox = inbox
+        self.awaiting = awaiting
         self.pendingReplies = pendingReplies
         self.history = history
     }
 
     public mutating func apply(_ event: ConversationEvent) {
         switch event {
-        case .member(let event):
-            members = members.applying(event)
+        case .awaiting(let id, let message):
+            awaiting[id] = message
+
+        case .answered(let id):
+            awaiting[id] = nil
 
         case .inbox(let event):
             switch event {
@@ -748,21 +732,17 @@ public struct ConversationTurnRequest: Hashable, Codable, Sendable {
     public let turnID: TurnID
     public let message: InboundMessage
     public let agentRole: String
-    /// Who the turn is on behalf of: the message's sender, in this conversation's group.
-    public let scope: CallScope
 
     public init(
         conversationID: ConversationID,
         turnID: TurnID,
         message: InboundMessage,
-        agentRole: String,
-        scope: CallScope
+        agentRole: String
     ) {
         self.conversationID = conversationID
         self.turnID = turnID
         self.message = message
         self.agentRole = agentRole
-        self.scope = scope
     }
 }
 
@@ -771,15 +751,7 @@ extension ConversationTurnRequest {
     init(_ pending: PendingConversationMessage, in state: ConversationState) {
         self.init(
             conversationID: state.conversationID, turnID: pending.turnID, message: pending.message,
-            agentRole: pending.agentRole, scope: state.scope(of: pending.message.userID))
-    }
-}
-
-extension ConversationState {
-    /// Whom a call `person` makes here is on behalf of: them, in this conversation's group, with the
-    /// role they have in its members now. Whoever writes joins as a member.
-    public func scope(of person: UserID) -> CallScope {
-        CallScope(person, in: GroupID(conversationID), as: members.role(of: person) ?? .member)
+            agentRole: pending.agentRole)
     }
 }
 
@@ -854,32 +826,12 @@ public struct OutboundAction: Hashable, Codable, Sendable {
     }
 }
 
-public enum ApprovalDecision: Hashable, Codable, Sendable {
-    case granted
-    case denied
-}
-
-/// A question to the user before an action runs, asked in the conversation that
-/// wants it. It's answered by its ID.
-public struct ApprovalPrompt: Hashable, Codable, Sendable, Identifiable {
-    public let id: UUID
-    /// What would run, such as `Music.play`.
-    public let action: String
-    /// Its arguments, as the user should read them.
-    public let arguments: String
-
-    public init(id: UUID, action: String, arguments: String) {
-        self.id = id
-        self.action = action
-        self.arguments = arguments
-    }
-}
-
 public enum OutboundEvent: Hashable, Codable, Sendable {
     case reply(ReplyEvent)
-    case approvalRequested(conversationID: ConversationID, turnID: TurnID?, prompt: ApprovalPrompt)
-    /// Every connection hears the answer, so each can stop asking.
-    case approvalResolved(conversationID: ConversationID, approvalID: UUID, decision: ApprovalDecision)
+    /// Someone asked its group's admins for access: each link shows it to them.
+    case asked(conversationID: ConversationID, AccessRequest)
+    /// An admin answered it: every link hears the answer, so each stops asking.
+    case answered(conversationID: ConversationID, AccessRequest, AccessAnswer, by: UserID)
     case notice(conversationID: ConversationID, turnID: TurnID?, text: String)
     case noticeWithActions(
         conversationID: ConversationID,
@@ -902,13 +854,17 @@ public enum ConversationAction: Sendable {
         turnID: TurnID,
         agentRole: String
     )
+    /// The turn running now needed what its scope didn't allow, which its group's admins are asked
+    /// for, as `id`.
+    case awaiting(AccessRequestID)
+    /// An admin answered `request`: the turn that waited for it continues, as `turnID`, with the
+    /// answer, on behalf of whoever asked.
+    case answered(AccessRequest, AccessAnswer, turnID: TurnID, at: Date)
     case modelCompleted(turnID: TurnID, completion: ConversationCompletion)
     case replyDelivered(turnID: TurnID)
     case modelFailed(turnID: TurnID, failure: ConversationFailure)
     case reset
     case resume
-    /// Who its admins are now, as its platform says.
-    case admins(Set<UserID>)
 }
 
 // MARK: Deciding
@@ -954,8 +910,7 @@ extension ConversationDecision {
                     userID: message.userID, author: message.author, text: text, attachments: message.attachments,
                     receivedAt: message.receivedAt),
                 turnID: turnID, agentRole: agentRole)
-            // Whoever writes is one of its members.
-            var events = state.members.admitting(message.userID).map { [ConversationEvent.member($0)] } ?? []
+            var events: [ConversationEvent] = []
             guard case .running = state.inbox.status else {
                 // Idle, or failed: the oldest waiting message starts, which is this one if none waits.
                 let next = state.inbox.pendingMessages.first ?? pending
@@ -965,6 +920,25 @@ extension ConversationDecision {
                     effects: [.runReply(ConversationTurnRequest(next, in: state))])
             }
             return ConversationDecision(events: events + [.inbox(.queued(pending))])
+
+        case .awaiting(let id):
+            guard let active = state.inbox.activeMessage, state.awaiting[id] == nil else {
+                return ConversationDecision()
+            }
+            return ConversationDecision(events: [.awaiting(id, active)])
+
+        case .answered(let request, let answer, let turnID, let at):
+            guard let waited = state.awaiting[request.id] else { return ConversationDecision() }
+            // The turn that waited continues: its asker is told the answer, as their next message.
+            let told = InboundMessage(
+                id: MessageID(rawValue: request.id.rawValue), conversationID: state.conversationID,
+                participantID: waited.message.participantID, userID: waited.message.userID,
+                author: waited.message.author, text: answer.said(about: request.request), receivedAt: at)
+            let answered = ConversationEvent.answered(request.id)
+            let continued = Self.deciding(
+                .receive(message: told, turnID: turnID, agentRole: waited.agentRole),
+                in: state.applying([answered]))
+            return ConversationDecision(events: [answered] + continued.events, effects: continued.effects)
 
         case .modelCompleted(let turnID, let completion):
             guard state.inbox.activeTurnID == turnID else { return ConversationDecision() }
@@ -990,9 +964,6 @@ extension ConversationDecision {
             let next = startingNext(in: state)
             return ConversationDecision(
                 events: [.inbox(.turnFailed(turnID, failure))] + next.events, effects: next.effects)
-
-        case .admins(let admins):
-            return ConversationDecision(events: state.members.having(admins: admins).map(ConversationEvent.member))
 
         case .reset:
             let cancel = state.inbox.activeTurnID.map { [ConversationEffect.cancelModel($0)] } ?? []

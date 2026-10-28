@@ -1,7 +1,8 @@
 import Logging
 import Testing
 import TurgaiDomain
-import TurgaiTelegram
+
+@testable import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -11,20 +12,28 @@ import TurgaiTelegram
 
 struct TelegramTests {
     @Test
-    func anApprovalButtonIsItsTappersAnswer() {
+    func aFilesTypeIsWhatTelegramSaysElseWhatItsPathSays() {
+        #expect(TelegramAPIClient.contentType("image/png", ofFileAt: "photos/file_0.jpg") == "image/png")
+        #expect(TelegramAPIClient.contentType("application/octet-stream", ofFileAt: "photos/file_0.jpg") == "image/jpeg")
+        #expect(TelegramAPIClient.contentType(nil, ofFileAt: "documents/file_1.pdf") == "application/pdf")
+        #expect(TelegramAPIClient.contentType(nil, ofFileAt: "documents/file_2") == nil)
+    }
+
+    @Test
+    func anAnswerButtonIsItsTappersAnswer() {
         let asker = TelegramUser(id: 7, firstName: "Kid")
         let tapper = TelegramUser(id: 8, firstName: "Parent")
         let chat = TelegramChat(id: 42)
-        let question = UUID()
-        func tap(_ decision: ApprovalDecision) -> TelegramInboundEvent? {
+        let request = AccessRequestID(UUID())
+        func tap(_ answer: AccessAnswer) -> TelegramInboundEvent? {
             TelegramBot.event(
                 for: TelegramUpdate(
                     updateID: 1,
                     callbackQuery: TelegramCallbackQuery(
                         id: "callback",
                         from: tapper,
-                        message: TelegramMessage(messageID: 1, from: asker, chat: chat, date: 100, text: "question"),
-                        data: TelegramApprovalButton.data(for: question, decision))
+                        message: TelegramMessage(messageID: 1, from: asker, chat: chat, date: 100, text: "Allow this?"),
+                        data: TelegramAnswerButton.data(for: request, answer))
                 ),
                 conversationChannel: ChannelID("telegram"),
                 messageID: MessageID(rawValue: UUID()),
@@ -32,14 +41,14 @@ struct TelegramTests {
             )
         }
 
-        // Whoever taps answers; the conversation decides whether their answer counts.
+        // Whoever taps answers; the chat's group decides whether their answer counts.
         let parent = UserID(participantID: TelegramBot.participantID(for: tapper.id))
         let conversationID = TelegramBot.conversationID(for: chat.id)
-        func answer(_ decision: ApprovalDecision) -> TelegramInboundEvent {
-            .approval(conversationID: conversationID, approvalID: question, decision: decision, by: parent)
+        for answer in [AccessAnswer.once, .always, .everyone, .no] {
+            #expect(tap(answer) == .answer(conversationID: conversationID, request, answer, by: parent))
         }
-        #expect(tap(.granted) == answer(.granted))
-        #expect(tap(.denied) == answer(.denied))
+        // Data that isn't a button's is no answer.
+        #expect(TelegramAnswerButton.answer(in: "turgai-access:sometimes:\(request)") == nil)
     }
 
     @Test
@@ -447,7 +456,7 @@ struct TelegramTests {
             #expect(message.text == "What is this?")
             #expect(message.attachments.count == 1)
             #expect(message.attachments.first?.kind == AttachmentKind.image)
-            #expect(message.attachments.first?.id.rawValue == "telegram:large")
+            #expect(message.attachments.first?.id.rawValue == "large")
             #expect(message.attachments.first?.mimeType == "image/jpeg")
         } else {
             Issue.record("Expected an attachment message")

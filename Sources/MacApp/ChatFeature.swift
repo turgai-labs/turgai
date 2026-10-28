@@ -29,7 +29,7 @@ struct ChatFeature {
         var pending: [SendMessageRequest] = []
         var turn: Turn?
         /// Actions waiting for the user's consent, oldest first.
-        var approvals: IdentifiedArrayOf<Approval> = []
+        var accessRequests: IdentifiedArrayOf<AccessRequest> = []
         var draft = ""
         var error: ChatError?
         /// The agent's turns, step by step: the past ones, then each new one as it runs.
@@ -44,7 +44,7 @@ struct ChatFeature {
         case closed(why: String)
         case sendTapped
         case sendFailed(SendMessageRequest)
-        case approvalAnswered(Approval.ID, ApprovalDecision)
+        case accessAnswered(AccessRequest.ID, AccessAnswer)
     }
 
     private enum CancelID { case socket }
@@ -91,7 +91,7 @@ struct ChatFeature {
                 state.connection = .disconnected(why: why)
                 state.turn = nil
                 // The conversation asks again when the socket reconnects.
-                state.approvals = []
+                state.accessRequests = []
                 return .none
 
             case .received(let event):
@@ -114,11 +114,11 @@ struct ChatFeature {
                     }
                 }
 
-            case .approvalAnswered(let id, let decision):
-                guard state.approvals.remove(id: id) != nil else { return .none }
+            case .accessAnswered(let id, let answer):
+                guard state.accessRequests.remove(id: id) != nil else { return .none }
                 return .run { _ in
                     // Unanswered, the request expires as a denial on the server.
-                    try? await chat.send(.approval(id: id, decision: decision))
+                    try? await chat.send(.answer(id: id, answer: answer))
                 }
 
             case .sendFailed(let request):
@@ -162,10 +162,10 @@ struct ChatFeature {
             state.turns = IdentifiedArray(uniqueElements: turns)
         case .turnStep(_, let turnID, let step):
             state.turns[id: turnID]?.steps.append(step)
-        case .approvalRequested(_, _, let approval):
-            state.approvals.updateOrAppend(approval)
-        case .approvalResolved(_, let id, _):
-            state.approvals.remove(id: id)
+        case .accessRequested(_, let request):
+            state.accessRequests.updateOrAppend(request)
+        case .accessAnswered(_, let id, _):
+            state.accessRequests.remove(id: id)
         case .notice(_, _, let error):
             state.error = error
         }

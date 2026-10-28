@@ -64,8 +64,7 @@ private func workflowArguments(_ json: String) -> GeneratedContent {
 
 private func makeWorkflowTool(
     fixture: WorkflowFixture,
-    steps: [UserTool.WorkflowStep],
-    approval: UserTool.ApprovalPolicy = .never
+    steps: [UserTool.WorkflowStep]
 ) -> UserWorkflowTool {
     let arguments = try! JSONDecoder().decode(
         GenerationSchema.self,
@@ -74,15 +73,13 @@ private func makeWorkflowTool(
     let userTool = UserTool(
         name: "weather_brief",
         description: "Fetches and processes weather.",
-        approval: approval,
         arguments: arguments,
         body: .workflow(UserTool.Workflow(steps: steps)),
         source: fixture.source
     )
     return UserWorkflowTool(
         tool: userTool,
-        workspaceRoot: fixture.directory.path,
-        approval: NoOpApproval()
+        workspaceRoot: fixture.directory.path
     )
 }
 

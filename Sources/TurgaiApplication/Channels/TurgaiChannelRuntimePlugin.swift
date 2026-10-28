@@ -5,20 +5,21 @@ import TurgaiObjects
 public struct TurgaiChannelRuntimeDependencies: Sendable {
     public let secrets: ChannelSecretStore
     public let connections: TurgaiConnections
-    public let attachments: AttachmentResolver
+    /// Each running Telegram bot's files, by the channel its chats are in.
+    public let telegramFiles: TelegramFiles
     public let objectCatalog: ObjectCatalog
     public let loadPersistedConversationIDs: @Sendable () async throws -> [ConversationID]
 
     fileprivate init(
         secrets: ChannelSecretStore,
         connections: TurgaiConnections,
-        attachments: AttachmentResolver,
+        telegramFiles: TelegramFiles,
         objectCatalog: ObjectCatalog,
         loadPersistedConversationIDs: @escaping @Sendable () async throws -> [ConversationID]
     ) {
         self.secrets = secrets
         self.connections = connections
-        self.attachments = attachments
+        self.telegramFiles = telegramFiles
         self.objectCatalog = objectCatalog
         self.loadPersistedConversationIDs = loadPersistedConversationIDs
     }
@@ -44,19 +45,19 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
 
     private let agentProfiles: TurgaiAgentProfileStore
     private let secrets: ChannelSecretStore
-    private let attachments: AttachmentResolver
+    private let telegramFiles: TelegramFiles
     private let loadPersistedConversationIDs: @Sendable () async throws -> [ConversationID]
     private var lifecycle: Lifecycle = .awaitingStart
 
     public init(
         agentProfiles: TurgaiAgentProfileStore,
         secrets: ChannelSecretStore,
-        attachments: AttachmentResolver,
+        telegramFiles: TelegramFiles,
         loadPersistedConversationIDs: @escaping @Sendable () async throws -> [ConversationID]
     ) {
         self.agentProfiles = agentProfiles
         self.secrets = secrets
-        self.attachments = attachments
+        self.telegramFiles = telegramFiles
         self.loadPersistedConversationIDs = loadPersistedConversationIDs
     }
 
@@ -68,7 +69,7 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
                     actorSystem: system,
                     agentProfiles: agentProfiles
                 ),
-                attachments: attachments,
+                telegramFiles: telegramFiles,
                 objectCatalog: await ObjectCatalog(actorSystem: system),
                 loadPersistedConversationIDs: loadPersistedConversationIDs
             )

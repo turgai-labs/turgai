@@ -520,7 +520,7 @@ struct DynamicObjectTests {
     @Test(.timeLimit(.minutes(2)))
     func anObjectKeepsWhoMadeIt() async throws {
         let store = MemoryEventStore()
-        let ann = CallScope(UserID("ann"), in: GroupID(rawValue: "family"), as: .admin)
+        let ann = CallScope(UserID("ann"), in: GroupID(rawValue: "family"), as: .admin, allowed: [])
         let counter = "actor Counter {\n    var count = 0\n}"
         let drinks = "actor Drinks {\n    private let tea = Counter(id: \"tea\")\n}"
         let uses = Uses(
@@ -542,7 +542,7 @@ struct DynamicObjectTests {
                 try await CallChain.$current.withValue(.start(ann)) {
                     let objects = try await DynamicObjects.resolve(on: node)
                     #expect(try await objects.held(drinksID).maker == ann)
-                    #expect(try await objects.held(drinksID).access == ObjectAccess(madeBy: ann))
+                    #expect(try await objects.held(drinksID).access == Access(madeBy: ann))
                     let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
                     let made = try await DynamicObject.resolve(on: node, identity: tea)
                     // Not hers to call: it's what Drinks holds.
@@ -554,7 +554,7 @@ struct DynamicObjectTests {
                     let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
                     let made = try await DynamicObject.resolve(on: node, identity: tea)
                     #expect(try await made.maker == ann)
-                    #expect(try await made.access == ObjectAccess(heldBy: drinks))
+                    #expect(try await made.access == Access(heldBy: drinks))
                 }
             }
         }
@@ -708,9 +708,9 @@ struct DynamicObjectTests {
     func aReferenceToAnotherKindOfActorFails() async throws {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { node, _ in
-            let shop = try await Shop(actorSystem: node)
+            let board = try await Board(actorSystem: node)
             await #expect(throws: ResolveError.self) {
-                _ = try await DynamicObject.resolve(id: shop.id, using: node).identity
+                _ = try await DynamicObject.resolve(id: board.id, using: node).identity
             }
         }
     }
@@ -999,10 +999,10 @@ distributed actor Board {
 
 /// Read by everyone and written by no one, as any built-in object.
 extension Player: AccessControlled {
-    func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+    func access(for chain: CallChain) -> Access { .readByEveryone }
 }
 
 /// Read by everyone and written by no one, as any built-in object.
 extension Board: AccessControlled {
-    func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+    func access(for chain: CallChain) -> Access { .readByEveryone }
 }

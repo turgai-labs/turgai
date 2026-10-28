@@ -3,11 +3,11 @@ import Distributed
 import DistributedCluster
 import TurgaiDomain
 
-/// How far someone may go with an object: writing includes reading.
+/// How far someone may go with a thing, an object or an exact request: writing includes reading.
 public enum AccessLevel: Int, Codable, Sendable, Comparable {
-    /// Using it: calling its actions.
+    /// Using it: calling an object's actions, or running an exact request.
     case read
-    /// Changing it: its code, its name, removing it, and who may do what.
+    /// Changing it, and who may do what with it: deciding for it.
     case write
 
     public static func < (lhs: AccessLevel, rhs: AccessLevel) -> Bool {
@@ -15,7 +15,7 @@ public enum AccessLevel: Int, Codable, Sendable, Comparable {
     }
 }
 
-/// Whom a line of an object's access is for.
+/// Whom a line of a thing's access is for.
 public enum Audience: Hashable, Codable, Sendable {
     /// Anyone at all.
     case everyone
@@ -40,9 +40,15 @@ public enum Audience: Hashable, Codable, Sendable {
     }
 }
 
-/// Who may read an object and who may write it: one level for each audience it's shared with.
-public struct ObjectAccess: Hashable, Codable, Sendable {
+/// Who may read a thing, an object or an exact request, and who may write it: one level for each
+/// audience it's shared with.
+public struct Access: Hashable, Codable, Sendable {
     public private(set) var levels: [Audience: AccessLevel]
+
+    /// What a group decides for: its admins', which no one else uses until they share it.
+    public init(decidedBy group: GroupID) {
+        levels = [.admins(of: group): .write]
+    }
 
     /// A new object's access: its maker's alone.
     public init(madeBy maker: CallScope) {
@@ -57,7 +63,7 @@ public struct ObjectAccess: Hashable, Codable, Sendable {
 
     /// Read by everyone and written by no one: what a built-in object and an agent allow, until
     /// whoever runs the node, and whoever made the agent, are known.
-    public static let readByEveryone = ObjectAccess(levels: [.everyone: .read])
+    public static let readByEveryone = Access(levels: [.everyone: .read])
 
     private init(levels: [Audience: AccessLevel]) {
         self.levels = levels
@@ -87,14 +93,14 @@ public struct ObjectAccess: Hashable, Codable, Sendable {
     }
 
     /// The access after `audience` is given `level`, or nothing at all.
-    func sharing(with audience: Audience, _ level: AccessLevel?) -> ObjectAccess {
+    func sharing(with audience: Audience, _ level: AccessLevel?) -> Access {
         var next = self
         next.levels[audience] = level
         return next
     }
 }
 
-/// A call that may not go as far as it asked with an object: reading it, or writing it.
+/// A call that may not go as far as it asked with a thing: reading it, or writing it.
 public struct NotAllowed: Error, Codable, Equatable, Sendable, CustomStringConvertible {
     public let level: AccessLevel
 
@@ -114,7 +120,7 @@ public struct NotAllowed: Error, Codable, Equatable, Sendable, CustomStringConve
 /// every call: each kind of object says its own.
 public protocol AccessControlled: DistributedActor where ActorSystem == ClusterSystem {
     /// Who may read it and who may write it, for a call through `chain`.
-    func access(for chain: CallChain) -> ObjectAccess
+    func access(for chain: CallChain) -> Access
 }
 
 extension AccessControlled {

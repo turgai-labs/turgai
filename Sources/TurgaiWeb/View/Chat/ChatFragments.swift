@@ -139,51 +139,56 @@ struct ChatLiveError: HTML, Sendable {
     }
 }
 
-/// The assistant asks before an action runs; the answer goes back over the socket.
-struct ChatLiveApproval: HTML, Sendable {
-    let approval: Approval
+/// Someone asked the conversation's admins for access; the answer goes back over the socket, and
+/// only an admin's counts.
+struct ChatLiveAccessRequest: HTML, Sendable {
+    let request: AccessRequest
 
     var body: some HTML {
         div(.hx.swapOOB(.beforeEnd, "#chat-messages-content")) {
             div(
-                .id("approval-\(approval.id.uuidString)"),
-                .class("chat-message chat-message-assistant chat-approval")
+                .id("access-\(request.id.uuidString)"),
+                .class("chat-message chat-message-assistant chat-access")
             ) {
-                p { strong { "Allow \(approval.action)?" } }
-                p(.class("chat-approval-arguments")) { code { approval.arguments } }
-                div(.class("chat-approval-actions")) {
-                    answer(.denied, label: "Don't Allow", style: "button")
-                    answer(.granted, label: "Allow", style: "button button-accent")
+                p { strong { "Allow this?" } }
+                p(.class("chat-access-request")) { code { request.request } }
+                div(.class("chat-access-actions")) {
+                    answer(.no, label: "No", style: "button")
+                    answer(.once, label: "Once", style: "button")
+                    answer(.always, label: "Always", style: "button")
+                    answer(.everyone, label: "Everyone", style: "button button-accent")
                 }
             }
         }
     }
 
-    private func answer(_ decision: ApprovalDecision, label: String, style: String) -> some HTML {
-        form(.ws.send, .class("chat-approval-answer")) {
-            input(.type(.hidden), .name("command"), .value("approval"))
-            input(.type(.hidden), .name("id"), .value(approval.id.uuidString))
-            input(.type(.hidden), .name("decision"), .value(decision.rawValue))
+    private func answer(_ answer: AccessAnswer, label: String, style: String) -> some HTML {
+        form(.ws.send, .class("chat-access-answer")) {
+            input(.type(.hidden), .name("command"), .value("answer"))
+            input(.type(.hidden), .name("id"), .value(request.id.uuidString))
+            input(.type(.hidden), .name("answer"), .value(answer.rawValue))
             button(.type(.submit), .class(style)) { label }
         }
     }
 }
 
-/// Replaces an answered approval with what was decided.
-struct ChatLiveApprovalResolved: HTML, Sendable {
-    let approvalID: UUID
-    let decision: ApprovalDecision
+/// Replaces an answered access request with its answer.
+struct ChatLiveAccessAnswered: HTML, Sendable {
+    let requestID: UUID
+    let answer: AccessAnswer
 
     var body: some HTML {
         div(
-            .id("approval-\(approvalID.uuidString)"),
-            .class("chat-message chat-message-assistant chat-approval"),
+            .id("access-\(requestID.uuidString)"),
+            .class("chat-message chat-message-assistant chat-access"),
             .hx.swapOOB(.outerHTML)
         ) {
             p {
-                switch decision {
-                case .granted: "Allowed."
-                case .denied: "Not allowed."
+                switch answer {
+                case .once: "Allowed once."
+                case .always: "Allowed from now on."
+                case .everyone: "Allowed for everyone here from now on."
+                case .no: "Not allowed."
                 }
             }
         }
@@ -191,12 +196,12 @@ struct ChatLiveApprovalResolved: HTML, Sendable {
 }
 
 enum ChatLiveFragment {
-    static func approval(_ approval: Approval) -> String {
-        ChatLiveEmptyClear().render() + ChatLiveApproval(approval: approval).render()
+    static func accessRequested(_ request: AccessRequest) -> String {
+        ChatLiveEmptyClear().render() + ChatLiveAccessRequest(request: request).render()
     }
 
-    static func approvalResolved(_ approvalID: UUID, decision: ApprovalDecision) -> String {
-        ChatLiveApprovalResolved(approvalID: approvalID, decision: decision).render()
+    static func accessAnswered(_ requestID: UUID, answer: AccessAnswer) -> String {
+        ChatLiveAccessAnswered(requestID: requestID, answer: answer).render()
     }
 
     static func history(_ messages: [Message]) -> String {

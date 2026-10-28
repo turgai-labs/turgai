@@ -93,7 +93,7 @@ extension Agent: @retroactive DiscoverableActor {
 /// Every agent is read by everyone and written by no one, until agents have makers: every call to
 /// one is on someone's behalf.
 extension Agent: AccessControlled {
-    public func access(for chain: CallChain) -> ObjectAccess { .readByEveryone }
+    public func access(for chain: CallChain) -> Access { .readByEveryone }
 }
 
 /// Why an agent asked as an object didn't answer.

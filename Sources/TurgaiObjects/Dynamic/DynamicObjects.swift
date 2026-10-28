@@ -243,7 +243,10 @@ public distributed actor DynamicObjects {
     public distributed func start() async throws {
         for entry in state.entries {
             let object = try await object(entry.identity)
-            try await CallChain.$current.withValue(.start(entry.maker)) { try await object.start() }
+            // As their group settles their scope now.
+            let maker = try await Group.resolve(on: actorSystem, id: entry.maker.group).opening(
+                scopeOf: entry.maker.person)
+            try await CallChain.$current.withValue(.start(maker)) { try await object.start() }
         }
     }
 
@@ -304,9 +307,9 @@ public enum DynamicObjectsEvent: Codable, Sendable {
     case typeNamed(String, BehaviorID)
     /// An object made by name, of a type, by `maker`: listed and found by the name it holds, to
     /// whoever may read it.
-    case added(ObjectIdentity, type: BehaviorID, description: String?, access: ObjectAccess, maker: CallScope)
+    case added(ObjectIdentity, type: BehaviorID, description: String?, access: Access, maker: CallScope)
     /// Who may read and write an object changed, as the object says.
-    case accessChanged(ObjectIdentity, ObjectAccess)
+    case accessChanged(ObjectIdentity, Access)
     case removed(ObjectIdentity)
 }
 
@@ -317,7 +320,7 @@ public struct DynamicObjectsState: Codable, Sendable {
         /// What it was made for.
         public let description: String?
         /// Who may read and write it, as it last said: who it's listed to.
-        public var access: ObjectAccess
+        public var access: Access
         /// Whoever made it, on whose behalf it's started.
         public let maker: CallScope
     }

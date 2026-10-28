@@ -89,7 +89,8 @@ private enum PublishEvent: Sendable {
             self = .userMessage(pending)
         case .inbox(.turnStarted(let pending)):
             self = .turnStarted(pending)
-        case .member, .inbox(.turnCompleted), .inbox(.turnFailed), .replyQueued, .replyDelivered, .reset:
+        case .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyQueued, .replyDelivered,
+            .reset:
             return nil
         }
     }
@@ -312,15 +313,6 @@ public distributed actor Conversation {
     /// Live-only echo bookkeeping: message IDs whose user-message echo was
     /// already broadcast. Bounded like `AgentInbox.acceptedMessageIDs`.
     private var echoedMessageIDs: [MessageID] = []
-    /// Questions waiting for the user, live-only like the connections that ask them.
-    private var approvals: [UUID: PendingApproval] = [:]
-    private static let approvalExpiration: Duration = .seconds(300)
-
-    private struct PendingApproval {
-        let turnID: TurgaiDomain.TurnID?
-        let prompt: ApprovalPrompt
-        let continuation: CheckedContinuation<ApprovalDecision, Never>
-    }
 
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
@@ -385,19 +377,19 @@ public distributed actor Conversation {
         state.inbox.status
     }
 
-    /// Whom a call `person` makes here is on behalf of: them, in this conversation's group, with
-    /// their role in it.
-    public distributed func scope(of person: TurgaiDomain.UserID) -> CallScope {
-        state.scope(of: person)
+    /// Its group: who's in it, and what its admins allow.
+    private func group() async throws -> Group {
+        try await Group.resolve(on: actorSystem, id: GroupID(conversationID))
     }
 
     /// The agent's past turns, step by step, as `person` asks for them.
     public distributed func turns(askedBy person: TurgaiDomain.UserID) async throws -> [ConversationTurn] {
         let participant = try await participant(for: agentRole)
-        return try await CallChain.$current.withValue(.start(state.scope(of: person))) { try await participant.turns() }
+        let scope = try await group().scope(of: person)
+        return try await CallChain.$current.withValue(.start(scope)) { try await participant.turns() }
     }
 
-    public distributed func addConnection(_ connection: ConversationConnection) async {
+    public distributed func addConnection(_ connection: ConversationConnection) async throws {
         connections.insert(connection)
         if let turnID = state.inbox.activeTurnID {
             let activity = liveState.latestActivity
@@ -417,50 +409,42 @@ public distributed actor Conversation {
                 break
             }
         }
-        for approval in approvals.values {
-            try? await connection.receive(
-                .approvalRequested(conversationID: conversationID, turnID: approval.turnID, prompt: approval.prompt)
-            )
+        // What's asked of its group's admins is shown through its links, this one too, from what
+        // still waits.
+        for request in try await group().waiting() {
+            try? await connection.receive(.asked(conversationID: conversationID, request))
         }
         await deliverPendingReplies()
     }
 
-    /// Asks the people in this conversation whether an action may run, and waits
-    /// for one of them to answer. Nobody connected, no answer in time, or a
-    /// cancelled turn all mean no.
-    public distributed func requestApproval(_ request: ChannelApprovalRequest) async -> ApprovalDecision {
-        guard !connections.isEmpty else { return .denied }
-        let prompt = ApprovalPrompt(id: UUID(), action: request.command, arguments: request.arguments)
-        let turnID = UUID(uuidString: request.turnID).map { TurgaiDomain.TurnID(rawValue: $0) }
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                approvals[prompt.id] = PendingApproval(turnID: turnID, prompt: prompt, continuation: continuation)
-                Task {
-                    await self.publishLive(
-                        .approvalRequested(conversationID: self.conversationID, turnID: turnID, prompt: prompt)
-                    )
-                    try? await Task.sleep(for: Self.approvalExpiration)
-                    await self.resolveApproval(prompt.id, decision: .denied)
-                }
-            }
-        } onCancel: {
-            Task { await self.resolveApproval(prompt.id, decision: .denied) }
-        }
+    /// A turn of its own needed exactly `request`, which its scope didn't allow: its group asks its
+    /// admins, and its links show them what's asked.
+    public distributed func needed(_ request: ExactRequest) async throws {
+        guard let opened = try await group().needed(request) else { return }
+        // The turn waits for the answer, which continues it.
+        try await dispatch(.awaiting(opened.id))
+        await publishLive(.asked(conversationID: conversationID, opened))
     }
 
-    /// An answer to a question from ``requestApproval(_:)``, by `person`: only its admins decide
-    /// for it, so anyone else's answer is no answer.
-    public distributed func decideApproval(
-        _ id: UUID, decision: ApprovalDecision, by person: TurgaiDomain.UserID
-    ) async {
-        guard state.members.role(of: person) == .admin else { return }
-        await resolveApproval(id, decision: decision)
+    /// `person`'s answer to one of its group's access requests, as the link they answered through
+    /// says: its links show it, so each stops asking, when it counted.
+    public distributed func answer(
+        _ id: AccessRequestID, _ answer: AccessAnswer, by person: TurgaiDomain.UserID
+    ) async throws {
+        guard let answered = try await group().answer(id, answer, by: person) else { return }
+        await publishLive(.answered(conversationID: conversationID, answered, answer, by: person))
+        // The turn that waited for it continues, on behalf of whoever asked.
+        try await dispatch(.answered(answered, answer, turnID: TurgaiDomain.TurnID(), at: Date()))
     }
 
-    private func resolveApproval(_ id: UUID, decision: ApprovalDecision) async {
-        guard let approval = approvals.removeValue(forKey: id) else { return }
-        approval.continuation.resume(returning: decision)
-        await publishLive(.approvalResolved(conversationID: conversationID, approvalID: id, decision: decision))
+    /// Who its group's admins are now, as its platform says: they decide for it.
+    public distributed func setAdmins(_ admins: Set<TurgaiDomain.UserID>) async throws {
+        try await group().setAdmins(admins)
+    }
+
+    /// Whom a call `person` makes here is on behalf of, and what's shared with them.
+    public distributed func scope(of person: TurgaiDomain.UserID) async throws -> CallScope {
+        try await group().scope(of: person)
     }
 
     public distributed func removeConnection(_ connection: ConversationConnection) async {
@@ -478,6 +462,8 @@ public distributed actor Conversation {
 
         memoryExtractionConfiguration = configuration.memoryExtraction
         turnConfigurations[turnID] = configuration
+        // Whoever writes takes part in its group.
+        try await group().admit(message.userID)
         try await dispatch(
             .receive(
                 message: message,
@@ -527,11 +513,6 @@ public distributed actor Conversation {
         try await dispatch(.reset)
     }
 
-    /// Who its admins are now, as its platform says: they decide for it.
-    public distributed func reportAdmins(_ admins: Set<TurgaiDomain.UserID>) async throws {
-        try await dispatch(.admins(admins))
-    }
-
     /// Shows only the requesting user's bounded active memory. The command is
     /// handled here rather than sent through the model, so it cannot create a
     /// turn or become a new memory observation.
@@ -552,7 +533,8 @@ public distributed actor Conversation {
     /// token usage and lifecycle data describe one coherent state.
     public distributed func showContext(for person: TurgaiDomain.UserID) async throws {
         let participant = try await participant(for: agentRole)
-        let snapshot = try await CallChain.$current.withValue(.start(state.scope(of: person))) {
+        let scope = try await group().scope(of: person)
+        let snapshot = try await CallChain.$current.withValue(.start(scope)) {
             try await participant.contextSnapshot()
         }
         await publish(
@@ -833,8 +815,11 @@ public distributed actor Conversation {
     private func startModel(for request: ConversationTurnRequest) async {
         let turnConfiguration = turnConfigurations.removeValue(forKey: request.turnID)
         do {
+            // The turn's scope, as its sender's group settles it now that it starts.
+            let scope = try await group().opening(scopeOf: request.message.userID)
             try await participant(for: request.agentRole).answer(
-                request, memoryExtraction: turnConfiguration?.memoryExtraction ?? memoryExtractionConfiguration)
+                request, as: scope,
+                memoryExtraction: turnConfiguration?.memoryExtraction ?? memoryExtractionConfiguration)
         } catch {
             actorSystem.log.error(
                 "Could not resolve agent for conversation turn",

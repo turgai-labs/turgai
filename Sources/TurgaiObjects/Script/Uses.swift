@@ -32,6 +32,9 @@ public struct Uses: Codable, Sendable, Equatable {
     /// The type of any object, as the module declares it.
     public static let anyObject = "Object"
 
+    /// The namespace of the tools object code calls: `Tools.Http.send`.
+    public static let tools = "Tools"
+
     /// The types whose values are other objects: the actors the module declares, and any object.
     public var objectTypes: Set<String> {
         Set(interface.actors(events: []).map(\.name)).union([Self.anyObject])
@@ -59,9 +62,12 @@ extension Uses {
     /// The module `objects` make, as Swift declares it: each object an actor, with its methods,
     /// what it publishes and its events, and the structs and enums their values are. The types of
     /// `own`, the object whose code imports it, are left out: its code declares them.
-    public static func interface(of objects: [Object], except own: String? = nil) -> ModuleInterface {
+    public static func interface(of objects: [Object], tools: [ToolsAPI.Tool] = [], except own: String? = nil)
+        -> ModuleInterface
+    {
         var schemas: [JSONValue] = []
         var actors: [String] = []
+        if let declared = declaration(ofTools: tools, schemas: &schemas) { actors.append(declared) }
         for object in objects {
             var lines = documented(object.description.description.map(JSONValue.string), indent: "")
             lines.append("actor \(object.type) {")
@@ -122,6 +128,37 @@ extension Uses {
         let values = declarations(of: schemas, except: own)
         return ModuleInterface(
             name: module, source: (actors + (values.isEmpty ? [] : [values])).joined(separator: "\n\n"))
+    }
+
+    /// The tools object code calls, as Swift declares them: `enum Tools`, with an enum in it for each
+    /// tool, `Tools.Http`, and its functions, each static, awaited and tried. A function whose
+    /// values can't be written in Swift isn't declared; `nil` when none is.
+    static func declaration(ofTools tools: [ToolsAPI.Tool], schemas: inout [JSONValue]) -> String? {
+        var lines: [String] = []
+        for tool in tools.sorted(by: { $0.name < $1.name }) {
+            var functions: [String] = []
+            for function in tool.functions.sorted(by: { $0.name < $1.name }) {
+                guard let call = call(of: function) else { continue }
+                functions += documented(function.description.map(JSONValue.string), indent: "        ")
+                functions.append("        static func \(call)")
+                schemas += [function.input, function.output]
+            }
+            guard !functions.isEmpty else { continue }
+            lines += documented(tool.description.map(JSONValue.string), indent: "    ")
+            lines += ["    enum \(tool.name) {"] + functions + ["    }"]
+        }
+        guard !lines.isEmpty else { return nil }
+        return (["enum \(Self.tools) {"] + lines + ["}"]).joined(separator: "\n")
+    }
+
+    /// A tool's function as code calls it: the value it takes, named by its type, and the value
+    /// it gives, `send(_ httpRequest: HttpRequest) async throws -> HttpResponse`; `nil` when either
+    /// can't be written in Swift.
+    public static func call(of function: ToolsAPI.Function) -> String? {
+        guard let input = function.input.typeName, let output = function.output.swiftType else { return nil }
+        let own = input.split(separator: ".").last.map(String.init) ?? input
+        let name = own.prefix(1).lowercased() + own.dropFirst()
+        return "\(function.name)(_ \(name): \(input)) async throws -> \(output)"
     }
 
     /// The parameters a schema's values are, as Swift declares them, in the order they're

@@ -20,27 +20,15 @@ public struct UserPromptTool: HailCore.Tool {
     public let tool: UserTool
     public let actorSystem: ClusterSystem
     public let sourceAgentID: AgentID
-    public let approval: any ToolApproval
-    public let conversationID: String
-    public let requesterID: String
-    public let turnID: String
 
     public init(
         tool: UserTool,
         actorSystem: ClusterSystem,
-        sourceAgentID: AgentID,
-        approval: any ToolApproval,
-        conversationID: String = "unknown",
-        requesterID: String = "unknown",
-        turnID: String = "unknown"
+        sourceAgentID: AgentID
     ) {
         self.tool = tool
         self.actorSystem = actorSystem
         self.sourceAgentID = sourceAgentID
-        self.approval = approval
-        self.conversationID = conversationID
-        self.requesterID = requesterID
-        self.turnID = turnID
     }
 
     public var name: String { tool.name }
@@ -71,20 +59,6 @@ public struct UserPromptTool: HailCore.Tool {
         token: borrowing EffectToken<CoordinationEffect>
     ) async throws -> CallReturn {
         _ = token
-        if tool.approval == .always {
-            let decision = try await approval.decide(
-                ApprovalRequest(
-                    toolName: name,
-                    arguments: input,
-                    conversationID: conversationID,
-                    requesterID: requesterID,
-                    turnID: turnID
-                )
-            )
-            guard decision == .granted else {
-                return .text("The user declined to run \(name).")
-            }
-        }
 
         let instruction = try tool.renderPrompt(input)
         let childID = AgentID(

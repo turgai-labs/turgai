@@ -55,11 +55,10 @@ enum AuthenticatedUser: Identifiable, Sendable, Equatable {
         }
     }
 
-    /// Whom what the dashboard asks for, as this account looks at it, is on behalf of: the account,
-    /// in the dashboard's group, an admin when it's an administrator.
-    var dashboardScope: CallScope {
-        let role: GroupRole = if case .administrator = self { .admin } else { .member }
-        return CallScope(UserID(account: id), in: .dashboard, as: role)
+    /// The account in the dashboard's group, as the accounts say: an admin when it's an
+    /// administrator. Its group settles whom what the dashboard asks for is on behalf of.
+    var dashboardMembership: Membership {
+        Membership(UserID(account: id), as: { if case .administrator = self { .admin } else { .member } }())
     }
 
 }

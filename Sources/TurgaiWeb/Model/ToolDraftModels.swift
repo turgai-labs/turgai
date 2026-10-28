@@ -144,7 +144,6 @@ struct TurgaiToolDraft: Sendable {
     var kind: ToolDraftKind
     var name: String
     var description: String
-    var approval: String
     var bodyKind: TurgaiToolBodyKind
     var arguments: [TurgaiToolArgumentDraft]
     var workflowSteps: [TurgaiWorkflowStepDraft]
@@ -160,7 +159,6 @@ struct TurgaiToolDraft: Sendable {
             kind: .new,
             name: "",
             description: "",
-            approval: "always",
             bodyKind: .workflow,
             arguments: [],
             workflowSteps: [TurgaiWorkflowStepDraft(id: "step-1")],
@@ -179,15 +177,10 @@ struct TurgaiToolDraft: Sendable {
         guard !trimmedName.isEmpty else { throw ToolDraftError.invalid("Give the tool a name.") }
         let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedDescription.isEmpty else { throw ToolDraftError.invalid("Describe what the tool does.") }
-        guard let approvalPolicy = UserTool.ApprovalPolicy(rawValue: approval) else {
-            throw ToolDraftError.invalid("Choose when the tool may run.")
-        }
-
         var root: [String: Any] = [
             "version": 1,
             "name": trimmedName,
             "description": trimmedDescription,
-            "approval": approvalPolicy.rawValue,
             "arguments": try argumentSchema(),
         ]
 

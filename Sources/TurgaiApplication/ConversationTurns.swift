@@ -2,6 +2,7 @@ import AnyLanguageModel
 import Foundation
 import Hail
 import TurgaiDomain
+import TurgaiHail
 
 /// The agent's history as turns, for watching what it did. Turns a compaction folded into the
 /// summary are no longer there.
@@ -46,7 +47,8 @@ public enum ConversationTurns {
             .toolCalled(name: call.name, arguments: call.arguments.jsonString, at: at)
         case .resulted(let result, let at):
             .toolFinished(
-                name: result.name, output: result.output.textRepresentation, failure: result.failureKind?.rawValue,
+                name: result.name, output: result.output.textRepresentation,
+                failure: result.failureKind.map(HailRunMapper.failure),
                 at: at)
         case .noticed(let notice, let at):
             .noticed(words: notice.words, at: at)

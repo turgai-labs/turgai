@@ -84,7 +84,7 @@ public enum CodableValues {
                 return SwiftTypeSchema.isAnyObject(type) || SwiftTypeSchema.conformed(type, in: declarations) != nil
                     ? nil : type
             case .named(let name, let arguments):
-                if ["Date", "Decimal", "UUID", "URL"].contains(name) { return nil }
+                if ["Date", "Decimal", "UUID", "URL", "Data"].contains(name) { return nil }
                 if name == "Set" { return arguments.first.flatMap { notCodable($0) } }
                 switch declarations[name] {
                 // An object goes as a reference to it: of an actor type, or conforming to a protocol.

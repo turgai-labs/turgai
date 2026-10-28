@@ -561,17 +561,18 @@ actor LiveSession {
             do {
                 let agentRole = try await self.resolvedAgentRole(for: conversationID)
                 let conversation = try await self.resolveConversation(conversationID, agentRole: agentRole)
-                try await conversation.reportAdmins(admins)
+                try await conversation.setAdmins(admins)
                 return true
             } catch {
                 return false
             }
 
-        case .approval(let conversationID, let approvalID, let decision, let person):
-            // Only a conversation this session is attached to hears its answer.
+        case .answer(let conversationID, let id, let answer, let person):
+            // Only a conversation this session is attached to hears its answer; its group decides
+            // whose answer counts.
             guard let conversation = conversations[conversationID] else { return false }
             do {
-                try await conversation.decideApproval(approvalID, decision: decision, by: person)
+                try await conversation.answer(id, answer, by: person)
                 return true
             } catch {
                 return false

@@ -43,7 +43,7 @@ private func writeSpec(
 
 @Suite("User tool registry")
 struct UserToolRegistryTests {
-    @Test("a valid wasm spec loads with wasm approval defaulting to always")
+    @Test("a valid wasm spec loads")
     func validWasmSpec() throws {
         let directory = try makeTemporaryDirectory()
         try writeSpec(
@@ -70,7 +70,6 @@ struct UserToolRegistryTests {
         #expect(tools.count == 1)
         let tool = try #require(tools.first)
         #expect(tool.name == "house_status")
-        #expect(tool.approval == .always)
         guard case .wasm(let wasm) = tool.body else {
             Issue.record("Expected a wasm body")
             return
@@ -81,7 +80,7 @@ struct UserToolRegistryTests {
         capture.issues.withLock { #expect($0.isEmpty) }
     }
 
-    @Test("a native process spec loads with process approval defaulting to always")
+    @Test("a native process spec loads")
     func validProcessSpec() throws {
         let directory = try makeTemporaryDirectory()
         try writeSpec(
@@ -109,7 +108,6 @@ struct UserToolRegistryTests {
         let tools = makeRegistry(directory: directory, capture: capture).load()
 
         let tool = try #require(tools.first)
-        #expect(tool.approval == .always)
         guard case .process(let process) = tool.body else {
             Issue.record("Expected a process body")
             return
@@ -140,7 +138,7 @@ struct UserToolRegistryTests {
         capture.issues.withLock { #expect($0.isEmpty) }
     }
 
-    @Test("a prompt spec defaults to never asking approval")
+    @Test("a prompt spec loads")
     func promptSpecDefaultApproval() throws {
         let directory = try makeTemporaryDirectory()
         try writeSpec(
@@ -163,7 +161,6 @@ struct UserToolRegistryTests {
         )
         let tools = makeRegistry(directory: directory).load()
         let tool = try #require(tools.first)
-        #expect(tool.approval == .never)
         guard case .prompt(let prompt) = tool.body else {
             Issue.record("Expected a prompt body")
             return
@@ -221,7 +218,6 @@ struct UserToolRegistryTests {
         let tool = try #require(tools.first)
         #expect(tools.count == 1)
         #expect(tool.name == "weather_brief")
-        #expect(tool.approval == .always)
         #expect(tool.argumentNames == ["city"])
         guard case .workflow(let workflow) = tool.body else {
             Issue.record("Expected a workflow body")

@@ -30,8 +30,8 @@ struct ChatView: View {
         .background(Color.turgaiCanvas)
         .ignoresSafeArea(.container, edges: .top)
         .modifier(
-            ApprovalAlert(approval: state.approvals.first) { approval, decision in
-                store.send(.approvalAnswered(approval.id, decision))
+            AccessRequestAlert(request: state.accessRequests.first) { request, answer in
+                store.send(.accessAnswered(request.id, answer))
             })
         .task(id: session) { store.send(.connect(session)) }
         .onDisappear { store.send(.disconnect) }
@@ -240,25 +240,24 @@ private struct BottomBar: View {
     }
 }
 
-/// Asks about the oldest action waiting for consent, bringing the app forward to ask: a menu bar
-/// app sits behind the others.
-private struct ApprovalAlert: ViewModifier {
-    let approval: Approval?
-    let answer: (Approval, ApprovalDecision) -> Void
-
-    private var title: String {
-        approval.map { (approval: Approval) -> String in "Allow Turgai to use \(approval.action)?" } ?? ""
-    }
+/// Asks about the oldest access request waiting for an answer, bringing the app forward to ask: a
+/// menu bar app sits behind the others. Only an admin's answer counts.
+private struct AccessRequestAlert: ViewModifier {
+    let request: AccessRequest?
+    let answer: (AccessRequest, AccessAnswer) -> Void
 
     func body(content: Content) -> some View {
         content
-            .alert(title, isPresented: .constant(approval != nil), presenting: approval) { (approval: Approval) in
-                Button("Don't Allow", role: .cancel) { answer(approval, .denied) }
-                Button("Allow") { answer(approval, .granted) }
-            } message: { (approval: Approval) in
-                Text(approval.arguments)
+            .alert("Allow this?", isPresented: .constant(request != nil), presenting: request) {
+                (request: AccessRequest) in
+                Button("No", role: .cancel) { answer(request, .no) }
+                Button("Once") { answer(request, .once) }
+                Button("Always") { answer(request, .always) }
+                Button("Everyone") { answer(request, .everyone) }
+            } message: { (request: AccessRequest) in
+                Text(request.request)
             }
-            .onChange(of: approval?.id) { _, id in
+            .onChange(of: request?.id) { _, id in
                 if id != nil { NSApplication.shared.activate() }
             }
     }

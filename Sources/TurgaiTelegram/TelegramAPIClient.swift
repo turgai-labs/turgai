@@ -2,6 +2,7 @@ import AsyncHTTPClient
 import Logging
 import NIOCore
 import TurgaiDomain
+import UniformTypeIdentifiers
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -343,6 +344,17 @@ extension TelegramAPIClient {
         )
     }
 
+    /// What a downloaded file is: as Telegram's `Content-Type` says, or else as its path's
+    /// extension says.
+    static func contentType(_ declared: String?, ofFileAt path: String) -> String? {
+        if let declared, declared != "application/octet-stream" { return declared }
+        let pathExtension = URL(fileURLWithPath: path).pathExtension
+        if !pathExtension.isEmpty, let inferred = UTType(filenameExtension: pathExtension)?.preferredMIMEType {
+            return inferred
+        }
+        return declared
+    }
+
     private static let httpClient: HTTPClient = {
         var configuration = HTTPClient.Configuration()
         // No read timeout: long polling intentionally holds a request open.
@@ -459,13 +471,13 @@ extension TelegramAPIClient {
                 }
 
                 let body = try await response.body.collect(upTo: 20 * 1024 * 1024)
-                let contentType = response.headers.first(name: "Content-Type")?
+                let declared = response.headers.first(name: "Content-Type")?
                     .split(separator: ";", maxSplits: 1)
                     .first
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
                 return TelegramFileData(
                     body: Data(body.readableBytesView),
-                    contentType: contentType
+                    contentType: Self.contentType(declared, ofFileAt: filePath)
                 )
             },
             sendChatAction: { chatID, action in

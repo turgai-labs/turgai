@@ -57,16 +57,6 @@ struct TurgaiToolRow: HTML, Sendable {
                 span(.class("tool-meta-label")) { "Kind" }
                 span { kind }
             }
-            div(.class("tool-row-meta")) {
-                span(.class("tool-meta-label")) { "Approval" }
-                span {
-                    if let tool = document.tool {
-                        tool.approval.rawValue == "always" ? "asks first" : "runs directly"
-                    } else {
-                        "unavailable"
-                    }
-                }
-            }
             a(.href(href), .class("tool-row-action")) {
                 switch access {
                 case .view: "View →"

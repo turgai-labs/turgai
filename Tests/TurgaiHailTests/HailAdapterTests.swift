@@ -2,6 +2,7 @@ import AnyLanguageModel
 import Hail
 import Testing
 import TurgaiDomain
+import TurgaiTelegram
 
 @testable import TurgaiApplication
 @testable import TurgaiHail
@@ -86,7 +87,8 @@ struct HailAdapterTests {
             spawnConfigProvider: { AgentSpawnConfig(agentID: $0) },
             modelSelectionProvider: { _ in
                 ModelConfiguration(model: try AgentModel("ollama/test"))
-            }
+            },
+            authority: { _ in TurgaiAuthority() }
         )
 
         guard let compactor = await plugin.contextCompactor as? SlidingWindowCompactor else {
@@ -98,10 +100,8 @@ struct HailAdapterTests {
     }
 
     @Test
-    func weatherCommandsCarryGeocodingAndHorizon() throws {
-        let effect = try WeatherTools().hourly(
-            .init(place: "London", region: nil, country: nil)
-        )
+    func weatherCarriesGeocodingAndHorizon() throws {
+        let effect = try Weather.effect("London", nil, nil, .hourly)
 
         #expect(effect.geocoding.query == "London")
         #expect(effect.geocoding.network.host == "geocoding-api.open-meteo.com")
@@ -110,44 +110,12 @@ struct HailAdapterTests {
     }
 
     @Test
-    func weatherCommandCarriesAdministrativeRegion() throws {
-        let effect = try WeatherTools().hourly(
-            .init(place: "Haar", region: "Landkreis München", country: "Germany")
-        )
+    func weatherCarriesAdministrativeRegion() throws {
+        let effect = try Weather.effect("Haar", "Landkreis München", "Germany", .hourly)
 
         #expect(effect.geocoding.query == "Haar")
         #expect(effect.geocoding.region == "Landkreis München")
         #expect(effect.geocoding.country == "Germany")
-    }
-
-    @Test
-    func weatherRejectsInvalidCommandArguments() {
-        #expect(throws: ToolError.invalidArgument("days", value: "0")) {
-            try WeatherTools().daily(.init(place: "London", region: nil, country: nil, days: 0))
-        }
-    }
-
-    @Test
-    func weatherCommandInputsRoundTripThroughGeneratedContent() throws {
-        let hourlyJSON = WeatherToolsHourlyInput(
-            place: "London", region: nil, country: nil
-        ).generatedContent.jsonString
-        #expect(hourlyJSON.contains("\"place\":\"London\""))
-        let decodedHourly = try WeatherToolsHourlyInput(
-            GeneratedContent(json: #"{"place":"London","country":null}"#)
-        )
-        #expect(decodedHourly.place == "London")
-        #expect(decodedHourly.country == nil)
-
-        let dailyJSON = WeatherToolsDailyInput(
-            place: "London", region: nil, country: nil, days: 7
-        ).generatedContent.jsonString
-        #expect(dailyJSON.contains("\"days\":7"))
-        let decodedDaily = try WeatherToolsDailyInput(
-            GeneratedContent(json: #"{"place":"London","days":7}"#)
-        )
-        #expect(decodedDaily.place == "London")
-        #expect(decodedDaily.days == 7)
     }
 
     @Test
@@ -172,8 +140,7 @@ struct HailAdapterTests {
                 text: "hello",
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
-            agentRole: "test",
-            scope: CallScope(UserID("user"), in: GroupID(conversationID), as: .admin)
+            agentRole: "test"
         )
 
         let received = Received()
@@ -189,98 +156,66 @@ struct HailAdapterTests {
     }
 
     @Test
-    func webSearchUsesTheNetworkEffectAndValidatesTargets() throws {
-        let tool = WebSearchTool()
+    func searchAndHttpUseTheNetworkEffectAndValidateTargets() throws {
+        let searchEffect = try Search().web(WebSearch(query: "weather in Munich"))
+        #expect(searchEffect.request.host == "html.duckduckgo.com")
+        #expect(searchEffect.request.operation == "search")
 
-        let searchEffect = try tool.effect(
-            for: WebSearchToolInput(action: .search, query: "weather in Munich", url: nil)
-        )
-        #expect(searchEffect.host == "html.duckduckgo.com")
-        #expect(searchEffect.operation == "search")
+        let sendEffect = try Http().send(HttpRequest(method: .get, url: "https://example.com", headers: nil, body: nil))
+        #expect(sendEffect.request.host == "example.com")
+        #expect(sendEffect.request.operation == "http_get")
+        #expect(sendEffect.request.request.method == "GET")
 
-        let openEffect = try tool.effect(
-            for: WebSearchToolInput(action: .open, query: nil, url: "https://example.com")
-        )
-        #expect(openEffect.host == "example.com")
-        #expect(openEffect.operation == "open")
-
-        #expect(throws: WebSearchTool.Error.unsupportedURLScheme) {
-            try tool.effect(
-                for: WebSearchToolInput(action: .open, query: nil, url: "file:///tmp/secrets")
-            )
+        #expect(throws: HttpEffect.Error.unsupportedURLScheme) {
+            try Http().send(HttpRequest(method: .get, url: "file:///tmp/secrets", headers: nil, body: nil))
+        }
+        // Credentials are never a request's own.
+        #expect(throws: HttpEffect.Error.headerNotAllowed("Authorization")) {
+            try Http().send(
+                HttpRequest(
+                    method: .get, url: "https://example.com",
+                    headers: [HttpHeader(name: "Authorization", value: "Bearer x")], body: nil))
         }
     }
 
     @Test
-    func webSearchLiveOutputIsCapped() {
+    func aPageIsGivenAsItsBoundedReadableText() {
         let overflowing = String(repeating: "word ", count: 1_000)
-        #expect(overflowing.count > 3_000)
-
-        let results = try! WebSearchBackend.duckDuckGo.parseSearchResults(
-            """
-            <a class="result__a" href="https://example.com/article">Title</a>
-            <a class="result__snippet">\(overflowing)</a>
-            """
-        )
-        let searchOutput = WebSearchTool.searchResult(query: "terms", results: results)
-        #expect(searchOutput.count <= 3_000)
-
-        let pageOutput = WebSearchTool.openResult(
-            for: URL(string: "https://example.com/article")!,
-            page: "<p>\(overflowing)</p>"
-        )
-        #expect(pageOutput.count <= 3_000 + "Page: https://example.com/article\n\n".count)
-    }
-
-    @Test
-    func fetchURLUsesSpecificMetadataOverGenericTransportType() {
-        let imageURL = URL(string: "https://api.telegram.org/file/bot-redacted/photos/file_0.jpg")!
-
-        #expect(
-            FetchURLTool.resolvedContentType(
-                response: "application/octet-stream",
-                hint: "image/jpeg",
-                url: imageURL
-            ) == "image/jpeg"
-        )
-        #expect(
-            FetchURLTool.resolvedContentType(
-                response: "application/octet-stream",
-                hint: nil,
-                url: imageURL
-            ) == "image/jpeg"
-        )
-        #expect(
-            FetchURLTool.resolvedContentType(
-                response: "text/plain",
-                hint: "image/jpeg",
-                url: imageURL
-            ) == "text/plain"
-        )
-    }
-
-    @Test
-    func fetchAttachmentRoutesOpaqueIDThroughOwningChannel() async throws {
-        let resolver = AttachmentResolver()
-        await resolver.register(channel: AttachmentChannel("telegram"), owner: UUID()) {
-            externalID,
-            expectedContentType in
-            #expect(externalID == "telegram-file-id")
-            #expect(expectedContentType == "image/jpeg")
-            return ToolData(
-                body: Data([1, 2, 3]),
-                contentType: expectedContentType
-            )
+        let page = HttpResponse(
+            status: 200, headers: [HttpHeader(name: "Content-Type", value: "text/html; charset=utf-8")],
+            body: Data("<p>\(overflowing)</p>".utf8), url: URL(string: "https://example.com/article")!)
+        guard case .text(let text) = Http().render(page) else {
+            Issue.record("a page wasn't given as text")
+            return
         }
-        let tool = FetchAttachmentTool(resolver: resolver)
+        #expect(text.hasPrefix("Page: https://example.com/article\n\n"))
+        #expect(text.count <= 4_000 + "Page: https://example.com/article\n\n".count)
+    }
+
+    @Test
+    func whatAnHttpResponseIsComesFromItsHeaderThenItsURL() {
+        let imageURL = URL(string: "https://api.telegram.org/file/bot-redacted/photos/file_0.jpg")!
+        func response(_ contentType: String) -> HttpResponse {
+            HttpResponse(
+                status: 200, headers: [HttpHeader(name: "content-type", value: contentType)], body: Data([1]),
+                url: imageURL)
+        }
+        #expect(Http.contentType(of: response("application/octet-stream")) == "image/jpeg")
+        #expect(Http.contentType(of: response("text/plain")) == "text/plain")
+    }
+
+    @Test
+    func anAttachmentIsGotThroughTheBotTheChatIsWith() async throws {
+        let chat = ChannelID(provider: "telegram", instanceID: "bot")
+        let files = TelegramFiles()
+        await files.register(chat) { fileID in
+            #expect(fileID == "telegram-file-id")
+            return TelegramFileData(body: Data([1, 2, 3]), contentType: "image/jpeg")
+        }
+        let tool = Telegram.Fetch_attachmentTool(owner: Telegram(chat: chat, files: files))
 
         let output = try await tool.runOutput(
-            input: .init(
-                attachmentID: "telegram:telegram-file-id",
-                mimeType: "image/jpeg"
-            ),
-            authority: FullAuthority()
-        )
+            input: TelegramAttachment(attachmentID: "telegram-file-id"), authority: FullAuthority())
 
         guard case .data(let data) = output.result else {
             Issue.record("Expected binary tool data")

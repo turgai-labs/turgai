@@ -14,8 +14,8 @@ import struct AnyLanguageModel.GeneratedContent
 @Suite(.serialized)
 struct SharingTests {
     private let family = GroupID(rawValue: "family")
-    private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member) }
-    private var bob: CallScope { CallScope(UserID("bob"), in: family, as: .member) }
+    private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
+    private var bob: CallScope { CallScope(UserID("bob"), in: family, as: .member, allowed: []) }
     private let counter =
         "actor Counter {\n    var count = 0\n\n    func add() -> Int {\n        count += 1\n        return count\n    }\n}"
 

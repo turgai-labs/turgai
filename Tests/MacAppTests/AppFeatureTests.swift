@@ -209,7 +209,7 @@ struct ChatFeatureTests {
     }
 
     @Test
-    func approvalIsAskedOnceAndAnswered() async {
+    func anAccessRequestIsAskedOnceAndAnswered() async {
         let sent = LockIsolated<[ChatCommand]>([])
         let store = TestStore(
             initialState: ChatFeature.State(connection: .connected(botID: BotID(rawValue: "turgai")))
@@ -219,36 +219,33 @@ struct ChatFeatureTests {
             $0.chat.send = { command in sent.withValue { $0.append(command) } }
         }
         let conversation = ConversationID(rawValue: "c")
-        let play = Approval(id: UUID(1), action: "Music.play", arguments: #"{"query":"Daft Punk"}"#)
-        let add = Approval(id: UUID(2), action: "Reminders.add", arguments: #"{"title":"Milk"}"#)
+        let forecast = AccessRequest(id: UUID(1), request: "GET https://api.open-meteo.com/v1/forecast")
+        let search = AccessRequest(id: UUID(2), request: "GET https://html.duckduckgo.com/html/?q=tea")
 
         await store.send(
-            .received(ChatEvent(payload: .approvalRequested(conversationID: conversation, turnID: nil, approval: play)))
+            .received(ChatEvent(payload: .accessRequested(conversationID: conversation, request: forecast)))
         ) {
-            $0.approvals = [play]
+            $0.accessRequests = [forecast]
         }
-        // A reconnect asks again; it stays one question.
+        // A reconnect shows it again; it stays one request.
         await store.send(
-            .received(ChatEvent(payload: .approvalRequested(conversationID: conversation, turnID: nil, approval: play)))
-        )
-        await store.send(
-            .received(ChatEvent(payload: .approvalRequested(conversationID: conversation, turnID: nil, approval: add)))
-        ) {
-            $0.approvals = [play, add]
+            .received(ChatEvent(payload: .accessRequested(conversationID: conversation, request: forecast))))
+        await store.send(.received(ChatEvent(payload: .accessRequested(conversationID: conversation, request: search))))
+        {
+            $0.accessRequests = [forecast, search]
         }
 
-        await store.send(.approvalAnswered(play.id, .granted)) {
-            $0.approvals = [add]
+        await store.send(.accessAnswered(forecast.id, .always)) {
+            $0.accessRequests = [search]
         }
-        #expect(sent.value == [.approval(id: play.id, decision: .granted)])
+        #expect(sent.value == [.answer(id: forecast.id, answer: .always)])
 
         // Answered in another client.
         await store.send(
             .received(
-                ChatEvent(
-                    payload: .approvalResolved(conversationID: conversation, approvalID: add.id, decision: .denied)))
+                ChatEvent(payload: .accessAnswered(conversationID: conversation, requestID: search.id, answer: .no)))
         ) {
-            $0.approvals = []
+            $0.accessRequests = []
         }
     }
 }

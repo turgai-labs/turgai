@@ -210,32 +210,20 @@ public struct UserWorkflowTool: HailCore.Tool {
     public let workspaceRoot: String
     public let actorSystem: ClusterSystem?
     public let sourceAgentID: AgentID?
-    public let approval: any ToolApproval
     public let maximumOutputCharacters: Int
-    public let conversationID: String
-    public let requesterID: String
-    public let turnID: String
 
     public init(
         tool: UserTool,
         workspaceRoot: String,
         actorSystem: ClusterSystem? = nil,
         sourceAgentID: AgentID? = nil,
-        approval: any ToolApproval,
-        maximumOutputCharacters: Int = 4096,
-        conversationID: String = "unknown",
-        requesterID: String = "unknown",
-        turnID: String = "unknown"
+        maximumOutputCharacters: Int = 4096
     ) {
         self.tool = tool
         self.workspaceRoot = workspaceRoot
         self.actorSystem = actorSystem
         self.sourceAgentID = sourceAgentID
-        self.approval = approval
         self.maximumOutputCharacters = max(1, maximumOutputCharacters)
-        self.conversationID = conversationID
-        self.requesterID = requesterID
-        self.turnID = turnID
     }
 
     public var name: String { tool.name }
@@ -272,25 +260,8 @@ public struct UserWorkflowTool: HailCore.Tool {
         _ input: GeneratedContent, in scope: borrowing ToolScope<Never>,
         token: borrowing EffectToken<UserWorkflowEffect>
     ) async throws -> CallReturn {
-        if tool.approval == .always {
-            let decision = try await approval.decide(
-                ApprovalRequest(
-                    toolName: name,
-                    arguments: input,
-                    command: ["workflow", name],
-                    workingDirectory: workspaceRoot,
-                    conversationID: conversationID,
-                    requesterID: requesterID,
-                    turnID: turnID
-                )
-            )
-            guard decision == .granted else {
-                return .text("The user declined to run \(name).")
-            }
-        }
-
-        // A workflow's specification and scripts may be replaced while the
-        // model call is waiting for approval. Do not execute a removed tool.
+        // A workflow's specification and scripts may be replaced after the tool was offered. Do
+        // not execute a removed tool.
         guard FileManager.default.fileExists(atPath: tool.source.path) else {
             return .text("The user tool \(name) is no longer available.")
         }

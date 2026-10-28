@@ -25,18 +25,18 @@ import VirtualActors
 #endif
 
 actor TurgaiRuntimeSnapshotSource {
-    private var provider: (@Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot])?
+    private var provider: (@Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot])?
 
     func setProvider(
-        _ provider: @escaping @Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot]
+        _ provider: @escaping @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot]
     ) {
         self.provider = provider
     }
 
     /// What each running agent is doing, as whoever asks on behalf of `scope` may see it.
-    func snapshots(as scope: CallScope) async -> [TurgaiAgentRuntimeSnapshot] {
+    func snapshots(as viewer: Membership) async -> [TurgaiAgentRuntimeSnapshot] {
         guard let provider else { return [] }
-        return await provider(scope)
+        return await provider(viewer)
     }
 }
 
@@ -156,13 +156,17 @@ struct TurgaiAppService: Service, Sendable {
                 turgaiDirectory
                 .appendingPathComponent("tools", isDirectory: true)
             let wasmRunnerURL = WasmRunnerLocator.executableURL(environment: environment)
-            let attachmentResolver = AttachmentResolver()
-            let searchBackend = try Self.makeSearchBackend(environment: environment)
+            let telegramFiles = TelegramFiles()
+            // The tools every node has: a turn's, and those object code calls, decided as every
+            // effect is, by the scope of the call.
+            let nodeTools = NodeTools(
+                searchBackend: try Self.makeSearchBackend(environment: environment),
+                authority: { _ in TurgaiAuthority() })
             let userToolRegistry = Self.userToolRegistry(in: userToolsDirectory)
             let turnTools = TurnToolSources(
                 agentProfiles: agentProfiles, endpointFactory: endpointFactory,
                 runtimeConfiguration: runtimeConfiguration,
-                attachmentResolver: attachmentResolver, searchBackend: searchBackend, workspaceRoot: workspaceRoot,
+                telegramFiles: telegramFiles, nodeTools: nodeTools, workspaceRoot: workspaceRoot,
                 wasmRunnerURL: wasmRunnerURL, userToolRegistry: userToolRegistry)
             let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
                 workspaceRoot: workspaceRoot,
@@ -179,7 +183,8 @@ struct TurgaiAppService: Service, Sendable {
                 turnToolsProvider: { context, actorSystem in
                     try await turnTools.tools(for: context, on: actorSystem)
                 },
-                authorityProvider: { spawnConfig, workspace in Self.authority(for: spawnConfig, in: workspace) }
+                // No agent has an authority of its own: what a turn may do is what its scope allows.
+                authority: { _ in TurgaiAuthority() }
             )
             // The plugin is the stores' long-term owner: it receives the
             // instances built above and hosts them for every journaled actor.
@@ -191,7 +196,7 @@ struct TurgaiAppService: Service, Sendable {
             let channelRuntimePlugin = TurgaiChannelRuntimePlugin(
                 agentProfiles: agentProfiles,
                 secrets: channelSecrets,
-                attachments: attachmentResolver,
+                telegramFiles: telegramFiles,
                 loadPersistedConversationIDs: loadPersistedConversationIDs
             )
 
@@ -215,6 +220,7 @@ struct TurgaiAppService: Service, Sendable {
                 settings.plugins.install(plugin: runtimePlugin)
                 settings.plugins.install(plugin: workflowsPlugin)
                 settings.plugins.install(plugin: channelRuntimePlugin)
+                settings.plugins.install(plugin: ToolsAPIPlugin(nodeTools.api))
             }
 
             try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
@@ -226,6 +232,8 @@ struct TurgaiAppService: Service, Sendable {
             // The objects models made: started again after a restart, each on behalf of whoever
             // made it, so what they follow and run keeps going.
             try await DynamicObjects.resolve(on: system).start()
+            // The node's built-in objects, held while it runs: the receptionist doesn't keep them.
+            let weather = try await Weather(actorSystem: system)
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
                 activities: ScheduleActivities()
@@ -264,7 +272,7 @@ struct TurgaiAppService: Service, Sendable {
                     )
                 }
             }
-            let runtimeSnapshotProvider: @Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot] = {
+            let runtimeSnapshotProvider: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot] = {
                 await Self.runtimeSnapshots(on: system, as: $0)
             }
             await runtimeSnapshotSource.setProvider(runtimeSnapshotProvider)
@@ -286,6 +294,7 @@ struct TurgaiAppService: Service, Sendable {
                 logger: logger
             )
             try await serviceGroup.run()
+            withExtendedLifetime(weather) {}
             persistenceTasks.cancelAll()
         }
     }
@@ -571,54 +580,6 @@ extension TurgaiAppService {
         )
     }
 
-    /// What an agent may do: a helper nothing outside, a profile agent its workspace and Turgai's
-    /// own effects.
-    static func authority(for spawnConfig: AgentSpawnConfig, in workspace: AgentWorkspace) -> any Authority {
-        if spawnConfig.agentID.role.rawValue == "user-tool" {
-            return CompositeAuthority()
-                .granting(for: FileEffect.self) { _ in
-                    .denied("prompt helpers cannot access files")
-                }
-                .granting(for: TerminalEffect.self) { _ in
-                    .denied("prompt helpers cannot run terminal commands")
-                }
-                .granting(for: ProcessEffect.self) { _ in
-                    .denied("prompt helpers cannot spawn processes")
-                }
-                .granting(for: NetworkEffect.self) { _ in
-                    .denied("prompt helpers cannot access the network")
-                }
-                .granting(for: CoordinationEffect.self) { _ in
-                    .denied("prompt helpers cannot coordinate with other agents")
-                }
-                .grantingAll(for: ClockEffect.self)
-        }
-        return
-            CompositeAuthority
-            .workspaceDefault(root: workspace.rootPath)
-            .grantingAll(for: UserWorkflowEffect.self)
-            .grantingAll(for: CreateScheduleEffect.self)
-            .grantingAll(for: ReplaceScheduleEffect.self)
-            .grantingAll(for: CancelScheduleEffect.self)
-            .grantingAll(for: ListSchedulesEffect.self)
-            .grantingAll(for: TriggerScheduleEffect.self)
-            .grantingAll(for: CreateTimerEffect.self)
-            .grantingAll(for: ReplaceTimerEffect.self)
-            .grantingAll(for: CancelTimerEffect.self)
-            .grantingAll(for: ListTimersEffect.self)
-            // Actions that aren't safe also ask the user, inside the effect.
-            .grantingAll(for: FindObjectsEffect.self)
-            .grantingAll(for: ListObjectsEffect.self)
-            .grantingAll(for: MakeObjectEffect.self)
-            .grantingAll(for: ToolPageEffect.self)
-            .grantingAll(for: EditObjectEffect.self)
-            .grantingAll(for: ShareObjectEffect.self)
-            .grantingAll(for: UseObjectEffect.self)
-            .grantingAll(for: RemoveObjectEffect.self)
-            .grantingAll(for: InvokeObjectEffect.self)
-            .grantingAll(for: RecallEffect.self)
-    }
-
     /// What the object writer was asked and wrote, logged.
     @Sendable static func log(_ event: WriterEvent) {
         let logger = Logger(label: "turgai.objectwriter")
@@ -638,8 +599,14 @@ extension TurgaiAppService {
         logger.info("\(event.written)")
     }
 
-    /// What each running profile agent is doing, for the dashboard, asked on behalf of `scope`.
-    static func runtimeSnapshots(on system: ClusterSystem, as scope: CallScope) async -> [TurgaiAgentRuntimeSnapshot] {
+    /// What each running profile agent is doing, for the dashboard, asked on behalf of `viewer`, as
+    /// the dashboard's group settles their scope: none when it can't.
+    static func runtimeSnapshots(on system: ClusterSystem, as viewer: Membership) async -> [TurgaiAgentRuntimeSnapshot]
+    {
+        guard let group = try? await Group.resolve(on: system, id: .dashboard),
+            (try? await group.setRole(viewer.role, of: viewer.person)) != nil,
+            let scope = try? await group.opening(scopeOf: viewer.person)
+        else { return [] }
         let entries = (try? await system.agentRuntime.allAgents()) ?? []
         return await CallChain.$current.withValue(.start(scope)) { await snapshots(of: entries, on: system) }
     }
@@ -732,8 +699,8 @@ struct TurnToolSources: Sendable {
     let agentProfiles: TurgaiAgentProfileStore
     let endpointFactory: AgentModelEndpointFactory
     let runtimeConfiguration: HailRuntimeConfiguration
-    let attachmentResolver: AttachmentResolver
-    let searchBackend: WebSearchBackend
+    let telegramFiles: TelegramFiles
+    let nodeTools: NodeTools
     let workspaceRoot: String
     let wasmRunnerURL: URL?
     let userToolRegistry: UserToolRegistry
@@ -755,13 +722,11 @@ struct TurnToolSources: Sendable {
             }
         var tools = try await ConversationTools.make(
             context: context,
-            attachmentResolver: attachmentResolver,
-            searchBackend: searchBackend,
+            telegramFiles: telegramFiles,
+            nodeTools: nodeTools,
             workspaceRoot: workspaceRoot,
             wasmRunnerURL: wasmRunnerURL,
             userTools: userToolRegistry,
-            approval: ChannelToolApproval(
-                actorSystem: actorSystem, agentRole: context.agentID.role.rawValue),
             actorSystem: actorSystem,
             objectCatalog: objectCatalog,
             writer: writer,

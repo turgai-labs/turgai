@@ -25,7 +25,6 @@ struct ToolsPageTests {
             form: [
                 "toolName": ["weather"],
                 "toolDescription": ["Gets the weather."],
-                "approval": ["always"],
                 "bodyKind": ["workflow"],
                 "stageID": ["lookup", "explain", ""],
                 "stageKind": ["fetch", "think", "fetch"],

@@ -85,6 +85,8 @@ public enum HailModelEvent: Sendable {
     case toolCalled(name: String, arguments: String, at: Date)
     /// A tool call's result; `failure` says why it failed, when it did.
     case toolFinished(name: String, output: String, failure: String?, at: Date)
+    /// A call refused exactly this, which the turn's scope didn't allow.
+    case needed(ExactRequest)
     case completed
 }
 
@@ -94,6 +96,23 @@ public enum HailRunMapper {
             return value
         }
         return content.jsonString
+    }
+
+    /// Why a tool call failed, in a word.
+    public static func failure(_ kind: ToolFailureKind) -> String {
+        switch kind {
+        case .invalidArguments: "invalidArguments"
+        case .rejected: "rejected"
+        case .unavailable: "unavailable"
+        case .failed: "failed"
+        }
+    }
+
+    /// The exact request a call's refusal refused, which its scope didn't allow.
+    private static func needed(by result: ToolResult) -> [HailModelEvent] {
+        guard case .rejected(let refusal)? = result.failureKind, let request = ExactRequest(encoded: refusal.refused)
+        else { return [] }
+        return [.needed(request)]
     }
 
     /// What the agent did in a turn, as the turn's call brought it back.
@@ -115,8 +134,8 @@ public enum HailRunMapper {
             [
                 .toolFinished(
                     name: result.name, output: result.output.textRepresentation,
-                    failure: result.failureKind?.rawValue, at: at)
-            ]
+                    failure: result.failureKind.map(failure), at: at)
+            ] + needed(by: result)
         case .received, .modelOutputGenerated, .responseRecorded:
             []
         }
@@ -208,8 +227,8 @@ public struct HailAgentAdapter: Sendable {
                 let message = request.message
                 let input = HailConversationInput(message: message)
                 let agent = try await self.agent(for: conversationID)
-                // Attachments remain opaque references unless the model fetches one. What the agent
-                // does comes back through the turn's own call, the reply so far among it.
+                // Attachments stay ids, got when the model asks for one. What the agent does comes
+                // back through the turn's own call, the reply so far among it.
                 let stream = AgentStream<AgentReply>(actorSystem: actorSystem)
                 let following = Task<AgentReply?, Never> {
                     var reply: AgentReply?

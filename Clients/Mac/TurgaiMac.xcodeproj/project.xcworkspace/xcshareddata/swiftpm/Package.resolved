@@ -79,7 +79,7 @@
       "location" : "https://github.com/turgai-labs/doppel.git",
       "state" : {
         "branch" : "main",
-        "revision" : "80c8491eaa7bf44ba5267d56a1f27339eeac8a47"
+        "revision" : "54db39729ad85e39c14f25a75b5de8285ac5f73d"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "71ab4543823d5c3bc4fb7abb06eb9263539d93fd"
+        "revision" : "d6a8f803ccd18fa395e49b3a933605f8bd84c47e"
       }
     },
     {

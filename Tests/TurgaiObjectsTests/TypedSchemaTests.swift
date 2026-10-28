@@ -151,7 +151,9 @@ struct TypedSchemaTests {
         let instance = try await ScriptInstance.start(
             try Script(code: Self.desk, type: "RefundDesk"), as: ObjectIdentity(rawValue: "desk"),
             reaches: { _, _ in .null },
-            makes: { type, _ in throw CodeProblem("\(type) isn't made here") }, schedules: { _ in }, cancels: { _ in })
+            makes: { type, _ in throw CodeProblem("\(type) isn't made here") },
+            tools: { function, _ in throw CodeProblem("\(function) isn't here") }, schedules: { _ in },
+            cancels: { _ in })
         let error = await #expect(throws: CodeProblem.self) {
             try await instance.handle("review", arguments: ["refund": ["order": 7, "reason": "early"]])
         }

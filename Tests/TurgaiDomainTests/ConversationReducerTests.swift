@@ -23,49 +23,42 @@ struct ConversationReducerTests {
         return (state.applying(decision.events), decision.effects)
     }
 
+    /// A turn that needed what its scope didn't allow waits for the answer, which continues it:
+    /// its asker is told the answer, as their next message, whoever gave it.
     @Test
-    func whoeverWritesJoinsAsAMember() {
-        func message(from participant: String) -> InboundMessage {
-            InboundMessage(
-                conversationID: conversationID, participantID: ParticipantID(participant), text: "hello",
-                receivedAt: Date(timeIntervalSince1970: 1))
-        }
-        let ann = message(from: "ann")
-        let bob = message(from: "bob")
-        var state = ConversationState(conversationID: conversationID)
-        for sent in [ann, bob, message(from: "ann")] {
-            state = step(state, .receive(message: sent, turnID: TurnID(), agentRole: "conversation")).0
-        }
-
-        #expect(state.members.members == [ann.userID: .member, bob.userID: .member])
-        #expect(state.members.admins.isEmpty)
-    }
-
-    @Test
-    func thePlatformSaysWhoTheAdminsAre() {
-        let ann = UserID(participantID: ParticipantID("ann"))
-        let bob = UserID(participantID: ParticipantID("bob"))
-        let cat = UserID(participantID: ParticipantID("cat"))
-        let sent = InboundMessage(
-            conversationID: conversationID, participantID: ParticipantID("ann"), text: "hello",
+    func anAnswerContinuesTheTurnThatWaitedForIt() {
+        let asked = InboundMessage(
+            conversationID: conversationID, participantID: participantID, text: "What's the forecast?",
             receivedAt: Date(timeIntervalSince1970: 1))
+        let turn = TurnID()
         var state = step(
             ConversationState(conversationID: conversationID),
-            .receive(message: sent, turnID: TurnID(), agentRole: "conversation")
+            .receive(message: asked, turnID: turn, agentRole: "conversation")
         ).0
+        let forecast = ExactRequest.http(method: "GET", url: "https://example.com/forecast", body: Data())
+        let request = AccessRequest(
+            id: AccessRequestID(UUID()), request: forecast, by: asked.userID, standing: .waiting)
 
-        state = step(state, .admins([ann, bob])).0
-        #expect(state.members.members == [ann: .admin, bob: .admin])
+        state = step(state, .awaiting(request.id)).0
+        #expect(state.awaiting[request.id]?.message == asked)
+        // The same request again is the same wait.
+        #expect(ConversationDecision(.awaiting(request.id), in: state).events.isEmpty)
+        state = step(state, .modelCompleted(turnID: turn, completion: .void)).0
 
-        // Bob is no longer one, and Cat now is: Bob stays, as a member.
-        let decision = ConversationDecision(.admins([ann, cat]), in: state)
+        let next = TurnID()
+        let (continued, effects) = step(
+            state, .answered(request, .once, turnID: next, at: Date(timeIntervalSince1970: 2)))
+        #expect(continued.awaiting.isEmpty)
+        guard case .runReply(let reply)? = effects.first else {
+            Issue.record("the waiting turn didn't continue")
+            return
+        }
+        #expect(reply.turnID == next)
+        #expect(reply.message.userID == asked.userID)
+        #expect(reply.message.text == "Allowed once: GET https://example.com/forecast")
+        // An answer no turn waits for continues nothing.
         #expect(
-            decision.events == [.member(.joined(cat, as: .admin)), .member(.roleChanged(bob, to: .member))])
-        state = state.applying(decision.events)
-        #expect(state.members.admins == [ann, cat])
-
-        // The same admins again change nothing.
-        #expect(ConversationDecision(.admins([ann, cat]), in: state).events.isEmpty)
+            ConversationDecision(.answered(request, .no, turnID: TurnID(), at: Date()), in: continued).events.isEmpty)
     }
 
     @Test
@@ -330,8 +323,7 @@ struct ConversationReducerTests {
                         conversationID: conversationID,
                         turnID: pending.turnID,
                         message: pending.message,
-                        agentRole: pending.agentRole,
-                        scope: CallScope(pending.message.userID, in: GroupID(conversationID), as: .member)
+                        agentRole: pending.agentRole
                     )
                 )
             ])

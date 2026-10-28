@@ -219,16 +219,13 @@ extension TurgaiMainWebApp {
                             switch chatCommand {
                             case .message(let request):
                                 command = request
-                            case .approval(let id, let decision):
+                            case .answer(let id, let answer):
                                 let receipt = ConversationInputReceipt()
                                 await session.input.send(
                                     ConversationInputDelivery(
-                                        input: .approval(
-                                            conversationID: conversation.domainID,
-                                            approvalID: id,
-                                            decision: decision.domain,
-                                            by: userID
-                                        ),
+                                        input: .answer(
+                                            conversationID: conversation.domainID, AccessRequestID(id), answer.domain,
+                                            by: userID),
                                         receipt: receipt
                                     )
                                 )
@@ -870,12 +867,10 @@ private actor HTMLChatSocketWriter {
             return ChatLiveFragment.failed(text)
         case .reset:
             return ChatLiveFragment.cleared()
-        case .approvalRequested(_, _, let prompt):
-            return ChatLiveFragment.approval(
-                .init(id: prompt.id, action: prompt.action, arguments: prompt.arguments)
-            )
-        case .approvalResolved(_, let approvalID, let decision):
-            return ChatLiveFragment.approvalResolved(approvalID, decision: decision.public)
+        case .asked(_, let request):
+            return ChatLiveFragment.accessRequested(.init(request))
+        case .answered(_, let request, let answer, _):
+            return ChatLiveFragment.accessAnswered(request.id.rawValue, answer: answer.public)
         }
     }
 }
@@ -883,10 +878,10 @@ private actor HTMLChatSocketWriter {
 /// What the browser chat's forms send over the socket.
 private enum HTMLChatCommand: Decodable, Sendable {
     case message(text: String)
-    case approval(id: UUID, decision: TurgaiModels.ApprovalDecision)
+    case answer(id: UUID, answer: TurgaiModels.AccessAnswer)
 
     private enum CodingKeys: String, CodingKey {
-        case command, text, id, decision
+        case command, text, id, answer
     }
 
     init(from decoder: Decoder) throws {
@@ -894,10 +889,10 @@ private enum HTMLChatCommand: Decodable, Sendable {
         switch try values.decode(String.self, forKey: .command) {
         case "message":
             self = .message(text: try values.decode(String.self, forKey: .text))
-        case "approval":
-            self = .approval(
+        case "answer":
+            self = .answer(
                 id: try values.decode(UUID.self, forKey: .id),
-                decision: try values.decode(TurgaiModels.ApprovalDecision.self, forKey: .decision)
+                answer: try values.decode(TurgaiModels.AccessAnswer.self, forKey: .answer)
             )
         case let other:
             throw DecodingError.dataCorruptedError(
@@ -935,16 +930,12 @@ private func runHTMLChatSocket(
                 switch command {
                 case .message(let text):
                     commandText = text
-                case .approval(let id, let decision):
+                case .answer(let id, let answer):
                     let receipt = ConversationInputReceipt()
                     await session.input.send(
                         ConversationInputDelivery(
-                            input: .approval(
-                                conversationID: conversation.domainID,
-                                approvalID: id,
-                                decision: decision.domain,
-                                by: userID
-                            ),
+                            input: .answer(
+                                conversationID: conversation.domainID, AccessRequestID(id), answer.domain, by: userID),
                             receipt: receipt
                         )
                     )
@@ -1018,22 +1009,13 @@ private struct PublicChatEvent: Sendable {
                     error: .init(code: "reset", message: "Conversation reset.")
                 )
             )
-        case .approvalRequested(_, let turnID, let prompt):
+        case .asked(_, let request):
             self.event = .init(
-                payload: .approvalRequested(
-                    conversationID: publicConversationID,
-                    turnID: turnID.map { .init(rawValue: $0.rawValue) },
-                    approval: .init(id: prompt.id, action: prompt.action, arguments: prompt.arguments)
-                )
-            )
-        case .approvalResolved(_, let approvalID, let decision):
+                payload: .accessRequested(conversationID: publicConversationID, request: .init(request)))
+        case .answered(_, let request, let answer, _):
             self.event = .init(
-                payload: .approvalResolved(
-                    conversationID: publicConversationID,
-                    approvalID: approvalID,
-                    decision: decision.public
-                )
-            )
+                payload: .accessAnswered(
+                    conversationID: publicConversationID, requestID: request.id.rawValue, answer: answer.public))
         }
     }
 
@@ -1133,21 +1115,32 @@ private struct PublicChatEvent: Sendable {
     }
 }
 
-extension TurgaiModels.ApprovalDecision {
-    fileprivate var domain: TurgaiDomain.ApprovalDecision {
+extension TurgaiModels.AccessAnswer {
+    fileprivate var domain: TurgaiDomain.AccessAnswer {
         switch self {
-        case .granted: .granted
-        case .denied: .denied
+        case .once: .once
+        case .always: .always
+        case .everyone: .everyone
+        case .no: .no
         }
     }
 }
 
-extension TurgaiDomain.ApprovalDecision {
-    fileprivate var `public`: TurgaiModels.ApprovalDecision {
+extension TurgaiDomain.AccessAnswer {
+    fileprivate var `public`: TurgaiModels.AccessAnswer {
         switch self {
-        case .granted: .granted
-        case .denied: .denied
+        case .once: .once
+        case .always: .always
+        case .everyone: .everyone
+        case .no: .no
         }
+    }
+}
+
+extension TurgaiModels.AccessRequest {
+    /// A request as a client shows it: exactly what was asked for, as people read it.
+    fileprivate init(_ request: TurgaiDomain.AccessRequest) {
+        self.init(id: request.id.rawValue, request: request.request.description)
     }
 }
 

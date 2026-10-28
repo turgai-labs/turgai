@@ -22,7 +22,7 @@ struct EvalNode: Sendable {
 
     static func start(
         model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil,
-        agents: [EvalAgent] = []
+        agents: [EvalAgent] = [], sendsRequests: Bool = false
     ) async throws -> EvalNode {
         let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
             "turgai-eval-\(UUID().uuidString)")
@@ -62,9 +62,10 @@ struct EvalNode: Sendable {
                     model: model, configuration: configuration, temperature: runtime.temperature)
                 return try await Self.tools(
                     for: context, on: actorSystem, catalog: await catalog.current, agents: agents, writing: writing,
-                    objectsPageDescription: objectsPageDescription)
+                    objectsPageDescription: objectsPageDescription, sendsRequests: sendsRequests)
             },
-            authorityProvider: { _, _ in Self.authority }
+            // What a turn may do is what its scope allows, as on every node.
+            authority: { _ in TurgaiAuthority() }
         )
         let system = await ClusterSystem("eval") { settings in
             settings.bindHost = "127.0.0.1"
@@ -78,6 +79,7 @@ struct EvalNode: Sendable {
             settings.checkObjectAccess()
             settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
             settings.plugins.install(plugin: plugin)
+            settings.plugins.install(plugin: ToolsAPIPlugin(Self.nodeTools.api))
         }
         try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
         await catalog.start(on: system)
@@ -90,7 +92,7 @@ struct EvalNode: Sendable {
     /// A turn's tools: the objects, made and found, and the task's other agents, which it can ask.
     private static func tools(
         for context: AgentTurnContext, on actorSystem: ClusterSystem, catalog: ObjectCatalog?, agents: [EvalAgent],
-        writing: any ModelEndpoint, objectsPageDescription: String?
+        writing: any ModelEndpoint, objectsPageDescription: String?, sendsRequests: Bool
     ) async throws -> TurnTools {
         // A task's agents, which the others can ask: never itself.
         let others: [Role] = agents.map(\.role).filter { (role: Role) -> Bool in role != context.agentID.role }
@@ -103,21 +105,14 @@ struct EvalNode: Sendable {
         let roots: [any HailCore.Tool] = try await ObjectTools(session: session).tools().filter {
             (tool: any HailCore.Tool) -> Bool in tool.name != "use_object"
         }
-        let tools: [any HailCore.Tool] = roots + (await session.objectTools())
+        // The node's own tools, for a task that sends requests: as every conversation has them.
+        let tools: [any HailCore.Tool] =
+            roots + (await session.objectTools()) + (sendsRequests ? Self.nodeTools.turn : [])
         return TurnTools(tools: tools, pages: EvalPages(base: session, introduction: objectsPageDescription))
     }
 
-    /// What an eval's agents may do: everything with objects, and nothing else.
-    private static let authority = CompositeAuthority()
-        .grantingAll(for: FindObjectsEffect.self)
-        .grantingAll(for: ListObjectsEffect.self)
-        .grantingAll(for: MakeObjectEffect.self)
-        .grantingAll(for: ToolPageEffect.self)
-        .grantingAll(for: EditObjectEffect.self)
-        .grantingAll(for: ShareObjectEffect.self)
-        .grantingAll(for: UseObjectEffect.self)
-        .grantingAll(for: RemoveObjectEffect.self)
-        .grantingAll(for: InvokeObjectEffect.self)
+    /// The tools every node has, under the node's authority.
+    private static let nodeTools = NodeTools(authority: { _ in TurgaiAuthority() })
 
     /// The provider settings the app's profiles use for this model.
     static func configuration(for model: AgentModel) throws -> AgentProviderConfiguration {
@@ -128,8 +123,16 @@ struct EvalNode: Sendable {
         }
     }
 
-    /// Who the eval asks as: one person, in a group of their own.
-    static let asker = CallScope(UserID("eval"), in: GroupID(rawValue: "eval"), as: .admin)
+    /// Who the eval asks as: one person, the admin of a group of their own.
+    static let askerID = TurgaiDomain.UserID("eval")
+    static let group = GroupID(rawValue: "eval")
+
+    /// The asker's scope, as their group settles it.
+    func asker() async throws -> CallScope {
+        let group = try await Group.resolve(on: system, id: Self.group)
+        try await group.setAdmins([Self.askerID])
+        return try await group.opening(scopeOf: Self.askerID)
+    }
 
     /// An agent no one has talked to.
     func freshAgent() async throws -> Agent {

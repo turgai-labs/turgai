@@ -5,6 +5,7 @@ import HailAgentRuntime
 import Logging
 import Observation
 import ServiceLifecycle
+import TurgaiApplication
 import TurgaiObjects
 import TurgaiServer
 import TurgaiWeb
@@ -102,6 +103,8 @@ actor MacObjectsService: Service {
             settings.plugins.install(plugin: DiscoveryPlugin())
             settings.propagateCallChain()
             settings.checkObjectAccess()
+            // The tools every node has, which objects' code here calls.
+            settings.plugins.install(plugin: ToolsAPIPlugin(NodeTools(authority: { _ in TurgaiAuthority() }).api))
         }
         defer { _ = try? system.shutdown() }
         try await withGracefulShutdownHandler {

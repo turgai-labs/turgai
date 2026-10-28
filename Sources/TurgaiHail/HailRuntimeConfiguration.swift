@@ -1,3 +1,4 @@
+import DistributedCluster
 import Hail
 
 #if canImport(FoundationEssentials)
@@ -92,7 +93,7 @@ public struct HailRuntimeConfiguration: Sendable {
         modelSelectionProvider: @escaping ModelSelectionProvider,
         definitionProvider: AgentRuntimePlugin.DefinitionProvider? = nil,
         turnToolsProvider: AgentRuntimePlugin.TurnToolsProvider? = nil,
-        authorityProvider: AgentRuntimePlugin.AuthorityProvider? = nil,
+        authority: @escaping @Sendable (ClusterSystem) -> any Authority,
         compactionOperation: CompactionOperation? = nil
     ) throws -> AgentRuntimePlugin {
         let routerConfiguration = try ModelRouterConfiguration(
@@ -116,7 +117,7 @@ public struct HailRuntimeConfiguration: Sendable {
             routerConfiguration: routerConfiguration,
             modelEndpointProvider: modelEndpointProvider,
             turnToolsProvider: turnToolsProvider,
-            authorityProvider: authorityProvider,
+            authority: authority,
             workspaceProvider: { spawnConfig throws(AgentRuntimeError) in
                 let directoryName = WorkspaceDirectoryName.make(for: spawnConfig.workspaceID)
                 let root = workspaceRoot + "/workspaces/" + directoryName

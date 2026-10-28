@@ -300,33 +300,23 @@ public struct UserTool: Sendable {
         case workflow(Workflow)
     }
 
-    /// How consent is asked before the tool runs. Native process and Wasm
-    /// tools default to `.always` at load time; prompts default to `.never`.
-    public enum ApprovalPolicy: String, Codable, Sendable {
-        case always
-        case never
-    }
-
     public let name: String
     public let description: String
-    public let approval: ApprovalPolicy
     public let arguments: GenerationSchema
     public let body: Body
-    /// The spec file this tool was loaded from, for diagnostics and for
-    /// re-validation while an approval question is pending.
+    /// The spec file this tool was loaded from, for diagnostics and for re-validation before it
+    /// runs.
     public let source: URL
 
     public init(
         name: String,
         description: String,
-        approval: ApprovalPolicy,
         arguments: GenerationSchema,
         body: Body,
         source: URL
     ) {
         self.name = name
         self.description = description
-        self.approval = approval
         self.arguments = arguments
         self.body = body
         self.source = source

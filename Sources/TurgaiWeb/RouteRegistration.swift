@@ -24,7 +24,7 @@ struct TurgaiRouteDependencies: Sendable {
     let requestLimits: RequestLimitStore
     let channelSecrets: ChannelSecretStore
     let defaultFileDirectory: URL
-    let runtimeSnapshots: @Sendable (CallScope) async -> [TurgaiAgentRuntimeSnapshot]
+    let runtimeSnapshots: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot]
     let userToolRegistry: UserToolRegistry
     let webChatBridge: TurgaiWebChatBridge
     let apiConfiguration: APIConfiguration

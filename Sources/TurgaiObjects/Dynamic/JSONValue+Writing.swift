@@ -36,6 +36,8 @@ extension JSONValue {
             return options[1 - null].declaredType(optional: true)
         }
         switch self["type"] {
+        // Bytes, as `Codable` writes `Data`: base64 text.
+        case "string" where self["contentEncoding"] == "base64": return "Data"
         case "string": return "String"
         case "integer": return "Int"
         case "number": return "Double"

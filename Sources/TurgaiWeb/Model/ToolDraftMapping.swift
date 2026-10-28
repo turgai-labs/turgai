@@ -13,7 +13,6 @@ extension TurgaiToolDraft {
         self.kind = .existing
         self.name = document.tool?.name ?? ""
         self.description = document.tool?.description ?? ""
-        self.approval = document.tool?.approval.rawValue ?? "always"
         self.arguments = document.tool.map { Self.argumentDrafts(from: $0.arguments) } ?? []
         self.workflowSteps = []
         self.processExecutable = ""
@@ -53,7 +52,6 @@ extension TurgaiToolDraft {
         self.kind = kind
         self.name = form["toolName"]?.first ?? ""
         self.description = form["toolDescription"]?.first ?? ""
-        self.approval = form["approval"]?.first ?? "always"
         self.bodyKind = TurgaiToolBodyKind(rawValue: form["bodyKind"]?.first ?? "") ?? .workflow
 
         let argumentCount = form["argumentName"]?.count ?? 0

@@ -43,7 +43,7 @@ public struct ObjectWriter: Sendable {
     /// Each answer goes to `save`, which says what's wrong with it, or `nil` when it's saved.
     public func write(
         type: String, task: String, current: String?, failure: String? = nil, others: [String] = [],
-        values: [String] = [],
+        tools: [String] = [], values: [String] = [],
         request: String? = nil,
         runtime: [String] = ObjectWriter.runtime, explained: [String] = [RuntimeMacros.declared],
         isolation: isolated (any Actor)? = #isolation,
@@ -69,6 +69,8 @@ public struct ObjectWriter: Sendable {
         parts += explained
         // The objects that exist: what each is, its methods, and its events.
         if !others.isEmpty { parts.append("Objects that exist:\n" + others.joined(separator: "\n\n")) }
+        // The tools it can call, always in scope.
+        if !tools.isEmpty { parts.append("Tools it can call, always in scope:\n" + tools.joined(separator: "\n\n")) }
         // The types their values are, which the code uses as they're declared.
         if !values.isEmpty { parts.append("Values they send and take:\n" + values.joined(separator: "\n")) }
         // The code to change, as it is now.
