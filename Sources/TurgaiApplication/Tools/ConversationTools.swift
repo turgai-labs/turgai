@@ -39,11 +39,6 @@ public enum ConversationTools {
         if case .conversation(let conversation)? = working, await telegramFiles.serves(conversation.channel) {
             tools += Telegram(chat: conversation.channel, files: telegramFiles).tools
         }
-        // Schedules and timers reply in a conversation: an agent asked as an object has none.
-        if case .conversation? = working {
-            tools += ScheduleTools(context: context).tools
-            tools += TimerTools(context: context).tools
-        }
         var pages: any ToolPages = NoToolPages()
         // The person the agent works for.
         let owner = working?.person

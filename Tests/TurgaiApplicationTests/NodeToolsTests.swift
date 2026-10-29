@@ -112,11 +112,6 @@ private actor Said {
     nonisolated var dependency: ActorSystemDependency<ChatSayEffect> {
         struct Unreached: Error {}
         return ActorSystemDependency(
-            workflows: WorkflowActions(
-                startTimer: { _, _, _ in throw Unreached() }, cancelTimer: { _ in throw Unreached() },
-                listTimers: { throw Unreached() }, schedule: { _, _, _, _, _ in throw Unreached() },
-                cancelSchedule: { _ in throw Unreached() }, triggerSchedule: { _ in throw Unreached() },
-                listSchedules: { throw Unreached() }),
             virtualActors: VirtualActorActions(
                 resolveUser: { _ in throw Unreached() },
                 notify: { chat, text in await self.add(Message(chat: chat, text: text)) }))

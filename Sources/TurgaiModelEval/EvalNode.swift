@@ -131,7 +131,7 @@ struct EvalNode: Sendable {
     func asker() async throws -> CallScope {
         let group = try await Group.resolve(on: system, id: Self.group)
         try await group.setAdmins([Self.askerID])
-        return try await group.opening(scopeOf: Self.askerID)
+        return try await group.opening(scopeOf: Self.askerID, for: .person)
     }
 
     /// An agent no one has talked to.

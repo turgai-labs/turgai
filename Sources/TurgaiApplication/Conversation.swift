@@ -116,7 +116,7 @@ private enum MemoryPresentation {
     }
 }
 
-private enum DeferredActionPresentation {
+private enum DuePresentation {
     private enum Command {
         static let cancelReminder = "/cancel-reminder"
         static let pauseTask = "/pause-task"
@@ -124,57 +124,50 @@ private enum DeferredActionPresentation {
         static let cancelTask = "/cancel-task"
     }
 
-    static func reminders(_ values: [(WorkflowID, Date, DeferredAction)]) -> (String, [OutboundAction]) {
-        guard !values.isEmpty else { return ("No active reminders.", []) }
+    static func reminders(_ timers: TimersInChat) -> (String, [OutboundAction]) {
+        guard !timers.chat.isEmpty || !timers.objects.isEmpty else { return ("No active reminders.", []) }
         var lines: [String] = []
         var actions: [OutboundAction] = []
-        for (id, fireAt, action) in values {
-            lines.append(action.content)
-            lines.append(
-                "  Action: \(action.kind == .deliverPreparedMessage ? "deliver prepared message" : "perform task")")
-            lines.append("  At: \(fireAt.formatted(date: .abbreviated, time: .shortened))")
-            actions.append(
-                OutboundAction(
-                    label: "Cancel",
-                    command: "\(Command.cancelReminder) \(WorkflowID.compactTimerID(id))"
-                )
-            )
+        for timer in timers.chat {
+            switch timer.then {
+            case .say(let text): lines.append("\(timer.name): says \(text)")
+            case .ask(let instruction): lines.append("\(timer.name): asks \(instruction)")
+            }
+            lines.append("  At: \(timer.date.formatted(date: .abbreviated, time: .shortened))")
+            actions.append(OutboundAction(label: "Cancel", command: "\(Command.cancelReminder) \(timer.name)"))
+        }
+        // An object's own timers, which its code changes.
+        for timer in timers.objects {
+            lines.append("\(timer.object) · \(timer.property)")
+            lines.append("  At: \(timer.date.formatted(date: .abbreviated, time: .shortened))")
         }
         return (lines.joined(separator: "\n"), actions)
     }
 
-    static func tasks(
-        _ values: [(ScheduleID, Date, Date?, Date?, Bool, DeferredAction)]
-    ) -> (String, [OutboundAction]) {
-        guard !values.isEmpty else { return ("No active tasks.", []) }
+    static func tasks(_ scheduled: SchedulesInChat) -> (String, [OutboundAction]) {
+        guard !scheduled.chat.isEmpty || !scheduled.objects.isEmpty else { return ("No active tasks.", []) }
         var lines: [String] = []
         var actions: [OutboundAction] = []
-        for (id, createdAt, lastFiredAt, nextFireAt, paused, action) in values {
-            lines.append(action.content)
-            lines.append(
-                "  Action: \(action.kind == .deliverPreparedMessage ? "deliver prepared message" : "perform task")")
-            lines.append("  Created: \(createdAt.formatted(date: .abbreviated, time: .shortened))")
-            if let lastFiredAt {
-                lines.append("  Last run: \(lastFiredAt.formatted(date: .abbreviated, time: .shortened))")
+        func next(_ date: Date?) -> String { date?.formatted(date: .abbreviated, time: .shortened) ?? "unknown" }
+        for schedule in scheduled.chat {
+            switch schedule.then {
+            case .say(let text): lines.append("\(schedule.name): says \(text)")
+            case .ask(let instruction): lines.append("\(schedule.name): asks \(instruction)")
             }
-            lines.append(
-                "  Next: \(nextFireAt?.formatted(date: .abbreviated, time: .shortened) ?? "unknown")"
-            )
-            lines.append("  Status: \(paused ? "paused" : "active")")
+            lines.append("  \(schedule.schedule.described)")
+            lines.append("  Next: \(next(schedule.next))")
+            lines.append("  Status: \(schedule.paused ? "paused" : "active")")
             actions.append(
                 OutboundAction(
-                    label: paused ? "Resume" : "Pause",
-                    command: paused
-                        ? "\(Command.unpauseTask) \(ScheduleID.compactScheduleID(id))"
-                        : "\(Command.pauseTask) \(ScheduleID.compactScheduleID(id))"
-                )
-            )
-            actions.append(
-                OutboundAction(
-                    label: "Cancel",
-                    command: "\(Command.cancelTask) \(ScheduleID.compactScheduleID(id))"
-                )
-            )
+                    label: schedule.paused ? "Resume" : "Pause",
+                    command: "\(schedule.paused ? Command.unpauseTask : Command.pauseTask) \(schedule.name)"))
+            actions.append(OutboundAction(label: "Cancel", command: "\(Command.cancelTask) \(schedule.name)"))
+        }
+        // An object's own schedules, which its code changes.
+        for schedule in scheduled.objects {
+            lines.append("\(schedule.object) · \(schedule.property)")
+            lines.append("  \(schedule.schedule.described)")
+            lines.append("  Next: \(next(schedule.next))")
         }
         return (lines.joined(separator: "\n"), actions)
     }
@@ -603,19 +596,10 @@ public distributed actor Conversation {
         )
     }
 
-    public distributed func showReminders() async throws {
-        let descriptions = try await actorSystem.workflows.listWorkflows(workflow: TimerWorkflow.self)
-        let decoder = JSONDecoder()
-        let reminders = descriptions.compactMap { description -> (WorkflowID, Date, DeferredAction)? in
-            guard case .running = description.status,
-                let inputData = description.inputData,
-                let input = try? decoder.decode(Timer.Input.self, from: inputData),
-                input.request.conversationID == conversationID
-            else { return nil }
-            return (description.id, input.fireAt, input.request.action)
-        }
-        .sorted { $0.1 < $1.1 }
-        let presentation = DeferredActionPresentation.reminders(reminders)
+    /// This chat's timers and its objects', as the timers object lists them for `person`.
+    public distributed func showReminders(for person: TurgaiDomain.UserID) async throws {
+        let timers = try await asking(person) { try await Timers.resolve(on: $0).list() }
+        let presentation = DuePresentation.reminders(timers)
         await publish(
             .noticeWithActions(
                 conversationID: conversationID,
@@ -626,153 +610,76 @@ public distributed actor Conversation {
         )
     }
 
-    public distributed func showTasks() async throws {
-        let descriptions = try await actorSystem.workflows.listSchedules(workflow: ScheduleWorkflow.self)
-        let decoder = JSONDecoder()
-        let tasks = descriptions.compactMap { description -> (ScheduleID, Date, Date?, Date?, Bool, DeferredAction)? in
-            guard let request = try? decoder.decode(Schedule.Request.self, from: description.inputData),
-                request.conversationID == conversationID
-            else { return nil }
-            return (
-                description.id,
-                description.createdAt,
-                description.lastFiredAt,
-                description.nextFireAt,
-                description.paused,
-                request.action
+    /// A change to one of this chat's schedules, as its commands ask for it.
+    public enum TaskChange: Codable, Sendable {
+        case pause, resume, cancel
+    }
+
+    /// This chat's schedules and its objects', as the scheduler lists them for `person`.
+    public distributed func showTasks(for person: TurgaiDomain.UserID) async throws {
+        let scheduled = try await asking(person) { try await Scheduler.resolve(on: $0).list() }
+        let presentation = DuePresentation.tasks(scheduled)
+        await publish(
+            .noticeWithActions(
+                conversationID: conversationID,
+                turnID: nil,
+                text: presentation.0,
+                actions: presentation.1
             )
-        }
-        .sorted { left, right in
-            switch (left.3, right.3) {
-            case (let left?, let right?): return left < right
-            case (_?, nil): return true
-            case (nil, _?): return false
-            default: return left.0.rawValue < right.0.rawValue
+        )
+    }
+
+    /// `change` to this chat's schedule `name`, as the scheduler makes it for `person`: refused,
+    /// with why, when it isn't theirs to make.
+    public distributed func changeTask(_ change: TaskChange, named name: String, by person: TurgaiDomain.UserID)
+        async throws
+    {
+        do {
+            let changed = try await asking(person) { system in
+                let scheduler = try await Scheduler.resolve(on: system)
+                switch change {
+                case .pause: return try await scheduler.pause(name: name)
+                case .resume: return try await scheduler.resume(name: name)
+                case .cancel: return try await scheduler.cancel(name: name)
+                }
             }
-        }
-        let presentation = DeferredActionPresentation.tasks(tasks)
-        await publish(
-            .noticeWithActions(
-                conversationID: conversationID,
-                turnID: nil,
-                text: presentation.0,
-                actions: presentation.1
-            )
-        )
-    }
-
-    public distributed func pauseTask(id: String) async throws {
-        guard let id = ScheduleID.scheduleID(from: id) else {
-            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Usage: /pause-task <task-id>"))
-            return
-        }
-        let workflows = actorSystem.workflows
-        guard
-            try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
-                guard description.id == id,
-                    let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
-                else { return false }
-                return request.conversationID == conversationID
-            })
-        else {
-            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
-            return
-        }
-        try await workflows.pauseSchedule(
-            id: id,
-            workflow: ScheduleWorkflow.self,
-            reason: "Telegram command"
-        )
-        await publish(
-            .notice(
-                conversationID: conversationID, turnID: nil,
-                text: DeferredActionPresentation.action("paused", id: id.rawValue)))
-    }
-
-    public distributed func unpauseTask(id: String) async throws {
-        guard let id = ScheduleID.scheduleID(from: id) else {
-            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Usage: /unpause-task <task-id>"))
-            return
-        }
-        let workflows = actorSystem.workflows
-        guard
-            try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
-                guard description.id == id,
-                    let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
-                else { return false }
-                return request.conversationID == conversationID
-            })
-        else {
-            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
-            return
-        }
-        try await workflows.unpauseSchedule(
-            id: id,
-            workflow: ScheduleWorkflow.self,
-            reason: "Telegram command"
-        )
-        await publish(
-            .notice(
-                conversationID: conversationID, turnID: nil,
-                text: DeferredActionPresentation.action("unpaused", id: id.rawValue)))
-    }
-
-    public distributed func cancelTask(id: String) async throws {
-        guard let id = ScheduleID.scheduleID(from: id) else {
-            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Usage: /cancel-task <task-id>"))
-            return
-        }
-        let workflows = actorSystem.workflows
-        guard
-            try await workflows.listSchedules(workflow: ScheduleWorkflow.self).contains(where: { description in
-                guard description.id == id,
-                    let request = try? JSONDecoder().decode(Schedule.Request.self, from: description.inputData)
-                else { return false }
-                return request.conversationID == conversationID
-            })
-        else {
-            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Task not found."))
-            return
-        }
-        try await workflows.cancelSchedule(
-            id: id,
-            workflow: ScheduleWorkflow.self
-        )
-        await publish(
-            .notice(
-                conversationID: conversationID, turnID: nil,
-                text: DeferredActionPresentation.action("cancelled", id: id.rawValue)))
-    }
-
-    public distributed func cancelReminder(id: String) async throws {
-        guard let id = WorkflowID.timerID(from: id) else {
+            let verb =
+                switch change {
+                case .pause: "paused"
+                case .resume: "resumed"
+                case .cancel: "cancelled"
+                }
             await publish(
-                .notice(conversationID: conversationID, turnID: nil, text: "Usage: /cancel-reminder <reminder-id>"))
-            return
+                .notice(
+                    conversationID: conversationID, turnID: nil,
+                    text: DuePresentation.action(verb, id: changed.name)))
+        } catch {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "\(error)"))
         }
-        let workflows = actorSystem
-        let descriptions = try await workflows.workflows.listWorkflows(workflow: TimerWorkflow.self)
-        guard
-            descriptions.contains(where: { description in
-                guard description.id == id,
-                    case .running = description.status,
-                    let inputData = description.inputData,
-                    let input = try? JSONDecoder().decode(Timer.Input.self, from: inputData)
-                else { return false }
-                return input.request.conversationID == conversationID
-            })
-        else {
-            await publish(.notice(conversationID: conversationID, turnID: nil, text: "Reminder not found."))
-            return
+    }
+
+    /// `ask`'s answer, asked of an object on behalf of `person`, in this chat: with their scope,
+    /// which asking spends nothing of.
+    private func asking<Answer: Sendable>(
+        _ person: TurgaiDomain.UserID, _ ask: @Sendable (ClusterSystem) async throws -> Answer
+    ) async throws -> Answer {
+        let scope = try await group().scope(of: person)
+        let system = actorSystem
+        return try await CallChain.$current.withValue(.start(scope, in: conversationID)) { try await ask(system) }
+    }
+
+    /// Cancels this chat's timer `name`, as the timers object does for `person`: refused, with
+    /// why, when it isn't theirs to cancel.
+    public distributed func cancelReminder(named name: String, by person: TurgaiDomain.UserID) async throws {
+        do {
+            let cancelled = try await asking(person) { try await Timers.resolve(on: $0).cancel(name: name) }
+            await publish(
+                .notice(
+                    conversationID: conversationID, turnID: nil,
+                    text: DuePresentation.reminderAction("cancelled", id: cancelled.name)))
+        } catch {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "\(error)"))
         }
-        try await workflows.workflows.cancel(
-            type: TimerWorkflow.self,
-            options: WorkflowOptions(id: id)
-        )
-        await publish(
-            .notice(
-                conversationID: conversationID, turnID: nil,
-                text: DeferredActionPresentation.reminderAction("cancelled", id: id.rawValue)))
     }
 
     /// Receives ephemeral model output from the current turn runner. The
@@ -817,7 +724,7 @@ public distributed actor Conversation {
         let turnConfiguration = turnConfigurations.removeValue(forKey: request.turnID)
         do {
             // The turn's scope, as its sender's group settles it now that it starts.
-            let scope = try await group().opening(scopeOf: request.message.userID)
+            let scope = try await group().opening(scopeOf: request.message.userID, for: .person)
             try await participant(for: request.agentRole).answer(
                 request, as: scope,
                 memoryExtraction: turnConfiguration?.memoryExtraction ?? memoryExtractionConfiguration)

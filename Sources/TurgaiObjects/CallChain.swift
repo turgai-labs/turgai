@@ -11,20 +11,30 @@ public struct CallChain: Codable, Sendable, Equatable {
     /// The conversation it happens in, when it happens in one: a turn's, or, for what an object
     /// does itself, the one it was made in. It stays the same down the chain too.
     public let place: ConversationID?
+    /// Who it's for, asking: its person, or an object's own work, done for them. What an admin
+    /// allows once goes to exactly the one that asked.
+    public let asker: Asker
     public let actors: [ObjectID]
 
     /// How deep calls may go.
     static let limit = 64
 
-    /// A call no actor's code made, on behalf of `scope`, in `place`: the start of a chain.
+    /// A call no actor's code made, on behalf of `scope`, in `place`: the start of a chain its
+    /// person makes.
     public static func start(_ scope: CallScope, in place: ConversationID?) -> CallChain {
-        CallChain(scope: scope, place: place, actors: [])
+        CallChain(scope: scope, place: place, asker: .person, actors: [])
+    }
+
+    /// The start of a chain of `object`'s own work, its tasks and what it follows, on behalf of
+    /// `scope`, its maker's, in `place`.
+    public static func own(_ object: ObjectIdentity, for scope: CallScope, in place: ConversationID?) -> CallChain {
+        CallChain(scope: scope, place: place, asker: .object(object), actors: [])
     }
 
     /// The chain inside `actor`'s handling of a call that came through this one, refused once
     /// it's too deep. It's left as the handling ends, with the chain it was entered from.
     public func entering(_ actor: ObjectID) throws(CallsTooDeep) -> CallChain {
-        let next = CallChain(scope: scope, place: place, actors: actors + [actor])
+        let next = CallChain(scope: scope, place: place, asker: asker, actors: actors + [actor])
         guard next.actors.count <= Self.limit else { throw CallsTooDeep(chain: next) }
         return next
     }

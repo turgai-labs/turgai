@@ -735,17 +735,17 @@ actor LiveSession {
             case .diagnose:
                 try await conversation.showDiagnostics(for: userID)
             case .reminders:
-                try await conversation.showReminders()
+                try await conversation.showReminders(for: userID)
             case .tasks:
-                try await conversation.showTasks()
-            case .pauseTask(let id):
-                try await conversation.pauseTask(id: id)
-            case .unpauseTask(let id):
-                try await conversation.unpauseTask(id: id)
-            case .cancelTask(let id):
-                try await conversation.cancelTask(id: id)
-            case .cancelReminder(let id):
-                try await conversation.cancelReminder(id: id)
+                try await conversation.showTasks(for: userID)
+            case .pauseTask(let name):
+                try await conversation.changeTask(.pause, named: name, by: userID)
+            case .unpauseTask(let name):
+                try await conversation.changeTask(.resume, named: name, by: userID)
+            case .cancelTask(let name):
+                try await conversation.changeTask(.cancel, named: name, by: userID)
+            case .cancelReminder(let name):
+                try await conversation.cancelReminder(named: name, by: userID)
             }
             return true
         } catch {

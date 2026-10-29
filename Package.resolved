@@ -1,5 +1,5 @@
 {
-  "originHash" : "22e5237c7df75aac528dde7bba273c4c886458ad9ca8dd8c1f7dcab3b9731d73",
+  "originHash" : "578cd831c812d183d9912ea858c9e07c2b07382c6a8bebcb2f71714c562217dd",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -25,7 +25,7 @@
       "location" : "https://github.com/akbashev/cluster-durable-workflows.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "44628119f4ac90e80732d147b1b5d247004ed084"
+        "revision" : "2ad79b0889f58719c5c9f93fb794a9febe99bdd1"
       }
     },
     {

@@ -52,10 +52,10 @@ public distributed actor Group {
         state.scope(of: person)
     }
 
-    /// The scope of a chain `person` starts here, settled as it starts: what's allowed them once
-    /// is in it, and spent.
-    public distributed func opening(scopeOf person: UserID) async throws -> CallScope {
-        let (scope, spent) = state.opening(scopeOf: person)
+    /// The scope of a chain `person` starts here for `asker`, settled as it starts: what's allowed
+    /// `asker` once is in it, and spent.
+    public distributed func opening(scopeOf person: UserID, for asker: Asker) async throws -> CallScope {
+        let (scope, spent) = state.opening(scopeOf: person, for: asker)
         for event in spent { try await emit(event: event) }
         return scope
     }
@@ -80,9 +80,9 @@ public distributed actor Group {
     public distributed func needed(_ request: ExactRequest) async throws -> AccessRequest? {
         guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .actor(id, type: nil)) }
         var opened: AccessRequest?
-        for event in state.requesting(request, by: chain.scope.person, id: AccessRequestID(UUID())) {
+        for event in state.requesting(request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID())) {
             try await emit(event: event)
-            if case .asked(let asked) = event { opened = asked }
+            if case .asked(let asked, _) = event { opened = asked }
         }
         return opened
     }

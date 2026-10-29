@@ -235,19 +235,27 @@ struct TurgaiAppService: Service, Sendable {
             // The shared production dependency facade for tool effects. The
             // generic parameter is only a carrier; the stored workflows and
             // virtual-actor actions serve every effect type.
-            ActorSystemDependency<CreateTimerEffect>.prepare(.live(on: system))
+            ActorSystemDependency<ChatSayEffect>.prepare(.live(on: system))
             let virtualNode = await VirtualNode(actorSystem: system)
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
-                activities: ScheduleActivities()
+                activities: ScheduleActivities(agentProfiles: agentProfiles)
             )
             let scheduleTimerWorker = await DurableActivityDispatchWorker<TimerWorkflow>(
                 actorSystem: system,
-                activities: TimerActivities()
+                activities: TimerActivities(agentProfiles: agentProfiles)
             )
             let memoryExtractionWorker = await DurableActivityDispatchWorker<MemoryExtractionWorkflow>(
                 actorSystem: system,
                 activities: MemoryExtractionActivities(endpointFactory: endpointFactory)
+            )
+            let objectScheduleWorker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
+                actorSystem: system,
+                activities: ObjectScheduleActivities()
+            )
+            let objectTimerWorker = await DurableActivityDispatchWorker<ObjectTimerWorkflow>(
+                actorSystem: system,
+                activities: ObjectScheduleActivities()
             )
             let channelRuntime = try await system.turgaiChannelRuntime.dependencies()
             let connections = channelRuntime.connections
@@ -261,7 +269,9 @@ struct TurgaiAppService: Service, Sendable {
                 virtualNode: virtualNode,
                 scheduleWorker: scheduleWorker,
                 scheduleTimerWorker: scheduleTimerWorker,
-                memoryExtractionWorker: memoryExtractionWorker
+                memoryExtractionWorker: memoryExtractionWorker,
+                objectScheduleWorker: objectScheduleWorker,
+                objectTimerWorker: objectTimerWorker
             )
 
             let logger = system.log
@@ -274,6 +284,8 @@ struct TurgaiAppService: Service, Sendable {
                 Startup("built-in objects", logger: logger) {
                     try await Weather.start(on: system)
                     try await Website.start(on: system, port: websitePort)
+                    try await Scheduler.start(on: system)
+                    try await Timers.start(on: system)
                 },
                 // The objects models made: started again after a restart, each on behalf of
                 // whoever made it, so what they follow and run keeps going.
@@ -284,6 +296,8 @@ struct TurgaiAppService: Service, Sendable {
                     try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
                     try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
                     try await system.workflows.recoverAll(ofType: MemoryExtractionWorkflow.self)
+                    try await system.workflows.recoverAll(ofType: ObjectScheduleWorkflow.self)
+                    try await system.workflows.recoverAll(ofType: ObjectTimerWorkflow.self)
                 },
                 Startup("web chat", logger: logger) {
                     await webChatBridge.install(
@@ -378,6 +392,8 @@ struct TurgaiClusterService: Service {
     let scheduleWorker: DurableActivityDispatchWorker<ScheduleWorkflow>
     let scheduleTimerWorker: DurableActivityDispatchWorker<TimerWorkflow>
     let memoryExtractionWorker: DurableActivityDispatchWorker<MemoryExtractionWorkflow>
+    let objectScheduleWorker: DurableActivityDispatchWorker<ObjectScheduleWorkflow>
+    let objectTimerWorker: DurableActivityDispatchWorker<ObjectTimerWorkflow>
 
     func run() async throws {
         let (shutdownRequests, shutdownContinuation) = AsyncStream<Void>.makeStream()
@@ -571,7 +587,8 @@ extension TurgaiAppService {
     {
         guard let group = try? await Group.resolve(on: system, id: .dashboard),
             (try? await group.setRole(viewer.role, of: viewer.person)) != nil,
-            let scope = try? await group.opening(scopeOf: viewer.person)
+            // Viewing does nothing: it spends nothing that's allowed once.
+            let scope = try? await group.scope(of: viewer.person)
         else { return [] }
         let entries = (try? await system.agentRuntime.allAgents()) ?? []
         return await CallChain.$current.withValue(.start(scope, in: nil)) { await snapshots(of: entries, on: system) }

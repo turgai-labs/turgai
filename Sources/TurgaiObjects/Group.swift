@@ -6,12 +6,20 @@ public enum GroupEvent: Hashable, Codable, Sendable {
     case joined(UserID, as: GroupRole)
     /// Someone's role changed.
     case roleChanged(UserID, to: GroupRole)
-    /// Someone asked its admins to run exactly what they may not run yet.
-    case asked(AccessRequest)
+    /// Someone asked its admins to run exactly what they may not run yet: themselves, or an
+    /// object's own work, done for them.
+    case asked(AccessRequest, by: Asker)
     /// An admin answered.
     case answered(AccessRequestID, AccessAnswer, by: UserID)
     /// What was allowed once ran.
     case spent(AccessRequestID)
+}
+
+/// Who asked for what an admin then allows once: a person, themselves, or one object's own work,
+/// done for its maker. What's allowed once goes to exactly the one that asked.
+public enum Asker: Hashable, Codable, Sendable {
+    case person
+    case object(ObjectIdentity)
 }
 
 /// A group: the people in it, each with their role; who may run each exact request it decides,
@@ -25,12 +33,15 @@ public struct GroupState: Hashable, Codable, Sendable {
     public private(set) var access: [ExactRequest: Access]
     /// What's asked of its admins: waiting for an answer, or allowed once and not yet run.
     public private(set) var requests: [AccessRequestID: AccessRequest]
+    /// Who asked each: the one what it allows once goes to.
+    public private(set) var askers: [AccessRequestID: Asker]
 
     public init(id: GroupID) {
         self.id = id
         self.members = [:]
         self.access = [:]
         self.requests = [:]
+        self.askers = [:]
     }
 
     /// The role `person` has here, if they're in it.
@@ -52,11 +63,14 @@ public struct GroupState: Hashable, Codable, Sendable {
         return CallScope(person, in: id, as: role, allowed: Set(shared))
     }
 
-    /// The scope of a chain `person` starts here, as it opens: theirs, with what an admin allowed
-    /// them once besides, which opening it spends.
-    public func opening(scopeOf person: UserID) -> (CallScope, [GroupEvent]) {
+    /// The scope of a chain `person` starts here for `asker`, as it opens: theirs, with what an
+    /// admin allowed `asker` once besides, which opening it spends. What another asked for, even
+    /// for them, it doesn't take.
+    public func opening(scopeOf person: UserID, for asker: Asker) -> (CallScope, [GroupEvent]) {
         let scope = scope(of: person)
-        let once = requests.values.filter { $0.by == person && $0.standing == .allowedOnce }
+        let once = requests.values.filter {
+            $0.by == person && askers[$0.id] == asker && $0.standing == .allowedOnce
+        }
             .sorted { $0.id.rawValue.uuidString < $1.id.rawValue.uuidString }
         return (
             CallScope(person, in: id, as: scope.role, allowed: scope.allowed.union(once.map(\.request))),
@@ -97,16 +111,20 @@ public struct GroupState: Hashable, Codable, Sendable {
         access[request] ?? Access(decidedBy: id)
     }
 
-    /// The request `person` asked for exactly `request` with, while it's open.
-    public func request(for request: ExactRequest, by person: UserID) -> AccessRequest? {
-        requests.values.first { $0.request == request && $0.by == person }
+    /// The request `asker` asked for exactly `request` with, for `person`, while it's open.
+    public func request(for request: ExactRequest, by person: UserID, as asker: Asker) -> AccessRequest? {
+        requests.values.first { $0.request == request && $0.by == person && askers[$0.id] == asker }
     }
 
-    /// `person` asking its admins to run exactly `request`, which their scope didn't allow: a new
-    /// request, `id`, unless theirs is already open or it's since been shared with them.
-    public func requesting(_ request: ExactRequest, by person: UserID, id: AccessRequestID) -> [GroupEvent] {
-        guard self.request(for: request, by: person) == nil, !scope(of: person).allows(request) else { return [] }
-        return [.asked(AccessRequest(id: id, request: request, by: person, standing: .waiting))]
+    /// `asker` asking its admins, for `person`, to run exactly `request`, which their scope didn't
+    /// allow: a new request, `id`, unless it's already asked for it or it's since been shared with them.
+    public func requesting(_ request: ExactRequest, by person: UserID, as asker: Asker, id: AccessRequestID)
+        -> [GroupEvent]
+    {
+        guard self.request(for: request, by: person, as: asker) == nil, !scope(of: person).allows(request) else {
+            return []
+        }
+        return [.asked(AccessRequest(id: id, request: request, by: person, standing: .waiting), by: asker)]
     }
 
     /// `answer` to the request `id`, by a call on behalf of `scope`: nothing unless it waits and
@@ -124,8 +142,9 @@ public struct GroupState: Hashable, Codable, Sendable {
         switch event {
         case .joined(let person, let role), .roleChanged(let person, let role):
             next.members[person] = role
-        case .asked(let request):
+        case .asked(let request, let asker):
             next.requests[request.id] = request
+            next.askers[request.id] = asker
         case .answered(let id, let answer, _):
             guard let open = requests[id] else { return next }
             switch answer {
@@ -133,15 +152,19 @@ public struct GroupState: Hashable, Codable, Sendable {
                 next.requests[id] = open.standing(.allowedOnce)
             case .always:
                 next.requests[id] = nil
+                next.askers[id] = nil
                 next.access[open.request] = access(to: open.request).sharing(with: .person(open.by), .read)
             case .everyone:
                 next.requests[id] = nil
+                next.askers[id] = nil
                 next.access[open.request] = access(to: open.request).sharing(with: .group(self.id), .read)
             case .no:
                 next.requests[id] = nil
+                next.askers[id] = nil
             }
         case .spent(let id):
             next.requests[id] = nil
+            next.askers[id] = nil
         }
         return next
     }

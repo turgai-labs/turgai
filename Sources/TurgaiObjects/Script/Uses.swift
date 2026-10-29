@@ -70,7 +70,8 @@ extension Uses {
     public static func interface(of objects: [Object], tools: [ToolsAPI.Tool] = [], except own: String? = nil)
         -> ModuleInterface
     {
-        var schemas: [JSONValue] = []
+        // The runtime's own values, which any object's code can hold: when something's due.
+        var schemas: [JSONValue] = [Schedule.jsonSchema, Timer.jsonSchema]
         var actors: [String] = []
         if let declared = declaration(ofTools: tools, schemas: &schemas) { actors.append(declared) }
         for object in objects {

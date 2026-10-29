@@ -62,11 +62,7 @@ public struct TurgaiAuthority: Authority {
         ObjectIdentifier(ShareObjectEffect.self), ObjectIdentifier(UseObjectEffect.self),
         ObjectIdentifier(RemoveObjectEffect.self), ObjectIdentifier(InvokeObjectEffect.self),
         ObjectIdentifier(ToolPageEffect.self), ObjectIdentifier(RecallEffect.self),
-        ObjectIdentifier(CreateScheduleEffect.self), ObjectIdentifier(ReplaceScheduleEffect.self),
-        ObjectIdentifier(CancelScheduleEffect.self), ObjectIdentifier(ListSchedulesEffect.self),
-        ObjectIdentifier(TriggerScheduleEffect.self), ObjectIdentifier(CreateTimerEffect.self),
-        ObjectIdentifier(ReplaceTimerEffect.self), ObjectIdentifier(CancelTimerEffect.self),
-        ObjectIdentifier(ListTimersEffect.self), ObjectIdentifier(UserWorkflowEffect.self),
+        ObjectIdentifier(UserWorkflowEffect.self),
         ObjectIdentifier(AttachmentEffect.self), ObjectIdentifier(CoordinationEffect.self),
         ObjectIdentifier(ClockEffect.self), ObjectIdentifier(ChatSayEffect.self),
     ]

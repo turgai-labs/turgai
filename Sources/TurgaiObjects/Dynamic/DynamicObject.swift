@@ -1,6 +1,7 @@
 import DiscoverableActors
 import Distributed
 import DistributedCluster
+import DurableWorkflows
 import EventSourcing
 import Foundation
 import ScopedEffect
@@ -37,6 +38,14 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     private var hub = _DiscoveryEventHub(events: [])
     /// The objects it follows, by the `@Subscribed` field holding each.
     private var followers: [String: Follower] = [:]
+    /// The schedules its `Schedule` fields are due by, as they're kept durably now, by field.
+    private var scheduled: [String: Schedule] = [:]
+    /// The timers its `Timer` fields are due at, as they're kept durably now, by field.
+    private var timed: [String: Timer] = [:]
+    /// Keeping its schedules as its fields say, one change after another.
+    private var rescheduling: Task<Void, Never>?
+    /// Its code's shape, read once for each code it runs.
+    private var shaped: (code: Script, shape: ObjectShape)?
 
     /// An object followed: the one the field held, and the task delivering its events.
     private struct Follower: Sendable {
@@ -205,10 +214,35 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// Ends the object for good: it answers nothing from now on, and the next idle sweep stops
     /// it, which takes it out of the catalog.
     distributed func remove() async throws {
+        // Its schedules and timers end with it, whether or not this activation kept them.
+        let schedules = (try? shape(of: state.live.code))?.schedules ?? []
+        let timers = (try? state.live.fields).map { timers(in: $0) } ?? [:]
         try await emit(event: try state.removing(by: try caller()))
         stop()
         rehub()
         refollow()
+        if let workflows = workflows {
+            for property in schedules {
+                try? await workflows.cancelSchedule(
+                    id: ObjectFiring.scheduleID(of: own, property), workflow: ObjectScheduleWorkflow.self)
+            }
+            for (property, timer) in timers {
+                try? await workflows.cancel(
+                    type: ObjectTimerWorkflow.self,
+                    options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: timer.date)))
+            }
+        }
+    }
+
+    /// Its `property`'s schedule is due: its code's `on<Property>Fired(at:)` handles it as its own
+    /// doing, as an event it follows is handled.
+    distributed func fired(_ property: String) async throws {
+        let handler = Schedule.handler(for: property)
+        let arguments: JSONValue = ["at": .string(Date.now.ISO8601Format())]
+        let origin = Origin.event(Delivery(message: handler, arguments: arguments, at: Date()), from: property)
+        _ = try await CallChain.$current.withValue(try await ownChain()) {
+            try await handling(handler, arguments: arguments, origin: origin)
+        }
     }
 
     /// Its stable reference: the one to know it by.
@@ -398,6 +432,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                 try await instance.handle(action, arguments: arguments)
             }
             after = try await instance.fields()
+            // A schedule it holds is one that can be due: one that can't is its code's problem.
+            _ = try schedules(in: after)
         } catch let refusal as EffectDenied {
             // Its scope didn't allow what its code needed: that isn't the code failing. What the
             // message did is undone, as for any message that doesn't finish.
@@ -540,7 +576,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// Follows the objects its `@Subscribed` fields hold now: a field holding another object than
     /// before follows that one instead, and one that's gone, or a removed object, follows nothing.
     private func refollow() {
-        guard case .live(let object) = state, let shape = try? ObjectShape(object.code) else {
+        rescheduleSoon()
+        guard case .live(let object) = state, let shape = try? shape(of: object.code) else {
             for follower in followers.values { follower.task.cancel() }
             followers = [:]
             return
@@ -572,16 +609,142 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         }
     }
 
+    /// Its code's shape: read once for each code, which reading resolves with the checker.
+    private func shape(of code: Script) throws(CodeProblem) -> ObjectShape {
+        if let shaped, shaped.code == code { return shaped.shape }
+        let shape = try ObjectShape(code)
+        shaped = (code, shape)
+        return shape
+    }
+
+    // MARK: Schedules
+
+    /// The durable workflows, when its node runs them.
+    private var workflows: DurableWorkflowsPlugin? {
+        actorSystem.settings.plugins[DurableWorkflowsPlugin.pluginKey]
+    }
+
+    /// The schedules `fields` hold, by field, each one that can be due: one that can't is refused.
+    private func schedules(in fields: [String: JSONValue]) throws -> [String: Schedule] {
+        guard case .live(let object) = state, let shape = try? shape(of: object.code) else { return [:] }
+        var held: [String: Schedule] = [:]
+        for property in shape.schedules {
+            guard let value = fields[property], value != .null else { continue }
+            let schedule = try value.decode(Schedule.self)
+            _ = try schedule.rule()
+            held[property] = schedule
+        }
+        return held
+    }
+
+    /// The timers `fields` hold, by field.
+    private func timers(in fields: [String: JSONValue]) -> [String: Timer] {
+        guard case .live(let object) = state, let shape = try? shape(of: object.code) else { return [:] }
+        var held: [String: Timer] = [:]
+        for property in shape.timers {
+            guard let value = fields[property], value != .null, let timer = try? value.decode(Timer.self) else {
+                continue
+            }
+            held[property] = timer
+        }
+        return held
+    }
+
+    /// Keeps its schedules as its fields say, after whatever changed before.
+    private func rescheduleSoon() {
+        let before = rescheduling
+        rescheduling = Task { [weak self] in
+            await before?.value
+            await self?.whenLocal { await $0.reschedule() }
+        }
+    }
+
+    /// Each `Schedule` field it holds has its durable schedule: made when it's set, made again
+    /// when it changes, and cancelled when it's `nil`, gone, or the object is.
+    private func reschedule() async {
+        guard let workflows else { return }
+        let wanted: [String: Schedule]
+        let wantedTimers: [String: Timer]
+        let maker: CallScope?
+        let place: ConversationID?
+        if case .live(let object) = state {
+            wanted = (try? schedules(in: object.fields)) ?? [:]
+            wantedTimers = timers(in: object.fields)
+            maker = object.maker
+            place = object.madeIn
+        } else {
+            wanted = [:]
+            wantedTimers = [:]
+            maker = nil
+            place = nil
+        }
+        for (property, schedule) in wanted where scheduled[property] != schedule {
+            guard let maker else { continue }
+            let id = ObjectFiring.scheduleID(of: own, property)
+            do {
+                // One that changed is made again: a schedule that's there keeps what it was made with.
+                if scheduled[property] != nil {
+                    try await workflows.cancelSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
+                }
+                try await workflows.schedule(
+                    id: id, recurrence: try schedule.rule(), workflow: ObjectScheduleWorkflow.self,
+                    input: ObjectFiring(
+                        object: own, property: property, maker: maker.person, group: maker.group,
+                        due: .schedule(schedule), place: place),
+                    overlapPolicy: .skip)
+                scheduled[property] = schedule
+            } catch {
+                actorSystem.log.warning(
+                    "A dynamic object's schedule couldn't be kept",
+                    metadata: ["object": "\(own)", "field": "\(property)", "error": "\(error)"])
+            }
+        }
+        for property in scheduled.keys where wanted[property] == nil {
+            try? await workflows.cancelSchedule(
+                id: ObjectFiring.scheduleID(of: own, property), workflow: ObjectScheduleWorkflow.self)
+            scheduled[property] = nil
+        }
+        // A timer is started for each date it's set to: one that fired, or runs, is left as it is.
+        for (property, timer) in wantedTimers where timed[property] != timer {
+            guard let maker else { continue }
+            do {
+                if let before = timed[property] {
+                    try? await workflows.cancel(
+                        type: ObjectTimerWorkflow.self,
+                        options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: before.date)))
+                }
+                try await workflows.start(
+                    type: ObjectTimerWorkflow.self,
+                    options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: timer.date)),
+                    input: ObjectFiring(
+                        object: own, property: property, maker: maker.person, group: maker.group,
+                        due: .timer(timer), place: place))
+                timed[property] = timer
+            } catch {
+                actorSystem.log.warning(
+                    "A dynamic object's timer couldn't be kept",
+                    metadata: ["object": "\(own)", "field": "\(property)", "error": "\(error)"])
+            }
+        }
+        for (property, timer) in timed where wantedTimers[property] == nil {
+            try? await workflows.cancel(
+                type: ObjectTimerWorkflow.self,
+                options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: timer.date)))
+            timed[property] = nil
+        }
+    }
+
     /// The scope of a chain its own doing starts: whoever made it, as their group settles it now.
     private func makersScope() async throws -> CallScope {
         let maker = try state.live.maker
-        return try await Group.resolve(on: actorSystem, id: maker.group).opening(scopeOf: maker.person)
+        return try await Group.resolve(on: actorSystem, id: maker.group).opening(
+            scopeOf: maker.person, for: .object(own))
     }
 
     /// The chain of what it does itself, its tasks and the events it follows: on behalf of its
     /// maker, in the conversation it was made in.
     private func ownChain() async throws -> CallChain {
-        CallChain.start(try await makersScope(), in: try state.live.madeIn)
+        CallChain.own(own, for: try await makersScope(), in: try state.live.madeIn)
     }
 
     /// Delivers the events of the object `field` holds that the code has a method for, named like

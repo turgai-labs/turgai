@@ -39,3 +39,12 @@ public enum AgentContext: Equatable, Sendable {
         }
     }
 }
+
+extension ConversationID {
+    /// The user a conversation belongs to: its participant on that channel.
+    var participantUserID: TurgaiDomain.UserID? {
+        let participant = externalAddress.rawValue
+        guard !participant.isEmpty else { return nil }
+        return TurgaiDomain.UserID(rawValue: "participant:\(channel.rawValue):\(participant)")
+    }
+}

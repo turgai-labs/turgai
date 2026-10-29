@@ -149,6 +149,7 @@ let package = Package(
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+                .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 .product(name: "Yams", package: "Yams"),
                 .product(name: "Parsing", package: "swift-parsing"),
                 .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
@@ -322,6 +323,7 @@ let package = Package(
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
             ]
         ),
         // The Swift module Turgai gives an object's code compiles, for every object written so far.

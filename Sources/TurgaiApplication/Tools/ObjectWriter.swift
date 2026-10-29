@@ -32,6 +32,7 @@ public struct ObjectWriter: Sendable {
         "Its stored properties start from their default values.",
         "Stored properties are what it keeps; methods are what it can be asked to do.",
         CodableValues.rule,
+        ScheduleHandlers.rule,
         "Only the actor goes in the file: code outside it never runs.",
     ]
 

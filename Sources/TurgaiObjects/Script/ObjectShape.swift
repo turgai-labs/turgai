@@ -202,6 +202,23 @@ public struct ObjectShape: Sendable, Equatable {
     /// Whether it declares `_check()`, which says which of its checks its data breaks, if any.
     public let checks: Bool
 
+    /// The fields that are schedules, as the checker resolved their types: each `Schedule` it
+    /// holds, or optional one, is due as it says.
+    public var schedules: [String] { fields(of: "\(Schedule.self)") }
+
+    /// The fields that are timers: each `Timer` it holds, or optional one, is due once, at its date.
+    public var timers: [String] { fields(of: "\(Timer.self)") }
+
+    /// The fields of `type`, or optional ones of it, as the checker resolved their types.
+    private func fields(of type: String) -> [String] {
+        fields.filter { field in
+            switch field.resolved {
+            case .named(let name, _), .optional(.named(let name, _)): name == type
+            default: false
+            }
+        }.map(\.name)
+    }
+
     /// Whether a declaration carries the runtime's macro `name`.
     static func carries(_ attributes: AttributeListSyntax, _ name: String) -> Bool {
         attributes.contains { $0.as(AttributeSyntax.self)?.attributeName.trimmedDescription == name }
