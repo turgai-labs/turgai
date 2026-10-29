@@ -4,7 +4,8 @@ import SwiftSyntax
 extension RuntimeMacros {
     /// What's wrong with how `script` uses the runtime's macros, which Swift doesn't know: each
     /// `@Subscribed` property holds an object that announces events, and its actor handles at least
-    /// one of them, each with a function taking what its event does.
+    /// one of them, each with a function taking what its event does. That it holds one that lasts
+    /// is the rule for what any property holds.
     static func problems(in script: Script) -> [CodeProblem] {
         let file = Parser.parse(source: script.code)
         let lines = SourceLocationConverter(fileName: "", tree: file)
@@ -55,7 +56,13 @@ extension RuntimeMacros {
             let events = Dictionary(followed.events.map { (DynamicObject.handler(for: $0.key), $0.value) }) {
                 first, _ in first
             }
-            guard !events.isEmpty else { continue }
+            guard !events.isEmpty else {
+                problems.append(
+                    CodeProblem(
+                        line: line(variable), span: variable.trimmedDescription,
+                        "@\(subscribed) should hold an object that announces events, while `\(type)` announces none"))
+                continue
+            }
             let object = script.uses.ids(of: type).first?.rawValue ?? type
             let handling = methods.filter { events[$0.name.text] != nil }
             guard !handling.isEmpty else {

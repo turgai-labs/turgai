@@ -150,7 +150,7 @@ extension TurgaiMainWebApp {
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             guard let accountIDValue = form["id"]?.first,
-                let accountID = Foundation.UUID(uuidString: accountIDValue)
+                let accountID = UUID(uuidString: accountIDValue)
             else {
                 return TurgaiWebSupport.redirect(to: "/accounts")
             }

@@ -1,4 +1,5 @@
 import AnyLanguageModel
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -254,11 +255,11 @@ public struct UserToolRegistry: Sendable {
     /// Deletes exactly one validated child file from the tools directory.
     public func delete(named fileName: String) throws {
         let source = try fileURL(named: fileName)
-        var isDirectory = ObjCBool(false)
-        guard FileManager.default.fileExists(atPath: source.path, isDirectory: &isDirectory) else {
+        guard FileManager.default.fileExists(atPath: source.path) else {
             throw UserToolRegistryError.fileNotFound
         }
-        guard !isDirectory.boolValue else {
+        let type = try? FileManager.default.attributesOfItem(atPath: source.path)[.type] as? FileAttributeType
+        guard type != .typeDirectory else {
             throw UserToolRegistryError.unableToDelete("The target is a directory.")
         }
         do {
@@ -269,7 +270,7 @@ public struct UserToolRegistry: Sendable {
     }
 
     private func fileURL(named fileName: String) throws -> URL {
-        let trimmed = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = fileName.trimmed()
         guard trimmed == fileName,
             !trimmed.isEmpty,
             trimmed.count <= 128,
@@ -368,7 +369,7 @@ struct UserToolSpec: Decodable {
         case .process(let process):
             guard !process.argv.isEmpty else { try fail("process argv must not be empty.") }
             guard let executable = process.argv.first,
-                !executable.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                !executable.trimmed().isEmpty
             else { try fail("process argv must start with an executable.") }
             let environmentValues = process.environment.map { Array($0.values) } ?? []
             for value in process.argv + environmentValues {
@@ -391,7 +392,7 @@ struct UserToolSpec: Decodable {
                 )
             )
         case .wasm(let wasm):
-            let modulePath = wasm.module.trimmingCharacters(in: .whitespacesAndNewlines)
+            let modulePath = wasm.module.trimmed()
             guard !modulePath.isEmpty else { try fail("wasm module must not be empty.") }
             guard !modulePath.hasPrefix("/") else {
                 try fail("wasm module must be relative to the tool directory.")
@@ -486,7 +487,7 @@ struct UserToolSpec: Decodable {
         var outputNames: Set<String> = []
         for (index, step) in workflow.steps.enumerated() {
             let position = index + 1
-            let id = step.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            let id = step.id.trimmed()
             guard !id.isEmpty else {
                 try fail("workflow step \(position) must have a non-empty id.")
             }
@@ -494,7 +495,7 @@ struct UserToolSpec: Decodable {
                 try fail("workflow step id '\(id)' is duplicated.")
             }
 
-            let outputName = step.outputName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let outputName = step.outputName.trimmed()
             guard !outputName.isEmpty else {
                 try fail("workflow step '\(id)' has an empty output name.")
             }
@@ -504,10 +505,10 @@ struct UserToolSpec: Decodable {
 
             if let inputs = step.inputs {
                 for (alias, reference) in inputs {
-                    guard !alias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    guard !alias.trimmed().isEmpty else {
                         try fail("workflow step '\(id)' contains an empty input alias.")
                     }
-                    guard !reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    guard !reference.trimmed().isEmpty else {
                         try fail("workflow step '\(id)' contains an empty input reference.")
                     }
                 }
@@ -519,12 +520,12 @@ struct UserToolSpec: Decodable {
                     try fail("fetch step '\(id)' cannot declare a write directory.")
                 }
                 guard let url = step.url,
-                    !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    !url.trimmed().isEmpty
                 else {
                     try fail("fetch step '\(id)' must have a url.")
                 }
                 if let method = step.method {
-                    guard !method.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    guard !method.trimmed().isEmpty,
                         !method.contains(where: { $0 == "\r" || $0 == "\n" })
                     else {
                         try fail("fetch step '\(id)' has an invalid method.")
@@ -532,7 +533,7 @@ struct UserToolSpec: Decodable {
                 }
                 if let hosts = step.allowedHosts {
                     for host in hosts {
-                        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let normalized = host.trimmed()
                         guard !normalized.isEmpty,
                             !normalized.contains(where: { $0.isWhitespace }),
                             !normalized.contains("/"),
@@ -552,7 +553,7 @@ struct UserToolSpec: Decodable {
                 }
                 guard
                     step.scriptSource != nil
-                        || (step.script?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                        || (step.script?.trimmed().isEmpty == false)
                 else {
                     try fail("execute step '\(id)' must have a script path.")
                 }
@@ -566,7 +567,7 @@ struct UserToolSpec: Decodable {
                     }
                 }
                 if let writeDirectory = step.writeDirectory {
-                    let trimmed = writeDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let trimmed = writeDirectory.trimmed()
                     guard !trimmed.isEmpty,
                         !trimmed.hasPrefix("/"),
                         !URL(fileURLWithPath: trimmed).pathComponents.contains("..")
@@ -582,7 +583,7 @@ struct UserToolSpec: Decodable {
                     }
                 }
                 if let interpreter = step.interpreter {
-                    guard !interpreter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    guard !interpreter.trimmed().isEmpty else {
                         try fail("execute step '\(id)' has an empty interpreter.")
                     }
                 }
@@ -600,7 +601,7 @@ struct UserToolSpec: Decodable {
                     try fail("think step '\(id)' cannot declare a write directory.")
                 }
                 guard let instruction = step.instruction,
-                    !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    !instruction.trimmed().isEmpty
                 else {
                     try fail("think step '\(id)' must have an instruction.")
                 }

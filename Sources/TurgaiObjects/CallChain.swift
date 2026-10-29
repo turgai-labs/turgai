@@ -8,20 +8,23 @@ import TurgaiDomain
 public struct CallChain: Codable, Sendable, Equatable {
     /// Whoever started it, as they came in. It stays the same down the chain.
     public let scope: CallScope
+    /// The conversation it happens in, when it happens in one: a turn's, or, for what an object
+    /// does itself, the one it was made in. It stays the same down the chain too.
+    public let place: ConversationID?
     public let actors: [ObjectID]
 
     /// How deep calls may go.
     static let limit = 64
 
-    /// A call no actor's code made, on behalf of `scope`: the start of a chain.
-    public static func start(_ scope: CallScope) -> CallChain {
-        CallChain(scope: scope, actors: [])
+    /// A call no actor's code made, on behalf of `scope`, in `place`: the start of a chain.
+    public static func start(_ scope: CallScope, in place: ConversationID?) -> CallChain {
+        CallChain(scope: scope, place: place, actors: [])
     }
 
     /// The chain inside `actor`'s handling of a call that came through this one, refused once
     /// it's too deep. It's left as the handling ends, with the chain it was entered from.
     public func entering(_ actor: ObjectID) throws(CallsTooDeep) -> CallChain {
-        let next = CallChain(scope: scope, actors: actors + [actor])
+        let next = CallChain(scope: scope, place: place, actors: actors + [actor])
         guard next.actors.count <= Self.limit else { throw CallsTooDeep(chain: next) }
         return next
     }

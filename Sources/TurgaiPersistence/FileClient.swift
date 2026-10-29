@@ -1,3 +1,5 @@
+import SystemPackage
+import TurgaiDomain
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
@@ -59,10 +61,9 @@ public final class FileClient: Sendable {
             )
             return
         }
-        let handle = try FileHandle(forUpdating: url)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        handle.write(data)
+        let file = try FileDescriptor.open(FilePath(url.path), .writeOnly, options: [.append])
+        defer { try? file.close() }
+        _ = try file.writeAll(data)
     }
 
     public func delete(at path: String) throws {
@@ -83,11 +84,8 @@ public final class FileClient: Sendable {
         )
         return
             urls
+            .filter { url in ext.map { url.pathExtension == $0 } ?? true }
             .map(\.lastPathComponent)
-            .filter { name in
-                guard let ext else { return true }
-                return (name as NSString).pathExtension == ext
-            }
             .sorted()
     }
 
@@ -131,7 +129,7 @@ extension FileClient {
     public func loadSecret(at path: String) throws -> String? {
         guard let data = try read(at: path) else { return nil }
         let value = String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmed()
         return value.isEmpty ? nil : value
     }
 
@@ -140,7 +138,7 @@ extension FileClient {
     }
 }
 
-/// The lines of a file, pulled a chunk at a time with plain reads of the file itself.
+/// The lines of a file, pulled a chunk at a time with plain reads of its descriptor.
 ///
 /// Not `FileHandle.bytes`: its reads in a process share one reader, so a read that waits,
 /// on a pipe that has nothing to say yet, holds up every other, and replaying a journal
@@ -156,7 +154,7 @@ public struct FileLines: AsyncSequence, Sendable {
 
     public final class Iterator: AsyncIteratorProtocol {
         private let url: URL
-        private var handle: FileHandle?
+        private var file: FileDescriptor?
         private var buffer = Data()
         private var ended = false
 
@@ -168,7 +166,7 @@ public struct FileLines: AsyncSequence, Sendable {
         }
 
         deinit {
-            try? handle?.close()
+            try? file?.close()
         }
 
         public func next() async throws -> String? {
@@ -183,15 +181,16 @@ public struct FileLines: AsyncSequence, Sendable {
                     defer { buffer = Data() }
                     return String(decoding: buffer, as: UTF8.self)
                 }
-                let file = try handle ?? FileHandle(forReadingFrom: url)
-                handle = file
-                let read = try file.read(upToCount: Self.chunk) ?? Data()
-                if read.isEmpty {
+                let opened = try file ?? FileDescriptor.open(FilePath(url.path), .readOnly)
+                file = opened
+                var chunk = [UInt8](repeating: 0, count: Self.chunk)
+                let count = try chunk.withUnsafeMutableBytes { try opened.read(into: $0) }
+                if count == 0 {
                     ended = true
-                    try file.close()
-                    handle = nil
+                    try opened.close()
+                    file = nil
                 } else {
-                    buffer.append(read)
+                    buffer.append(contentsOf: chunk[..<count])
                 }
             }
         }

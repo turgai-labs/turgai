@@ -17,8 +17,13 @@ let package = Package(
         .executable(name: "TurgaiSite", targets: ["TurgaiSite"]),
         .library(name: "MacApp", targets: ["MacApp"]),
     ],
+    traits: [
+        .trait(name: "Llama", description: "Local GGUF models run by llama.cpp, which builds only for Apple platforms.")
+    ],
     dependencies: [
-        .package(url: "https://github.com/akbashev/hail.git", branch: "turgai-integration"),
+        .package(
+            url: "https://github.com/akbashev/hail.git", branch: "turgai-integration",
+            traits: [.trait(name: "Llama", condition: .when(traits: ["Llama"]))]),
         .package(
             url: "https://github.com/akbashev/discoverable-distributed-actors.git", branch: "turgai-integration",
             traits: ["ClusterSystem"]),
@@ -29,7 +34,7 @@ let package = Package(
         .package(
             url: "https://github.com/akbashev/AnyLanguageModel.git",
             branch: "fix/schema-in-prompt",
-            traits: ["AsyncHTTPClient", "Llama"]
+            traits: ["AsyncHTTPClient", .trait(name: "Llama", condition: .when(traits: ["Llama"]))]
         ),
         .package(
             url: "https://github.com/apple/swift-async-algorithms.git",
@@ -74,6 +79,8 @@ let package = Package(
             from: "2.25.0"
         ),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.16.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
+        .package(url: "https://github.com/apple/swift-system.git", from: "1.5.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.2.0"),
         .package(url: "https://github.com/elementary-swift/elementary.git", from: "0.7.0"),
         .package(url: "https://github.com/elementary-swift/elementary-htmx.git", from: "0.1.0"),
@@ -121,6 +128,7 @@ let package = Package(
                 .product(name: "HummingbirdElementary", package: "hummingbird-elementary"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Markdown", package: "swift-markdown"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ]
         ),
         .executableTarget(
@@ -178,7 +186,7 @@ let package = Package(
         ),
         .target(
             name: "TurgaiMemory",
-            dependencies: []
+            dependencies: ["TurgaiDomain"]
         ),
         .target(
             name: "TurgaiHail",
@@ -187,6 +195,7 @@ let package = Package(
                 .product(name: "Hail", package: "hail"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
             ]
         ),
         .target(
@@ -210,6 +219,8 @@ let package = Package(
                 .product(name: "HummingbirdBcrypt", package: "hummingbird-auth"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Yams", package: "Yams"),
+                .product(name: "Hummingbird", package: "hummingbird"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ]
         ),
         .target(
@@ -219,6 +230,7 @@ let package = Package(
                 .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "Hummingbird", package: "hummingbird"),
             ]
         ),
         .target(
@@ -246,9 +258,11 @@ let package = Package(
         .executableTarget(
             name: "Turgai",
             dependencies: [
+                "TurgaiObjects",
                 "TurgaiServer",
                 "TurgaiWeb",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "Logging", package: "swift-log"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
             ]
         ),
@@ -343,6 +357,7 @@ let package = Package(
                 .product(name: "PostgresEventStore", package: "postgres-event-store"),
                 .product(name: "PostgresNIO", package: "postgres-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "SystemPackage", package: "swift-system"),
             ]
         ),
         .testTarget(

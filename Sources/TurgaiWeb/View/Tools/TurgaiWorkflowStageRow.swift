@@ -8,6 +8,7 @@ import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -122,9 +123,9 @@ struct StepOptions: HTML, Sendable {
     ]
 
     private var isConfigured: Bool {
-        !step.saveAs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !step.saveAs.trimmed().isEmpty
             || step.permission != .inherit
-            || !step.inputs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !step.inputs.trimmed().isEmpty
     }
 
     var body: some HTML {

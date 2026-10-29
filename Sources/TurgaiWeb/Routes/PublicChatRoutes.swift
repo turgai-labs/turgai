@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import HTTPTypes
 import Hummingbird
 import HummingbirdWebSocket
@@ -232,7 +232,7 @@ extension TurgaiMainWebApp {
                                 _ = await receipt.wait()
                                 continue
                             }
-                            let messageText = command.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let messageText = command.text.trimmed()
                             guard !messageText.isEmpty else {
                                 try await writer.write(
                                     publicAPIErrorEvent(
@@ -446,7 +446,7 @@ extension TurgaiMainWebApp {
                     message: "The message request is invalid."
                 )
             }
-            let text = input.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = input.text.trimmed()
             guard !text.isEmpty else {
                 return publicAPIErrorResponse(
                     status: .badRequest,
@@ -511,7 +511,7 @@ private func apiConversationID(profileID: String) -> TurgaiDomain.ConversationID
 private func accountConversationAddress(accountID: UUID, profileID: String) -> String {
     let source = Data("\(accountID.uuidString):\(profileID)".utf8)
     let digest = SHA256.hash(data: source)
-    let value = digest.map { String(format: "%02x", $0) }.joined()
+    let value = digest.hexString
     return "account-\(value)"
 }
 
@@ -599,7 +599,7 @@ private func apiConversation(
     profiles: TurgaiAgentProfileStore
 ) async -> APIConversation? {
     guard let rawValue else { return nil }
-    let decodedValue = rawValue.removingPercentEncoding ?? rawValue
+    let decodedValue = rawValue.percentDecoded ?? rawValue
 
     let domainID: TurgaiDomain.ConversationID
     if let stableID = TurgaiDomain.ConversationID(stableKey: decodedValue),
@@ -942,7 +942,7 @@ private func runHTMLChatSocket(
                     _ = await receipt.wait()
                     continue
                 }
-                let messageText = commandText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let messageText = commandText.trimmed()
                 guard !messageText.isEmpty else { continue }
                 let messageID = TurgaiModels.MessageID()
                 let receipt = ConversationInputReceipt()

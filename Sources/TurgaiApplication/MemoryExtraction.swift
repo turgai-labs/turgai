@@ -167,8 +167,8 @@ public enum MemoryExtractionService {
     ) -> MemoryProposal? {
         let quote = normalize(candidate.supportingText)
         guard !quote.isEmpty else { return nil }
-        let predicate = candidate.predicate.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawValue = candidate.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let predicate = candidate.predicate.trimmed()
+        let rawValue = candidate.value.trimmed()
         guard !predicate.isEmpty, !rawValue.isEmpty,
             predicate.count <= 500, rawValue.count <= 500
         else { return nil }
@@ -187,7 +187,7 @@ public enum MemoryExtractionService {
         case "person": value = .person(rawValue)
         case "place": value = .place(rawValue)
         case "date":
-            guard let date = ISO8601DateFormatter().date(from: rawValue) else { return nil }
+            guard let date = try? Date.ISO8601FormatStyle().parse(rawValue) else { return nil }
             value = .date(date)
         case "preference":
             guard let preference = Bool(rawValue) else { return nil }

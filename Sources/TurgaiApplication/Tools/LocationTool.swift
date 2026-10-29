@@ -1,5 +1,6 @@
 import AnyLanguageModel
 import Hail
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -90,7 +91,7 @@ public struct LocationTool {
     }
 
     private func validatedPlace(_ value: String) throws -> String {
-        let place = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let place = value.trimmed()
         guard !place.isEmpty else { throw Error.emptyQuery }
         guard place.count <= 200 else { throw Error.queryTooLong }
         return place
@@ -98,7 +99,7 @@ public struct LocationTool {
 
     private func validatedCountry(_ value: String?) throws -> String? {
         guard let value else { return nil }
-        let country = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let country = value.trimmed()
         guard !country.isEmpty else { return nil }
         guard country.count <= 100 else { throw Error.queryTooLong }
         return country
@@ -106,7 +107,7 @@ public struct LocationTool {
 
     private func validatedRegion(_ value: String?) throws -> String? {
         guard let value else { return nil }
-        let region = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let region = value.trimmed()
         guard !region.isEmpty else { return nil }
         guard region.count <= 200 else { throw Error.queryTooLong }
         return region
@@ -220,7 +221,7 @@ public struct LocationEffect: CompositeScopedEffect, Sendable {
         let matchingPlaces = places.filter { place in
             let countryMatches: Bool
             if let country = configuration.2 {
-                countryMatches = place.country?.localizedCaseInsensitiveContains(country) == true
+                countryMatches = place.country?.lowercased().contains(country.lowercased()) == true
             } else {
                 countryMatches = true
             }
@@ -228,7 +229,7 @@ public struct LocationEffect: CompositeScopedEffect, Sendable {
 
             guard let region = configuration.1 else { return true }
             return [place.admin1, place.admin2, place.admin3].compactMap { $0 }.contains {
-                $0.localizedCaseInsensitiveContains(region)
+                $0.lowercased().contains(region.lowercased())
             }
         }
         let results = matchingPlaces.compactMap { place -> Result? in

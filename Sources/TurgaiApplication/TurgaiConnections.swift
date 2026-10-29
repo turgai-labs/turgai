@@ -229,6 +229,41 @@ public actor TurgaiConnections: Service {
             AsyncStream<Connection>.makeStream()
     }
 
+    /// The conversation with `id`, started with the agent its chat is answered by if it isn't running.
+    public func conversation(_ id: ConversationID) async throws -> Conversation {
+        let agentRole = try await Self.agentRole(for: id, agentProfiles: agentProfiles, on: actorSystem)
+        return try await Conversation.resolve(
+            on: actorSystem,
+            conversationID: id,
+            agentDirectoryID: "agent-directory",
+            agentRole: agentRole,
+            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(forProfileID: agentRole)
+        )
+    }
+
+    /// The agent that answers `conversationID`: as its Telegram bot's channel routes its chats, or,
+    /// for any other chat, the default profile.
+    static func agentRole(
+        for conversationID: ConversationID, agentProfiles: TurgaiAgentProfileStore, on actorSystem: ClusterSystem
+    ) async throws -> String {
+        guard conversationID.channel.providerName == TelegramProvider.providerID,
+            let channelID = UUID(uuidString: conversationID.channel.instanceID)
+        else { return try await agentProfiles.defaultProfileID() }
+        let channel = try await TelegramChannel.resolve(on: actorSystem, channelID: channelID)
+        guard case .active(let configuration, _) = try await channel.currentState(), configuration.enabled else {
+            throw LiveSessionRoutingError.channelUnavailable
+        }
+        switch configuration.agentRouting {
+        case .defaultProfile:
+            return try await agentProfiles.defaultProfileID()
+        case .profile(let binding):
+            guard let profile = await agentProfiles.profile(id: binding), profile.availability == .enabled else {
+                throw LiveSessionRoutingError.unavailableProfile(binding)
+            }
+            return profile.id
+        }
+    }
+
     /// Creates one live Turgai session for one external logical connection.
     ///
     /// The caller owns the input stream and receives the output stream. This
@@ -245,6 +280,7 @@ public actor TurgaiConnections: Service {
             agentProfiles: agentProfiles,
             source: source
         )
+        actorSystem.log.debug("Live session added", metadata: ["session": "\(id)"])
         await outboundConnections.add(.live(session))
         connectionContinuation.yield(.live(session))
         return LiveSessionConnection(output: session.output, handle: session.handle)
@@ -491,6 +527,9 @@ actor LiveSession {
             }
 
         case .message(let message, let turnID):
+            actorSystem.log.debug(
+                "Message for conversation",
+                metadata: ["conversation": "\(message.conversationID.stableKey)", "turn": "\(turnID.rawValue)"])
             do {
                 let user = try await User.resolve(
                     on: actorSystem,
@@ -517,8 +556,16 @@ actor LiveSession {
                         )
                     ),
                 )
+                actorSystem.log.debug(
+                    "Message sent to conversation",
+                    metadata: ["conversation": "\(message.conversationID.stableKey)", "turn": "\(turnID.rawValue)"])
                 return true
             } catch {
+                actorSystem.log.warning(
+                    "Message didn't reach its conversation",
+                    metadata: [
+                        "conversation": "\(message.conversationID.stableKey)", "error": "\(error)",
+                    ])
                 await publish(
                     .reply(
                         .failed(
@@ -734,8 +781,8 @@ actor LiveSession {
         )
     }
 
-    /// The channel actor is the routing authority for channel sessions. Web
-    /// sessions use the configured application default.
+    /// The channel actor is the routing authority for channel sessions, which answer only their
+    /// own channel's chats. Web sessions use the configured application default.
     private func resolvedAgentRole(for conversationID: ConversationID) async throws -> String {
         if case .channel(let channelID) = source {
             let expectedChannelID = ChannelID(
@@ -745,31 +792,8 @@ actor LiveSession {
             guard conversationID.channel == expectedChannelID else {
                 throw LiveSessionRoutingError.channelIdentityMismatch
             }
-
-            let channel = try await TelegramChannel.resolve(
-                on: actorSystem,
-                channelID: channelID
-            )
-            guard case .active(let configuration, _) = try await channel.currentState(),
-                configuration.enabled
-            else {
-                throw LiveSessionRoutingError.channelUnavailable
-            }
-
-            let agentRouting = configuration.agentRouting
-            switch agentRouting {
-            case .defaultProfile:
-                return try await agentProfiles.defaultProfileID()
-            case .profile(let binding):
-                guard let profile = await agentProfiles.profile(id: binding),
-                    profile.availability == .enabled
-                else {
-                    throw LiveSessionRoutingError.unavailableProfile(binding)
-                }
-                return profile.id
-            }
         }
-        return try await agentProfiles.defaultProfileID()
+        return try await TurgaiConnections.agentRole(for: conversationID, agentProfiles: agentProfiles, on: actorSystem)
     }
 
     private func attach(

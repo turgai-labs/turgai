@@ -260,6 +260,11 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         get throws { try state.live.maker }
     }
 
+    /// The conversation it was made in, when it was made in one.
+    public distributed var madeIn: ConversationID? {
+        get throws { try state.live.madeIn }
+    }
+
     /// Who may read it and who may write it.
     public distributed var access: Access {
         get throws { try state.live.access }
@@ -485,7 +490,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             do {
                 // A task's starter doesn't wait on it: its calls start a chain of their own, on
                 // behalf of whoever made it.
-                let chain = try CallChain.start(try await makersScope()).entering(objectID)
+                let chain = try await ownChain().entering(objectID)
                 let system = actorSystem
                 let announced = try await CallChain.$current.withValue(chain) {
                     do {
@@ -573,12 +578,18 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         return try await Group.resolve(on: actorSystem, id: maker.group).opening(scopeOf: maker.person)
     }
 
+    /// The chain of what it does itself, its tasks and the events it follows: on behalf of its
+    /// maker, in the conversation it was made in.
+    private func ownChain() async throws -> CallChain {
+        CallChain.start(try await makersScope(), in: try state.live.madeIn)
+    }
+
     /// Delivers the events of the object `field` holds that the code has a method for, named like
     /// each, until they end: whether it should follow again, which a source that's gone, or not
     /// there yet, should be.
     private func follow(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
         // Following is its own doing, as its tasks are: on behalf of whoever made it.
-        guard let scope = try? await makersScope(), let chain = try? CallChain.start(scope).entering(objectID) else {
+        guard let chain = try? await ownChain().entering(objectID) else {
             return false
         }
         return await CallChain.$current.withValue(chain) {
@@ -634,7 +645,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         do {
             // An event it follows starts a chain of its own, as a task does, on behalf of whoever
             // made it: its handling enters it.
-            _ = try await CallChain.$current.withValue(.start(try await makersScope())) {
+            _ = try await CallChain.$current.withValue(try await ownChain()) {
                 try await handling(handler, arguments: values, origin: origin)
             }
         } catch {

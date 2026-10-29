@@ -12,10 +12,14 @@ public struct Uses: Codable, Sendable, Equatable {
     public let interface: ModuleInterface
     /// The objects that exist, each id's type: what `Type(id:)` reaches.
     public let objects: [ObjectIdentity: String]
+    /// The types whose objects last, as virtual actors: the same object, by the same id, after
+    /// every restart, so code names them by id, keeps them and follows them.
+    public let lasting: Set<String>
 
-    public init(interface: ModuleInterface, objects: [ObjectIdentity: String]) {
+    public init(interface: ModuleInterface, objects: [ObjectIdentity: String], lasting: Set<String>) {
         self.interface = interface
         self.objects = objects
+        self.lasting = lasting
     }
 
     /// The ids of the objects of `type` that exist, in order.
@@ -24,7 +28,8 @@ public struct Uses: Codable, Sendable, Equatable {
     }
 
     /// Nothing from other objects.
-    public static let nothing = Uses(interface: ModuleInterface(name: Uses.module, source: ""), objects: [:])
+    public static let nothing = Uses(
+        interface: ModuleInterface(name: Uses.module, source: ""), objects: [:], lasting: [])
 
     /// The module objects' code imports.
     public static let module = "Objects"

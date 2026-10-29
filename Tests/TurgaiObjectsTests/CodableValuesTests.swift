@@ -115,6 +115,34 @@ struct CodableValuesTests {
         #expect(try await Self.refusals(code, type: "Scores").isEmpty)
     }
 
+    /// An object it holds lasts, as a virtual actor, so what it holds still reaches it after a
+    /// restart; one that doesn't goes within a call.
+    @Test func anObjectItHoldsLasts() async throws {
+        let uses = Uses(
+            interface: ModuleInterface(
+                name: Uses.module,
+                source:
+                    "actor Website {\n    func show(text: String) async throws\n}\n\nactor Ledger {\n    init(id: String)\n    func total() async throws -> Int\n}"
+            ),
+            objects: [ObjectIdentity(rawValue: "ledger"): "Ledger"], lasting: ["Ledger"])
+        let code = """
+            actor Desk {
+                let ledger = Ledger(id: "ledger")
+                var shown: [Website] = []
+
+                func show(on site: Website) async throws -> Website {
+                    try await site.show(text: "\\(try await ledger.total())")
+                    return site
+                }
+            }
+            """
+        let refusals = await ScriptInstance.problems(in: try Script(code: code, type: "Desk", uses: uses)).map(
+            \.message)
+        #expect(
+            refusals == ["stored property 'shown' of type '[Website]' holds 'Website', an object whose id doesn't last"],
+            "\(refusals)")
+    }
+
     /// Objects go as references, and the values Swift and Foundation make `Codable` go as they are.
     @Test func objectsAndCodableValuesAreSent() async throws {
         let code = """

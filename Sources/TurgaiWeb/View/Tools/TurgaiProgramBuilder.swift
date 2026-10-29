@@ -8,6 +8,7 @@ import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -21,8 +22,8 @@ struct TurgaiProgramBuilder: HTML, Sendable {
     let environment: String
 
     private var hasOptions: Bool {
-        !arguments.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !environment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !arguments.trimmed().isEmpty
+            || !environment.trimmed().isEmpty
     }
 
     var body: some HTML {

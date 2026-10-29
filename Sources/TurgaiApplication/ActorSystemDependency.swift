@@ -111,6 +111,10 @@ public struct ActorSystemDependency<Effect: ScopedEffect>: Sendable {
             virtualActors: VirtualActorActions(
                 resolveUser: { userID in
                     try await User.resolve(on: actorSystem, userID: userID)
+                },
+                notify: { conversationID, text in
+                    try await actorSystem.turgaiChannelRuntime.dependencies().connections
+                        .conversation(conversationID).notify(text)
                 }
             )
         )
@@ -164,9 +168,15 @@ public struct WorkflowActions: Sendable {
 /// only the actors Turgai's tools actually address are exposed.
 public struct VirtualActorActions: Sendable {
     public var resolveUser: @Sendable (TurgaiDomain.UserID) async throws -> User
+    /// Says text in a conversation, as its connections deliver what it says.
+    public var notify: @Sendable (ConversationID, String) async throws -> Void
 
-    public init(resolveUser: @escaping @Sendable (TurgaiDomain.UserID) async throws -> User) {
+    public init(
+        resolveUser: @escaping @Sendable (TurgaiDomain.UserID) async throws -> User,
+        notify: @escaping @Sendable (ConversationID, String) async throws -> Void
+    ) {
         self.resolveUser = resolveUser
+        self.notify = notify
     }
 }
 

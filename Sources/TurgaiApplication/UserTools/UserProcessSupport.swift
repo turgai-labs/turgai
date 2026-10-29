@@ -1,4 +1,5 @@
 import Hail
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -89,7 +90,7 @@ enum UserProcessSupport {
         workspaceRoot: String
     ) throws -> String {
         guard let path else { return workspaceRoot }
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = path.trimmed()
         guard !trimmed.isEmpty, !trimmed.hasPrefix("/") else {
             throw UserWorkflowError.invalidScriptPath(path)
         }
@@ -108,7 +109,7 @@ enum UserProcessSupport {
         _ path: String,
         toolDirectory: URL
     ) throws -> URL {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = path.trimmed()
         guard !trimmed.isEmpty, !trimmed.hasPrefix("/") else {
             throw UserWorkflowError.invalidScriptPath(path)
         }

@@ -26,7 +26,7 @@ public struct ObjectModule: Sendable {
 
     public init(_ script: Script) {
         files =
-            Self.given(script.uses.interface) + [
+            Self.given(script.uses.interface, lasting: script.uses.lasting) + [
                 File(name: Self.objectFile, code: Self.expanded(script.code, type: script.type))
             ]
     }
@@ -34,9 +34,9 @@ public struct ObjectModule: Sendable {
     /// The file the objects of `interface` are declared in, as code meets them.
     static let objectsFile = "Objects.swift"
 
-    /// The files code is given with `interface`: its objects, with bodies Swift takes, and the
-    /// runtime's own declarations.
-    static func given(_ interface: ModuleInterface) -> [File] {
+    /// The files code is given with `interface`: its objects, with bodies Swift takes, those of the
+    /// types in `lasting` named by their ids, and the runtime's own declarations.
+    static func given(_ interface: ModuleInterface, lasting: Set<String>) -> [File] {
         let runtime = [
             "/// Another object, of a type this code doesn't declare: what's called on it is a message.",
             "typealias \(Uses.anyObject) = any Actor",
@@ -46,7 +46,7 @@ public struct ObjectModule: Sendable {
         ]
         return [
             // Foundation's value types are the module's, as the objects' declarations use them.
-            File(name: objectsFile, code: "import Foundation\n\n" + stubbed(interface.source)),
+            File(name: objectsFile, code: "import Foundation\n\n" + stubbed(interface.source, lasting: lasting)),
             File(name: "Runtime.swift", code: runtime.joined(separator: "\n") + "\n"),
         ]
     }
@@ -56,15 +56,26 @@ public struct ObjectModule: Sendable {
 
     /// The spec's declarations with bodies Swift takes: each function and property without one is
     /// given one, which never runs, and its events are plain functions.
-    static func stubbed(_ source: String) -> String {
-        Stubbing().rewrite(Parser.parse(source: source)).description
+    static func stubbed(_ source: String, lasting: Set<String>) -> String {
+        Stubbing(lasting: lasting).rewrite(Parser.parse(source: source)).description
     }
 
     private final class Stubbing: SyntaxRewriter {
-        /// Another object's type is named by its id, `Type(id:)`: the only way code reaches one.
+        /// The types whose objects last.
+        let lasting: Set<String>
+
+        init(lasting: Set<String>) {
+            self.lasting = lasting
+            super.init(viewMode: .sourceAccurate)
+        }
+
+        /// Another object's type is named by its id, `Type(id:)`, when its objects last: the only
+        /// way code reaches one by name. One whose objects don't, code only gets from a call.
         override func visit(_ node: ActorDeclSyntax) -> DeclSyntax {
             guard var actor = super.visit(node).as(ActorDeclSyntax.self) else { return super.visit(node) }
-            guard !actor.memberBlock.members.contains(where: { $0.decl.is(InitializerDeclSyntax.self) }) else {
+            guard lasting.contains(actor.name.text),
+                !actor.memberBlock.members.contains(where: { $0.decl.is(InitializerDeclSyntax.self) })
+            else {
                 return DeclSyntax(actor)
             }
             let named = MemberBlockItemSyntax(

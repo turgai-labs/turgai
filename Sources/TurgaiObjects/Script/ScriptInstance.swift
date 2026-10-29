@@ -99,14 +99,15 @@ public final class ScriptInstance {
         let swift = SwiftCheck.problems(in: ObjectModule.objectFile, of: files(source)).map { diagnostic in
             CodeProblem(line: diagnostic.line, span: diagnostic.code, diagnostic.message)
         }
-        // And how it uses the runtime's macros, which are Turgai's, as Turgai has them, and what
-        // it sends and keeps, which the runtime keeps as data.
-        var problems = swift + RuntimeMacros.problems(in: source)
+        // And how it uses the runtime's macros, which are Turgai's, as Turgai has them, the
+        // objects it names, which exist, and what it sends and keeps, which the runtime keeps as data.
+        var problems = swift + RuntimeMacros.problems(in: source) + ExistingObjects.problems(in: source)
         if swift.isEmpty,
             let declarations = SwiftCheck.declarations(of: source.type, in: ObjectModule.objectFile, of: files(source))
                 .declarations
         {
-            problems += CodableValues.problems(in: source.code, type: source.type, declarations: declarations)
+            problems += CodableValues.problems(
+                in: source.code, type: source.type, declarations: declarations, lasting: source.lasting)
         }
         return problems.sorted { ($0.line ?? 0) < ($1.line ?? 0) }
     }

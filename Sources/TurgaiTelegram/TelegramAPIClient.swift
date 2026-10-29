@@ -2,7 +2,8 @@ import AsyncHTTPClient
 import Logging
 import NIOCore
 import TurgaiDomain
-import UniformTypeIdentifiers
+
+import struct Hummingbird.MediaType
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -349,8 +350,8 @@ extension TelegramAPIClient {
     static func contentType(_ declared: String?, ofFileAt path: String) -> String? {
         if let declared, declared != "application/octet-stream" { return declared }
         let pathExtension = URL(fileURLWithPath: path).pathExtension
-        if !pathExtension.isEmpty, let inferred = UTType(filenameExtension: pathExtension)?.preferredMIMEType {
-            return inferred
+        if !pathExtension.isEmpty, let inferred = MediaType.getMediaType(forExtension: pathExtension.lowercased()) {
+            return inferred.description
         }
         return declared
     }
@@ -474,7 +475,7 @@ extension TelegramAPIClient {
                 let declared = response.headers.first(name: "Content-Type")?
                     .split(separator: ";", maxSplits: 1)
                     .first
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                    .map { $0.trimmed().lowercased() }
                 return TelegramFileData(
                     body: Data(body.readableBytesView),
                     contentType: Self.contentType(declared, ofFileAt: filePath)

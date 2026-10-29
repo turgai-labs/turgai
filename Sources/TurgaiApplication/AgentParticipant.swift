@@ -65,17 +65,26 @@ public distributed actor AgentParticipant {
                 try? await conversation?.modelEvent(.completed(turnID: request.turnID, completion: completion))
             },
             operation: {
-                // The agent's turn starts a chain of its own, on behalf of whoever it answers: what
-                // it calls comes from it. What it does meanwhile comes back with it, and reaches
-                // whoever watches the conversation.
+                // The agent's turn starts a chain of its own, on behalf of whoever it answers, in
+                // the conversation it answers in: what it calls comes from it. What it does
+                // meanwhile comes back with it, and reaches whoever watches the conversation.
                 let agentID = HailAgentAdapter.agentID(for: request.conversationID, role: request.agentRole)
-                let response = try await CallChain.$current.withValue(.start(turnScope)) {
+                let conversationKey = request.conversationID.stableKey
+                let turn = request.turnID.rawValue
+                let started = ContinuousClock.now
+                actorSystem.log.debug("Turn started", metadata: ["conversation": "\(conversationKey)", "turn": "\(turn)"])
+                let response = try await CallChain.$current.withValue(.start(turnScope, in: request.conversationID)) {
                     try await Agent.answering(as: agentID) {
                         try await peer.run(to: request) { event in
                             await participant.whenLocal { await $0.follow(event, of: request.turnID) }
                         }
                     }
                 }
+                actorSystem.log.debug(
+                    "Turn answered",
+                    metadata: [
+                        "conversation": "\(conversationKey)", "turn": "\(turn)", "took": "\(ContinuousClock.now - started)",
+                    ])
                 await Self.remember(request, answered: response.reply.text, with: memoryExtraction, on: actorSystem)
                 return .reply(response.reply)
             }
@@ -197,7 +206,7 @@ public distributed actor AgentParticipant {
         _ request: ConversationTurnRequest, answered response: String,
         with configuration: MemoryExtractionConfiguration?, on actorSystem: ClusterSystem
     ) async {
-        let text = request.message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = request.message.text.trimmed()
         guard !text.isEmpty, let configuration, configuration.isEnabled else { return }
         let observation = MemoryObservation(
             id: ObservationID(rawValue: request.message.id.rawValue),

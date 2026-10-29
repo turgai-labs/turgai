@@ -35,7 +35,7 @@ public enum TurgaiStorageConfiguration: Codable, Equatable, Sendable {
         guard Self.isValidPostgresURL(url) else {
             throw TurgaiStorageConfigurationError.invalidPostgresURL
         }
-        let username = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let username = username.trimmed()
         guard !username.isEmpty else {
             throw TurgaiStorageConfigurationError.invalidPostgresUsername
         }
@@ -67,8 +67,8 @@ public enum TurgaiStorageConfiguration: Codable, Equatable, Sendable {
     }
 
     fileprivate static func databaseName(in url: URL) -> String {
-        let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return path.removingPercentEncoding ?? path
+        let path = url.path.trimmed(while: { $0 == "/" })
+        return path.percentDecoded ?? path
     }
 
     private enum CodingKeys: String, CodingKey {

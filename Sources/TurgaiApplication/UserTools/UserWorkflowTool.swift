@@ -3,6 +3,7 @@ import DistributedCluster
 import Hail
 import HailCore
 import VirtualActors
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -190,7 +191,7 @@ private struct UserWorkflowStageAuthority: Authority {
     }
 
     private static func normalizeHost(_ host: String) -> String {
-        host.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+        host.trimmed(while: { $0 == "." }).lowercased()
     }
 
     private static func canonicalPath(_ path: String) -> String {
@@ -475,7 +476,7 @@ private enum UserWorkflowRunner {
                 step: step.id,
                 exitCode: result.exitCode,
                 stderr: String(decoding: result.standardError, as: UTF8.self)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmed()
             )
         }
         return try processValue(result.standardOutput, step: step.id)
@@ -557,7 +558,7 @@ private enum UserWorkflowRunner {
         step: String
     ) throws -> GeneratedContent {
         let text = String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmed()
         guard !text.isEmpty else {
             return GeneratedContent("")
         }
@@ -573,7 +574,7 @@ private enum UserWorkflowRunner {
     }
 
     private static func isLocalHost(_ host: String) -> Bool {
-        let normalized = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        let normalized = host.lowercased().trimmed(while: { $0 == "." })
         return normalized == "localhost"
             || normalized == "127.0.0.1"
             || normalized == "0.0.0.0"
@@ -593,7 +594,7 @@ private struct WorkflowContext {
     }
 
     func resolve(_ reference: String) throws -> GeneratedContent {
-        let reference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        let reference = reference.trimmed()
         guard !reference.isEmpty else {
             throw UserWorkflowError.invalidReference(reference)
         }
@@ -640,14 +641,14 @@ private struct WorkflowContext {
     func render(_ template: String) throws -> String {
         var rendered = ""
         var rest = template[...]
-        while let open = rest.range(of: "{{") {
+        while let open = rest.firstRange(of: "{{") {
             rendered += rest[rest.startIndex..<open.lowerBound]
             rest = rest[open.upperBound...]
-            guard let close = rest.range(of: "}}") else {
+            guard let close = rest.firstRange(of: "}}") else {
                 throw UserWorkflowError.invalidTemplate(template)
             }
             let reference = String(rest[rest.startIndex..<close.lowerBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmed()
             guard !reference.isEmpty else {
                 throw UserWorkflowError.invalidTemplate(template)
             }
@@ -655,7 +656,7 @@ private struct WorkflowContext {
             let wholePlaceholder =
                 rendered.isEmpty
                 && rest[close.upperBound...].isEmpty
-                && template.trimmingCharacters(in: .whitespacesAndNewlines)
+                && template.trimmed()
                     == "{{\(reference)}}"
             if wholePlaceholder {
                 if case .string(let string) = value.kind {

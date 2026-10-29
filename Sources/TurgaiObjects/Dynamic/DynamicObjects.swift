@@ -97,7 +97,9 @@ public distributed actor DynamicObjects {
         if !start.isEmpty { try await made.set(values: start) }
         let access = try await made.access
         let maker = try await made.maker
-        try await emit(event: .added(identity, type: id, description: description, access: access, maker: maker))
+        let place = try await made.madeIn
+        try await emit(
+            event: .added(identity, type: id, description: description, access: access, maker: maker, in: place))
         return identity
     }
 
@@ -238,15 +240,31 @@ public distributed actor DynamicObjects {
         try await emit(event: .removed(identity))
     }
 
-    /// Starts every object here, each on behalf of whoever made it, as what it does by itself is.
+    /// Starts every object here, each on behalf of whoever made it, in the conversation it was made
+    /// in, as what it does by itself is. Each starts on its own: one that's slow to start, or
+    /// fails, holds up no other.
     /// The server does this when it starts.
-    public distributed func start() async throws {
-        for entry in state.entries {
-            let object = try await object(entry.identity)
+    public distributed func start() async {
+        await withDiscardingTaskGroup { group in
+            for entry in state.entries {
+                group.addTask { await self.start(entry) }
+            }
+        }
+    }
+
+    /// Starts the object `entry` holds, saying in the log whether it started.
+    private func start(_ entry: DynamicObjectsState.Entry) async {
+        actorSystem.log.info("Starting made object", metadata: ["object": "\(entry.identity)"])
+        do {
+            let made = try await self.object(entry.identity)
             // As their group settles their scope now.
             let maker = try await Group.resolve(on: actorSystem, id: entry.maker.group).opening(
                 scopeOf: entry.maker.person)
-            try await CallChain.$current.withValue(.start(maker)) { try await object.start() }
+            try await CallChain.$current.withValue(.start(maker, in: entry.place)) { try await made.start() }
+            actorSystem.log.info("Started made object", metadata: ["object": "\(entry.identity)"])
+        } catch {
+            actorSystem.log.error(
+                "Couldn't start made object", metadata: ["object": "\(entry.identity)", "error": "\(error)"])
         }
     }
 
@@ -307,7 +325,8 @@ public enum DynamicObjectsEvent: Codable, Sendable {
     case typeNamed(String, BehaviorID)
     /// An object made by name, of a type, by `maker`: listed and found by the name it holds, to
     /// whoever may read it.
-    case added(ObjectIdentity, type: BehaviorID, description: String?, access: Access, maker: CallScope)
+    case added(
+        ObjectIdentity, type: BehaviorID, description: String?, access: Access, maker: CallScope, in: ConversationID?)
     /// Who may read and write an object changed, as the object says.
     case accessChanged(ObjectIdentity, Access)
     case removed(ObjectIdentity)
@@ -323,6 +342,8 @@ public struct DynamicObjectsState: Codable, Sendable {
         public var access: Access
         /// Whoever made it, on whose behalf it's started.
         public let maker: CallScope
+        /// The conversation it was made in, where it's started.
+        public let place: ConversationID?
     }
 
     /// Each type as it is now.
@@ -360,9 +381,11 @@ public struct DynamicObjectsState: Codable, Sendable {
             types[id] = code
         case .typeNamed(let name, let id):
             typeNames[name] = id
-        case .added(let identity, let type, let description, let access, let maker):
+        case .added(let identity, let type, let description, let access, let maker, let place):
             entries.append(
-                Entry(identity: identity, type: type, description: description, access: access, maker: maker))
+                Entry(
+                    identity: identity, type: type, description: description, access: access, maker: maker,
+                    place: place))
         case .accessChanged(let identity, let access):
             if let index = entries.firstIndex(where: { $0.identity == identity }) { entries[index].access = access }
         case .removed(let identity):

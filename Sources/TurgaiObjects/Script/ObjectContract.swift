@@ -15,7 +15,8 @@ public struct ObjectContract: Sendable, Equatable {
     /// The contract `description` says, as Swift resolves it.
     public init(_ description: ObjectDescription) throws(CodeProblem) {
         let interface = Uses.interface(of: [Uses.Object(description: description, publishes: true)])
-        let files = ObjectModule.given(interface).map { SwiftCheck.File(name: $0.name, code: $0.code) }
+        // What it takes doesn't depend on whether it lasts: it's read without `init(id:)`.
+        let files = ObjectModule.given(interface, lasting: []).map { SwiftCheck.File(name: $0.name, code: $0.code) }
         let (problems, read) = SwiftCheck.declarations(of: description.type, in: ObjectModule.objectsFile, of: files)
         guard let read, case .actor(_, let methods, _, _)? = read[description.type] else {
             throw CodeProblem(

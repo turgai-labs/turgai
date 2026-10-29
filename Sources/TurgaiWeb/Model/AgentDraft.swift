@@ -1,6 +1,7 @@
 import Hail
 import TurgaiApplication
 import TurgaiHail
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -67,9 +68,11 @@ extension AgentDraft {
         case .openAICompatible(let url, _, let api, _):
             settings.endpointURL = url.absoluteString
             settings.compatibleAPI = api.rawValue
-        case .llamaCPP(let llama, _):
-            settings.modelPath = llama.modelPath
-            settings.gpuLayers = String(llama.gpuLayers)
+        #if Llama
+            case .llamaCPP(let llama, _):
+                settings.modelPath = llama.modelPath
+                settings.gpuLayers = String(llama.gpuLayers)
+        #endif
         case .openAI, .anthropic, .gemini, .appleSystem:
             break
         }
@@ -82,7 +85,7 @@ extension AgentDraft {
     /// What was submitted, over `saved`: a key not typed again stays the saved one.
     init(form: [String: [String]], over saved: AgentDraft) {
         func typed(_ key: String) -> String? {
-            form[key]?.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+            form[key]?.first?.trimmed()
         }
         self = saved
         name = form["name"]?.first ?? saved.name

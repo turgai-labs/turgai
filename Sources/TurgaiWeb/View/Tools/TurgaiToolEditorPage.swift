@@ -8,6 +8,7 @@ import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -51,7 +52,7 @@ struct TurgaiToolEditorPage: HTMLDocument, Sendable {
     var head: some HTML { TurgaiHead() }
 
     private var heading: String {
-        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = draft.name.trimmed()
         guard name.isEmpty else { return name }
         switch draft.kind {
         case .new: return "Build a tool"

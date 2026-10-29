@@ -10,7 +10,7 @@ import TurgaiDomain
 public enum DynamicObjectEvent: Codable, Sendable {
     /// The code of its type it runs from now on, first or new, with the starting values of the
     /// data new to it, given on behalf of `by`. One that another object's code made is held by it.
-    case adopted(BehaviorID, Script, starts: [String: JSONValue], by: CallScope, heldBy: ObjectID?)
+    case adopted(BehaviorID, Script, starts: [String: JSONValue], by: CallScope, in: ConversationID?, heldBy: ObjectID?)
     /// `audience` given `level` of access, or none at all.
     case shared(with: Audience, AccessLevel?)
     /// What it's called and what it was made for, as it was asked for: an object made by name has
@@ -90,8 +90,8 @@ public enum DynamicObjectState: Codable, Sendable {
     /// every event is decided from the state it follows; it leaves the state as it is.
     public func applying(_ event: DynamicObjectEvent) -> DynamicObjectState {
         switch (self, event) {
-        case (.unmade, .adopted(let type, let code, let starts, let maker, let holder)):
-            .live(LiveObject(type: type, code: code, fields: starts, maker: maker, heldBy: holder))
+        case (.unmade, .adopted(let type, let code, let starts, let maker, let place, let holder)):
+            .live(LiveObject(type: type, code: code, fields: starts, maker: maker, madeIn: place, heldBy: holder))
         case (.unmade, _): self
         case (.live(let object), .removed): .removed(object)
         case (.live(let object), _): .live(object.applying(event))
@@ -131,10 +131,10 @@ public enum DynamicObjectState: Codable, Sendable {
         switch self {
         case .unmade:
             let holder = chain.actors.last.flatMap { DynamicObject.identity(of: $0) == nil ? nil : $0 }
-            return .adopted(type, code, starts: starts, by: chain.scope, heldBy: holder)
+            return .adopted(type, code, starts: starts, by: chain.scope, in: chain.place, heldBy: holder)
         case .live(let object):
             try object.changeable(by: chain)
-            return .adopted(type, code, starts: starts, by: chain.scope, heldBy: nil)
+            return .adopted(type, code, starts: starts, by: chain.scope, in: chain.place, heldBy: nil)
         case .removed:
             throw DynamicObjectError.removed
         }
@@ -168,6 +168,8 @@ public struct LiveObject: Codable, Sendable {
     /// Whoever it was made by: on whose behalf it was first given code. What it starts itself, its
     /// tasks and the events it follows, is on their behalf.
     public let maker: CallScope
+    /// The conversation it was made in, when it was made in one: where what it says goes.
+    public let madeIn: ConversationID?
     /// Who may read it and who may write it: its maker's alone, from when it's made, until shared.
     public private(set) var access: Access
     /// What it's called and what it was made for: an object made by name has them.
@@ -185,11 +187,15 @@ public struct LiveObject: Codable, Sendable {
 
     /// An object just made on behalf of `maker`, running `code` of the type `type`, holding
     /// `fields`: its maker's, or, made by another object's code, its holder's alone.
-    init(type: BehaviorID, code: Script, fields: [String: JSONValue], maker: CallScope, heldBy holder: ObjectID?) {
+    init(
+        type: BehaviorID, code: Script, fields: [String: JSONValue], maker: CallScope, madeIn: ConversationID?,
+        heldBy holder: ObjectID?
+    ) {
         self.type = type
         self.code = code
         self.fields = fields
         self.maker = maker
+        self.madeIn = madeIn
         self.access = holder.map(Access.init(heldBy:)) ?? Access(madeBy: maker)
     }
 
@@ -197,7 +203,7 @@ public struct LiveObject: Codable, Sendable {
     func applying(_ event: DynamicObjectEvent) -> LiveObject {
         var next = self
         switch event {
-        case .adopted(let type, let code, let starts, _, _):
+        case .adopted(let type, let code, let starts, _, _, _):
             next.type = type
             next.code = code
             // New code starts again: what failed before is the old code's.

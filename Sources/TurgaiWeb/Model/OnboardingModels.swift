@@ -1,3 +1,4 @@
+import TurgaiDomain
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
@@ -40,7 +41,7 @@ struct CredentialsFormValues: Sendable, Equatable {
     let password: String
 
     init(form: [String: [String]]) {
-        username = form["username"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        username = form["username"]?.first?.trimmed() ?? ""
         password = form["password"]?.first ?? ""
     }
 }

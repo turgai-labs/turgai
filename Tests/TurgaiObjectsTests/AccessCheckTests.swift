@@ -16,7 +16,7 @@ struct AccessCheckTests {
         "actor Counter {\n    var count = 0\n\n    func add() -> Int {\n        count += 1\n        return count\n    }\n}"
 
     private func `as`<Value: Sendable>(_ scope: CallScope, _ body: () async throws -> Value) async throws -> Value {
-        try await CallChain.$current.withValue(.start(scope)) { try await body() }
+        try await CallChain.$current.withValue(.start(scope, in: nil)) { try await body() }
     }
 
     private func listed(_ objects: DynamicObjects, to scope: CallScope) async throws -> [String] {

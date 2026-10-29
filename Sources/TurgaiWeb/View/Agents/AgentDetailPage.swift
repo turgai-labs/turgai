@@ -7,9 +7,11 @@ import NIOCore
 import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
+    import FoundationInternationalization
 #else
     import Foundation
 #endif
@@ -140,7 +142,7 @@ struct AgentConfigurationSummary: HTML, Sendable {
     let profile: TurgaiAgentProfile
 
     private var persona: String {
-        let persona = (profile.persona ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let persona = (profile.persona ?? "").trimmed()
         return persona.isEmpty ? "No persona configured" : persona
     }
 

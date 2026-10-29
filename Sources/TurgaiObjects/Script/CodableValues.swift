@@ -3,14 +3,18 @@ import SwiftParser
 import SwiftSyntax
 
 /// The runtime's rule for values: what an object takes, gives back, announces or holds is sent and
-/// kept as data, so it's `Codable`, as the checker resolved its type. Objects go as references.
+/// kept as data, so it's `Codable`, as the checker resolved its type. Objects go as references, and
+/// one it holds is one that lasts, whose reference outlives a restart.
 public enum CodableValues {
     /// The rule, as the code's writer is told it.
     public static let rule =
         "Values its methods take and give back, its events carry, and its stored properties hold are Codable: the runtime sends and keeps them as data."
 
-    /// Each value of the actor `type` in `code` that isn't `Codable`, at its line, in Swift's words.
-    static func problems(in code: String, type: String, declarations: Declarations) -> [CodeProblem] {
+    /// Each value of the actor `type` in `code` that isn't `Codable`, or holds an object of a type
+    /// not in `lasting`, at its line, in Swift's words.
+    static func problems(in code: String, type: String, declarations: Declarations, lasting: Set<String>)
+        -> [CodeProblem]
+    {
         guard case .actor(let fields, let methods, _, _)? = declarations[type] else { return [] }
         let places = Places(code: code, type: type)
         var checking = Checking(declarations: declarations)
@@ -34,11 +38,18 @@ public enum CodableValues {
             }
         }
         for field in fields {
-            guard let part = checking.notCodable(field.type) else { continue }
-            problems.append(
-                CodeProblem(
-                    line: places.fields[field.name]?.line, span: places.fields[field.name]?.span,
-                    message("stored property '\(field.name)' of type '\(field.type)'", field.type, part)))
+            let property = "stored property '\(field.name)' of type '\(field.type)'"
+            if let part = checking.notCodable(field.type) {
+                problems.append(
+                    CodeProblem(
+                        line: places.fields[field.name]?.line, span: places.fields[field.name]?.span,
+                        message(property, field.type, part)))
+            } else if let object = checking.kept(field.type, lasting: lasting) {
+                problems.append(
+                    CodeProblem(
+                        line: places.fields[field.name]?.line, span: places.fields[field.name]?.span,
+                        "\(property) holds '\(object)', an object whose id doesn't last"))
+            }
         }
         // A type that says it's `Codable` holds only what is, as Swift makes it.
         for name in checking.unmet.sorted() {
@@ -106,6 +117,33 @@ public enum CodableValues {
             case .character, .tuple, .function, .parameter, .inout, .dynamic, .metatype:
                 return type
             }
+        }
+
+        /// The first type of an object in `type` that isn't in `lasting`, `nil` when every one is: a
+        /// reference kept to it would outlive it.
+        func kept(_ type: SwiftType, lasting: Set<String>) -> String? {
+            var walked: Set<String> = []
+            func object(in type: SwiftType) -> String? {
+                switch type {
+                case .optional(let wrapped), .array(let wrapped):
+                    return object(in: wrapped)
+                case .dictionary(let key, let value):
+                    return object(in: key) ?? object(in: value)
+                case .named(let name, let arguments):
+                    if let found = arguments.lazy.compactMap(object(in:)).first { return found }
+                    guard walked.insert(name).inserted else { return nil }
+                    switch declarations[name] {
+                    case .actor?: return lasting.contains(name) ? nil : name
+                    case .structure(let fields, _, _)?: return fields.lazy.compactMap { object(in: $0.type) }.first
+                    case .enumeration(let cases, _, _)?:
+                        return cases.lazy.flatMap(\.values).compactMap { object(in: $0.type) }.first
+                    case .protocol?, nil: return nil
+                    }
+                default:
+                    return nil
+                }
+            }
+            return object(in: type)
         }
 
         /// Records `name`, which says it's `Codable`, as unmet when what it holds isn't.

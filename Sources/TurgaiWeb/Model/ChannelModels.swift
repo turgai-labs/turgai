@@ -1,4 +1,5 @@
 import TurgaiApplication
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -11,8 +12,8 @@ struct ChannelCreateFormValues: Sendable, Equatable {
     let label: String
 
     init(form: [String: [String]]) {
-        kind = form["kind"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        label = form["label"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        kind = form["kind"]?.first?.trimmed() ?? ""
+        label = form["label"]?.first?.trimmed() ?? ""
     }
 }
 
@@ -66,11 +67,11 @@ extension ChannelDraft {
     /// What was submitted, over `saved`.
     init(form: [String: [String]], over saved: ChannelDraft) {
         self = saved
-        label = form["label"]?.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? saved.label
+        label = form["label"]?.first?.trimmed() ?? saved.label
         enabled = form["enabled"] != nil
-        let profileID = (form["agentProfileID"]?.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let profileID = (form["agentProfileID"]?.first ?? "").trimmed()
         routing = profileID.isEmpty ? .defaultProfile : .profile(profileID)
         chatIDs = form["chatIDs"]?.first ?? saved.chatIDs
-        token = (form["token"]?.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        token = (form["token"]?.first ?? "").trimmed()
     }
 }

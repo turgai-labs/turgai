@@ -494,6 +494,9 @@ public actor ObjectSession {
         for entry in (try? await entries()) ?? [] { handles.insert(listed(entry)) }
         var objects: [Uses.Object] = []
         var existing: [ObjectIdentity: String] = [:]
+        // The types whose objects are virtual actors: the same object, by the same id, after every
+        // restart, so code names them by id, keeps them and follows them.
+        var lasting: Set<String> = []
         var summaries: [String: String] = [:]
         var descriptions: [String: ObjectDescription] = [:]
         for handle in handles.sorted() {
@@ -501,10 +504,10 @@ public actor ObjectSession {
             let typeName = description.type
             // What it publishes is read, never written: what isn't `private`, as Swift reads another
             // actor's property.
-            // Code reaches by id, `Type(id:)`, what has one: an object made by name, or a built-in one.
-            switch handle {
-            case .virtual, .actor(_, type: _?): existing[ObjectIdentity(rawValue: handle.name)] = typeName
-            case .actor(_, type: nil): break
+            // Code reaches by id, `Type(id:)`, what has one that lasts: a virtual actor's.
+            if case .virtual = handle {
+                existing[ObjectIdentity(rawValue: handle.name)] = typeName
+                lasting.insert(typeName)
             }
             // One actor per type: every object of it is a constant of that type.
             guard !objects.contains(where: { $0.type == typeName }) else { continue }
@@ -517,14 +520,16 @@ public actor ObjectSession {
             $0.key < $1.key
         })
         where unmade != type && !objects.contains(where: { $0.type == unmade }) {
+            // An object code makes is a virtual actor.
             objects.append(Uses.Object(description: description, publishes: true))
+            lasting.insert(unmade)
             summaries[unmade] = Self.given(description.description)
         }
         // The object being written declares its own types: they aren't declared for it again.
         // The tools this node has, which code calls as `Tools.<tool>.<function>`.
         let tools = actorSystem.toolsAPI.tools
         let interface = Uses.interface(of: objects, tools: tools, except: type)
-        var others = Others(uses: Uses(interface: interface, objects: existing))
+        var others = Others(uses: Uses(interface: interface, objects: existing, lasting: lasting))
         for tool in tools.sorted(by: { $0.name < $1.name }) {
             for function in tool.functions.sorted(by: { $0.name < $1.name }) {
                 guard let call = Uses.call(of: function) else { continue }
@@ -535,9 +540,14 @@ public actor ObjectSession {
         }
         // In words, from the spec itself.
         for actor in interface.actors(events: [RuntimeMacros.event]) {
-            // Each as the code that reaches it; a type no object is of yet, as the code that makes one.
+            // Each as the code that reaches it; a type no object is of yet, as the code that makes one;
+            // one that doesn't last, which only a call gives, by its type.
             let reached = others.uses.ids(of: actor.name).map { "\(actor.name)(id: \"\($0)\")" }
-            var declaration = ["- \(reached.isEmpty ? "\(actor.name)(id:)" : reached.joined(separator: ", "))"]
+            let written =
+                !reached.isEmpty
+                ? reached.joined(separator: ", ")
+                : others.uses.lasting.contains(actor.name) ? "\(actor.name)(id:)" : actor.name
+            var declaration = ["- \(written)"]
             if let summary = summaries[actor.name] { declaration.append("  \(summary).") }
             // Each with what its parameters are, as its object says, in words.
             let takes = actor.methods.sorted { $0.key < $1.key }.map { name, method in
@@ -631,11 +641,11 @@ public actor ObjectSession {
         let lines = difference.compactMap { change -> String? in
             switch change {
             case .remove(_, let line, _):
-                line.trimmingCharacters(in: .whitespaces).isEmpty
-                    ? nil : "- " + line.trimmingCharacters(in: .whitespaces)
+                line.trimmed(while: { $0.isWhitespace && !$0.isNewline }).isEmpty
+                    ? nil : "- " + line.trimmed(while: { $0.isWhitespace && !$0.isNewline })
             case .insert(_, let line, _):
-                line.trimmingCharacters(in: .whitespaces).isEmpty
-                    ? nil : "+ " + line.trimmingCharacters(in: .whitespaces)
+                line.trimmed(while: { $0.isWhitespace && !$0.isNewline }).isEmpty
+                    ? nil : "+ " + line.trimmed(while: { $0.isWhitespace && !$0.isNewline })
             }
         }
         guard !lines.isEmpty else { return "\nIts code is the same as before." }
@@ -775,7 +785,7 @@ public actor ObjectSession {
     /// A description as given, without the full stop it ends with, for a line that goes on after
     /// it; `nil` when there's none.
     private static func given(_ text: String?) -> String? {
-        let text = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text = text?.trimmed() ?? ""
         let given = text.hasSuffix(".") ? String(text.dropLast()) : text
         return given.isEmpty ? nil : given
     }
@@ -1215,18 +1225,19 @@ public actor ObjectSession {
     }
 
     private static func looksLikeJSON(_ text: String?) -> Bool {
-        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmed = text?.trimmed() ?? ""
         return trimmed.hasPrefix("{") || trimmed.hasPrefix("[")
     }
 
     /// A result as the model reads it: YAML, the way it writes its arguments, keys sorted.
     static func text(_ value: DiscoveryJSON) throws -> String {
-        try Yams.dump(object: plain(value), sortKeys: true).trimmingCharacters(in: .newlines)
+        try Yams.dump(object: plain(value), sortKeys: true).trimmed(while: \.isNewline)
     }
 
     private static func plain(_ value: DiscoveryJSON) -> Any {
         switch value {
-        case .null: NSNull()
+        // Nothing, which Yams writes as `null`.
+        case .null: Optional<Any>.none as Any
         case .bool(let bool): bool
         // A whole number reads as one: YAML would write 3000.0 as 3e+3.
         case .number(let number) where number.rounded() == number && abs(number) < 1e15: Int(number)
@@ -2000,7 +2011,7 @@ struct UnofferedChoice: Error, CustomStringConvertible {
 extension GeneratedContent {
     /// The text of an optional property, or nil when it's missing or blank.
     func text(_ property: String) throws -> String? {
-        let text = try value(String?.self, forProperty: property)?.trimmingCharacters(in: .whitespaces)
+        let text = try value(String?.self, forProperty: property)?.trimmed(while: { $0.isWhitespace && !$0.isNewline })
         return text?.isEmpty == false ? text : nil
     }
 }

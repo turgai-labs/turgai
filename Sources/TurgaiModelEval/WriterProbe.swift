@@ -54,7 +54,7 @@ enum WriterProbe {
                 source:
                     "actor Website {\n    func show(_ page: Page)\n    @Event func buttonPressed(label: String)\n}\n\nstruct Page {\n    var items: [String]\n}"
             ),
-            objects: [ObjectIdentity(rawValue: "website"): "Website"])
+            objects: [ObjectIdentity(rawValue: "website"): "Website"], lasting: ["Website"])
         var tally: [String: Int] = [:]
         var saved = 0
         for run in 1...runs {

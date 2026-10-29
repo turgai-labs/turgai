@@ -6,6 +6,7 @@ import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
+    import FoundationInternationalization
 #else
     import Foundation
 #endif
@@ -361,7 +362,7 @@ public struct Timer: Sendable {
         retryPolicy: RetryPolicy? = Self.defaultRetryPolicy,
         workflows: WorkflowActions
     ) async throws {
-        guard !request.action.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !request.action.content.trimmed().isEmpty else {
             throw Error.emptyText
         }
 
@@ -738,7 +739,7 @@ extension WorkflowID {
     }
 
     static func timerID(from value: String) -> WorkflowID? {
-        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = value.trimmed()
         guard !value.isEmpty else { return nil }
         return WorkflowID(
             rawValue: value.hasPrefix(turgaiTimerPrefix)

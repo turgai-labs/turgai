@@ -36,28 +36,16 @@ public enum TurgaiChannelError: Error, Equatable, Sendable {
     case unknownChannel(UUID)
 }
 
-public enum ChannelRuntimeChange: Codable, Sendable, Equatable {
-    case configuration
-    case providerCredentials
-}
-
+/// What a channel is of: its provider's configuration, the state it keeps, and the events that
+/// change it. What runs a channel's chats is the provider's service on the node, never the channel.
 public protocol ChannelProvider: Sendable {
     associatedtype Configuration: Codable & Sendable & Equatable & Hashable
     associatedtype State: Codable & Sendable & Equatable & Hashable
     associatedtype Event: Codable & Sendable & Equatable & Hashable
-    associatedtype Runtime: Sendable
 
     static var providerID: String { get }
     static func initialState(configuration: Configuration) -> State
     static func apply(_ event: Event, to state: inout State)
-    static func makeRuntime(
-        configuration: ChannelConfiguration<Self>,
-        state: State,
-        actorSystem: ClusterSystem,
-        readState: @escaping @Sendable () async throws -> State,
-        emit: @escaping @Sendable (Event) async throws -> Void
-    ) async throws -> Runtime
-    static func run(_ runtime: Runtime) async throws
 }
 
 public struct ChannelConfiguration<Provider: ChannelProvider>:
@@ -89,6 +77,17 @@ public enum ChannelState<Provider: ChannelProvider>: Codable, Sendable, Equatabl
     case uninitialized
     case active(ChannelConfiguration<Provider>, Provider.State)
     case deleted(ChannelConfiguration<Provider>, Provider.State)
+}
+
+/// What a channel's provider did, as a call to the channel takes it: in a type of the channel's
+/// own generic parameter, since a distributed call can't take an associated type itself
+/// (swift#74769).
+public struct ProviderEvent<Provider: ChannelProvider>: Codable, Sendable, Equatable {
+    public let event: Provider.Event
+
+    public init(_ event: Provider.Event) {
+        self.event = event
+    }
 }
 
 public enum ChannelEvent<Provider: ChannelProvider>: Codable, Sendable, Equatable {
@@ -124,7 +123,6 @@ public enum TelegramProvider: ChannelProvider {
     public typealias Configuration = TelegramChannelConfig
     public typealias State = TelegramChannelState
     public typealias Event = TelegramChannelEvent
-    public typealias Runtime = TelegramChannelRuntime
 
     public static let providerID = "telegram"
 
@@ -148,9 +146,10 @@ public enum ChannelActorError: Error, Codable, Sendable, Equatable {
     case invalidLabel
     case deleted
     case notActive
-    case providerRuntimeUnavailable
 }
 
+/// A channel: its configuration and its provider's state, journaled. It runs nothing itself:
+/// its provider's service reads it and tells it what it's done, and each message activates it.
 @EventSourced
 @VirtualActor
 public distributed actor Channel<Provider: ChannelProvider> {
@@ -172,11 +171,6 @@ public distributed actor Channel<Provider: ChannelProvider> {
     )
 
     private let channelID: UUID
-    private enum ProviderRuntimeState {
-        case stopped
-        case running(UUID, Provider.Runtime, Task<Void, Never>)
-    }
-    private var providerRuntime: ProviderRuntimeState = .stopped
 
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
@@ -193,7 +187,6 @@ public distributed actor Channel<Provider: ChannelProvider> {
             actor: self,
             with: Self.persistenceID(for: channelID)
         )
-        await restartProviderRuntime()
     }
 
     public static func actorID(for channelID: UUID) -> VirtualActorID {
@@ -242,10 +235,7 @@ public distributed actor Channel<Provider: ChannelProvider> {
         state
     }
 
-    public distributed func replaceConfiguration(
-        _ configuration: ChannelConfiguration<Provider>,
-        runtimeChange: ChannelRuntimeChange
-    ) async throws {
+    public distributed func replaceConfiguration(_ configuration: ChannelConfiguration<Provider>) async throws {
         guard configuration.id == channelID else {
             throw ChannelActorError.channelIDMismatch
         }
@@ -254,29 +244,19 @@ public distributed actor Channel<Provider: ChannelProvider> {
         switch state {
         case .uninitialized:
             try await emit(event: .created(accepted))
-            await restartProviderRuntime()
         case .active(let existing, _):
-            guard existing != accepted || runtimeChange == .providerCredentials else { return }
-            await stopProviderRuntime()
-            do {
-                if existing != accepted {
-                    try await emit(event: .configurationChanged(accepted))
-                }
-            } catch {
-                await restartProviderRuntime()
-                throw error
-            }
-            await restartProviderRuntime()
+            guard existing != accepted else { return }
+            try await emit(event: .configurationChanged(accepted))
         case .deleted:
             throw ChannelActorError.deleted
         }
     }
 
-    public distributed func emitProviderEvent(_ event: Provider.Event) async throws {
+    public distributed func emitProviderEvent(_ event: ProviderEvent<Provider>) async throws {
         guard case .active = state else {
             throw ChannelActorError.notActive
         }
-        try await emit(event: .provider(event))
+        try await emit(event: .provider(event.event))
     }
 
     public distributed func delete() async throws {
@@ -284,116 +264,14 @@ public distributed actor Channel<Provider: ChannelProvider> {
         case .uninitialized:
             throw ChannelActorError.notActive
         case .active:
-            await stopProviderRuntime()
-            do {
-                try await emit(event: .deleted)
-            } catch {
-                await restartProviderRuntime()
-                throw error
-            }
+            try await emit(event: .deleted)
         case .deleted:
             return
         }
     }
 
-    public func shouldDeactivate() async -> Bool {
-        switch state {
-        case .uninitialized, .deleted:
-            return true
-        case .active:
-            if case .running = providerRuntime { return false }
-            return true
-        }
-    }
-
-    private func restartProviderRuntime() async {
-        await stopProviderRuntime()
-        guard case .active(let configuration, let providerState) = state,
-            configuration.enabled
-        else { return }
-
-        let eventSink: @Sendable (Provider.Event) async throws -> Void = { [weak self] event in
-            guard let self else { throw ChannelActorError.providerRuntimeUnavailable }
-            try await self.emitProviderEvent(event)
-        }
-        let stateReader: @Sendable () async throws -> Provider.State = { [weak self] in
-            guard let self else { throw ChannelActorError.providerRuntimeUnavailable }
-            return try await self.providerStateForRuntime()
-        }
-        let runtime: Provider.Runtime
-        do {
-            runtime = try await Provider.makeRuntime(
-                configuration: configuration,
-                state: providerState,
-                actorSystem: actorSystem,
-                readState: stateReader,
-                emit: eventSink
-            )
-        } catch {
-            actorSystem.log.warning(
-                "Channel provider runtime could not start",
-                metadata: [
-                    "provider": .string(Provider.providerID),
-                    "channel": .string(channelID.uuidString),
-                    "error": .string(String(describing: error)),
-                ]
-            )
-            return
-        }
-
-        let generation = UUID()
-        let task = Task { [weak self] in
-            do {
-                try await Provider.run(runtime)
-            } catch is CancellationError {
-            } catch {
-                try? await self?.reportProviderRuntimeFailure(String(describing: error))
-            }
-            try? await self?.providerRuntimeDidStop(generation)
-        }
-        providerRuntime = .running(generation, runtime, task)
-    }
-
-    private distributed func providerStateForRuntime() throws -> Provider.State {
-        guard case .active(_, let providerState) = state else {
-            throw ChannelActorError.notActive
-        }
-        return providerState
-    }
-
-    private func stopProviderRuntime() async {
-        guard case .running(_, _, let task) = providerRuntime else { return }
-        providerRuntime = .stopped
-        task.cancel()
-        await task.value
-    }
-
-    private distributed func providerRuntimeDidStop(_ generation: UUID) {
-        guard case .running(let current, _, _) = providerRuntime,
-            current == generation
-        else { return }
-        providerRuntime = .stopped
-    }
-
-    private distributed func reportProviderRuntimeFailure(_ message: String) {
-        actorSystem.log.warning(
-            "Channel provider runtime stopped",
-            metadata: [
-                "provider": .string(Provider.providerID),
-                "channel": .string(channelID.uuidString),
-                "error": .string(message),
-            ]
-        )
-    }
-
-    deinit {
-        if case .running(_, _, let task) = providerRuntime {
-            task.cancel()
-        }
-    }
-
     private static func validatedLabel(_ label: String) throws -> String {
-        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = label.trimmed()
         guard !trimmed.isEmpty, trimmed.count <= 120 else {
             throw ChannelActorError.invalidLabel
         }

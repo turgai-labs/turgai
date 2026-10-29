@@ -1,6 +1,7 @@
 import AnyLanguageModel
 import DiscoverableActors
 import Hail
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -90,7 +91,7 @@ public enum WebSearchBackend: Sendable, Hashable {
             guard let url = components.url else {
                 throw Search.Error.invalidURL
             }
-            let body = try JSONSerialization.data(withJSONObject: ["query": query])
+            let body = try JSONEncoder().encode(["query": query])
             return NetworkEffect(
                 host: components.host ?? "ollama",
                 operation: "search",
@@ -126,7 +127,7 @@ public enum WebSearchBackend: Sendable, Hashable {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw Search.Error.invalidURL
         }
-        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let basePath = components.path.trimmed(while: { $0 == "/" })
         components.path =
             "/"
             + ([basePath] + path.split(separator: "/").map(String.init))
@@ -169,7 +170,7 @@ public enum WebSearchBackend: Sendable, Hashable {
             .queryItems?
             .first(where: { $0.name == "uddg" })?
             .value,
-            let decoded = encoded.removingPercentEncoding
+            let decoded = encoded.percentDecoded
         {
             return decoded
         }
@@ -254,19 +255,13 @@ enum SearchHTML {
         "related", "share", "social", "subscribe", "toolbar",
     ]
 
+    /// Each match of `pattern` in `text`: the whole match, then each group that took part in it.
     static func captures(in text: String, pattern: String) -> [[String]] {
-        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+        guard let expression = try? Regex(pattern) else {
             return []
         }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return expression.matches(in: text, range: range).map { match in
-            (0..<match.numberOfRanges).compactMap { index in
-                let range = match.range(at: index)
-                guard range.location != NSNotFound, let swiftRange = Range(range, in: text) else {
-                    return nil
-                }
-                return String(text[swiftRange])
-            }
+        return text.matches(of: expression).map { match in
+            match.output.compactMap { $0.substring.map(String.init) }
         }
     }
 
@@ -285,7 +280,7 @@ enum SearchHTML {
             }
 
             if html[open...].hasPrefix("<!--"),
-                let end = html[open...].range(of: "-->")?.upperBound
+                let end = html[open...].firstRange(of: "-->")?.upperBound
             {
                 cursor = end
                 continue
@@ -344,7 +339,7 @@ enum SearchHTML {
     private static func parseTag(_ source: String) -> (
         name: String, attributes: [String: String], closing: Bool, selfClosing: Bool
     )? {
-        var value = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        var value = source.trimmed()
         guard !value.isEmpty, !value.hasPrefix("!") && !value.hasPrefix("?") else { return nil }
         let closing = value.hasPrefix("/")
         if closing { value.removeFirst() }
@@ -355,21 +350,15 @@ enum SearchHTML {
         }
 
         let remainder = String(value[nameEnd...])
-        let selfClosing = remainder.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("/")
+        let selfClosing = remainder.trimmed().hasSuffix("/")
         var attributes: [String: String] = [:]
-        guard !closing,
-            let expression = try? NSRegularExpression(
-                pattern: #"(?is)([a-z_:][a-z0-9_:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?"#
-            )
-        else {
+        guard !closing else {
             return (name, attributes, closing, selfClosing)
         }
-        let range = NSRange(remainder.startIndex..<remainder.endIndex, in: remainder)
-        for match in expression.matches(in: remainder, range: range) {
-            guard let keyRange = Range(match.range(at: 1), in: remainder) else { continue }
-            let key = String(remainder[keyRange]).lowercased()
-            let valueRange = (2...4).compactMap { Range(match.range(at: $0), in: remainder) }.first
-            attributes[key] = valueRange.map { String(remainder[$0]) } ?? ""
+        let attribute = #/(?is)([a-z_:][a-z0-9_:.-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/#
+        for match in remainder.matches(of: attribute) {
+            let (_, key, doubleQuoted, singleQuoted, bare) = match.output
+            attributes[key.lowercased()] = (doubleQuoted ?? singleQuoted ?? bare).map(String.init) ?? ""
         }
         return (name, attributes, closing, selfClosing)
     }
@@ -415,7 +404,8 @@ enum SearchHTML {
         let classes = [element.attributes["class"] ?? "", element.attributes["id"] ?? ""]
             .joined(separator: " ")
             .lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
         return !classes.contains(where: { boilerplateClasses.contains($0) || $0.hasPrefix("advert") })
     }
 
@@ -426,7 +416,7 @@ enum SearchHTML {
 
         let identifiers = "\(element.attributes["class"] ?? "") \(element.attributes["id"] ?? "")"
             .lowercased()
-            .replacingOccurrences(of: "_", with: "-")
+            .replacing("_", with: "-")
         if [
             "article-body", "article-content", "post-content", "story-body", "story-content", "entry-content",
             "content-body",
@@ -448,38 +438,29 @@ enum SearchHTML {
     }
 
     static func decodeEntities(_ value: String) -> String {
-        var decoded =
+        let decoded =
             value
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&#39;", with: "'")
-            .replacingOccurrences(of: "&#x27;", with: "'")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&nbsp;", with: " ")
-            .replacingOccurrences(of: "&rsquo;", with: "’")
-            .replacingOccurrences(of: "&lsquo;", with: "‘")
-            .replacingOccurrences(of: "&rdquo;", with: "”")
-            .replacingOccurrences(of: "&ldquo;", with: "“")
-            .replacingOccurrences(of: "&mdash;", with: "—")
-            .replacingOccurrences(of: "&ndash;", with: "–")
-            .replacingOccurrences(of: "&hellip;", with: "…")
-            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacing("&quot;", with: "\"")
+            .replacing("&#39;", with: "'")
+            .replacing("&#x27;", with: "'")
+            .replacing("&lt;", with: "<")
+            .replacing("&gt;", with: ">")
+            .replacing("&nbsp;", with: " ")
+            .replacing("&rsquo;", with: "’")
+            .replacing("&lsquo;", with: "‘")
+            .replacing("&rdquo;", with: "”")
+            .replacing("&ldquo;", with: "“")
+            .replacing("&mdash;", with: "—")
+            .replacing("&ndash;", with: "–")
+            .replacing("&hellip;", with: "…")
+            .replacing("&amp;", with: "&")
 
-        if let expression = try? NSRegularExpression(pattern: #"&#(?:x([0-9a-fA-F]+)|([0-9]+));"#) {
-            let range = NSRange(decoded.startIndex..<decoded.endIndex, in: decoded)
-            for match in expression.matches(in: decoded, range: range).reversed() {
-                guard let fullRange = Range(match.range, in: decoded) else { continue }
-                let hexRange = Range(match.range(at: 1), in: decoded)
-                let decimalRange = Range(match.range(at: 2), in: decoded)
-                let scalarValue =
-                    hexRange.flatMap { UInt32(decoded[$0], radix: 16) }
-                    ?? decimalRange.flatMap { UInt32(decoded[$0]) }
-                if let scalarValue, let scalar = Unicode.Scalar(scalarValue) {
-                    decoded.replaceSubrange(fullRange, with: String(scalar))
-                }
-            }
+        // A numeric entity is the character it names; one naming none stays as it's written.
+        return decoded.replacing(#/&#(?:x([0-9a-fA-F]+)|([0-9]+));/#) { match in
+            let (entity, hex, decimal) = match.output
+            let value = hex.flatMap { UInt32($0, radix: 16) } ?? decimal.flatMap { UInt32($0) }
+            return value.flatMap(Unicode.Scalar.init).map { String($0) } ?? String(entity)
         }
-        return decoded
     }
 }
 
@@ -537,7 +518,7 @@ public struct Search: Sendable {
     }
 
     private static func bounded(_ value: String, to maximumCharacters: Int) -> String {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = value.trimmed()
         guard normalized.count > maximumCharacters else { return normalized }
         guard maximumCharacters > 1 else { return String(normalized.prefix(maximumCharacters)) }
         return String(normalized.prefix(maximumCharacters - 1)) + "…"
@@ -562,7 +543,7 @@ public struct SearchWebEffect: CompositeScopedEffect, Sendable {
     public let request: NetworkEffect
 
     public init(query written: String, backend: WebSearchBackend) throws {
-        let query = written.trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = written.trimmed()
         guard !query.isEmpty else { throw ToolError.invalidArgument("query", value: written) }
         guard query.count <= 512 else { throw ToolError.invalidArgument("query", value: "query is too long") }
         self.query = query

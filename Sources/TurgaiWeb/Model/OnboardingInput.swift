@@ -2,6 +2,7 @@ import Hail
 import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -101,17 +102,19 @@ enum OnboardingInput {
             )
         case .system:
             return ProviderSubmission(configuration: .appleSystem, credential: nil)
-        case .llamaCPP:
-            let modelPath = values.modelPath
-            guard !modelPath.isEmpty else {
-                throw FormValidationError.invalidValue("GGUF model path")
-            }
-            let gpuLayers = Int32(values.gpuLayers) ?? -1
-            return ProviderSubmission(
-                configuration: .llamaCPP(
-                    .init(modelPath: modelPath, gpuLayers: gpuLayers), contextWindow: try contextWindow()),
-                credential: nil
-            )
+        #if Llama
+            case .llamaCPP:
+                let modelPath = values.modelPath
+                guard !modelPath.isEmpty else {
+                    throw FormValidationError.invalidValue("GGUF model path")
+                }
+                let gpuLayers = Int32(values.gpuLayers) ?? -1
+                return ProviderSubmission(
+                    configuration: .llamaCPP(
+                        .init(modelPath: modelPath, gpuLayers: gpuLayers), contextWindow: try contextWindow()),
+                    credential: nil
+                )
+        #endif
         default:
             throw FormValidationError.invalidValue("provider")
         }
@@ -178,12 +181,12 @@ enum OnboardingInput {
         let values = StorageFormValues(form: form, defaultFileDirectory: defaultFileDirectory)
         switch values.backend {
         case .file:
-            let value = values.fileURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = values.fileURL.trimmed()
             let url = URL(string: value) ?? defaultFileDirectory
             guard url.isFileURL else { throw FormValidationError.invalidValue("file store URL") }
             return try TurgaiStorageConfiguration.fileStore(directory: url)
         case .postgres:
-            guard let rawURL = URL(string: values.postgresURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            guard let rawURL = URL(string: values.postgresURL.trimmed()) else {
                 throw FormValidationError.invalidValue("PostgreSQL URL")
             }
             return try TurgaiStorageConfiguration.postgresStore(url: rawURL, username: values.postgresUsername)
@@ -199,12 +202,12 @@ enum OnboardingInput {
 
     static func chatIDs(from value: String?) throws -> [Int64] {
         guard let value else { return [] }
-        let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedValue = value.trimmed()
         guard !normalizedValue.isEmpty else { return [] }
         var result: [Int64] = []
         var seen = Set<Int64>()
         for value in normalizedValue.split(separator: ",", omittingEmptySubsequences: false) {
-            let rawValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rawValue = value.trimmed()
             guard !rawValue.isEmpty, let id = Int64(rawValue), id != 0 else {
                 throw FormValidationError.invalidValue("Telegram chat ID")
             }

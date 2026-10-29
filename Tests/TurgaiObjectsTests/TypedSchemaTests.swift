@@ -69,7 +69,8 @@ struct TypedSchemaTests {
                 "extension RefundDesk {\n    /// A refund to decide on.\n    struct Refund: Codable {"),
             "\(interface.source)")
         #expect(interface.source.contains("    enum Reason: String, Codable {"), "\(interface.source)")
-        let uses = Uses(interface: interface, objects: [ObjectIdentity(rawValue: "desk"): "RefundDesk"])
+        let uses = Uses(
+            interface: interface, objects: [ObjectIdentity(rawValue: "desk"): "RefundDesk"], lasting: ["RefundDesk"])
         func clerk(_ refund: String) -> String {
             "actor Clerk {\n    let desk = RefundDesk(id: \"desk\")\n\n    func file() async throws -> Bool {\n        try await desk.review(refund: \(refund))\n    }\n}"
         }
@@ -110,7 +111,7 @@ struct TypedSchemaTests {
             interface: interface,
             objects: [
                 ObjectIdentity(rawValue: "desk"): "RefundDesk", ObjectIdentity(rawValue: "warehouse"): "Warehouse",
-            ])
+            ], lasting: ["RefundDesk", "Warehouse"])
         let clerk = """
             actor Clerk {
                 let desk = RefundDesk(id: "desk")
@@ -178,7 +179,8 @@ struct TypedSchemaTests {
         let clerkSpec = try Script(code: first, type: "Clerk").spec(description: nil)
         // Then the desk, written against the clerk: its method takes the clerk's `Note`.
         let deskUses = Uses(
-            interface: Uses.interface(of: [Uses.Object(description: clerkSpec, publishes: false)]), objects: [:])
+            interface: Uses.interface(of: [Uses.Object(description: clerkSpec, publishes: false)]), objects: [:],
+            lasting: ["Clerk"])
         let desk = try Script(code: "actor Desk {\n    func file(note: Clerk.Note) {}\n}", type: "Desk", uses: deskUses)
         #expect(await ScriptInstance.problems(in: desk).isEmpty)
         let deskSpec = try desk.spec(description: nil)
@@ -192,7 +194,7 @@ struct TypedSchemaTests {
         )
         let clerkUses = Uses(
             interface: Uses.interface(of: [Uses.Object(description: deskSpec, publishes: false)], except: "Clerk"),
-            objects: [ObjectIdentity(rawValue: "desk"): "Desk"])
+            objects: [ObjectIdentity(rawValue: "desk"): "Desk"], lasting: ["Desk"])
         #expect(!clerkUses.interface.source.contains("struct Note"), "\(clerkUses.interface.source)")
         let problems = await ScriptInstance.problems(in: try Script(code: changed, type: "Clerk", uses: clerkUses))
         #expect(problems.isEmpty, "\(problems)\n\(clerkUses.interface.source)")
@@ -236,7 +238,7 @@ struct ObjectProtocolTests {
             interface.source.contains("func startShift(manager: any Shop.RefundManager) async throws"),
             "\(interface.source)")
 
-        let uses = Uses(interface: interface, objects: [ObjectIdentity(rawValue: "shop"): "Shop"])
+        let uses = Uses(interface: interface, objects: [ObjectIdentity(rawValue: "shop"): "Shop"], lasting: ["Shop"])
         func refusals(_ code: String) async throws -> [String] {
             await ScriptInstance.problems(in: try Script(code: code, type: "Ann", uses: uses)).map(\.message)
         }

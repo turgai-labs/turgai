@@ -1,4 +1,5 @@
 import TurgaiPersistence
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -53,7 +54,7 @@ public actor TurgaiSetupStore {
             guard let password = try? String(contentsOf: postgresPasswordURL, encoding: .utf8) else {
                 return false
             }
-            return !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return !password.trimmed().isEmpty
         default:
             return true
         }
@@ -66,7 +67,7 @@ public actor TurgaiSetupStore {
         switch storage {
         case .postgres:
             guard let postgresPassword,
-                !postgresPassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                !postgresPassword.trimmed().isEmpty
             else {
                 throw TurgaiStorageConfigurationError.invalidPostgresPassword
             }

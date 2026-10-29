@@ -96,16 +96,20 @@ extension TurgaiToolDraft {
 
     private static func argumentDrafts(from schema: GenerationSchema) -> [TurgaiToolArgumentDraft] {
         guard let data = try? JSONEncoder().encode(schema),
-            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let properties = root["properties"] as? [String: Any]
+            case .object(let root)? = try? JSONDecoder().decode(JSONValue.self, from: data),
+            case .object(let properties)? = root["properties"]
         else { return [] }
-        let required = Set(root["required"] as? [String] ?? [])
+        let required: Set<String> =
+            if case .array(let names)? = root["required"] {
+                Set(names.compactMap { if case .string(let name) = $0 { name } else { nil } })
+            } else { [] }
         return properties.keys.sorted().map { name in
-            let property = properties[name] as? [String: Any]
+            let property: [String: JSONValue] = if case .object(let property)? = properties[name] { property } else { [:] }
+            func text(_ key: String) -> String { if case .string(let value)? = property[key] { value } else { "" } }
             return TurgaiToolArgumentDraft(
                 name: name,
-                type: ToolArgumentType(rawValue: property?["type"] as? String ?? "") ?? .string,
-                description: property?["description"] as? String ?? "",
+                type: ToolArgumentType(rawValue: text("type")) ?? .string,
+                description: text("description"),
                 required: required.contains(name)
             )
         }

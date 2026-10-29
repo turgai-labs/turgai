@@ -1,18 +1,13 @@
 import AppKit
-import DiscoverableActors
-import DistributedCluster
-import HailAgentRuntime
 import Logging
 import Observation
 import ServiceLifecycle
-import TurgaiApplication
 import TurgaiObjects
 import TurgaiServer
 import TurgaiWeb
-import VirtualActors
 
-/// Runs the whole Turgai server and the Mac's objects in this process, as one
-/// `ServiceGroup`, from launch until the user quits.
+/// Runs the whole Turgai server in this process, as one `ServiceGroup`, from launch until the
+/// user quits.
 @MainActor
 @Observable
 final class Runtime {
@@ -34,6 +29,8 @@ final class Runtime {
             server = try TurgaiServer(
                 directory: TurgaiServer.defaultDirectory,
                 port: LocalServer.baseURL.port ?? 3333,
+                websitePort: WebsitePort(rawValue: LocalWebsite.port),
+                logLevel: .info,
                 api: APIConfiguration(),
                 environment: ProcessInfo.processInfo.environment,
                 workspaceRoot: FileManager.default.homeDirectoryForCurrentUser.path
@@ -44,11 +41,7 @@ final class Runtime {
             self.group = nil
             return
         }
-        var configuration = ServiceGroupConfiguration(
-            // The Mac's objects stop first, then the server, in reverse order.
-            services: server.services + [MacObjectsService()],
-            logger: Logger(label: "turgai")
-        )
+        var configuration = ServiceGroupConfiguration(services: server.services, logger: Logger(label: "turgai"))
         configuration.maximumGracefulShutdownDuration = .seconds(10)
         configuration.maximumCancellationDuration = .seconds(5)
         let group = ServiceGroup(configuration: configuration)
@@ -81,48 +74,5 @@ final class Runtime {
     private func stopped(reason: String) {
         guard status == .running else { return }
         status = .stopped(reason: reason)
-    }
-}
-
-/// Hosts the Mac's objects on their own cluster node so macOS asks for permissions
-/// under Turgai's bundle identity. They can't share the server's node: a call through
-/// a resolved stub to an actor on the same node doesn't return yet (see
-/// swift-distributed-actors#1243).
-actor MacObjectsService: Service {
-    private var objects: MacObjects?
-
-    func run() async throws {
-        let system = await ClusterSystem("turgai-mac-objects") { settings in
-            settings.bindHost = "127.0.0.1"
-            settings.bindPort = PortFinder.findAvailablePort(host: "127.0.0.1")
-            settings.discovery = .clusterd
-            // Lets objects here reach virtual ones, such as the demo shop's managers.
-            settings.plugins.install(plugin: ClusterSingletonPlugin())
-            let virtualActors = ClusterVirtualActorsPlugin.configuring(&settings)
-            settings.plugins.install(plugin: virtualActors)
-            settings.plugins.install(plugin: DiscoveryPlugin())
-            settings.propagateCallChain()
-            settings.checkObjectAccess()
-            // The tools every node has, which objects' code here calls.
-            settings.plugins.install(plugin: ToolsAPIPlugin(NodeTools(authority: { _ in TurgaiAuthority() }).api))
-        }
-        defer { _ = try? system.shutdown() }
-        try await withGracefulShutdownHandler {
-            // The server's node joins only once onboarding is done, so keep trying.
-            while objects == nil {
-                do {
-                    try await system.cluster.joined(within: .seconds(8))
-                    objects = try await MacObjects(actorSystem: system, websitePort: LocalWebsite.port)
-                    system.log.info("Mac objects joined the Turgai cluster")
-                } catch {
-                    guard !system.isTerminated else { break }
-                    system.log.debug("Waiting for the Turgai cluster before checking in Mac objects: \(error)")
-                    try await Task.sleep(for: .seconds(2))
-                }
-            }
-            try await system.terminated
-        } onGracefulShutdown: {
-            _ = try? system.shutdown()
-        }
     }
 }

@@ -97,7 +97,9 @@ public enum TurgaiModelCatalogLoader {
         notices[.anthropic] = "Enter a model ID available to your Anthropic API account."
         notices[.gemini] = "Enter a model ID available to your Gemini API account."
         notices[.openAICompatible] = "Enter the model ID supported by the configured compatible endpoint."
-        notices[.llamaCPP] = "Choose a local GGUF file and enter its model ID."
+        #if Llama
+            notices[.llamaCPP] = "Choose a local GGUF file and enter its model ID."
+        #endif
 
         for profile in profiles {
             let model = profile.model
@@ -138,7 +140,7 @@ public enum TurgaiModelCatalogLoader {
         }
         guard reachedServer else { return nil }
         return discovered.sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            $0.lowercased() < $1.lowercased()
         }
     }
 
@@ -194,14 +196,16 @@ public enum TurgaiModelCatalogLoader {
                 discovery: .manual
             )
         )
-        providers.append(
-            TurgaiProviderDescriptor(
-                provider: .llamaCPP,
-                name: "llama.cpp",
-                summary: "A local GGUF model loaded by llama.cpp",
-                discovery: .local
+        #if Llama
+            providers.append(
+                TurgaiProviderDescriptor(
+                    provider: .llamaCPP,
+                    name: "llama.cpp",
+                    summary: "A local GGUF model loaded by llama.cpp",
+                    discovery: .local
+                )
             )
-        )
+        #endif
         return providers
     }
 
@@ -216,7 +220,7 @@ public enum TurgaiModelCatalogLoader {
         }
         providerChoices.append(choice)
         providerChoices.sort {
-            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            $0.displayName.lowercased() < $1.displayName.lowercased()
         }
         choices[provider] = providerChoices
     }

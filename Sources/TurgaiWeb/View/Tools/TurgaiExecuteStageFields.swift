@@ -8,6 +8,7 @@ import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -90,7 +91,7 @@ struct ScriptOptions: HTML, Sendable {
 
     private var isConfigured: Bool {
         [step.writeDirectory, step.arguments, step.environment].contains { (value: String) -> Bool in
-            !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !value.trimmed().isEmpty
         }
     }
 

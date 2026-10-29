@@ -315,7 +315,7 @@ struct EvalTask: Sendable {
                 sendsRequests: { if case .sends = check { true } else { false } }())
             defer { node.stop() }
             // Everything the eval does, it does as the person asking.
-            try await CallChain.$current.withValue(.start(try await node.asker())) {
+            try await CallChain.$current.withValue(.start(try await node.asker(), in: nil)) {
                 switch check {
                 case .followUp(let followUp, let stateAddresses, _, _):
                     let asked = try await followingUp(with: followUp, readingStateOf: stateAddresses, on: node)

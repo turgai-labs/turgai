@@ -1,4 +1,6 @@
+import AnyLanguageModel
 import TurgaiApplication
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -173,133 +175,135 @@ struct TurgaiToolDraft: Sendable {
     }
 
     func encodedDefinition() throws -> String {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedName = name.trimmed()
         guard !trimmedName.isEmpty else { throw ToolDraftError.invalid("Give the tool a name.") }
-        let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDescription = description.trimmed()
         guard !trimmedDescription.isEmpty else { throw ToolDraftError.invalid("Describe what the tool does.") }
-        var root: [String: Any] = [
+        var root: [String: JSONValue] = [
             "version": 1,
-            "name": trimmedName,
-            "description": trimmedDescription,
-            "arguments": try argumentSchema(),
+            "name": .string(trimmedName),
+            "description": .string(trimmedDescription),
+            "arguments": .object(try argumentSchema()),
         ]
 
         switch bodyKind {
         case .workflow:
-            root["body"] = ["kind": "workflow", "steps": try workflowDefinition()]
+            root["body"] = ["kind": "workflow", "steps": .array(try workflowDefinition().map(JSONValue.object))]
         case .process:
             root["body"] = [
                 "kind": "process",
-                "argv": try processDefinition(),
-                "environment": try environmentDefinition(processEnvironment),
+                "argv": .array(try processDefinition().map(JSONValue.string)),
+                "environment": .object(try environmentDefinition(processEnvironment).mapValues(JSONValue.string)),
             ]
         case .prompt:
-            let instruction = promptInstruction.trimmingCharacters(in: .whitespacesAndNewlines)
+            let instruction = promptInstruction.trimmed()
             guard !instruction.isEmpty else { throw ToolDraftError.invalid("Write the instruction for the other bot.") }
-            root["body"] = ["kind": "prompt", "instruction": instruction]
+            root["body"] = ["kind": "prompt", "instruction": .string(instruction)]
         case .wasm:
-            let module = wasmModule.trimmingCharacters(in: .whitespacesAndNewlines)
+            let module = wasmModule.trimmed()
             guard !module.isEmpty, !module.hasPrefix("/"), module.hasSuffix(".wasm") else {
                 throw ToolDraftError.invalid("Choose a relative .wasm module.")
             }
-            root["body"] = ["kind": "wasm", "module": module]
+            root["body"] = ["kind": "wasm", "module": .string(module)]
         }
 
         do {
-            let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(JSONValue.object(root))
             return String(decoding: data, as: UTF8.self)
         } catch {
             throw ToolDraftError.invalid("The tool could not be prepared for saving.")
         }
     }
 
-    private func argumentSchema() throws -> [String: Any] {
-        var properties: [String: Any] = [:]
+    private func argumentSchema() throws -> [String: JSONValue] {
+        var properties: [String: JSONValue] = [:]
         var required: [String] = []
         var names: Set<String> = []
         for argument in arguments {
-            let name = argument.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            if name.isEmpty, argument.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
+            let name = argument.name.trimmed()
+            if name.isEmpty, argument.description.trimmed().isEmpty { continue }
             guard !name.isEmpty else { throw ToolDraftError.invalid("Every input needs a name.") }
             guard names.insert(name).inserted else {
                 throw ToolDraftError.invalid("Input '\(name)' is listed more than once.")
             }
-            var property: [String: Any] = ["type": argument.type.rawValue]
-            let description = argument.description.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !description.isEmpty { property["description"] = description }
-            properties[name] = property
+            var property: [String: JSONValue] = ["type": .string(argument.type.rawValue)]
+            let description = argument.description.trimmed()
+            if !description.isEmpty { property["description"] = .string(description) }
+            properties[name] = .object(property)
             if argument.required { required.append(name) }
         }
-        var schema: [String: Any] = ["type": "object", "properties": properties]
-        if !required.isEmpty { schema["required"] = required }
+        var schema: [String: JSONValue] = ["type": "object", "properties": .object(properties)]
+        if !required.isEmpty { schema["required"] = .array(required.map(JSONValue.string)) }
         return schema
     }
 
-    private func workflowDefinition() throws -> [[String: Any]] {
+    private func workflowDefinition() throws -> [[String: JSONValue]] {
         let activeSteps = workflowSteps.filter { step in
-            !step.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !step.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !step.scriptSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !step.scriptFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !step.instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !step.id.trimmed().isEmpty
+                || !step.url.trimmed().isEmpty
+                || !step.scriptSource.trimmed().isEmpty
+                || !step.scriptFile.trimmed().isEmpty
+                || !step.instruction.trimmed().isEmpty
         }
         guard !activeSteps.isEmpty else { throw ToolDraftError.invalid("Add at least one workflow step.") }
-        var result: [[String: Any]] = []
+        var result: [[String: JSONValue]] = []
         for (index, step) in activeSteps.enumerated() {
-            let id = step.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            let id = step.id.trimmed()
             guard !id.isEmpty else { throw ToolDraftError.invalid("Step \(index + 1) needs a name.") }
-            var definition: [String: Any] = [
-                "id": id, "permission": step.permission.rawValue,
+            var definition: [String: JSONValue] = [
+                "id": .string(id), "permission": .string(step.permission.rawValue),
             ]
-            let saveAs = step.saveAs.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !saveAs.isEmpty { definition["saveAs"] = saveAs }
+            let saveAs = step.saveAs.trimmed()
+            if !saveAs.isEmpty { definition["saveAs"] = .string(saveAs) }
             let inputs = try pairs(step.inputs, separator: "=")
-            if !inputs.isEmpty { definition["inputs"] = inputs }
+            if !inputs.isEmpty { definition["inputs"] = .object(inputs.mapValues(JSONValue.string)) }
             switch step.kind {
             case .fetch:
-                var payload: [String: Any] = [:]
-                let url = step.url.trimmingCharacters(in: .whitespacesAndNewlines)
+                var payload: [String: JSONValue] = [:]
+                let url = step.url.trimmed()
                 guard !url.isEmpty else { throw ToolDraftError.invalid("Fetch step '\(id)' needs a URL.") }
-                payload["url"] = url
-                let method = step.method.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !method.isEmpty { payload["method"] = method.uppercased() }
-                if let hosts = commaList(step.allowedHosts) { payload["allowedHosts"] = hosts }
+                payload["url"] = .string(url)
+                let method = step.method.trimmed()
+                if !method.isEmpty { payload["method"] = .string(method.uppercased()) }
+                if let hosts = commaList(step.allowedHosts) { payload["allowedHosts"] = .array(hosts.map(JSONValue.string)) }
                 let headers = try pairs(step.headers, separator: ":")
-                if !headers.isEmpty { payload["headers"] = headers }
-                let body = step.body.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !body.isEmpty { payload["body"] = body }
-                definition["payload"] = ["fetch": payload]
+                if !headers.isEmpty { payload["headers"] = .object(headers.mapValues(JSONValue.string)) }
+                let body = step.body.trimmed()
+                if !body.isEmpty { payload["body"] = .string(body) }
+                definition["payload"] = ["fetch": .object(payload)]
             case .execute:
-                var payload: [String: Any] = [:]
-                let source = step.scriptSource.trimmingCharacters(in: .whitespacesAndNewlines)
-                let file = step.scriptFile.trimmingCharacters(in: .whitespacesAndNewlines)
+                var payload: [String: JSONValue] = [:]
+                let source = step.scriptSource.trimmed()
+                let file = step.scriptFile.trimmed()
                 if step.scriptMode == .file {
                     guard !file.isEmpty else {
                         throw ToolDraftError.invalid("Execute step '\(id)' needs a script file.")
                     }
-                    payload["script"] = ["path": file]
+                    payload["script"] = ["path": .string(file)]
                 } else {
                     guard !source.isEmpty else { throw ToolDraftError.invalid("Execute step '\(id)' needs a script.") }
-                    payload["script"] = ["inline": source]
+                    payload["script"] = ["inline": .string(source)]
                 }
-                let interpreter = step.interpreter.trimmingCharacters(in: .whitespacesAndNewlines)
+                let interpreter = step.interpreter.trimmed()
                 if step.scriptMode != .file, interpreter.isEmpty {
                     throw ToolDraftError.invalid("Choose an interpreter for the script in step '\(id)'.")
                 }
-                if !interpreter.isEmpty { payload["interpreter"] = interpreter }
+                if !interpreter.isEmpty { payload["interpreter"] = .string(interpreter) }
                 let arguments = nonEmptyLines(step.arguments)
-                if !arguments.isEmpty { payload["arguments"] = arguments }
+                if !arguments.isEmpty { payload["arguments"] = .array(arguments.map(JSONValue.string)) }
                 let environment = try environmentDefinition(step.environment)
-                if !environment.isEmpty { payload["environment"] = environment }
-                let directory = step.writeDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !directory.isEmpty { payload["writeDirectory"] = directory }
-                definition["payload"] = ["execute": payload]
+                if !environment.isEmpty { payload["environment"] = .object(environment.mapValues(JSONValue.string)) }
+                let directory = step.writeDirectory.trimmed()
+                if !directory.isEmpty { payload["writeDirectory"] = .string(directory) }
+                definition["payload"] = ["execute": .object(payload)]
             case .think:
-                let instruction = step.instruction.trimmingCharacters(in: .whitespacesAndNewlines)
+                let instruction = step.instruction.trimmed()
                 guard !instruction.isEmpty else {
                     throw ToolDraftError.invalid("Think step '\(id)' needs an instruction.")
                 }
-                definition["payload"] = ["think": ["instruction": instruction]]
+                definition["payload"] = ["think": ["instruction": .string(instruction)]]
             }
             result.append(definition)
         }
@@ -307,7 +311,7 @@ struct TurgaiToolDraft: Sendable {
     }
 
     private func processDefinition() throws -> [String] {
-        let executable = processExecutable.trimmingCharacters(in: .whitespacesAndNewlines)
+        let executable = processExecutable.trimmed()
         guard !executable.isEmpty else { throw ToolDraftError.invalid("Choose a program to run.") }
         return [executable] + nonEmptyLines(processArguments)
     }
@@ -317,13 +321,13 @@ struct TurgaiToolDraft: Sendable {
     private func pairs(_ value: String, separator: Character) throws -> [String: String] {
         var result: [String: String] = [:]
         for line in value.split(whereSeparator: \.isNewline) {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = line.trimmed()
             guard !trimmed.isEmpty else { continue }
             guard let split = trimmed.firstIndex(of: separator) else {
                 throw ToolDraftError.invalid("Use one \(separator) between each name and value.")
             }
-            let key = String(trimmed[..<split]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let item = String(trimmed[trimmed.index(after: split)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = String(trimmed[..<split]).trimmed()
+            let item = String(trimmed[trimmed.index(after: split)...]).trimmed()
             guard !key.isEmpty else { throw ToolDraftError.invalid("A name cannot be empty.") }
             guard result[key] == nil else {
                 throw ToolDraftError.invalid("The name '\(key)' is listed more than once.")
@@ -336,7 +340,7 @@ struct TurgaiToolDraft: Sendable {
     private func commaList(_ value: String) -> [String]? {
         var seen: Set<String> = []
         let values = value.split { $0 == "," || $0.isNewline }.compactMap { part -> String? in
-            let value = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = part.trimmed()
             guard !value.isEmpty, seen.insert(value).inserted else { return nil }
             return value
         }
@@ -344,7 +348,7 @@ struct TurgaiToolDraft: Sendable {
     }
 
     private func nonEmptyLines(_ value: String) -> [String] {
-        value.split(whereSeparator: \.isNewline).map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        value.split(whereSeparator: \.isNewline).map { String($0).trimmed() }
             .filter { !$0.isEmpty }
     }
 

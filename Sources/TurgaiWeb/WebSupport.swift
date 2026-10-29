@@ -285,7 +285,7 @@ enum TurgaiWebSupport {
     {
         let buffer = try await request.body.collect(upTo: context.maxUploadSize)
         let data = buffer.getData(at: buffer.readerIndex, length: buffer.readableBytes) ?? Data()
-        let body = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "+", with: "%20")
+        let body = String(decoding: data, as: UTF8.self).replacing("+", with: "%20")
         guard let components = URLComponents(string: "?\(body)") else { return [:] }
         return components.queryItems?.reduce(into: [String: [String]]()) { result, item in
             result[item.name, default: []].append(item.value ?? "")

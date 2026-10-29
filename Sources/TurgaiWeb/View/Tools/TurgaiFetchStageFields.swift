@@ -8,6 +8,7 @@ import TurgaiApplication
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -20,9 +21,9 @@ struct TurgaiFetchStageFields: HTML, Sendable {
 
     private var hasConnectionOptions: Bool {
         step.method.uppercased() != "GET"
-            || !step.allowedHosts.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !step.headers.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !step.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !step.allowedHosts.trimmed().isEmpty
+            || !step.headers.trimmed().isEmpty
+            || !step.body.trimmed().isEmpty
     }
 
     var body: some HTML {

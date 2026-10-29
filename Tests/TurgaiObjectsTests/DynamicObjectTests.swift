@@ -51,7 +51,7 @@ struct DynamicObjectTests {
                         source:
                             "actor Wallet {\n    func balance() async throws -> Int\n}\n\nactor Clock {\n    func balance() async throws -> Int\n}"
                     ),
-                    objects: [:])
+                    objects: [:], lasting: [])
                 let teller = """
                     actor Teller {
                         func check(wallet: Wallet) async throws -> Int {
@@ -121,7 +121,7 @@ struct DynamicObjectTests {
                         source:
                             "actor CoffeeCounter {\n    init(id: String)\n    func addCup() async throws\n    @Event func cupAdded(count: Int)\n}"
                     ),
-                    objects: [:])
+                    objects: [:], lasting: ["CoffeeCounter"])
                 let loggerID = try await objects.create(
                     name: "CupLogger", spec: .new(try Script(code: logger, type: "CupLogger", uses: counterSpec)))
                 let coffee = try await DynamicObjects.resolve(on: node).held(counterID)
@@ -151,12 +151,13 @@ struct DynamicObjectTests {
             interface: ModuleInterface(
                 name: Uses.module,
                 source:
-                    "actor CoffeeCounter {\n    init(id: String)\n    @Event func cupAdded(count: Int)\n}\n\nactor Clock {\n    init(id: String)\n    @Event func ticked(at: Int)\n}"
+                    "actor CoffeeCounter {\n    init(id: String)\n    @Event func cupAdded(count: Int)\n}\n\nactor Clock {\n    init(id: String)\n    @Event func ticked(at: Int)\n}\n\nactor Doorbell {\n    @Event func rang()\n}\n\nactor Ledger {\n    init(id: String)\n    func total() async throws -> Int\n}"
             ),
             objects: [
-                ObjectIdentity(rawValue: "teaCounter"): "CoffeeCounter",
-                ObjectIdentity(rawValue: "coffeeCounter"): "CoffeeCounter", ObjectIdentity(rawValue: "clock"): "Clock",
-            ])
+                ObjectIdentity(rawValue: "tea-counter"): "CoffeeCounter",
+                ObjectIdentity(rawValue: "coffee-counter"): "CoffeeCounter", ObjectIdentity(rawValue: "clock"): "Clock",
+                ObjectIdentity(rawValue: "ledger"): "Ledger",
+            ], lasting: ["CoffeeCounter", "Clock", "Ledger"])
         func refusals(_ property: String) async throws -> [String] {
             let code = "actor CupLogger {\n    \(property)\n\n    func onCupAdded(count: Int) {}\n}"
             return await ScriptInstance.problems(in: try Script(code: code, type: "CupLogger", uses: uses)).map(
@@ -171,6 +172,40 @@ struct DynamicObjectTests {
             try await refusals("@Subscribed var tea = Clock(id: \"clock\")") == [
                 "no function handles the events of clock: onTicked(at: Int)"
             ])
+        // It holds the same object after every restart, as any property does, which announces what
+        // it follows.
+        let bell = try await refusals("@Subscribed var bell: Doorbell?")
+        #expect(
+            bell == [
+                "no function handles the events of Doorbell: onRang()",
+                "stored property 'bell' of type 'Doorbell?' holds 'Doorbell', an object whose id doesn't last",
+            ], "\(bell)")
+        let ledger = try await refusals("@Subscribed var ledger = Ledger(id: \"ledger\")")
+        #expect(
+            ledger == ["@Subscribed should hold an object that announces events, while `Ledger` announces none"],
+            "\(ledger)")
+    }
+
+    /// An object code names by id is one that exists: a type with objects is named by one of
+    /// their ids, as it's kept, and a type with none yet by a new one, which makes it.
+    @Test
+    func anObjectIsNamedByAnIDThatExists() async throws {
+        let uses = Uses(
+            interface: ModuleInterface(
+                name: Uses.module,
+                source:
+                    "actor Counter {\n    init(id: String)\n    func add() async throws -> Int\n}\n\nactor Clock {\n    init(id: String)\n}"
+            ),
+            objects: [ObjectIdentity(rawValue: "drinks"): "Counter"], lasting: ["Counter", "Clock"])
+        func refusals(_ property: String) async throws -> [String] {
+            let code = "actor Bar {\n    \(property)\n}"
+            return await ScriptInstance.problems(in: try Script(code: code, type: "Bar", uses: uses)).map(\.message)
+        }
+        #expect(try await refusals("let counter = Counter(id: \"drinks\")").isEmpty)
+        #expect(try await refusals("let counter = Counter(id: \"Drinks\")").isEmpty)
+        #expect(try await refusals("let clock = Clock(id: \"kitchen\")").isEmpty)
+        let madeUp = try await refusals("let counter = Counter(id: \"550e8400\")")
+        #expect(madeUp == ["`Counter` has no object with id `550e8400`; its objects: `drinks`"], "\(madeUp)")
     }
 
     /// An `init` other than `init(id: String)` is never called, and each property without an
@@ -182,7 +217,7 @@ struct DynamicObjectTests {
                 name: Uses.module,
                 source:
                     "actor Ann {\n    init(id: String)\n    func approveRaise(_ amount: Int) async throws -> Bool\n}"),
-            objects: [ObjectIdentity(rawValue: "ann"): "Ann"])
+            objects: [ObjectIdentity(rawValue: "ann"): "Ann"], lasting: ["Ann"])
         func refusals(_ code: String) async throws -> [String] {
             await ScriptInstance.problems(in: try Script(code: code, type: "Bob", uses: uses)).map {
                 $0.written(in: code)
@@ -249,7 +284,7 @@ struct DynamicObjectTests {
             interface: ModuleInterface(
                 name: Uses.module,
                 source: "actor Website {\n    init(id: String)\n    @Event func buttonPressed(label: String)\n}"),
-            objects: [ObjectIdentity(rawValue: "website"): "Website"])
+            objects: [ObjectIdentity(rawValue: "website"): "Website"], lasting: ["Website"])
         let code =
             "actor PressCounter {\n    var presses = 0\n    @Subscribed var website: Website\n\n    func onButtonPressed(label: String) {\n        presses += 1\n    }\n}"
         #expect(
@@ -268,7 +303,7 @@ struct DynamicObjectTests {
         let interface = Uses.interface(of: [Uses.Object(description: ann, publishes: true)])
         #expect(interface.source.contains("var budget: Int { get async throws }"), "\(interface.source)")
         #expect(!interface.source.contains("notes"), "\(interface.source)")
-        let uses = Uses(interface: interface, objects: [ObjectIdentity(rawValue: "ann"): "Ann"])
+        let uses = Uses(interface: interface, objects: [ObjectIdentity(rawValue: "ann"): "Ann"], lasting: ["Ann"])
         let bob =
             "actor Bob {\n    let ann = Ann(id: \"ann\")\n\n    func left() async throws -> Int {\n        try await ann.budget\n    }\n}"
         #expect(await ScriptInstance.problems(in: try Script(code: bob, type: "Bob", uses: uses)).isEmpty)
@@ -282,8 +317,8 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let player = try await Player(actorSystem: node)
-                let board = try await Board(actorSystem: node)
+                let player = try await Player.start(on: node)
+                let board = try await Board.start(on: node)
                 let session = ObjectSession(
                     actorSystem: node, objectCatalog: await ObjectCatalog(actorSystem: node))
                 try await eventually { (try await session.list().arrayValue?.count ?? 0) >= 2 }
@@ -363,7 +398,7 @@ struct DynamicObjectTests {
             interface: ModuleInterface(
                 name: Uses.module,
                 source: "actor Shop {\n    init(id: String)\n    @Event func refundRequested(order: Int)\n}"),
-            objects: [ObjectIdentity(rawValue: "shop"): "Shop"])
+            objects: [ObjectIdentity(rawValue: "shop"): "Shop"], lasting: ["Shop"])
         for (code, refusal) in [
             (
                 "actor Manager {\n    @Subscribed var shop = Shop(id: \"shop\")\n    func refund(order: Int) {}\n}",
@@ -475,7 +510,7 @@ struct DynamicObjectTests {
             interface: ModuleInterface(
                 name: Uses.module,
                 source: "actor Counter {\n    init(id: String)\n    func add() async throws -> Int\n}"),
-            objects: [:])
+            objects: [:], lasting: ["Counter"])
         try await withShopNodes(store: store) { shop, _ in
             let drinksID = try await withDynamicNode(joining: shop, store: store) { node in
                 let objects = try await DynamicObjects.resolve(on: node)
@@ -525,11 +560,11 @@ struct DynamicObjectTests {
         let drinks = "actor Drinks {\n    private let tea = Counter(id: \"tea\")\n}"
         let uses = Uses(
             interface: ModuleInterface(name: Uses.module, source: "actor Counter {\n    init(id: String)\n}"),
-            objects: [:])
+            objects: [:], lasting: ["Counter"])
         try await withShopNodes(store: store) { shop, customers in
             let drinksID = try await withDynamicNode(joining: shop, store: store) { _ in
                 // Made from a node that hosts no objects: the call carries Ann to the one that does.
-                try await CallChain.$current.withValue(.start(ann)) {
+                try await CallChain.$current.withValue(.start(ann, in: nil)) {
                     let objects = try await DynamicObjects.resolve(on: customers)
                     _ = try await objects.create(
                         name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
@@ -539,7 +574,7 @@ struct DynamicObjectTests {
             }
             try await withDynamicNode(joining: shop, store: store) { node in
                 // Hers alone: read as her.
-                try await CallChain.$current.withValue(.start(ann)) {
+                try await CallChain.$current.withValue(.start(ann, in: nil)) {
                     let objects = try await DynamicObjects.resolve(on: node)
                     #expect(try await objects.held(drinksID).maker == ann)
                     #expect(try await objects.held(drinksID).access == Access(madeBy: ann))
@@ -550,7 +585,7 @@ struct DynamicObjectTests {
                 }
                 // Read as Drinks: made on Ann's behalf, and Drinks' alone.
                 let drinks = ObjectID.virtual(DynamicObject.actorID(for: drinksID))
-                try await CallChain.$current.withValue(try CallChain.start(ann).entering(drinks)) {
+                try await CallChain.$current.withValue(try CallChain.start(ann, in: nil).entering(drinks)) {
                     let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
                     let made = try await DynamicObject.resolve(on: node, identity: tea)
                     #expect(try await made.maker == ann)
@@ -572,7 +607,8 @@ struct DynamicObjectTests {
         let uses = Uses(
             interface: ModuleInterface(
                 name: Uses.module,
-                source: "actor Counter {\n    init(id: String)\n    func add() async throws -> Int\n}"), objects: [:])
+                source: "actor Counter {\n    init(id: String)\n    func add() async throws -> Int\n}"),
+            objects: [:], lasting: ["Counter"])
         try await withShopNodes(store: store) { shop, _ in
             let (drinksID, tea) = try await withDynamicNode(joining: shop, store: store) { node in
                 let objects = try await DynamicObjects.resolve(on: node)
@@ -678,7 +714,7 @@ struct DynamicObjectTests {
                         source:
                             "struct Order: Codable {\n    var status: Status\n}\n\nenum Status: String, Codable {\n    case placed\n}"
                     ),
-                    objects: [:])
+                    objects: [:], lasting: [])
                 let code = """
                     actor Shop {
                         var mood: Mood = .calm
@@ -708,9 +744,9 @@ struct DynamicObjectTests {
     func aReferenceToAnotherKindOfActorFails() async throws {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { node, _ in
-            let board = try await Board(actorSystem: node)
+            let catalog = await ObjectCatalog(actorSystem: node)
             await #expect(throws: ResolveError.self) {
-                _ = try await DynamicObject.resolve(id: board.id, using: node).identity
+                _ = try await DynamicObject.resolve(id: catalog.id, using: node).identity
             }
         }
     }
@@ -940,17 +976,25 @@ struct TrackChanged: Codable, Sendable, Equatable {
     var track: Track?
 }
 
-/// A player, a built-in object: what it plays, published, and each change announced.
+/// A player, a built-in object: what it plays, published, and each change announced. A virtual
+/// actor, as a built-in object code names is: the same by its id after every restart.
 @Discoverable(events: TrackChanged.self)
+@VirtualActor
 distributed actor Player {
     typealias ActorSystem = ClusterSystem
+    typealias Dependency = ObjectIdentity
     private var current: Track?
 
-    init(actorSystem: ActorSystem) async throws {
+    init(actorSystem: ActorSystem, dependency: ObjectIdentity) async throws {
         self.actorSystem = actorSystem
-        await actorSystem.receptionist.checkIn(
-            try DiscoverableObject.resolve(id: id, using: actorSystem), with: .objects)
     }
+
+    /// The one player, listed among the objects.
+    static func start(on actorSystem: ClusterSystem) async throws -> Player {
+        try await builtIn("player", on: actorSystem)
+    }
+
+    func shouldDeactivate() async -> Bool { false }
 
     /// What it plays now.
     public distributed var playing: Track? { current }
@@ -976,17 +1020,24 @@ enum Card: Codable, Sendable, Equatable {
     case row(items: [Piece])
 }
 
-/// A board, a built-in object: it shows a card.
+/// A board, a built-in object: it shows a card. A virtual actor, as a built-in object code names is.
 @Discoverable
+@VirtualActor
 distributed actor Board {
     typealias ActorSystem = ClusterSystem
+    typealias Dependency = ObjectIdentity
     private var shown: Card?
 
-    init(actorSystem: ActorSystem) async throws {
+    init(actorSystem: ActorSystem, dependency: ObjectIdentity) async throws {
         self.actorSystem = actorSystem
-        await actorSystem.receptionist.checkIn(
-            try DiscoverableObject.resolve(id: id, using: actorSystem), with: .objects)
     }
+
+    /// The one board, listed among the objects.
+    static func start(on actorSystem: ClusterSystem) async throws -> Board {
+        try await builtIn("board", on: actorSystem)
+    }
+
+    func shouldDeactivate() async -> Bool { false }
 
     /// What it shows.
     public distributed var card: Card? { shown }
@@ -995,6 +1046,15 @@ distributed actor Board {
     public distributed func show(card: Card) {
         shown = card
     }
+}
+
+/// The built-in object `name`, as a virtual actor, listed among the objects by its lasting reference.
+private func builtIn<Object: VirtualActor>(_ name: String, on actorSystem: ClusterSystem) async throws -> Object {
+    let object: Object = try await actorSystem.virtualActors.getActor(
+        identifiedBy: VirtualActorID(rawValue: "builtin/\(name)"), dependency: ObjectIdentity(rawValue: name))
+    await actorSystem.receptionist.checkIn(
+        try DiscoverableObject.resolve(id: object.id, using: actorSystem), with: .objects)
+    return object
 }
 
 /// Read by everyone and written by no one, as any built-in object.

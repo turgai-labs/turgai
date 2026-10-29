@@ -15,7 +15,17 @@
    "website": "Website",
    "shop": "Shop",
    "mac": "Mac"
-  }
+  },
+  "lasting": [
+   "Calendar",
+   "Contacts",
+   "Mac",
+   "MediaControl",
+   "Reminders",
+   "Shop",
+   "Warehouse",
+   "Website"
+  ]
  },
  "from": "writer answer, current spec"
 }

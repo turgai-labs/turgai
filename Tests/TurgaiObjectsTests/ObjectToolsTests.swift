@@ -74,7 +74,7 @@ struct ObjectToolsTests {
     @Test
     func findRanksRootsByTheQuery() async throws {
         try await withObjectNodes { objectsNode, sessionNode in
-            let board = try await Board(actorSystem: objectsNode)
+            let board = try await Board.start(on: objectsNode)
 
             let session = ObjectSession(
                 actorSystem: sessionNode)
@@ -93,7 +93,7 @@ struct ObjectToolsTests {
     @Test
     func theObjectsPageListsRootsAndTheirHandlesWorkWithoutListing() async throws {
         try await withObjectNodes { objectsNode, sessionNode in
-            let board = try await Board(actorSystem: objectsNode)
+            let board = try await Board.start(on: objectsNode)
 
             // The runtime keeps one catalog following the receptionist, as here. The objects page
             // says what objects are for, lists the roots by handle, and links them directly.

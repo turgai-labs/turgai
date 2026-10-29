@@ -1,7 +1,9 @@
 import AnyLanguageModel
 import DiscoverableActors
 import Hail
-import UniformTypeIdentifiers
+
+import struct Hummingbird.MediaType
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -53,13 +55,13 @@ public struct Http: Sendable {
 
     /// What it is: as its `Content-Type` says, or else as its URL's extension says.
     static func contentType(of response: HttpResponse) -> String? {
-        let declared = response.headers.first { $0.name.caseInsensitiveCompare("Content-Type") == .orderedSame }?
+        let declared = response.headers.first { $0.name.lowercased() == "content-type" }?
             .value.split(separator: ";", maxSplits: 1).first
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .map { $0.trimmed().lowercased() }
         if let declared, declared != "application/octet-stream" { return declared }
         let pathExtension = response.url.pathExtension
-        if !pathExtension.isEmpty, let inferred = UTType(filenameExtension: pathExtension)?.preferredMIMEType {
-            return inferred
+        if !pathExtension.isEmpty, let inferred = MediaType.getMediaType(forExtension: pathExtension.lowercased()) {
+            return inferred.description
         }
         return declared
     }
@@ -75,12 +77,12 @@ public struct Http: Sendable {
         } else {
             return nil
         }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = text.trimmed()
         return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func bounded(_ value: String, to maximumCharacters: Int) -> String {
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = value.trimmed()
         guard normalized.count > maximumCharacters else { return normalized }
         return String(normalized.prefix(maximumCharacters - 1)) + "…"
     }
@@ -170,7 +172,7 @@ public struct HttpEffect: CompositeScopedEffect, Sendable {
         if let body { headers["Content-Type"] = Self.contentType(of: body) }
         // Its own, in place of the tool's of the same name.
         for header in given {
-            headers = headers.filter { $0.key.caseInsensitiveCompare(header.name) != .orderedSame }
+            headers = headers.filter { $0.key.lowercased() != header.name.lowercased() }
             headers[header.name] = header.value
         }
         self.url = url
@@ -195,7 +197,10 @@ public struct HttpEffect: CompositeScopedEffect, Sendable {
 
     /// A body's content type: JSON when it reads as JSON, plain text otherwise.
     private static func contentType(of body: Data) -> String {
-        (try? JSONSerialization.jsonObject(with: body)) == nil ? "text/plain" : "application/json"
+        switch try? JSONDecoder().decode(AnyLanguageModel.JSONValue.self, from: body) {
+        case .object?, .array?: "application/json"
+        default: "text/plain"
+        }
     }
 
     /// An http(s) URL to the public web: never this machine, nor one with credentials in it.

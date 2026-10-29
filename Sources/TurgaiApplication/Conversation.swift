@@ -11,6 +11,7 @@ import VirtualActors
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
+    import FoundationInternationalization
 #else
     import Foundation
 #endif
@@ -386,7 +387,7 @@ public distributed actor Conversation {
     public distributed func turns(askedBy person: TurgaiDomain.UserID) async throws -> [ConversationTurn] {
         let participant = try await participant(for: agentRole)
         let scope = try await group().scope(of: person)
-        return try await CallChain.$current.withValue(.start(scope)) { try await participant.turns() }
+        return try await CallChain.$current.withValue(.start(scope, in: conversationID)) { try await participant.turns() }
     }
 
     public distributed func addConnection(_ connection: ConversationConnection) async throws {
@@ -480,7 +481,7 @@ public distributed actor Conversation {
     /// channel. This is intentionally not journaled: the durable workflow is
     /// the owner of retrying the activity when no channel is available.
     public distributed func notify(_ text: String) async throws {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = text.trimmed()
         guard !text.isEmpty else {
             throw ConversationActorError.emptyNotification
         }
@@ -534,7 +535,7 @@ public distributed actor Conversation {
     public distributed func showContext(for person: TurgaiDomain.UserID) async throws {
         let participant = try await participant(for: agentRole)
         let scope = try await group().scope(of: person)
-        let snapshot = try await CallChain.$current.withValue(.start(scope)) {
+        let snapshot = try await CallChain.$current.withValue(.start(scope, in: conversationID)) {
             try await participant.contextSnapshot()
         }
         await publish(
@@ -1001,9 +1002,18 @@ public distributed actor Conversation {
     }
 }
 
-public enum ConversationActorError: Error, Codable, Sendable, Equatable {
+public enum ConversationActorError: Error, Codable, Sendable, Equatable, CustomStringConvertible {
     case conversationMismatch
     case emptyNotification
     case noConnection
     case deliveryFailed(String)
+
+    public var description: String {
+        switch self {
+        case .conversationMismatch: "the message is for another conversation"
+        case .emptyNotification: "the notification has no text"
+        case .noConnection: "no chat is connected to the conversation"
+        case .deliveryFailed(let reason): "the delivery failed: \(reason)"
+        }
+    }
 }

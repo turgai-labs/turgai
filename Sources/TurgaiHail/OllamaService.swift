@@ -1,4 +1,6 @@
+import AsyncHTTPClient
 import Hail
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -44,10 +46,10 @@ public struct OllamaService: Sendable {
         }
         return response.models
             .compactMap { model in
-                let name = model.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let name = model.name.trimmed()
                 return name.isEmpty ? nil : AgentModelID(rawValue: name)
             }
-            .sorted { $0.rawValue.localizedCaseInsensitiveCompare($1.rawValue) == .orderedAscending }
+            .sorted { $0.rawValue.lowercased() < $1.rawValue.lowercased() }
     }
 
     public func contextWindow(for model: AgentModelID) async throws(OllamaServiceError) -> Int {
@@ -65,24 +67,24 @@ public struct OllamaService: Sendable {
         path: String,
         method: String
     ) async throws(OllamaServiceError) -> Data {
-        var request = URLRequest(url: configuration.baseURL.appendingPathComponent(path))
-        request.httpMethod = method
-        request.timeoutInterval = 5
+        var request = HTTPClientRequest(url: configuration.baseURL.appendingPathComponent(path).absoluteString)
+        request.method = .init(rawValue: method)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let response = response as? HTTPURLResponse else {
-                throw OllamaServiceError.invalidResponse
+            let response = try await HTTPClient.shared.execute(request, timeout: .seconds(5))
+            guard (200..<300).contains(response.status.code) else {
+                throw OllamaServiceError.unexpectedStatus(Int(response.status.code))
             }
-            guard (200..<300).contains(response.statusCode) else {
-                throw OllamaServiceError.unexpectedStatus(response.statusCode)
-            }
-            return data
+            let body = try await response.body.collect(upTo: Self.maximumResponseBytes)
+            return Data(body.readableBytesView)
         } catch let error as OllamaServiceError {
             throw error
         } catch {
             throw .requestFailed(String(describing: error))
         }
     }
+
+    /// The most of an answer that's read.
+    private static let maximumResponseBytes = 16 * 1024 * 1024
 
     private struct TagsResponse: Decodable {
         let models: [Model]

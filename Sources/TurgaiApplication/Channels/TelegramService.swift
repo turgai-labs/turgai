@@ -1,4 +1,5 @@
 import AsyncAlgorithms
+import DistributedCluster
 import Hail
 import Logging
 import ServiceLifecycle
@@ -273,12 +274,147 @@ enum TelegramDelivery {
     }
 }
 
-/// Runs the Telegram node.
-///
-/// TelegramBot owns the bot-level polling loop and emits one logical
-/// TelegramConnection per chat. This service attaches each one to a Turgai
-/// live session and bridges the returned outbound stream back to Telegram.
-actor TelegramService: Service {
+/// The node's Telegram: every channel's bot, each run while its channel is enabled. Every round it
+/// asks each channel what its bot runs as, a message that activates the channel, so a changed,
+/// disabled or deleted channel's bot is run again or stopped, and a new channel's started.
+public actor TelegramService: Service {
+    /// What a channel's bot runs as: a change to either runs it again.
+    struct Bot: Equatable, Sendable {
+        let configuration: ChannelConfiguration<TelegramProvider>
+        let token: String
+    }
+
+    private let actorSystem: ClusterSystem
+    private let dependencies: TurgaiChannelRuntimeDependencies
+    private let discoverChannelIDs: @Sendable () async throws -> [UUID]
+    private let logger: Logger
+    /// How often each channel is asked again, and the channels looked for.
+    private let round: Duration
+
+    public init(
+        actorSystem: ClusterSystem,
+        dependencies: TurgaiChannelRuntimeDependencies,
+        discoverChannelIDs: @escaping @Sendable () async throws -> [UUID],
+        round: Duration = .seconds(30)
+    ) {
+        self.actorSystem = actorSystem
+        self.dependencies = dependencies
+        self.discoverChannelIDs = discoverChannelIDs
+        self.logger = actorSystem.log
+        self.round = round
+    }
+
+    public func run() async {
+        _ = try? await cancelWhenGracefulShutdown {
+            await withDiscardingTaskGroup { group in
+                var running: Set<UUID> = []
+                while !Task.isCancelled {
+                    do {
+                        for channelID in try await self.discoverChannelIDs() where running.insert(channelID).inserted {
+                            group.addTask { await self.keepRunning(channelID) }
+                        }
+                    } catch {
+                        self.logger.warning(
+                            "Could not list the Telegram channels", metadata: ["error": "\(error)"])
+                    }
+                    try? await Task.sleep(for: self.round)
+                }
+                group.cancelAll()
+            }
+        }
+    }
+
+    /// Runs the channel's bot while it's enabled, and again whenever what it runs as changes.
+    private func keepRunning(_ channelID: UUID) async {
+        let channel: Logger.MetadataValue = "\(channelID.uuidString)"
+        while !Task.isCancelled {
+            guard let bot = await runnable(channelID) else {
+                try? await Task.sleep(for: round)
+                continue
+            }
+            logger.info("Telegram channel running", metadata: ["channel": channel])
+            let stoppedByItself = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    await self.run(bot)
+                    return true
+                }
+                // Each round, the channel again: when its bot runs as something else, this one stops.
+                group.addTask {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: self.round)
+                        if await self.runnable(channelID) != bot { break }
+                    }
+                    return false
+                }
+                let first = await group.next() ?? false
+                group.cancelAll()
+                return first
+            }
+            logger.info("Telegram channel stopped", metadata: ["channel": channel])
+            // One that stopped by itself, such as with a token Telegram refuses, is tried a round later.
+            if stoppedByItself { try? await Task.sleep(for: round) }
+        }
+    }
+
+    /// What the channel's bot runs as now, `nil` when it doesn't run: when it's disabled, deleted,
+    /// or has no token.
+    private func runnable(_ channelID: UUID) async -> Bot? {
+        do {
+            let channel = try await TelegramChannel.resolve(on: actorSystem, channelID: channelID)
+            guard case .active(let configuration, _) = try await channel.currentState(), configuration.enabled,
+                let token = await dependencies.secrets.token(for: channelID)
+            else { return nil }
+            return Bot(configuration: configuration, token: token)
+        } catch {
+            logger.warning(
+                "Could not read the Telegram channel",
+                metadata: ["channel": "\(channelID.uuidString)", "error": "\(error)"])
+            return nil
+        }
+    }
+
+    /// Runs one channel's bot, from the cursor its channel keeps, until it stops or is cancelled.
+    private func run(_ bot: Bot) async {
+        let channelID = bot.configuration.id
+        let allowed = bot.configuration.provider.chatIDs
+        let conversationChannel = ChannelID(provider: TelegramProvider.providerID, instanceID: channelID.uuidString)
+        do {
+            let channel = try await TelegramChannel.resolve(on: actorSystem, channelID: channelID)
+            guard case .active(_, let state) = try await channel.currentState() else { return }
+            // Its chats that were talked in before, so what they do by themselves reaches them.
+            let persisted = try await dependencies.loadPersistedConversationIDs().filter { conversationID in
+                guard conversationID.channel == conversationChannel,
+                    let chatID = Int64(conversationID.externalAddress.rawValue)
+                else { return false }
+                return allowed.isEmpty || allowed.contains(chatID)
+            }
+            let running = ChannelBot(
+                client: try TelegramAPIClient.live(token: bot.token),
+                allowedChatIDs: Set(allowed),
+                initialOffset: state.cursor.offset,
+                checkpointOffset: { offset in
+                    try await channel.emitProviderEvent(ProviderEvent(.cursorAdvanced(offset)))
+                },
+                connections: dependencies.connections,
+                channelID: channelID,
+                files: dependencies.telegramFiles,
+                logger: logger,
+                persistedConversationIDs: persisted
+            )
+            try await running.run()
+        } catch is CancellationError {
+        } catch {
+            logger.warning(
+                "Telegram channel's bot stopped",
+                metadata: ["channel": "\(channelID.uuidString)", "error": "\(error)"])
+        }
+    }
+}
+
+/// One channel's bot, joined to Turgai: its ``TelegramBot`` polls and makes one logical
+/// ``TelegramConnection`` per chat, and each is attached to a Turgai live session, whose output
+/// is sent back to Telegram.
+private actor ChannelBot {
     private let bot: TelegramBot
     private let client: TelegramAPIClient
     private let connections: TurgaiConnections

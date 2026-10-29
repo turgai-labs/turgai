@@ -112,9 +112,9 @@ public actor FileSnapshotStore: SnapshotStore {
     private func snapshotPath(for id: PersistenceID) -> String {
         let safe =
             id
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-            .replacingOccurrences(of: "\\", with: "_")
+            .replacing("/", with: "_")
+            .replacing(":", with: "_")
+            .replacing("\\", with: "_")
         return "snapshots/\(safe).jsonl"
     }
 }

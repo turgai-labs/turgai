@@ -1,5 +1,6 @@
 import Hummingbird
 import HummingbirdWebSocket
+import Logging
 import ServiceLifecycle
 import TurgaiApplication
 import TurgaiObjects
@@ -24,6 +25,8 @@ public struct TurgaiServer: Sendable {
     public init(
         directory: URL,
         port: Int,
+        websitePort: WebsitePort,
+        logLevel: Logger.Level,
         api: APIConfiguration,
         environment: [String: String],
         workspaceRoot: String
@@ -82,13 +85,15 @@ public struct TurgaiServer: Sendable {
             channelSecrets: channelSecrets,
             runtimeSnapshotSource: runtimeSnapshotSource,
             objectCatalogSource: objects,
-            webChatBridge: webChatBridge
+            webChatBridge: webChatBridge,
+            websitePort: websitePort,
+            logLevel: logLevel
         )
         let runtimeService = TurgaiRuntimeService(
             onboarding: onboardingWebApp,
             application: appService
         )
-        self.services = [Daemon(), runtimeService, application]
+        self.services = [Daemon(logLevel: logLevel), runtimeService, application]
         self.objects = objects
     }
 

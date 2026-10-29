@@ -1,3 +1,4 @@
+import TurgaiDomain
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
@@ -45,7 +46,7 @@ public enum WasmRunnerLocator {
     }
 
     private static func executableURL(atPath path: String) -> URL? {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = path.trimmed()
         guard !trimmed.isEmpty else { return nil }
         let url = URL(fileURLWithPath: trimmed).standardizedFileURL
         return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil

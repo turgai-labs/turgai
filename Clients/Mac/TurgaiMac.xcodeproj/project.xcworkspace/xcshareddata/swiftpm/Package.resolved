@@ -1,5 +1,5 @@
 {
-  "originHash" : "dbaf44a4fbbbe160893ad40696c6c3a2fb0a0a8b9b7fa88d7a034b756e9fb7c5",
+  "originHash" : "50779eec6b1009ca40ca57686f498d40ae4c0865101e2c2362e67c12853ff147",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -43,7 +43,7 @@
       "location" : "https://github.com/akbashev/cluster-virtual-actors.git",
       "state" : {
         "branch" : "stable-references",
-        "revision" : "d2cc73594b24e7b9c95921f933e2127159c6ef0b"
+        "revision" : "9c07ff249b70af3ad507e15dc2464755b001c09b"
       }
     },
     {
@@ -70,7 +70,7 @@
       "location" : "https://github.com/akbashev/discoverable-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "484ad0358ff133efbf1ae64136ca7ce974e8760e"
+        "revision" : "e802eed5455c37b1103294e7bd0f9a938b48aef4"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "d6a8f803ccd18fa395e49b3a933605f8bd84c47e"
+        "revision" : "5a8df4f3f9799458339234cba867e6254e25c6ec"
       }
     },
     {

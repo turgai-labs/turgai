@@ -71,6 +71,13 @@ public struct Script: Codable, Sendable, Equatable {
         self.uses = uses
     }
 
+    /// The types whose objects last, as virtual actors: those it was written against that do, and
+    /// the actors its code declares, each made as one.
+    public var lasting: Set<String> {
+        uses.lasting.union(
+            Parser.parse(source: code).statements.compactMap { $0.item.as(ActorDeclSyntax.self)?.name.text })
+    }
+
     /// Its code with the runtime's macros expanded: what runs, with the module it imports.
     public var expanded: String { RuntimeMacros.expanding(code) }
 

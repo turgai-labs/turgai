@@ -61,6 +61,9 @@ struct TurgaiAppService: Service, Sendable {
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let objectCatalogSource: TurgaiObjectCatalogSource
     private let webChatBridge: TurgaiWebChatBridge
+    private let websitePort: WebsitePort
+    /// What the node's log shows.
+    private let logLevel: Logger.Level
 
     init(
         environment: [String: String],
@@ -72,7 +75,9 @@ struct TurgaiAppService: Service, Sendable {
         channelSecrets: ChannelSecretStore,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
-        webChatBridge: TurgaiWebChatBridge
+        webChatBridge: TurgaiWebChatBridge,
+        websitePort: WebsitePort,
+        logLevel: Logger.Level
     ) {
         self.environment = environment
         self.workspaceRoot = workspaceRoot
@@ -84,6 +89,8 @@ struct TurgaiAppService: Service, Sendable {
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
         self.webChatBridge = webChatBridge
+        self.websitePort = websitePort
+        self.logLevel = logLevel
     }
 
     func run() async throws {
@@ -209,6 +216,7 @@ struct TurgaiAppService: Service, Sendable {
                 // the only node hosting those singletons leads.
                 settings.bindPort = 2550
                 settings.discovery = .clusterd
+                settings.logging.logLevel = logLevel
                 settings.autoLeaderElection = .lowestReachable(minNumberOfMembers: 1)
                 settings.plugins.install(plugin: ClusterSingletonPlugin())
                 let virtualActorsPlugin = ClusterVirtualActorsPlugin.configuring(&settings)
@@ -229,11 +237,6 @@ struct TurgaiAppService: Service, Sendable {
             // virtual-actor actions serve every effect type.
             ActorSystemDependency<CreateTimerEffect>.prepare(.live(on: system))
             let virtualNode = await VirtualNode(actorSystem: system)
-            // The objects models made: started again after a restart, each on behalf of whoever
-            // made it, so what they follow and run keeps going.
-            try await DynamicObjects.resolve(on: system).start()
-            // The node's built-in objects, held while it runs: the receptionist doesn't keep them.
-            let weather = try await Weather(actorSystem: system)
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
                 activities: ScheduleActivities()
@@ -246,32 +249,9 @@ struct TurgaiAppService: Service, Sendable {
                 actorSystem: system,
                 activities: MemoryExtractionActivities(endpointFactory: endpointFactory)
             )
-            try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
-            try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
-            try await system.workflows.recoverAll(ofType: MemoryExtractionWorkflow.self)
             let channelRuntime = try await system.turgaiChannelRuntime.dependencies()
             let connections = channelRuntime.connections
             await objectCatalogSource.set(channelRuntime.objectCatalog)
-            await webChatBridge.install(
-                connections,
-                objectCatalog: channelRuntime.objectCatalog,
-                discoverChannelIDs: discoverChannelIDs,
-                actorSystem: system,
-                persistedConversationIDs: persistedConversationIDs
-            )
-            for channelID in try await discoverChannelIDs() {
-                do {
-                    _ = try await TelegramChannel.resolve(on: system, channelID: channelID)
-                } catch {
-                    system.log.warning(
-                        "Could not recover Telegram channel actor",
-                        metadata: [
-                            "channel": .string(channelID.uuidString),
-                            "error": .string(String(describing: error)),
-                        ]
-                    )
-                }
-            }
             let runtimeSnapshotProvider: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot] = {
                 await Self.runtimeSnapshots(on: system, as: $0)
             }
@@ -281,20 +261,54 @@ struct TurgaiAppService: Service, Sendable {
                 virtualNode: virtualNode,
                 scheduleWorker: scheduleWorker,
                 scheduleTimerWorker: scheduleTimerWorker,
-                memoryExtractionWorker: memoryExtractionWorker,
-                discoverChannelIDs: discoverChannelIDs
+                memoryExtractionWorker: memoryExtractionWorker
             )
 
             let logger = system.log
+            let websitePort = websitePort
+            let webChatBridge = webChatBridge
+            // Each part starts on its own: none waits for another, so a slow or failing one holds
+            // up nothing else, and messages are taken from the start.
+            let parts = [
+                // The node's built-in objects, reached by the ids they always have.
+                Startup("built-in objects", logger: logger) {
+                    try await Weather.start(on: system)
+                    try await Website.start(on: system, port: websitePort)
+                },
+                // The objects models made: started again after a restart, each on behalf of
+                // whoever made it, so what they follow and run keeps going.
+                Startup("made objects", logger: logger) {
+                    try await DynamicObjects.resolve(on: system).start()
+                },
+                Startup("workflows", logger: logger) {
+                    try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
+                    try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
+                    try await system.workflows.recoverAll(ofType: MemoryExtractionWorkflow.self)
+                },
+                Startup("web chat", logger: logger) {
+                    await webChatBridge.install(
+                        connections,
+                        objectCatalog: channelRuntime.objectCatalog,
+                        discoverChannelIDs: discoverChannelIDs,
+                        actorSystem: system,
+                        persistedConversationIDs: persistedConversationIDs
+                    )
+                },
+            ]
+            // Every channel's bot, run by the node while its channel is enabled.
+            let telegram = TelegramService(
+                actorSystem: system, dependencies: channelRuntime, discoverChannelIDs: discoverChannelIDs)
+
             logger.info("Turgai is ready")
             logger.info("Workspace: \(workspaceRoot)")
-            let services: [any Service] = [clusterService, connections]
             let serviceGroup = ServiceGroup(
-                services: services,
-                logger: logger
+                configuration: ServiceGroupConfiguration(
+                    services: [.init(service: clusterService), .init(service: connections), .init(service: telegram)]
+                        + parts.map { .init(service: $0, successTerminationBehavior: .ignore) },
+                    logger: logger
+                )
             )
             try await serviceGroup.run()
-            withExtendedLifetime(weather) {}
             persistenceTasks.cancelAll()
         }
     }
@@ -305,7 +319,7 @@ struct TurgaiAppService: Service, Sendable {
 
     private static func makeSearchBackend(environment: [String: String]) throws -> WebSearchBackend {
         let raw = environment["TURGAI_SEARCH"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmed()
             .lowercased()
         switch raw {
         case nil, "", "duckduckgo":
@@ -333,117 +347,73 @@ struct TurgaiAppService: Service, Sendable {
     }
 }
 
+/// One part of starting the node, done once and on its own: it waits for no other part, and no
+/// other waits for it. Whether it started, it says in the log; one still starting when the node
+/// shuts down stops there.
+struct Startup: Service {
+    let part: String
+    let logger: Logger
+    let step: @Sendable () async throws -> Void
+
+    init(_ part: String, logger: Logger, step: @escaping @Sendable () async throws -> Void) {
+        self.part = part
+        self.logger = logger
+        self.step = step
+    }
+
+    func run() async {
+        logger.info("Starting \(part)")
+        do {
+            try await cancelWhenGracefulShutdown { try await step() }
+            logger.info("Started \(part)")
+        } catch {
+            logger.error("Couldn't start \(part)", metadata: ["error": .string(String(describing: error))])
+        }
+    }
+}
+
 struct TurgaiClusterService: Service {
     let system: ClusterSystem
     let virtualNode: VirtualNode
     let scheduleWorker: DurableActivityDispatchWorker<ScheduleWorkflow>
     let scheduleTimerWorker: DurableActivityDispatchWorker<TimerWorkflow>
     let memoryExtractionWorker: DurableActivityDispatchWorker<MemoryExtractionWorkflow>
-    let discoverChannelIDs: @Sendable () async throws -> [UUID]
 
     func run() async throws {
         let (shutdownRequests, shutdownContinuation) = AsyncStream<Void>.makeStream()
-        let recoveryTask = Task {
-            await recoverChannelsAfterNodeLoss()
-        }
         defer {
             shutdownContinuation.finish()
         }
 
-        do {
-            try await withGracefulShutdownHandler {
-                try await withThrowingTaskGroup(of: Bool.self) {
-                    group in
-                    group.addTask {
-                        try await system.terminated
-                        return false
-                    }
-                    group.addTask {
-                        for await _ in shutdownRequests {
-                            return true
-                        }
-                        return false
-                    }
-                    do {
-                        let gracefulShutdownRequested = try await group.next() ?? false
-                        recoveryTask.cancel()
-                        await recoveryTask.value
-                        if gracefulShutdownRequested || Task.isCancelled {
-                            try system.shutdown()
-                        }
-                    } catch {
-                        recoveryTask.cancel()
-                        await recoveryTask.value
-                        _ = try? system.shutdown()
-                        throw error
-                    }
-                    // ClusterSystem.terminated does not respond to task
-                    // cancellation. Initiate shutdown before leaving the
-                    // group, which must wait for that child to finish.
-                    group.cancelAll()
+        try await withGracefulShutdownHandler {
+            try await withThrowingTaskGroup(of: Bool.self) {
+                group in
+                group.addTask {
+                    try await system.terminated
+                    return false
                 }
-            } onGracefulShutdown: {
-                shutdownContinuation.yield(())
-            }
-        } catch {
-            recoveryTask.cancel()
-            await recoveryTask.value
-            throw error
-        }
-    }
-
-    private func recoverChannelsAfterNodeLoss() async {
-        for await event in system.cluster.events {
-            guard !Task.isCancelled, !system.isTerminated else { return }
-            let requiresRecovery: Bool
-            switch event {
-            case .snapshot(let membership):
-                requiresRecovery = !membership.members(atLeast: .down).isEmpty
-            case .membershipChange(let change):
-                requiresRecovery = change.isDown || change.isRemoval
-            default:
-                requiresRecovery = false
-            }
-            guard requiresRecovery, !Task.isCancelled, !system.isTerminated else { continue }
-            await recoverChannels()
-        }
-    }
-
-    private func recoverChannels() async {
-        guard !Task.isCancelled, !system.isTerminated else { return }
-        do {
-            let channelIDs = try await discoverChannelIDs()
-            var unresolved: [UUID] = []
-            for id in channelIDs {
-                guard !Task.isCancelled, !system.isTerminated else { return }
+                group.addTask {
+                    for await _ in shutdownRequests {
+                        return true
+                    }
+                    return false
+                }
                 do {
-                    _ = try await TelegramChannel.resolve(on: system, channelID: id)
-                } catch is CancellationError {
-                    return
+                    let gracefulShutdownRequested = try await group.next() ?? false
+                    if gracefulShutdownRequested || Task.isCancelled {
+                        try system.shutdown()
+                    }
                 } catch {
-                    unresolved.append(id)
-                    system.log.warning(
-                        "Channel activation is waiting for virtual actor placement recovery",
-                        metadata: [
-                            "channel": .string(id.uuidString),
-                            "error": .string(String(describing: error)),
-                        ]
-                    )
+                    _ = try? system.shutdown()
+                    throw error
                 }
+                // ClusterSystem.terminated does not respond to task
+                // cancellation. Initiate shutdown before leaving the
+                // group, which must wait for that child to finish.
+                group.cancelAll()
             }
-            if !unresolved.isEmpty {
-                system.log.warning(
-                    "Some channels could not be resolved during node recovery",
-                    metadata: ["count": .string(String(unresolved.count))]
-                )
-            }
-        } catch is CancellationError {
-            return
-        } catch {
-            system.log.warning(
-                "Could not discover channels during node recovery",
-                metadata: ["error": .string(String(describing: error))]
-            )
+        } onGracefulShutdown: {
+            shutdownContinuation.yield(())
         }
     }
 }
@@ -533,13 +503,9 @@ extension TurgaiAppService {
         case (.profile, .enabled), (.userTool, _): break
         }
         let customInstructions =
-            profile.instructions.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
+            profile.instructions.trimmed()
         let personaInstructions =
-            profile.persona?.trimmingCharacters(
-                in: .whitespacesAndNewlines
-            ) ?? ""
+            profile.persona?.trimmed() ?? ""
         let systemPrompt: String
         switch agentKind {
         case .userTool:
@@ -608,7 +574,7 @@ extension TurgaiAppService {
             let scope = try? await group.opening(scopeOf: viewer.person)
         else { return [] }
         let entries = (try? await system.agentRuntime.allAgents()) ?? []
-        return await CallChain.$current.withValue(.start(scope)) { await snapshots(of: entries, on: system) }
+        return await CallChain.$current.withValue(.start(scope, in: nil)) { await snapshots(of: entries, on: system) }
     }
 
     private static func snapshots(of entries: [AgentDirectoryEntry], on system: ClusterSystem) async

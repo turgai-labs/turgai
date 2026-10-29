@@ -18,7 +18,10 @@ extension AgentProviderConfiguration {
         case .gemini: return ModelAccount(rawValue: "gemini")
         case .openAICompatible(let baseURL, _, _, _):
             return ModelAccount(rawValue: baseURL.host() ?? baseURL.absoluteString)
-        case .appleSystem, .llamaCPP: return nil
+        case .appleSystem: return nil
+        #if Llama
+            case .llamaCPP: return nil
+        #endif
         }
     }
 }

@@ -2,17 +2,36 @@ import DiscoverableActors
 import DistributedCluster
 import Hail
 import TurgaiObjects
+import VirtualActors
 
 /// Live weather for a place, from Open-Meteo.
 @Discoverable
+@VirtualActor
 public distributed actor Weather {
     public typealias ActorSystem = ClusterSystem
+    public typealias Dependency = ObjectIdentity
 
-    public init(actorSystem: ActorSystem) async throws {
+    public init(actorSystem: ActorSystem, dependency: ObjectIdentity) async throws {
         self.actorSystem = actorSystem
-        let object = try DiscoverableObject.resolve(id: self.id, using: actorSystem)
+    }
+
+    /// The one weather, by the id it always has: a reference to it reaches it after any restart.
+    public static func resolve(on actorSystem: ClusterSystem) async throws -> Weather {
+        try await actorSystem.virtualActors.getActor(identifiedBy: actorID, dependency: identity)
+    }
+
+    /// Starts it, and lists it among the objects by its lasting reference.
+    public static func start(on actorSystem: ClusterSystem) async throws {
+        let weather = try await resolve(on: actorSystem)
+        let object = try DiscoverableObject.resolve(id: weather.id, using: actorSystem)
         await actorSystem.receptionist.checkIn(object, with: .objects)
     }
+
+    static let identity = ObjectIdentity(rawValue: "weather")
+    static let actorID = VirtualActorID(rawValue: "builtin/weather")
+
+    /// It's there for as long as its node runs: what holds it finds it.
+    public func shouldDeactivate() async -> Bool { false }
 
     /// The weather at a place now.
     /// - Parameters:

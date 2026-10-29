@@ -81,13 +81,13 @@ public struct UserProcessTool: HailCore.Tool {
     public static func present(_ result: ProcessResult, maximumCharacters: Int) -> String {
         var parts: [String] = []
         let stdout = String(decoding: result.standardOutput, as: UTF8.self)
-            .trimmingCharacters(in: .newlines)
+            .trimmed(while: \.isNewline)
         parts.append(stdout.isEmpty ? "(no output)" : Self.cap(stdout, maximumCharacters))
         if result.exitCode != 0 {
             parts.append("(exit code \(result.exitCode))")
         }
         let stderr = String(decoding: result.standardError, as: UTF8.self)
-            .trimmingCharacters(in: .newlines)
+            .trimmed(while: \.isNewline)
         if !stderr.isEmpty {
             parts.append("stderr: \(Self.cap(stderr, maximumCharacters))")
         }

@@ -53,8 +53,9 @@ public struct TurgaiAuthority: Authority {
     }
 
     /// The effects whose own callee checks the call: objects, by what they allow; a conversation's
-    /// schedules, timers and attachments, and a person's memory, by whose they are; and reading
-    /// the clock, which reaches nothing.
+    /// schedules, timers and attachments, and a person's memory, by whose they are; reading the
+    /// clock, which reaches nothing; and saying something in the chat the call happens in, which
+    /// reaches no other.
     private static let checkedWhereTheyGo: Set<ObjectIdentifier> = [
         ObjectIdentifier(FindObjectsEffect.self), ObjectIdentifier(ListObjectsEffect.self),
         ObjectIdentifier(MakeObjectEffect.self), ObjectIdentifier(EditObjectEffect.self),
@@ -67,6 +68,6 @@ public struct TurgaiAuthority: Authority {
         ObjectIdentifier(ReplaceTimerEffect.self), ObjectIdentifier(CancelTimerEffect.self),
         ObjectIdentifier(ListTimersEffect.self), ObjectIdentifier(UserWorkflowEffect.self),
         ObjectIdentifier(AttachmentEffect.self), ObjectIdentifier(CoordinationEffect.self),
-        ObjectIdentifier(ClockEffect.self),
+        ObjectIdentifier(ClockEffect.self), ObjectIdentifier(ChatSayEffect.self),
     ]
 }

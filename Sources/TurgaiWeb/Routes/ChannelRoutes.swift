@@ -80,10 +80,7 @@ extension TurgaiMainWebApp {
                     agentRouting: .defaultProfile,
                     provider: TelegramChannelConfig(chatIDs: [])
                 )
-                try await webChatBridge.configureChannel(
-                    proposed,
-                    runtimeChange: .configuration
-                )
+                try await webChatBridge.configureChannel(proposed)
                 let state = try await webChatBridge.channelState(for: proposed)
                 guard case .active(let configuration, _) = state else {
                     throw TurgaiChannelError.unknownChannel(proposed.id)
@@ -170,10 +167,7 @@ extension TurgaiMainWebApp {
                     if let newToken {
                         try await channelSecrets.setToken(for: id, token: newToken)
                     }
-                    try await webChatBridge.configureChannel(
-                        updated,
-                        runtimeChange: newToken == nil ? .configuration : .providerCredentials
-                    )
+                    try await webChatBridge.configureChannel(updated)
                 } catch {
                     if newToken != nil {
                         if let previousToken {
@@ -181,13 +175,6 @@ extension TurgaiMainWebApp {
                         } else {
                             try? await channelSecrets.remove(for: id)
                         }
-                        // A rejected journal write can leave the current
-                        // runtime stopped. Rebuild it against the credential
-                        // that belonged to the accepted configuration.
-                        try? await webChatBridge.configureChannel(
-                            existing,
-                            runtimeChange: .providerCredentials
-                        )
                     }
                     throw error
                 }

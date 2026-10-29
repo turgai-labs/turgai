@@ -68,10 +68,7 @@ public actor TurgaiWebChatBridge {
         return await runtime.connections.addWebSession(id: id)
     }
 
-    public func configureChannel(
-        _ configuration: ChannelConfiguration<TelegramProvider>,
-        runtimeChange: ChannelRuntimeChange
-    ) async throws {
+    public func configureChannel(_ configuration: ChannelConfiguration<TelegramProvider>) async throws {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
@@ -79,7 +76,7 @@ public actor TurgaiWebChatBridge {
             on: runtime.actorSystem,
             configuration: configuration
         )
-        try await channel.replaceConfiguration(configuration, runtimeChange: runtimeChange)
+        try await channel.replaceConfiguration(configuration)
     }
 
     public func channelState(
@@ -152,7 +149,7 @@ public actor TurgaiWebChatBridge {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
         let scope = try await runtime.connections.scope(of: person, in: conversationID, role: role)
-        return try await CallChain.$current.withValue(.start(scope)) { try await runtime.objectCatalog.entries() }
+        return try await CallChain.$current.withValue(.start(scope, in: nil)) { try await runtime.objectCatalog.entries() }
     }
 
     /// Shares the object made here as `identity` with everyone, as far as `level`, or takes their
@@ -166,7 +163,7 @@ public actor TurgaiWebChatBridge {
         }
         let scope = try await runtime.connections.scope(of: person, in: conversationID, role: role)
         let object = try await DynamicObject.resolve(on: runtime.actorSystem, identity: identity)
-        try await CallChain.$current.withValue(.start(scope)) { try await object.share(with: .everyone, level) }
+        try await CallChain.$current.withValue(.start(scope, in: nil)) { try await object.share(with: .everyone, level) }
     }
 
     public func conversationTurns(

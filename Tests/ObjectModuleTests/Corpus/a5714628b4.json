@@ -15,7 +15,17 @@
    "shop": "Shop",
    "website": "Website",
    "mediaControl": "MediaControl"
-  }
+  },
+  "lasting": [
+   "Calendar",
+   "Contacts",
+   "Mac",
+   "MediaControl",
+   "Reminders",
+   "Shop",
+   "Warehouse",
+   "Website"
+  ]
  },
  "from": "journal"
 }

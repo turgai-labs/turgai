@@ -15,7 +15,17 @@
    "warehouse": "Warehouse",
    "reminders": "Reminders",
    "mac": "Mac"
-  }
+  },
+  "lasting": [
+   "Calendar",
+   "Contacts",
+   "Mac",
+   "MediaControl",
+   "Reminders",
+   "Shop",
+   "Warehouse",
+   "Website"
+  ]
  },
  "from": "journal"
 }

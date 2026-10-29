@@ -267,7 +267,7 @@ public struct MessageAuthor: Hashable, Codable, Sendable {
 
     private static func normalized(_ value: String?) -> String? {
         guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = value.trimmed()
         return trimmed.isEmpty ? nil : trimmed
     }
 }
@@ -432,7 +432,7 @@ public struct ConversationReply: Hashable, Codable, Sendable {
     public let text: String
 
     public init?(_ text: String) {
-        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = text.trimmed()
         guard !normalized.isEmpty else {
             return nil
         }
@@ -892,7 +892,7 @@ extension ConversationDecision {
             guard message.conversationID == state.conversationID,
                 !state.inbox.acceptedMessageIDs.contains(message.id)
             else { return ConversationDecision() }
-            let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = message.text.trimmed()
             guard !text.isEmpty || !message.attachments.isEmpty else {
                 // Input rejection, not a turn failure: a `nil` turn ID means no turn ended, even
                 // when another turn is running.

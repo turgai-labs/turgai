@@ -79,9 +79,9 @@ public actor FileEventStore: EventStore {
     private func journalPath(for id: String) -> String {
         let safe =
             id
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-            .replacingOccurrences(of: "\\", with: "_")
+            .replacing("/", with: "_")
+            .replacing(":", with: "_")
+            .replacing("\\", with: "_")
         return "journal/\(safe).jsonl"
     }
 }

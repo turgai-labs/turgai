@@ -11,7 +11,7 @@ struct AsAPerson: SuiteTrait, TestTrait, TestScoping {
         for test: Testing.Test, testCase: Testing.Test.Case?,
         performing function: @concurrent @Sendable () async throws -> Void
     ) async throws {
-        try await CallChain.$current.withValue(.start(Self.person)) { try await function() }
+        try await CallChain.$current.withValue(.start(Self.person, in: nil)) { try await function() }
     }
 
     /// Whom a test's calls are on behalf of.

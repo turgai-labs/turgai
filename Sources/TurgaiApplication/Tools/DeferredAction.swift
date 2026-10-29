@@ -82,15 +82,15 @@ enum DeferredActionToolSupport {
     static func make(kind: DeferredAction.Kind, message: String?, instruction: String?) throws -> DeferredAction {
         switch kind {
         case .deliverPreparedMessage:
-            guard let message, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard let message, !message.trimmed().isEmpty else {
                 throw TimerTools.Error.emptyMessage
             }
-            return .deliverPreparedMessage(message: message.trimmingCharacters(in: .whitespacesAndNewlines))
+            return .deliverPreparedMessage(message: message.trimmed())
         case .performTask:
-            guard let instruction, !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard let instruction, !instruction.trimmed().isEmpty else {
                 throw TimerTools.Error.emptyInstruction
             }
-            return .performTask(instruction: instruction.trimmingCharacters(in: .whitespacesAndNewlines))
+            return .performTask(instruction: instruction.trimmed())
         }
     }
 }

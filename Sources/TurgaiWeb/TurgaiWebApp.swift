@@ -26,7 +26,7 @@ public struct TurgaiWebConfiguration: Sendable {
             return false
         }
         if case .postgres = storage {
-            return postgresPassword?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            return postgresPassword?.trimmed().isEmpty == false
         }
         return true
     }

@@ -16,6 +16,7 @@ import TurgaiObjects
 public struct NodeTools: Sendable {
     public let http: Http
     public let search: Search
+    public let chat: Chat
     /// The authority of the node a call from code runs on.
     private let authority: @Sendable (ClusterSystem) -> any Authority
 
@@ -24,6 +25,7 @@ public struct NodeTools: Sendable {
     ) {
         self.http = Http()
         self.search = Search(backend: searchBackend)
+        self.chat = Chat()
         self.authority = authority
     }
 
@@ -31,13 +33,15 @@ public struct NodeTools: Sendable {
     public var turn: [any HailCore.Tool] { http.tools + search.tools }
 
     /// What object code calls: each tool by its type's name, with the commands whose input and
-    /// output code can hold.
+    /// output code can hold. The chat is code's alone: a turn's model answers in it already.
     public var api: ToolsAPI {
         ToolsAPI(tools: [
             ToolsAPI.Tool(
                 name: "\(Http.self)", description: http.group.description, functions: functions(http.commands)),
             ToolsAPI.Tool(
                 name: "\(Search.self)", description: search.group.description, functions: functions(search.commands)),
+            ToolsAPI.Tool(
+                name: "\(Chat.self)", description: chat.group.description, functions: functions(chat.commands)),
         ])
     }
 

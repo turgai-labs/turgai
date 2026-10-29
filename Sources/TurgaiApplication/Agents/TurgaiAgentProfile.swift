@@ -1,6 +1,7 @@
 import AnyLanguageModel
 import Hail
 import TurgaiPersistence
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -36,15 +37,17 @@ public enum OpenAICompatibleAPI: String, Codable, Sendable, Equatable {
     case responses
 }
 
-public struct LlamaCPPConfiguration: Codable, Sendable, Equatable {
-    public let modelPath: String
-    public let gpuLayers: Int32
+#if Llama
+    public struct LlamaCPPConfiguration: Codable, Sendable, Equatable {
+        public let modelPath: String
+        public let gpuLayers: Int32
 
-    public init(modelPath: String, gpuLayers: Int32 = -1) {
-        self.modelPath = modelPath
-        self.gpuLayers = gpuLayers
+        public init(modelPath: String, gpuLayers: Int32 = -1) {
+            self.modelPath = modelPath
+            self.gpuLayers = gpuLayers
+        }
     }
-}
+#endif
 
 /// Complete provider-owned configuration for a profile. Each case carries
 /// exactly the values required to construct that provider for a turn,
@@ -63,7 +66,9 @@ public enum AgentProviderConfiguration: Codable, Sendable, Equatable {
     /// Apple's on-device model. Its context window isn't a setting: the model
     /// reports it, and it differs between OS releases.
     case appleSystem
-    case llamaCPP(LlamaCPPConfiguration, contextWindow: Int)
+    #if Llama
+        case llamaCPP(LlamaCPPConfiguration, contextWindow: Int)
+    #endif
 }
 
 extension AgentProviderConfiguration {
@@ -73,8 +78,12 @@ extension AgentProviderConfiguration {
             return reference
         case .openAICompatible(_, let reference, _, _):
             return reference
-        case .ollama, .appleSystem, .llamaCPP:
+        case .ollama, .appleSystem:
             return nil
+        #if Llama
+            case .llamaCPP:
+                return nil
+        #endif
         }
     }
 
@@ -82,8 +91,12 @@ extension AgentProviderConfiguration {
     public var contextWindow: Int {
         switch self {
         case .ollama(_, let window), .openAI(_, let window), .anthropic(_, let window),
-            .gemini(_, let window), .openAICompatible(_, _, _, let window), .llamaCPP(_, let window):
+            .gemini(_, let window), .openAICompatible(_, _, _, let window):
             return window
+        #if Llama
+            case .llamaCPP(_, let window):
+                return window
+        #endif
         case .appleSystem:
             return Self.appleSystemContextWindow
         }
@@ -229,7 +242,7 @@ public actor TurgaiAgentProfileStore {
     }
 
     public func profiles() -> [TurgaiAgentProfile] {
-        state.profiles.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        state.profiles.sorted { $0.name.lowercased() < $1.name.lowercased() }
     }
 
     public func profile(id: String) -> TurgaiAgentProfile? {
@@ -320,7 +333,7 @@ public actor TurgaiAgentProfileStore {
         guard Self.validID(profile.id) else {
             throw TurgaiAgentProfileError.invalidID(profile.id)
         }
-        guard !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard !profile.name.trimmed().isEmpty,
             profile.name.count <= 120
         else {
             throw TurgaiAgentProfileError.invalidName
@@ -344,12 +357,14 @@ public actor TurgaiAgentProfileStore {
             }
         case .appleSystem:
             guard profile.model.provider == .system else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
-        case .llamaCPP(let configuration, _):
-            guard profile.model.provider == .llamaCPP,
-                !configuration.modelPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else {
-                throw TurgaiAgentProfileError.invalidEndpointURL(configuration.modelPath)
-            }
+        #if Llama
+            case .llamaCPP(let configuration, _):
+                guard profile.model.provider == .llamaCPP,
+                    !configuration.modelPath.trimmed().isEmpty
+                else {
+                    throw TurgaiAgentProfileError.invalidEndpointURL(configuration.modelPath)
+                }
+        #endif
         }
         guard profile.contextWindow > 0 else {
             throw TurgaiAgentProfileError.invalidContextWindow(profile.contextWindow)

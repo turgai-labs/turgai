@@ -1,3 +1,4 @@
+import TurgaiDomain
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
@@ -115,7 +116,7 @@ extension TelegramHTMLFormatter {
     ]
 
     fileprivate static func document(markdown: String) -> MarkdownDocument {
-        let normalized = markdown.replacingOccurrences(of: "\r\n", with: "\n")
+        let normalized = markdown.replacing("\r\n", with: "\n")
         let lines =
             normalized
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -277,7 +278,7 @@ extension TelegramHTMLFormatter {
             }
             if characters[index] == "|" {
                 hasPipe = true
-                cells.append(cell.trimmingCharacters(in: .whitespaces))
+                cells.append(cell.trimmed(while: { $0.isWhitespace && !$0.isNewline }))
                 cell.removeAll(keepingCapacity: true)
             } else {
                 cell.append(characters[index])
@@ -286,7 +287,7 @@ extension TelegramHTMLFormatter {
         }
 
         guard hasPipe else { return nil }
-        cells.append(cell.trimmingCharacters(in: .whitespaces))
+        cells.append(cell.trimmed(while: { $0.isWhitespace && !$0.isNewline }))
 
         if characters.first == "|", !cells.isEmpty {
             cells.removeFirst()
@@ -960,7 +961,7 @@ extension TelegramHTMLFormatter {
         return (
             labelEnd,
             String(characters[(labelEnd + 2)..<end])
-                .trimmingCharacters(in: .whitespacesAndNewlines),
+                .trimmed(),
             end
         )
     }
@@ -986,13 +987,13 @@ extension TelegramHTMLFormatter {
 
     fileprivate static func escapeText(_ text: String) -> String {
         text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacing("&", with: "&amp;")
+            .replacing("<", with: "&lt;")
+            .replacing(">", with: "&gt;")
     }
 
     fileprivate static func escapeAttribute(_ text: String) -> String {
-        escapeText(text).replacingOccurrences(of: "\"", with: "&quot;")
+        escapeText(text).replacing("\"", with: "&quot;")
     }
 
     fileprivate static func headingContent(in line: String) -> String? {
@@ -1082,7 +1083,7 @@ extension TelegramHTMLFormatter {
         return (
             characters[index],
             String(characters.dropFirst(index + 3))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmed()
         )
     }
 

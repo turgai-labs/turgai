@@ -1,5 +1,6 @@
 import DiscoverableActors
 import Hail
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -229,7 +230,7 @@ public enum WeatherSupport {
     }
 
     static func validatedPlace(_ value: String) throws -> String {
-        let place = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let place = value.trimmed()
         guard !place.isEmpty else {
             throw ToolError.invalidArgument("place", value: value)
         }
@@ -241,7 +242,7 @@ public enum WeatherSupport {
 
     static func validatedCountry(_ value: String?) throws -> String? {
         guard let value else { return nil }
-        let country = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let country = value.trimmed()
         guard !country.isEmpty else { return nil }
         guard country.count <= 100 else {
             throw ToolError.invalidArgument("country", value: "country is too long")
@@ -251,7 +252,7 @@ public enum WeatherSupport {
 
     static func validatedRegion(_ value: String?) throws -> String? {
         guard let value else { return nil }
-        let region = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let region = value.trimmed()
         guard !region.isEmpty else { return nil }
         guard region.count <= 200 else { throw ToolError.invalidArgument("region", value: region) }
         return region

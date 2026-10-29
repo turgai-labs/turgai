@@ -1,5 +1,6 @@
 import AnyLanguageModel
 import Hail
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -383,12 +384,12 @@ public struct UserTool: Sendable {
     static func placeholders(in template: String) -> [String] {
         var result: [String] = []
         var rest = template[...]
-        while let open = rest.range(of: "{{") {
+        while let open = rest.firstRange(of: "{{") {
             rest = rest[open.upperBound...]
-            guard let close = rest.range(of: "}}") else { break }
+            guard let close = rest.firstRange(of: "}}") else { break }
             result.append(
                 String(rest[rest.startIndex..<close.lowerBound])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmed()
             )
             rest = rest[close.upperBound...]
         }
@@ -398,16 +399,16 @@ public struct UserTool: Sendable {
     private static func render(_ template: String, values: [String: GeneratedContent]) throws -> String {
         var rendered = ""
         var rest = template[...]
-        while let open = rest.range(of: "{{") {
+        while let open = rest.firstRange(of: "{{") {
             rendered += rest[rest.startIndex..<open.lowerBound]
             rest = rest[open.upperBound...]
-            guard let close = rest.range(of: "}}") else {
+            guard let close = rest.firstRange(of: "}}") else {
                 rendered += "{{"
                 rendered += rest
                 return rendered
             }
             let key = String(rest[rest.startIndex..<close.lowerBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmed()
             guard !key.isEmpty else {
                 throw ToolError.invalidArgument("template", value: "empty placeholder")
             }

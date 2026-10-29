@@ -10,7 +10,12 @@
    "mac": "Mac",
    "website": "Website",
    "mediaControl": "MediaControl"
-  }
+  },
+  "lasting": [
+   "Mac",
+   "MediaControl",
+   "Website"
+  ]
  },
  "from": "journal"
 }

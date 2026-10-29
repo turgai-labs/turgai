@@ -3,7 +3,9 @@ import Hail
 
 public actor AgentModelEndpointFactory {
     private let credentials: AgentCredentialStore
-    private let llamaCache = LlamaCPPEndpointCache()
+    #if Llama
+        private let llamaCache = LlamaCPPEndpointCache()
+    #endif
     /// How models send their requests: each in its provider account's limit, if it has one.
     private let transports: ModelTransports
 
@@ -156,15 +158,17 @@ public actor AgentModelEndpointFactory {
             #else
                 throw AgentModelEndpointFactoryError.unavailable(.system)
             #endif
-        case .llamaCPP(let configuration, _):
-            try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
-            return await llamaCache.endpoint(
-                model: model,
-                modelPath: configuration.modelPath,
-                temperature: temperature,
-                contextWindow: contextWindow,
-                gpuLayers: configuration.gpuLayers
-            )
+        #if Llama
+            case .llamaCPP(let configuration, _):
+                try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
+                return await llamaCache.endpoint(
+                    model: model,
+                    modelPath: configuration.modelPath,
+                    temperature: temperature,
+                    contextWindow: contextWindow,
+                    gpuLayers: configuration.gpuLayers
+                )
+        #endif
         }
     }
 

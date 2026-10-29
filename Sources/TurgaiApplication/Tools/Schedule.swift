@@ -1,5 +1,5 @@
 import AnyLanguageModel
-import CryptoKit
+import Crypto
 import DistributedCluster
 import DurableWorkflows
 import Hail
@@ -101,10 +101,10 @@ public struct Schedule: Sendable {
         overlapPolicy: ScheduleOverlapPolicy = .skip,
         workflows: WorkflowActions
     ) async throws {
-        guard !id.rawValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !id.rawValue.trimmed().isEmpty else {
             throw Error.emptyScheduleID
         }
-        guard !request.action.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        guard !request.action.content.trimmed().isEmpty else {
             throw Error.emptyText
         }
 
@@ -506,7 +506,7 @@ extension ScheduleID {
     }
 
     static func scheduleID(from value: String) -> ScheduleID? {
-        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = value.trimmed()
         guard !value.isEmpty else { return nil }
         return ScheduleID(
             rawValue: value.hasPrefix(turgaiSchedulePrefix)

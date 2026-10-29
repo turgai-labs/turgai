@@ -26,9 +26,11 @@ struct ProviderConfigurationFields: HTML, Sendable {
         OpenAICompatibleAPI(rawValue: settings.compatibleAPI) ?? .chatCompletions
     }
 
-    private var modelPath: String? { draft(for: .llamaCPP)?.modelPath }
+    #if Llama
+        private var modelPath: String? { draft(for: .llamaCPP)?.modelPath }
 
-    private var gpuLayers: Int32? { draft(for: .llamaCPP).flatMap { Int32($0.gpuLayers) } }
+        private var gpuLayers: Int32? { draft(for: .llamaCPP).flatMap { Int32($0.gpuLayers) } }
+    #endif
 
     private func hasCredential(for provider: AgentModelProvider) -> Bool {
         settings.savedKeyProvider == provider
@@ -72,10 +74,12 @@ struct ProviderConfigurationFields: HTML, Sendable {
                     window: contextWindow(for: .openAICompatible), limit: requestLimit(for: .openAICompatible))
             }
             section(.system) { SystemModelFields() }
-            section(.llamaCPP) {
-                LlamaFields(
-                    modelPath: modelPath ?? "", gpuLayers: gpuLayers ?? -1, window: contextWindow(for: .llamaCPP))
-            }
+            #if Llama
+                section(.llamaCPP) {
+                    LlamaFields(
+                        modelPath: modelPath ?? "", gpuLayers: gpuLayers ?? -1, window: contextWindow(for: .llamaCPP))
+                }
+            #endif
         }
     }
 }
@@ -158,6 +162,7 @@ private struct SystemModelFields: HTML, Sendable {
     }
 }
 
+#if Llama
 /// A GGUF model run by llama.cpp.
 private struct LlamaFields: HTML, Sendable {
     let modelPath: String
@@ -177,6 +182,7 @@ private struct LlamaFields: HTML, Sendable {
         ContextWindowField(tokens: window)
     }
 }
+#endif
 
 /// One provider's settings, enabled only while that provider is selected.
 private struct ProviderSection<Content: HTML>: HTML {

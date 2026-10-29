@@ -1,4 +1,4 @@
-import CryptoKit
+import Crypto
 import HummingbirdBcrypt
 import NIOPosix
 
@@ -416,12 +416,12 @@ public actor TurgaiAuth {
     }
 
     private static func base64URL(_ data: Data) -> String {
-        data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        data.base64EncodedString().replacing("+", with: "-").replacing("/", with: "_")
+            .replacing("=", with: "")
     }
 
     private static func decodeBase64URL(_ value: String) -> Data? {
-        var base64 = value.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        var base64 = value.replacing("-", with: "+").replacing("_", with: "/")
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
         return Data(base64Encoded: base64)
     }

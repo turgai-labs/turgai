@@ -1,4 +1,5 @@
 import TurgaiPersistence
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -16,7 +17,7 @@ public actor ChannelSecretStore {
     }
 
     public func setToken(for channelID: UUID, token: String) throws {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = token.trimmed()
         guard !trimmed.isEmpty else {
             throw TurgaiChannelError.invalidToken
         }

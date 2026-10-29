@@ -142,6 +142,24 @@ public actor TelegramConnection {
 
     /// Sends a channel-neutral Turgai event over this Telegram chat.
     public func send(_ event: OutboundEvent) async throws {
+        switch event {
+        case .reply(.started(let conversationID, let turnID)):
+            logger.debug(
+                "Telegram turn started",
+                metadata: ["conversation": "\(conversationID.stableKey)", "turn": "\(turnID.rawValue)"])
+        case .reply(.finished(let conversationID, let turnID, _)):
+            logger.debug(
+                "Sending Telegram answer",
+                metadata: ["conversation": "\(conversationID.stableKey)", "turn": "\(turnID.rawValue)"])
+        case .reply(.failed(let conversationID, let turnID, _)):
+            logger.debug(
+                "Sending Telegram failure",
+                metadata: [
+                    "conversation": "\(conversationID.stableKey)", "turn": "\(turnID.map { "\($0.rawValue)" } ?? "none")",
+                ])
+        default:
+            break
+        }
         try await publisher.publish(event)
     }
 
@@ -345,7 +363,7 @@ public actor TelegramBot {
 
         let text = callbackQuery?.data ?? message.text ?? message.caption ?? ""
         guard
-            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            !text.trimmed().isEmpty
                 || !attachments.isEmpty
         else {
             return nil
@@ -362,7 +380,7 @@ public actor TelegramBot {
         }
         let displayName = [sender.firstName, sender.lastName]
             .compactMap { value in
-                let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmed = value?.trimmed()
                 return trimmed?.isEmpty == false ? trimmed : nil
             }
             .joined(separator: " ")
@@ -478,6 +496,50 @@ public actor TelegramBot {
         }
     }
 
+    /// Takes one update, as a webhook is given it: each update goes to its chat's connection, and
+    /// what isn't for an allowed chat is taken and dropped. `false` when the chat's connection
+    /// didn't take it, to be given again.
+    public func receive(_ update: TelegramUpdate) async -> Bool {
+        let ids = idFactory()
+        let chat = update.message?.chat.id ?? update.callbackQuery?.message?.chat.id
+        logger.debug(
+            "Telegram update received",
+            metadata: ["update": "\(update.updateID)", "chat": "\(chat.map(String.init) ?? "none")"])
+        guard let chatID = chat, allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID) else {
+            if let chat {
+                logger.debug("Telegram update ignored: its chat isn't allowed", metadata: ["chat": "\(chat)"])
+            }
+            return true
+        }
+        if let callbackQuery = update.callbackQuery {
+            let handled = await callbackHandler(callbackQuery)
+            try? await client.answerCallbackQuery(callbackQuery.id)
+            if handled { return true }
+        }
+        guard
+            let event = Self.event(
+                for: update,
+                conversationChannel: conversationChannel,
+                messageID: ids.0,
+                turnID: ids.1,
+                attachments: attachments(for: update.message)
+            )
+        else { return true }
+        let connection = connection(for: event.conversationID)
+        // Who decides for the chat, before what's said in it.
+        if case .message = event, let admins = await admins(of: update) {
+            _ = await connection.receive(admins)
+        }
+        logger.debug(
+            "Telegram update handed on",
+            metadata: ["update": "\(update.updateID)", "conversation": "\(event.conversationID.stableKey)"])
+        let accepted = await connection.receive(event)
+        logger.debug("Telegram update taken", metadata: ["update": "\(update.updateID)", "accepted": "\(accepted)"])
+        return accepted
+    }
+
+    /// Asks Telegram for updates, and gives each to ``receive(_:)``, as Telegram gives a webhook
+    /// each one: one that isn't taken is given again, and each taken one moves the offset on.
     private func poll() async throws {
         var offset = initialOffset
         let updates = client.updates(
@@ -488,49 +550,15 @@ public actor TelegramBot {
         )
 
         var iterator = updates.makeAsyncIterator()
+        logger.debug("Telegram polling started")
         while let update = try await iterator.next() {
             try Task.checkCancellation()
-
-            let ids = idFactory()
-            if let chatID = update.message?.chat.id ?? update.callbackQuery?.message?.chat.id,
-                allowedChatIDs.isEmpty || allowedChatIDs.contains(chatID)
-            {
-                let handledCallback: Bool
-                if let callbackQuery = update.callbackQuery {
-                    handledCallback = await callbackHandler(callbackQuery)
-                } else {
-                    handledCallback = false
-                }
-                if let callbackQuery = update.callbackQuery {
-                    try? await client.answerCallbackQuery(callbackQuery.id)
-                }
-                if !handledCallback {
-                    let attachments = attachments(for: update.message)
-                    if let event = Self.event(
-                        for: update,
-                        conversationChannel: conversationChannel,
-                        messageID: ids.0,
-                        turnID: ids.1,
-                        attachments: attachments
-                    ) {
-                        let connection = connection(for: event.conversationID)
-                        // Who decides for the chat, before what's said in it.
-                        if case .message = event, let admins = await admins(of: update) {
-                            _ = await connection.receive(admins)
-                        }
-                        let accepted = await connection.receive(event)
-                        if !accepted {
-                            iterator.retryPendingUpdate()
-                            logger.warning(
-                                "Telegram input was rejected; retrying the uncheckpointed update"
-                            )
-                            try await Task.sleep(for: configuration.retryDelay)
-                            continue
-                        }
-                    }
-                }
+            guard await receive(update) else {
+                iterator.retryPendingUpdate()
+                logger.warning("Telegram input was rejected; retrying the uncheckpointed update")
+                try await Task.sleep(for: configuration.retryDelay)
+                continue
             }
-
             // Acknowledging ignored updates is important too; otherwise
             // disallowed or non-message updates replay on every restart.
             guard update.updateID < Int64.max else { continue }
@@ -634,7 +662,7 @@ public actor TelegramBot {
         guard
             let firstWord =
                 text
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmed()
                 .split(whereSeparator: \.isWhitespace)
                 .first,
             firstWord.first == "/"
@@ -649,10 +677,10 @@ public actor TelegramBot {
     private static func argument(in text: String) -> String? {
         let parts =
             text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmed()
             .split(whereSeparator: \.isWhitespace)
         guard parts.count >= 2 else { return nil }
-        let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = parts[1].trimmed()
         return value.isEmpty ? nil : String(value)
     }
 }

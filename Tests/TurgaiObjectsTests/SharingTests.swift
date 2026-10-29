@@ -20,7 +20,7 @@ struct SharingTests {
         "actor Counter {\n    var count = 0\n\n    func add() -> Int {\n        count += 1\n        return count\n    }\n}"
 
     private func `as`<Value: Sendable>(_ scope: CallScope, _ body: () async throws -> Value) async throws -> Value {
-        try await CallChain.$current.withValue(.start(scope)) { try await body() }
+        try await CallChain.$current.withValue(.start(scope, in: nil)) { try await body() }
     }
 
     @Test
@@ -88,7 +88,7 @@ struct SharingTests {
             interface: ModuleInterface(
                 name: Uses.module,
                 source: "actor Counter {\n    init(id: String)\n    func add() async throws -> Int\n}"),
-            objects: [:])
+            objects: [:], lasting: ["Counter"])
         try await withClusterSystem("sharing", store: MemoryEventStore(), hostsVirtualActors: true) { node in
             let objects = try await DynamicObjects.resolve(on: node)
             let drinksID = try await self.as(ann) {
