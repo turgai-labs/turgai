@@ -100,17 +100,10 @@ public struct ObjectWriter: Sendable {
     }
 
     private func respond(_ entries: [Transcript.Entry]) async throws -> String {
-        let stream = endpoint.stream(
-            request: ModelRequest(input: entries, entries: entries), tools: [], authority: FullAuthority(),
-            generating: String.self, purpose: .generation)
-        for await event in stream {
-            switch event {
-            case .generated(let text): return text
-            case .failed(let error): throw AgentRuntimeError.modelMisbehavior(String(describing: error))
-            default: continue
-            }
+        guard let answer = try await endpoint.answer(entries) else {
+            throw AgentRuntimeError.modelMisbehavior("The object's writer gave no answer.")
         }
-        throw AgentRuntimeError.modelMisbehavior("The object's writer gave no answer.")
+        return answer
     }
 
     /// The code without the Markdown fence a chat model wraps it in, which is never Swift.

@@ -233,9 +233,15 @@ struct TurgaiAppService: Service, Sendable {
 
             try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
             // The shared production dependency facade for tool effects. The
-            // generic parameter is only a carrier; the stored workflows and
-            // virtual-actor actions serve every effect type.
-            ActorSystemDependency<ChatSayEffect>.prepare(.live(on: system))
+            // generic parameter is only a carrier; the stored virtual-actor
+            // actions serve every effect type.
+            ActorSystemDependency<ChatSayEffect>.prepare(
+                .live(
+                    on: system,
+                    models: ChatModels(
+                        agentProfiles: agentProfiles, endpoints: endpointFactory,
+                        temperature: runtimeConfiguration.temperature,
+                        ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive)))
             let virtualNode = await VirtualNode(actorSystem: system)
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,

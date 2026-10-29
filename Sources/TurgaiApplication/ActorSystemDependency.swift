@@ -46,8 +46,8 @@ public struct ActorSystemDependency<Effect: ScopedEffect>: Sendable {
         self.virtualActors = virtualActors
     }
 
-    /// The facade over a live node.
-    public static func live(on actorSystem: ClusterSystem) -> ActorSystemDependency<Effect> {
+    /// The facade over a live node, whose chats' agents answer with `models`.
+    public static func live(on actorSystem: ClusterSystem, models: ChatModels) -> ActorSystemDependency<Effect> {
         ActorSystemDependency<Effect>(
             virtualActors: VirtualActorActions(
                 resolveUser: { userID in
@@ -56,6 +56,9 @@ public struct ActorSystemDependency<Effect: ScopedEffect>: Sendable {
                 notify: { conversationID, text in
                     try await actorSystem.turgaiChannelRuntime.dependencies().connections
                         .conversation(conversationID).notify(text)
+                },
+                ask: { conversationID, question in
+                    try await models.ask(question, in: conversationID, on: actorSystem)
                 }
             )
         )
@@ -68,13 +71,18 @@ public struct VirtualActorActions: Sendable {
     public var resolveUser: @Sendable (TurgaiDomain.UserID) async throws -> User
     /// Says text in a conversation, as its connections deliver what it says.
     public var notify: @Sendable (ConversationID, String) async throws -> Void
+    /// Asks the model of the agent that answers a conversation one question, on its own: what it
+    /// answers.
+    public var ask: @Sendable (ConversationID, String) async throws -> String
 
     public init(
         resolveUser: @escaping @Sendable (TurgaiDomain.UserID) async throws -> User,
-        notify: @escaping @Sendable (ConversationID, String) async throws -> Void
+        notify: @escaping @Sendable (ConversationID, String) async throws -> Void,
+        ask: @escaping @Sendable (ConversationID, String) async throws -> String
     ) {
         self.resolveUser = resolveUser
         self.notify = notify
+        self.ask = ask
     }
 }
 

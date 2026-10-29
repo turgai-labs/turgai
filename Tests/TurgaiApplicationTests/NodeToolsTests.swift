@@ -31,6 +31,8 @@ struct NodeToolsTests {
             }
             """
         #expect(await ScriptInstance.problems(in: try Script(code: reader, type: "Reader", uses: uses)).isEmpty)
+        // The tools are namespaces, never values code sends or takes.
+        #expect(uses.interface.valueTypes.isDisjoint(with: ["Tools", "Tools.Http", "Tools.Search", "Tools.Chat"]))
         let getting = reader.replacingOccurrences(
             of: "Tools.Http.send(HttpRequest(url: page))", with: "Tools.Http.get(url: page)")
         #expect(!(await ScriptInstance.problems(in: try Script(code: getting, type: "Reader", uses: uses))).isEmpty)
@@ -67,6 +69,40 @@ struct NodeToolsTests {
         #expect(await said.messages.count == 1)
     }
 
+    /// Code asks the model of the chat its call happens in, and gets its answer back: nothing is said
+    /// in the chat. In no chat there's no model to ask.
+    @Test func codeAsksTheModelOfTheChatItsCallHappensIn() async throws {
+        let checker = """
+            actor Checker {
+                func isSpam(_ message: String) async throws -> Bool {
+                    let answer = try await Tools.Chat.ask(ChatAsking(text: "Is this spam? \\(message)"))
+                    return answer.text.lowercased().hasPrefix("yes")
+                }
+            }
+            """
+        #expect(await ScriptInstance.problems(in: try Script(code: checker, type: "Checker", uses: uses)).isEmpty)
+
+        let said = Said()
+        let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
+        let ann = CallScope(UserID("ann"), in: GroupID(chat), as: .member, allowed: [])
+        func ask(_ text: String, in place: ConversationID?) async throws -> ChatAnswer {
+            try await withActorSystemDependency(said.dependency) {
+                try await CallChain.$current.withValue(.start(ann, in: place)) {
+                    try await withEffect(try Chat().ask(ChatAsking(text: text)), authority: TurgaiAuthority()) {
+                        try await ChatAskEffect.run(in: $0)
+                    }
+                }
+            }
+        }
+
+        #expect(try await ask("Is this spam?", in: chat).text == "yes")
+        #expect(await said.asked == [Said.Message(chat: chat, text: "Is this spam?")])
+        #expect(await said.messages.isEmpty)
+        await #expect(throws: ChatAskEffect.Error.inNoChat) { try await ask("Is this spam?", in: nil) }
+        #expect(throws: ChatAskEffect.Error.nothingToAsk) { try Chat().ask(ChatAsking(text: "  ")) }
+        #expect(await said.asked.count == 1)
+    }
+
     /// A request reaching outside runs as its call's scope allows, and is refused otherwise, saying
     /// exactly what it was, for whoever opened the scope to ask its group.
     @Test func anExactRequestRunsAsItsScopeAllows() throws {
@@ -97,7 +133,7 @@ struct NodeToolsTests {
 }
 
 
-/// What was said in chats, standing in for the node's conversations.
+/// What was said in chats, and asked of their models, standing in for the node's conversations.
 private actor Said {
     struct Message: Equatable {
         let chat: ConversationID
@@ -105,15 +141,24 @@ private actor Said {
     }
 
     private(set) var messages: [Message] = []
+    private(set) var asked: [Message] = []
 
     func add(_ message: Message) { messages.append(message) }
 
-    /// The node, as far as saying goes: each chat's words are kept here; nothing else is reached.
+    /// Each chat's model answers yes.
+    func answer(_ question: Message) -> String {
+        asked.append(question)
+        return "yes"
+    }
+
+    /// The node, as far as saying and asking go: each chat's words and questions are kept here;
+    /// nothing else is reached.
     nonisolated var dependency: ActorSystemDependency<ChatSayEffect> {
         struct Unreached: Error {}
         return ActorSystemDependency(
             virtualActors: VirtualActorActions(
                 resolveUser: { _ in throw Unreached() },
-                notify: { chat, text in await self.add(Message(chat: chat, text: text)) }))
+                notify: { chat, text in await self.add(Message(chat: chat, text: text)) },
+                ask: { chat, question in await self.answer(Message(chat: chat, text: question)) }))
     }
 }

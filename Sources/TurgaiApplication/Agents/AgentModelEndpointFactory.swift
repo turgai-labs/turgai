@@ -197,3 +197,21 @@ public enum AgentModelEndpointFactoryError: Error, Sendable, Equatable {
     case missingCredential(AgentCredentialReference)
     case unavailable(AgentModelProvider)
 }
+
+extension ModelEndpoint {
+    /// What the model answers `entries` with, in text, offered no tools: one request; `nil` when it
+    /// gives no answer.
+    func answer(_ entries: [Transcript.Entry]) async throws -> String? {
+        let stream = stream(
+            request: ModelRequest(input: entries, entries: entries), tools: [], authority: FullAuthority(),
+            generating: String.self, purpose: .generation)
+        for await event in stream {
+            switch event {
+            case .generated(let text): return text
+            case .failed(let error): throw AgentRuntimeError.modelMisbehavior(String(describing: error))
+            default: continue
+            }
+        }
+        return nil
+    }
+}

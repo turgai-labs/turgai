@@ -22,7 +22,8 @@ extension ModuleInterface {
 
     /// The structs and enums it declares, in order, each named as Swift names it: a nested one
     /// with the types it's in, `RefundDesk.Refund`, whether it's declared in them or in an
-    /// extension of them.
+    /// extension of them. An enum with no cases holds no value: it's only a namespace, `Tools`,
+    /// whose values are listed and it isn't.
     public var valueDeclarations: [(name: String, declaration: DeclSyntax)] {
         var found: [(name: String, declaration: DeclSyntax)] = []
         func walk(_ declaration: DeclSyntax, in outer: String?) {
@@ -44,7 +45,10 @@ extension ModuleInterface {
                 return
             }
             let qualified = outer.map { "\($0).\(name)" } ?? name
-            found.append((qualified, declaration))
+            let namespace =
+                declaration.is(EnumDeclSyntax.self)
+                && !members.members.contains { $0.decl.is(EnumCaseDeclSyntax.self) }
+            if !namespace { found.append((qualified, declaration)) }
             for member in members.members { walk(member.decl, in: qualified) }
         }
         for statement in Parser.parse(source: source).statements {
