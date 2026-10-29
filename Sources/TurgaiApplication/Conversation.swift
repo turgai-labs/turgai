@@ -116,6 +116,17 @@ private enum MemoryPresentation {
     }
 }
 
+/// Why an object can't be shown: it isn't one of the person's here, with those that are.
+private struct NotYourObject: Error, CustomStringConvertible {
+    let written: String
+    let yours: [String]
+
+    var description: String {
+        "`\(written)` isn't one of your objects here"
+            + (yours.isEmpty ? "" : "; yours: " + yours.map { "`\($0)`" }.joined(separator: ", "))
+    }
+}
+
 private enum DuePresentation {
     private enum Command {
         static let cancelReminder = "/cancel-reminder"
@@ -677,6 +688,40 @@ public distributed actor Conversation {
                 .notice(
                     conversationID: conversationID, turnID: nil,
                     text: DuePresentation.reminderAction("cancelled", id: cancelled.name)))
+        } catch {
+            await publish(.notice(conversationID: conversationID, turnID: nil, text: "\(error)"))
+        }
+    }
+
+    /// The objects `person` may read here, made by name, each a button that shows its card.
+    public distributed func showObjects(for person: TurgaiDomain.UserID) async throws {
+        let objects = try await asking(person) { try await ObjectSession(actorSystem: $0).yourObjects() }
+        await publish(
+            .noticeWithActions(
+                conversationID: conversationID,
+                turnID: nil,
+                text: objects.isEmpty ? "No objects." : "Objects:",
+                actions: objects.map { OutboundAction(label: $0.description, command: "/object \($0)") }
+            )
+        )
+    }
+
+    /// The card of `person`'s object `written`, as they may read it here: refused, with why, when
+    /// it isn't one of theirs.
+    public distributed func showObject(_ written: String, for person: TurgaiDomain.UserID) async throws {
+        do {
+            let card = try await asking(person) { system in
+                let session = ObjectSession(actorSystem: system)
+                let objects = try await session.yourObjects()
+                guard let object = objects.first(where: { $0.description == written }) else {
+                    throw NotYourObject(written: written, yours: objects.map(\.description))
+                }
+                return try await session.card(object)
+            }
+            switch card {
+            case .markdown(let text):
+                await publish(.notice(conversationID: conversationID, turnID: nil, text: text))
+            }
         } catch {
             await publish(.notice(conversationID: conversationID, turnID: nil, text: "\(error)"))
         }

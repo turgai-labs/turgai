@@ -422,6 +422,8 @@ private enum UserCommand {
     case unpauseTask(String)
     case cancelTask(String)
     case cancelReminder(String)
+    case objects
+    case object(String)
 }
 
 actor LiveSession {
@@ -701,6 +703,20 @@ actor LiveSession {
                     participantID: participantID,
                     userID: userID
                 )
+            case .objects(let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .objects,
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            case .object(let id, let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .object(id),
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
             }
         }
     }
@@ -746,6 +762,10 @@ actor LiveSession {
                 try await conversation.changeTask(.cancel, named: name, by: userID)
             case .cancelReminder(let name):
                 try await conversation.cancelReminder(named: name, by: userID)
+            case .objects:
+                try await conversation.showObjects(for: userID)
+            case .object(let id):
+                try await conversation.showObject(id, for: userID)
             }
             return true
         } catch {

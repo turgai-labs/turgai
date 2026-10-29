@@ -125,7 +125,8 @@ public actor TelegramConnection {
                         Send me a message to get started. Use /reset to clear this conversation, \
                         /memory to inspect saved memory, /context for runtime diagnostics, /diagnose to \
                         exercise every tool and report their health, /reminders to list one-shot reminders, \
-                        /tasks to list recurring tasks, or /forget to clear saved memory.
+                        /tasks to list recurring tasks, /objects to see your objects, or /forget to clear \
+                        saved memory.
                         """
                 )
             } catch {
@@ -477,6 +478,23 @@ public actor TelegramBot {
                     userID: userID
                 )
             )
+        case .objects:
+            return .command(
+                .objects(
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+        case .object:
+            return .command(
+                .object(
+                    id: argument(in: text) ?? "",
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
         default:
             return .message(
                 InboundMessage(
@@ -704,7 +722,9 @@ extension TelegramInboundEvent {
                 .pauseTask(_, let conversationID, _, _),
                 .unpauseTask(_, let conversationID, _, _),
                 .cancelTask(_, let conversationID, _, _),
-                .cancelReminder(_, let conversationID, _, _):
+                .cancelReminder(_, let conversationID, _, _),
+                .objects(let conversationID, _, _),
+                .object(_, let conversationID, _, _):
                 conversationID
             }
         }

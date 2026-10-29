@@ -211,6 +211,8 @@ public enum TelegramCommand: String, Sendable, Equatable {
     case unpauseTask = "unpause-task"
     case cancelTask = "cancel-task"
     case cancelReminder = "cancel-reminder"
+    case objects
+    case object
 }
 
 public enum TelegramInboundEvent: Equatable, Sendable {

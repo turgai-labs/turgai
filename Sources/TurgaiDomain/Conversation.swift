@@ -379,6 +379,19 @@ public enum ConversationCommand: Sendable, Equatable {
         participantID: ParticipantID,
         userID: UserID
     )
+    /// The objects the person may read here, each to show.
+    case objects(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    /// One of those objects, by its id, shown as its card.
+    case object(
+        id: String,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
 }
 
 public enum ConversationInput: Sendable, Equatable {
