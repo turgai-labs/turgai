@@ -1123,11 +1123,11 @@ private struct HTMLChunkState {
             }
         case .text(let text):
             for unit in visibleUnits(text) {
-                if visibleLength == maximumLength {
+                if visibleLength > 0, visibleLength + unit.length > maximumLength {
                     split()
                 }
-                current += unit
-                visibleLength += 1
+                current += unit.html
+                visibleLength += unit.length
             }
         }
     }
@@ -1150,27 +1150,42 @@ private struct HTMLChunkState {
         openTags.reversed().map(\.closing).joined()
     }
 
-    private func visibleUnits(_ text: String) -> [String] {
+    /// The text's characters, each as its HTML writes it and as long as Telegram counts it once
+    /// the HTML is read: in UTF-16 units, so an emoji such as 🌧️ is three.
+    private func visibleUnits(_ text: String) -> [(html: String, length: Int)] {
         let characters = Array(text)
-        var units: [String] = []
+        var units: [(html: String, length: Int)] = []
         var index = 0
         while index < characters.count {
             if characters[index] == "&",
                 let end = characters[index...].firstIndex(of: ";")
             {
                 let entity = String(characters[index...end])
-                if ["&amp;", "&lt;", "&gt;", "&quot;"].contains(entity)
-                    || entity.hasPrefix("&#")
-                {
-                    units.append(entity)
+                if ["&amp;", "&lt;", "&gt;", "&quot;"].contains(entity) {
+                    units.append((entity, 1))
+                    index = end + 1
+                    continue
+                }
+                if entity.hasPrefix("&#") {
+                    units.append((entity, Self.length(ofNumeric: entity)))
                     index = end + 1
                     continue
                 }
             }
-            units.append(String(characters[index]))
+            units.append((String(characters[index]), String(characters[index]).utf16.count))
             index += 1
         }
         return units
+    }
+
+    /// How long a numeric entity, `&#39;` or `&#x1F327;`, is once it's read: its character's
+    /// UTF-16 units.
+    private static func length(ofNumeric entity: String) -> Int {
+        let digits = entity.dropFirst(2).dropLast()
+        let value =
+            digits.first == "x" || digits.first == "X"
+            ? UInt32(digits.dropFirst(), radix: 16) : UInt32(digits)
+        return value.flatMap(Unicode.Scalar.init).map { String($0).utf16.count } ?? 1
     }
 }
 

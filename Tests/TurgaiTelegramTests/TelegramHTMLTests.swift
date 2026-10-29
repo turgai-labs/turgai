@@ -69,6 +69,19 @@ struct TelegramHTMLTests {
         )
     }
 
+    /// Telegram counts a message's length in UTF-16 units, as it shows the text: an emoji such as
+    /// 🌧️ is one character and three units, so a chunk holds as many as fit in units.
+    @Test
+    func chunksByTheUnitsTelegramCounts() {
+        #expect(
+            TelegramHTMLFormatter.chunks(markdown: "a🌧️b🌧️", maximumLength: 4) == ["a🌧️", "b🌧️"]
+        )
+        let chunks = TelegramHTMLFormatter.chunks(
+            markdown: String(repeating: "Rain 🌧️ ", count: 1_000), maximumLength: 4_096)
+        #expect(chunks.count > 1)
+        #expect(chunks.allSatisfy { $0.utf16.count <= 4_096 }, "\(chunks.map(\.utf16.count))")
+    }
+
     @Test
     func streamingDraftWaitsForUnfinishedMarkdown() {
         #expect(
