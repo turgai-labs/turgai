@@ -1,20 +1,13 @@
-import SwiftDiagnostics
-import SwiftParser
 import SwiftSyntax
-import SwiftSyntaxBuilder
-import SwiftSyntaxMacroExpansion
-import SwiftSyntaxMacros
 
-/// The macros an object's code can use, which the runtime provides: real Swift macros, expanded
-/// in-process before the code runs. What they expand to calls the runtime, which does the rest:
-/// announcing, subscribing, delivering, and keeping it all across restarts.
+/// The attributes an object's code can use, which the runtime provides: what they mark, the
+/// runtime does the rest, announcing, subscribing, delivering, and keeping it all across restarts.
 public enum RuntimeMacros {
-    /// The attribute of a method the runtime gives a body: announcing an event.
+    /// The attribute of a struct or an enum in the actor: a value of it is an event, which
+    /// `announce(_:)` sends to its subscribers.
     public static let event = "Event"
     /// The attribute of a property whose object the actor follows the events of.
     public static let subscribed = "Subscribed"
-
-    static let all: [String: Macro.Type] = [event: EventMacro.self, subscribed: SubscribedMacro.self]
 
     /// The `@Subscribed` attribute among `attributes`, if it's one of them.
     static func subscribedAttribute(in attributes: AttributeListSyntax) -> AttributeSyntax? {
@@ -23,66 +16,22 @@ public enum RuntimeMacros {
         }
     }
 
-    /// The builtin an `@Event` method's body calls, with the event's name and its values.
+    /// The builtin an event's `announce(_:)` calls, with the event's name and its value.
     static let announce = "__announce"
 
-    /// `code` with the runtime's macros expanded: what runs.
-    static func expanding(_ code: String) -> String {
-        Parser.parse(source: code).expand(macros: all, contextGenerator: { _ in ExpansionContext() }).description
+    /// The function a follower handles the event `name` of an object of type `owner` with, as
+    /// Swift declares it: `onRaiseApproved(_ raiseApproved: Ann.RaiseApproved)`.
+    public static func handler(of name: String, in owner: String) -> String {
+        "\(DynamicObject.handler(for: name))(_ \(name.prefix(1).lowercased() + name.dropFirst()): \(owner).\(name))"
     }
 
-    /// The macros as Swift declares them, for whoever writes an object's code.
+    /// The attributes as code uses them, for whoever writes an object's code: what each marks, and
+    /// the function each calls.
     public static let declared = """
         Macros:
-          @Event: a function without a body. Calling it sends that event to subscribers.
-          @Subscribed: a property holding an object. Each of its events calls this actor's function of the same name, with its values.
+          @Event: a struct or an enum in the actor, whose values are its events. `announce(value)` sends one to the actor's subscribers.
+          @Subscribed: a property the actor follows, holding an object, a Schedule or a Timer.
+            An object: each event it announces calls the function named `on` and the event's type, taking the event's value as its one unlabeled parameter.
+            A Schedule or a Timer: each time it's due, it calls the function named `on`, the property and `Fired`, taking `at date: Date`.
         """
-}
-
-/// `@Event func cupAdded(count: Int)`: calling it announces `cupAdded` with `count`.
-struct EventMacro: BodyMacro {
-    static func expansion(
-        of node: AttributeSyntax, providingBodyFor declaration: some DeclSyntaxProtocol & WithOptionalCodeBlockSyntax,
-        in context: some MacroExpansionContext
-    ) throws -> [CodeBlockItemSyntax] {
-        guard let function = declaration.as(FunctionDeclSyntax.self) else { return [] }
-        let values = function.signature.parameterClause.parameters.map { parameter in
-            let name = (parameter.secondName ?? parameter.firstName).text
-            return "\"\(name)\": \(name)"
-        }
-        let dictionary = values.isEmpty ? "[:]" : "[\(values.joined(separator: ", "))]"
-        return ["\(raw: RuntimeMacros.announce)(\(literal: function.name.text), \(raw: dictionary))"]
-    }
-}
-
-/// `@Subscribed var shop = Shop(id: "shop")`: the property stays as it is. The runtime reads the attribute
-/// from the code, and follows the object the property holds.
-struct SubscribedMacro: PeerMacro {
-    static func expansion(
-        of node: AttributeSyntax, providingPeersOf declaration: some DeclSyntaxProtocol,
-        in context: some MacroExpansionContext
-    ) throws -> [DeclSyntax] {
-        []
-    }
-}
-
-/// What an expansion needs from where it happens: nothing it reports, since the code was checked
-/// before it's expanded.
-private final class ExpansionContext: MacroExpansionContext {
-    private var unique = 0
-
-    func makeUniqueName(_ name: String) -> TokenSyntax {
-        unique += 1
-        return .identifier("__\(name)\(unique)")
-    }
-
-    func diagnose(_ diagnostic: SwiftDiagnostics.Diagnostic) {}
-
-    func location(
-        of node: some SyntaxProtocol, at position: PositionInSyntaxNode, filePathMode: SourceLocationFilePathMode
-    ) -> AbstractSourceLocation? {
-        nil
-    }
-
-    var lexicalContext: [Syntax] { [] }
 }

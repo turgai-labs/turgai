@@ -108,7 +108,6 @@ public final class ScriptInstance {
         {
             problems += CodableValues.problems(
                 in: source.code, type: source.type, declarations: declarations, lasting: source.lasting)
-            problems += ScheduleHandlers.problems(in: source.code, type: source.type, declarations: declarations)
         }
         return problems.sorted { ($0.line ?? 0) < ($1.line ?? 0) }
     }

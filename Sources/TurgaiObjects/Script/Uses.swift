@@ -72,6 +72,8 @@ extension Uses {
     {
         // The runtime's own values, which any object's code can hold: when something's due.
         var schemas: [JSONValue] = [Schedule.jsonSchema, Timer.jsonSchema]
+        // The events, each declared in its actor, `Player.TrackChanged`, and among the values no more.
+        var events: Set<String> = []
         var actors: [String] = []
         if let declared = declaration(ofTools: tools, schemas: &schemas) { actors.append(declared) }
         for object in objects {
@@ -120,18 +122,28 @@ extension Uses {
                 }
                 lines.append("    }")
             }
+            // Each event as the type it is, in the actor that announces it: `Player.TrackChanged`.
             for (name, event) in object.description.events.sorted(by: { $0.key < $1.key }) {
-                // As a function, named as Swift names one: `TrackChanged`'s is `trackChanged`.
-                let function = name.prefix(1).lowercased() + name.dropFirst()
-                guard let parameters = parameters(of: event.data) else { continue }
-                lines.append("    @\(RuntimeMacros.event) func \(function)(\(written(parameters)))")
-                // Its handler takes its values, never the event itself: the types are its values'.
-                if case .object(let values)? = event.data["properties"] { schemas += values.values }
+                events.insert("\(object.type).\(name)")
+                var data = event.data
+                if data["description"] == nil, let description = event.description, case .object(var members) = data {
+                    members["description"] = .string(description)
+                    data = .object(members)
+                }
+                guard let declared = declaration(of: data, named: name) else { continue }
+                let declaredLines = declared.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+                // Marked as an event on the line the type is declared on, after its comment.
+                let start = declaredLines.firstIndex { !$0.hasPrefix("///") } ?? 0
+                for (index, line) in declaredLines.enumerated() {
+                    lines.append("    " + (index == start ? "@\(RuntimeMacros.event) " : "") + line)
+                }
+                // The types of what it holds are values, declared with the others'.
+                schemas += data.children
             }
             lines.append("}")
             actors.append(lines.joined(separator: "\n"))
         }
-        let values = declarations(of: schemas, except: own)
+        let values = declarations(of: schemas, except: own, declared: events)
         return ModuleInterface(
             name: module, source: (actors + (values.isEmpty ? [] : [values])).joined(separator: "\n\n"))
     }
@@ -292,12 +304,15 @@ extension Uses {
         return required ? "" : " = nil"
     }
 
-    static func declarations(of schemas: [JSONValue], except own: String? = nil) -> String {
+    static func declarations(of schemas: [JSONValue], except own: String? = nil, declared: Set<String> = [])
+        -> String
+    {
         var named: [(name: String, schema: JSONValue)] = []
         func collect(_ schema: JSONValue) {
-            // A type of the object `own`, which its code declares itself, isn't declared again.
+            // A type of the object `own`, which its code declares itself, isn't declared again, nor
+            // is one already declared, as an event is in its actor.
             if let name = schema.typeName, own.map({ name != $0 && !name.hasPrefix("\($0).") }) ?? true,
-                !named.contains(where: { $0.name == name })
+                !declared.contains(name), !named.contains(where: { $0.name == name })
             {
                 named.append((name, schema))
             }

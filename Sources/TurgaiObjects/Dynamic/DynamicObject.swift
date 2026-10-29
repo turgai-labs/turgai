@@ -800,16 +800,17 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         }
     }
 
-    /// An event of an object it follows, handled by its method named like it, as any message is:
-    /// journaled, with what failed if it did.
+    /// An event of an object it follows, handled by its method named like it, given the event's
+    /// value, as any message is: journaled, with what failed if it did.
     private func deliver(_ event: String, values: JSONValue, from field: String) async {
         let handler = Self.handler(for: event)
-        let origin = Origin.event(Delivery(message: handler, arguments: values, at: Date()), from: field)
+        let arguments: JSONValue = ["_0": values]
+        let origin = Origin.event(Delivery(message: handler, arguments: arguments, at: Date()), from: field)
         do {
             // An event it follows starts a chain of its own, as a task does, on behalf of whoever
             // made it: its handling enters it.
             _ = try await CallChain.$current.withValue(try await ownChain()) {
-                try await handling(handler, arguments: values, origin: origin)
+                try await handling(handler, arguments: arguments, origin: origin)
             }
         } catch {
             // Journaled as it failed; the next event is delivered all the same.

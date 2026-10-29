@@ -71,7 +71,7 @@ extension ModuleInterface {
 /// An actor a module declares, as its interface shows it: what it takes, what it publishes, what
 /// it announces, and the protocols it declares, each as Swift writes it.
 public struct DeclaredActor: Sendable {
-    /// A method or event, as declared: its parameters, what it returns, and its effects.
+    /// A method, as declared: its parameters, what it returns, and its effects.
     public struct Method: Sendable, Equatable {
         public struct Parameter: Sendable, Equatable {
             /// What it's called with: `nil` for `_`.
@@ -86,11 +86,21 @@ public struct DeclaredActor: Sendable {
         public let effects: String?
     }
 
+    /// An event it announces: a struct or an enum declared in it, marked `@Event`, whose values
+    /// its subscribers are sent.
+    public struct Event: Sendable, Equatable {
+        /// The type's name in the actor, which is the event's: `RaiseApproved`.
+        public let name: String
+        /// What a value of it holds, in a line: a struct's fields, `RaiseApproved(amount: Int)`, or
+        /// an enum's cases, `Raise: .approved(amount: Int) | .denied`.
+        public let written: String
+    }
+
     public let name: String
     public let methods: [String: Method]
     /// What it publishes to be read, by name, with each one's type.
     public let properties: [String: String]
-    public let events: [String: Method]
+    public let events: [String: Event]
     /// The protocols it declares, by the name code writes them with, `Shop.RefundManager`: each
     /// requirement, by name.
     public let protocols: [String: [String: Method]]
@@ -98,7 +108,7 @@ public struct DeclaredActor: Sendable {
     init(_ declaration: ActorDeclSyntax, events marks: Set<String>) {
         var methods: [String: Method] = [:]
         var properties: [String: String] = [:]
-        var events: [String: Method] = [:]
+        var events: [String: Event] = [:]
         var protocols: [String: [String: Method]] = [:]
         func method(_ function: FunctionDeclSyntax) -> Method {
             Method(
@@ -111,20 +121,24 @@ public struct DeclaredActor: Sendable {
                 returns: function.signature.returnClause?.type.trimmedDescription,
                 effects: function.signature.effectSpecifiers?.trimmedDescription)
         }
+        func marked(_ attributes: AttributeListSyntax) -> Bool {
+            attributes.contains { attribute in
+                attribute.as(AttributeSyntax.self).map { marks.contains($0.attributeName.trimmedDescription) } ?? false
+            }
+        }
         for member in declaration.memberBlock.members {
-            if let nested = member.decl.as(ProtocolDeclSyntax.self) {
+            if let event = member.decl.as(StructDeclSyntax.self), marked(event.attributes) {
+                events[event.name.text] = Event(name: event.name.text, written: Self.written(event))
+            } else if let event = member.decl.as(EnumDeclSyntax.self), marked(event.attributes) {
+                events[event.name.text] = Event(name: event.name.text, written: Self.written(event))
+            } else if let nested = member.decl.as(ProtocolDeclSyntax.self) {
                 var requirements: [String: Method] = [:]
                 for requirement in nested.memberBlock.members.compactMap({ $0.decl.as(FunctionDeclSyntax.self) }) {
                     requirements[requirement.name.text] = method(requirement)
                 }
                 protocols["\(declaration.name.text).\(nested.name.text)"] = requirements
             } else if let function = member.decl.as(FunctionDeclSyntax.self) {
-                let method = method(function)
-                let isEvent = function.attributes.contains { attribute in
-                    attribute.as(AttributeSyntax.self).map { marks.contains($0.attributeName.trimmedDescription) }
-                        ?? false
-                }
-                if isEvent { events[function.name.text] = method } else { methods[function.name.text] = method }
+                methods[function.name.text] = method(function)
             } else if let variable = member.decl.as(VariableDeclSyntax.self) {
                 for binding in variable.bindings {
                     if let type = binding.typeAnnotation?.type {
@@ -138,5 +152,25 @@ public struct DeclaredActor: Sendable {
         self.properties = properties
         self.events = events
         self.protocols = protocols
+    }
+
+    /// A struct's stored fields, as its memberwise initializer takes them: `RaiseApproved(amount: Int)`.
+    static func written(_ structure: StructDeclSyntax) -> String {
+        let fields = structure.memberBlock.members.compactMap { $0.decl.as(VariableDeclSyntax.self) }.flatMap {
+            variable in
+            variable.bindings.compactMap { binding -> String? in
+                guard binding.accessorBlock == nil, let type = binding.typeAnnotation?.type else { return nil }
+                return "\(binding.pattern.trimmedDescription): \(type.trimmedDescription)"
+            }
+        }
+        return "\(structure.name.text)(\(fields.joined(separator: ", ")))"
+    }
+
+    /// An enum's cases, each with its values: `Raise: .approved(amount: Int) | .denied`.
+    static func written(_ enumeration: EnumDeclSyntax) -> String {
+        let cases = enumeration.memberBlock.members.compactMap { $0.decl.as(EnumCaseDeclSyntax.self) }.flatMap {
+            $0.elements.map { ".\($0.name.text)\($0.parameterClause?.trimmedDescription ?? "")" }
+        }
+        return "\(enumeration.name.text): \(cases.joined(separator: " | "))"
     }
 }

@@ -14,8 +14,8 @@ enum WriterProbe {
           A website on this machine.
           Methods:
             show(_ page: Page)
-          Events, each received by a function of this name:
-            onButtonPressed(label: String)
+          Events:
+            ButtonPressed(label: String), received by onButtonPressed(_ buttonPressed: Website.ButtonPressed)
         """
     /// What events and subscribing are, then the calls for them, and where the receiving goes.
     static let events = """
@@ -52,7 +52,7 @@ enum WriterProbe {
             interface: ModuleInterface(
                 name: Uses.module,
                 source:
-                    "actor Website {\n    func show(_ page: Page)\n    @Event func buttonPressed(label: String)\n}\n\nstruct Page {\n    var items: [String]\n}"
+                    "actor Website {\n    func show(_ page: Page)\n    @Event struct ButtonPressed: Codable {\n        var label: String\n    }\n}\n\nstruct Page {\n    var items: [String]\n}"
             ),
             objects: [ObjectIdentity(rawValue: "website"): "Website"], lasting: ["Website"])
         var tally: [String: Int] = [:]
@@ -87,7 +87,7 @@ enum WriterProbe {
             let traits = Self.traits(of: final)
             // Saved and following the website: the subscription is what was asked for.
             if case .saved = outcome, traits.contains("follows website"),
-                traits.contains("implements onButtonPressed(label:)")
+                traits.contains("implements onButtonPressed(_:)")
             {
                 saved += 1
             }
@@ -121,7 +121,9 @@ enum WriterProbe {
         {
             traits.append("follows website")
         }
-        if code.contains("func onButtonPressed(label: String)") { traits.append("implements onButtonPressed(label:)") }
+        if code.contains("func onButtonPressed(_ buttonPressed: Website.ButtonPressed)") {
+            traits.append("implements onButtonPressed(_:)")
+        }
         if code.contains("onButtonPressed") || code.contains("handler") || code.contains("callback")
             || code.contains("subscribeTo")
         {

@@ -571,12 +571,10 @@ public actor ObjectSession {
                 declaration.append("  Protocols:\n" + protocols.map { "    \($0)" }.joined(separator: "\n"))
             }
             let announces = actor.events.sorted { $0.key < $1.key }.map {
-                Self.written(DynamicObject.handler(for: $0.key), $0.value)
+                "\($0.value.written), received by \(RuntimeMacros.handler(of: $0.key, in: actor.name))"
             }
             if !announces.isEmpty {
-                declaration.append(
-                    "  Events, each received by a function of this name:\n"
-                        + announces.map { "    \($0)" }.joined(separator: "\n"))
+                declaration.append("  Events:\n" + announces.map { "    \($0)" }.joined(separator: "\n"))
             }
             others.declarations.append(declaration.joined(separator: "\n"))
         }

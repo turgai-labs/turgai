@@ -32,13 +32,13 @@ struct ObjectModuleTests {
         }
     }
 
-    @Test("an @Event function announces, and a @Subscribed property stays as written, on the lines they're written")
+    @Test("an @Event type is announced by its actor, and a @Subscribed property stays as written, on the lines they're written")
     func macrosExpandOnTheirLines() {
         let code =
-            "actor Counter {\n    @Subscribed var shop = Shop(id: \"shop\")\n    @Event func added(count: Int)\n}"
+            "actor Counter {\n    @Subscribed var shop = Shop(id: \"shop\")\n    @Event struct Added {\n        var count: Int\n    }\n}"
         #expect(
-            ObjectModule.expanded(code)
-                == "actor Counter {\n     var shop = Shop(id: \"shop\")\n     func added(count: Int) { __announce(\"added\", [\"count\": count]) }\n}"
+            ObjectModule.expanded(code, type: "Counter")
+                == "actor Counter { init(id: String) {}; func announce(_ event: Added) { __announce(\"Added\", event) };\n     var shop = Shop(id: \"shop\")\n     struct Added: Codable {\n        var count: Int\n    }\n}"
         )
     }
 

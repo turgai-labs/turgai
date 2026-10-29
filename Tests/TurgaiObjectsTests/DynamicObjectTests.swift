@@ -100,8 +100,9 @@ struct DynamicObjectTests {
         }
     }
 
-    /// An object announces an event with an `@Event` method, and one holding it as `@Subscribed`
-    /// gets each, at its method named like the event: delivered as a message, journaled.
+    /// An object announces an event, a value of its `@Event` type, and one holding it as
+    /// `@Subscribed` gets each, at its method named like the event, given the value: delivered as a
+    /// message, journaled.
     @Test(.timeLimit(.minutes(2)))
     func anEventReachesTheObjectFollowingIt() async throws {
         let store = MemoryEventStore()
@@ -109,25 +110,28 @@ struct DynamicObjectTests {
             try await withDynamicNode(joining: shop, store: store) { node in
                 let objects = try await DynamicObjects.resolve(on: node)
                 let counter =
-                    "actor CoffeeCounter {\n    var count = 0\n\n    @Event\n    func cupAdded(count: Int)\n\n    func addCup() {\n        count += 1\n        cupAdded(count: count)\n    }\n}"
+                    "actor CoffeeCounter {\n    var count = 0\n\n    /// A cup was added.\n    @Event\n    struct CupAdded {\n        var count: Int\n    }\n\n    func addCup() {\n        count += 1\n        announce(CupAdded(count: count))\n    }\n}"
                 let logger =
-                    "actor CupLogger {\n    @Subscribed var counter = CoffeeCounter(id: \"coffee-counter\")\n    var lastCount = 0\n\n    func onCupAdded(count: Int) {\n        lastCount = count\n    }\n}"
+                    "actor CupLogger {\n    @Subscribed var counter = CoffeeCounter(id: \"coffee-counter\")\n    var lastCount = 0\n\n    func onCupAdded(_ cupAdded: CoffeeCounter.CupAdded) {\n        lastCount = cupAdded.count\n    }\n}"
                 let counterID = try await objects.create(
                     name: "CoffeeCounter", spec: .new(try Script(code: counter, type: "CoffeeCounter")))
-                // The logger is written against the counter's spec, as Turgai gives it the types there are.
-                let counterSpec = Uses(
-                    interface: ModuleInterface(
-                        name: Uses.module,
-                        source:
-                            "actor CoffeeCounter {\n    init(id: String)\n    func addCup() async throws\n    @Event func cupAdded(count: Int)\n}"
-                    ),
-                    objects: [:], lasting: ["CoffeeCounter"])
-                let loggerID = try await objects.create(
-                    name: "CupLogger", spec: .new(try Script(code: logger, type: "CupLogger", uses: counterSpec)))
                 let coffee = try await DynamicObjects.resolve(on: node).held(counterID)
+                // The logger is written against the counter's spec, as Turgai gives it the types
+                // there are: its event is the type it's declared as, in its actor.
+                let counterSpec = Uses.interface(of: [Uses.Object(description: try await coffee.describe(), publishes: true)])
+                #expect(
+                    counterSpec.source.contains(
+                        "    /// A cup was added.\n    @Event struct CupAdded: Codable {\n        var count: Int\n    }"),
+                    "\(counterSpec.source)")
+                let loggerID = try await objects.create(
+                    name: "CupLogger",
+                    spec: .new(
+                        try Script(
+                            code: logger, type: "CupLogger",
+                            uses: Uses(interface: counterSpec, objects: [:], lasting: ["CoffeeCounter"]))))
                 let log = try await DynamicObjects.resolve(on: node).held(loggerID)
 
-                #expect(try await coffee.describe().events.keys.sorted() == ["cupAdded"])
+                #expect(try await coffee.describe().events.keys.sorted() == ["CupAdded"])
                 // The logger follows once it has subscribed; until then an event isn't missed, but
                 // isn't for it either.
                 try await eventually { try await log.read(property: "lastCount") == 0 }
@@ -143,6 +147,34 @@ struct DynamicObjectTests {
         }
     }
 
+    /// An event can be an enum: its follower is given the case announced, with its values, and
+    /// switches over it, as Swift does.
+    @Test(.timeLimit(.minutes(2)))
+    func anEnumEventReachesItsFollowerAsItsCase() async throws {
+        let store = MemoryEventStore()
+        try await withShopNodes(store: store) { shop, _ in
+            try await withDynamicNode(joining: shop, store: store) { node in
+                let objects = try await DynamicObjects.resolve(on: node)
+                let bell =
+                    "actor Bell {\n    @Event enum Rang {\n        case once\n        case twice(loud: Bool)\n    }\n\n    func ring(loud: Bool) {\n        announce(Rang.twice(loud: loud))\n    }\n}"
+                let bellID = try await objects.create(name: "Bell", spec: .new(try Script(code: bell, type: "Bell")))
+                let ringing = try await DynamicObjects.resolve(on: node).held(bellID)
+                let spec = Uses.interface(of: [Uses.Object(description: try await ringing.describe(), publishes: true)])
+                let listener =
+                    "actor Listener {\n    @Subscribed var bell = Bell(id: \"bell\")\n    var heard = \"\"\n\n    func onRang(_ rang: Bell.Rang) {\n        switch rang {\n        case .once: heard = \"once\"\n        case .twice(let loud): heard = loud ? \"loud\" : \"soft\"\n        }\n    }\n}"
+                let script = try Script(
+                    code: listener, type: "Listener", uses: Uses(interface: spec, objects: [:], lasting: ["Bell"]))
+                #expect(await ScriptInstance.problems(in: script).isEmpty)
+                let listening = try await DynamicObjects.resolve(on: node).held(
+                    try await objects.create(name: "Listener", spec: .new(script)))
+                try await eventually { try await listening.read(property: "heard") == "" }
+                try await Task.sleep(for: .seconds(2))
+                _ = try await ringing.respond("ring", arguments: ["loud": true])
+                try await eventually { try await listening.read(property: "heard") == "loud" }
+            }
+        }
+    }
+
     /// A `@Subscribed` property is given its object as any property is: `Type(id:)`. The attribute
     /// takes nothing.
     @Test
@@ -151,7 +183,7 @@ struct DynamicObjectTests {
             interface: ModuleInterface(
                 name: Uses.module,
                 source:
-                    "actor CoffeeCounter {\n    init(id: String)\n    @Event func cupAdded(count: Int)\n}\n\nactor Clock {\n    init(id: String)\n    @Event func ticked(at: Int)\n}\n\nactor Doorbell {\n    @Event func rang()\n}\n\nactor Ledger {\n    init(id: String)\n    func total() async throws -> Int\n}"
+                    "actor CoffeeCounter {\n    init(id: String)\n    @Event struct CupAdded: Codable {\n        var count: Int\n    }\n}\n\nactor Clock {\n    init(id: String)\n    @Event struct Ticked: Codable {\n        var at: Int\n    }\n}\n\nactor Doorbell {\n    @Event struct Rang: Codable {}\n}\n\nactor Ledger {\n    init(id: String)\n    func total() async throws -> Int\n}"
             ),
             objects: [
                 ObjectIdentity(rawValue: "tea-counter"): "CoffeeCounter",
@@ -159,25 +191,25 @@ struct DynamicObjectTests {
                 ObjectIdentity(rawValue: "ledger"): "Ledger",
             ], lasting: ["CoffeeCounter", "Clock", "Ledger"])
         func refusals(_ property: String) async throws -> [String] {
-            let code = "actor CupLogger {\n    \(property)\n\n    func onCupAdded(count: Int) {}\n}"
+            let code = "actor CupLogger {\n    \(property)\n\n    func onCupAdded(_ cupAdded: CoffeeCounter.CupAdded) {}\n}"
             return await ScriptInstance.problems(in: try Script(code: code, type: "CupLogger", uses: uses)).map(
                 \.message)
         }
         #expect(try await refusals("@Subscribed var tea = CoffeeCounter(id: \"tea-counter\")").isEmpty)
         #expect(
             try await refusals("@Subscribed(id: \"tea-counter\") var tea = CoffeeCounter(id: \"tea-counter\")") == [
-                "@Subscribed takes no arguments: it follows the object its property holds"
+                "@Subscribed takes no arguments: it follows what its property holds"
             ])
         #expect(
             try await refusals("@Subscribed var tea = Clock(id: \"clock\")") == [
-                "no function handles the events of clock: onTicked(at: Int)"
+                "no function handles the events of clock: onTicked(_ ticked: Clock.Ticked)"
             ])
         // It holds the same object after every restart, as any property does, which announces what
         // it follows.
         let bell = try await refusals("@Subscribed var bell: Doorbell?")
         #expect(
             bell == [
-                "no function handles the events of Doorbell: onRang()",
+                "no function handles the events of Doorbell: onRang(_ rang: Doorbell.Rang)",
                 "stored property 'bell' of type 'Doorbell?' holds 'Doorbell', an object whose id doesn't last",
             ], "\(bell)")
         let ledger = try await refusals("@Subscribed var ledger = Ledger(id: \"ledger\")")
@@ -283,10 +315,11 @@ struct DynamicObjectTests {
         let uses = Uses(
             interface: ModuleInterface(
                 name: Uses.module,
-                source: "actor Website {\n    init(id: String)\n    @Event func buttonPressed(label: String)\n}"),
+                source:
+                    "actor Website {\n    init(id: String)\n    @Event struct ButtonPressed: Codable {\n        var label: String\n    }\n}"),
             objects: [ObjectIdentity(rawValue: "website"): "Website"], lasting: ["Website"])
         let code =
-            "actor PressCounter {\n    var presses = 0\n    @Subscribed var website: Website\n\n    func onButtonPressed(label: String) {\n        presses += 1\n    }\n}"
+            "actor PressCounter {\n    var presses = 0\n    @Subscribed var website: Website\n\n    func onButtonPressed(_ buttonPressed: Website.ButtonPressed) {\n        presses += 1\n    }\n}"
         #expect(
             await ScriptInstance.problems(in: try Script(code: code, type: "PressCounter", uses: uses)).map(\.message)
                 == [
@@ -326,7 +359,10 @@ struct DynamicObjectTests {
                 let others = await session.others(except: "Bridge")
                 let shown = others.declarations.joined(separator: "\n")
                 #expect(shown.contains("playing: Track?"))
-                #expect(shown.contains("onTrackChanged(track: Track?)"))
+                #expect(
+                    shown.contains(
+                        "TrackChanged(track: Track?), received by onTrackChanged(_ trackChanged: Player.TrackChanged)"),
+                    "\(shown)")
                 #expect(shown.contains("show(card: Card)"))
                 #expect(
                     others.uses.interface.source.contains(
@@ -344,7 +380,7 @@ struct DynamicObjectTests {
                 guard case .markdown(let card) = try await session.card(try await session.id(written: "player")) else { return }
                 #expect(card.contains("takes:\n- 'play(track: Track) async throws'"))
                 #expect(card.contains("publishes:\n- 'playing: Track? { get async throws }'"))
-                #expect(card.contains("announces:\n- 'trackChanged(track: Track?)'"))
+                #expect(card.contains("announces:\n- 'TrackChanged(track: Track?)'"), "\(card)")
 
                 let code = """
                     actor Bridge {
@@ -353,7 +389,7 @@ struct DynamicObjectTests {
                         var shown = ""
                         var last: Track? = nil
 
-                        func onTrackChanged(track: Track?) async throws {
+                        func onTrackChanged(_ trackChanged: Player.TrackChanged) async throws {
                             let now = try await player.playing
                             shown = now?.title ?? "nothing"
                             last = now
@@ -386,6 +422,11 @@ struct DynamicObjectTests {
                 #expect(try await bridge.read(property: "last") == ["title": "Song"])
                 // What it holds reads back, the object it follows as that object's handle.
                 #expect(try await session.values(try await session.id(written: "bridge")).contains("player: player"))
+                // A made object's card shows its Swift too, as it's written.
+                guard case .markdown(let made) = try await session.card(try await session.id(written: "bridge")) else {
+                    return
+                }
+                #expect(made.hasSuffix("```swift\n\(code)\n```"), "\(made)")
             }
         }
     }
@@ -397,21 +438,47 @@ struct DynamicObjectTests {
         let shop = Uses(
             interface: ModuleInterface(
                 name: Uses.module,
-                source: "actor Shop {\n    init(id: String)\n    @Event func refundRequested(order: Int)\n}"),
+                source:
+                    "actor Shop {\n    init(id: String)\n    @Event struct RefundRequested: Codable {\n        var order: Int\n    }\n}"),
             objects: [ObjectIdentity(rawValue: "shop"): "Shop"], lasting: ["Shop"])
         for (code, refusal) in [
             (
                 "actor Manager {\n    @Subscribed var shop = Shop(id: \"shop\")\n    func refund(order: Int) {}\n}",
-                "no function handles the events of shop: onRefundRequested(order: Int)"
+                "no function handles the events of shop: onRefundRequested(_ refundRequested: Shop.RefundRequested)"
             ),
             (
                 "actor Manager {\n    @Subscribed var shop = Shop(id: \"shop\")\n    func onRefundRequested(id: Int) {}\n}",
-                "the event of shop calls onRefundRequested(order: Int)"
+                "the event of shop calls onRefundRequested(_ refundRequested: Shop.RefundRequested)"
+            ),
+            // Its value, never its fields: the order and the labels are the event's, as Swift has them.
+            (
+                "actor Manager {\n    @Subscribed var shop = Shop(id: \"shop\")\n    func onRefundRequested(order: Int) {}\n}",
+                "the event of shop calls onRefundRequested(_ refundRequested: Shop.RefundRequested)"
             ),
         ] {
             let problems = await ScriptInstance.problems(in: try Script(code: code, type: "Manager", uses: shop))
             #expect(problems.map(\.message) == [refusal])
         }
+    }
+
+    /// An event is a struct or an enum the actor declares, and what's announced is a value of
+    /// one: an `@Event` on anything else is refused, and so is announcing what isn't an event.
+    @Test
+    func anEventIsATypeTheActorDeclares() async throws {
+        func refusals(_ code: String) async throws -> [String] {
+            await ScriptInstance.problems(in: try Script(code: code, type: "Bell")).map(\.message)
+        }
+        let enumeration = try await refusals(
+            "actor Bell {\n    @Event enum Rang {\n        case once\n        case twice(loud: Bool)\n    }\n\n    func ring() {\n        announce(Rang.twice(loud: true))\n    }\n}"
+        )
+        #expect(enumeration.isEmpty, "\(enumeration)")
+        let function = try await refusals("actor Bell {\n    @Event func rang() {}\n}")
+        #expect(
+            function == ["@Event is a struct's or an enum's, declared in `actor Bell`: `announce(_:)` sends a value of it"],
+            "\(function)")
+        let notAnEvent = try await refusals(
+            "actor Bell {\n    struct Rang {}\n\n    func ring() {\n        announce(Rang())\n    }\n}")
+        #expect(notAnEvent.contains { $0.contains("announce") }, "\(notAnEvent)")
     }
 
     /// Objects made here are each listed for the tools that take them, whatever they hold: one
@@ -429,14 +496,19 @@ struct DynamicObjectTests {
                         func requestRaise(amount: Int) {
                             if budget >= amount {
                                 budget -= amount
-                                raiseApproved(amount: amount)
+                                announce(RaiseApproved(amount: amount))
                             } else {
-                                raiseDenied(amount: amount)
+                                announce(RaiseDenied(amount: amount))
                             }
                         }
 
-                        @Event func raiseApproved(amount: Int)
-                        @Event func raiseDenied(amount: Int)
+                        @Event struct RaiseApproved {
+                            var amount: Int
+                        }
+
+                        @Event struct RaiseDenied {
+                            var amount: Int
+                        }
                     }
                     """
                 let annID = try await objects.create(name: "Ann", spec: .new(try Script(code: ann, type: "Ann")))
@@ -454,11 +526,11 @@ struct DynamicObjectTests {
                             try await ann.requestRaise(amount: amount)
                         }
 
-                        func onRaiseApproved(amount: Int) {
-                            pay += amount
+                        func onRaiseApproved(_ raiseApproved: Ann.RaiseApproved) {
+                            pay += raiseApproved.amount
                         }
 
-                        func onRaiseDenied(amount: Int) {}
+                        func onRaiseDenied(_ raiseDenied: Ann.RaiseDenied) {}
                     }
                     """
                 let bobScript = try Script(code: bob, type: "Bob", uses: others.uses)
@@ -470,6 +542,13 @@ struct DynamicObjectTests {
                 }
                 try await eventually { (try? await session.yourObjects())?.map(\.name) == ["ann", "bob"] }
                 #expect(try await session.yourObjects().map(\.name) == ["ann", "bob"])
+                // Each one's card, as `/objects` shows it, shows its own Swift: the followed one's and
+                // the follower's.
+                let shown = ObjectSession(actorSystem: node)
+                for (object, code) in zip(try await shown.yourObjects(), [ann, bob]) {
+                    guard case .markdown(let card) = try await shown.card(object) else { continue }
+                    #expect(card.hasSuffix("```swift\n\(code)\n```"), "\(object): \(card)")
+                }
                 // Using one offers its tools, never another `edit_object` for it alone, which would
                 // stand in for the one that changes any of them.
                 let bobTools = try await session.usingPage(of: try await session.id(written: "bob")).links.map(\.name)

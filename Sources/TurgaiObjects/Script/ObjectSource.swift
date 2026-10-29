@@ -81,7 +81,7 @@ public struct ObjectSource: Codable, Sendable, Equatable {
     let receive: [Message]
     /// The objects it follows, its `@Subscribed` properties, each as a binding.
     public var follows: [Datum] = []
-    /// The events it announces, its `@Event` functions, as Swift declares each.
+    /// The events it announces, its `@Event` types, each as a value of it holds.
     public var announces: [String] = []
     /// The protocols it declares, each with its requirements as Swift declares them.
     public var protocols: [Declared] = []
@@ -183,13 +183,13 @@ extension ObjectSource {
                         }))
                 continue
             }
-            // An event it announces: a function without a body, marked `@Event`.
-            if let function = declaration.as(FunctionDeclSyntax.self), function.body == nil,
-                function.attributes.contains(where: {
-                    $0.as(AttributeSyntax.self)?.attributeName.trimmedDescription == RuntimeMacros.event
-                })
-            {
-                announces.append(function.name.text + function.signature.trimmedDescription)
+            // An event it announces: a struct or an enum marked `@Event`, as a value of it holds.
+            if let event = declaration.as(StructDeclSyntax.self), Self.marksEvent(event.attributes) {
+                announces.append(DeclaredActor.written(event))
+                continue
+            }
+            if let event = declaration.as(EnumDeclSyntax.self), Self.marksEvent(event.attributes) {
+                announces.append(DeclaredActor.written(event))
                 continue
             }
             if let variable = declaration.as(VariableDeclSyntax.self),
@@ -272,6 +272,11 @@ extension ObjectSource {
         self.protocols = protocols
         // What it conforms to, as written: `Actor` is every object's, so it isn't said.
         self.conforms = actor.inheritance?.inheritedTypes.map(\.type.trimmedDescription).filter { $0 != "Actor" } ?? []
+    }
+
+    /// Whether `attributes` mark an event.
+    private static func marksEvent(_ attributes: AttributeListSyntax) -> Bool {
+        attributes.contains { $0.as(AttributeSyntax.self)?.attributeName.trimmedDescription == RuntimeMacros.event }
     }
 
     private static func optional(_ type: TypeSyntax?) -> Bool {

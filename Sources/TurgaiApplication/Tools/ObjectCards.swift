@@ -10,8 +10,8 @@ public enum Card: Codable, Sendable, Equatable {
 
 extension ObjectSession {
     /// The card a person reads for `handle`. While it works, it's what the object is, as YAML:
-    /// its data now, and, for an object made here, its code's view. While it's failing, it's why,
-    /// with its Swift, which is where the failure is.
+    /// its data now, and, for an object made here, its code's view, then its Swift. While it's
+    /// failing, it's why, with its Swift, which is where the failure is.
     public func card(_ handle: ObjectID) async throws -> Card {
         let description = try await described(handle)
         var parts = ["# \(description.type)"]
@@ -30,6 +30,7 @@ extension ObjectSession {
             if let yaml = try? ObjectSource(source).yaml {
                 parts.append("```yaml\n\(yaml)\n```")
             }
+            parts.append("```swift\n\(source.code)\n```")
         } else if let yaml = try Self.spec(of: Uses.Object(description: description, publishes: true)) {
             // A built-in object: its spec, what it takes, publishes and announces.
             parts.append("```yaml\n\(yaml)\n```")
@@ -50,7 +51,7 @@ extension ObjectSession {
             Node("\($0.key): \($0.value) { get async throws }")
         }
         if !publishes.isEmpty { root.append((Node("publishes"), Node(publishes))) }
-        let announces = actor.events.sorted { $0.key < $1.key }.map { Node(written($0.key, $0.value)) }
+        let announces = actor.events.sorted { $0.key < $1.key }.map { Node($0.value.written) }
         if !announces.isEmpty { root.append((Node("announces"), Node(announces))) }
         guard !root.isEmpty else { return nil }
         return try Yams.serialize(node: Node.mapping(Node.Mapping(root)), width: -1, allowUnicode: true)

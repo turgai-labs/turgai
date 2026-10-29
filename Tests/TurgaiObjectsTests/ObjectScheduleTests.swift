@@ -6,8 +6,8 @@ import Testing
 
 @testable import TurgaiObjects
 
-/// An object's `Schedule` and `Timer` properties are due as they say: kept durably while it holds
-/// one, its `on<Property>Fired(at:)` called each time, and ended when it holds none.
+/// An object's `@Subscribed` `Schedule` and `Timer` properties are due as they say: kept durably
+/// while it holds one, its `on<Property>Fired(at:)` called each time, and ended when it holds none.
 @Suite(.serialized, .asAPerson)
 struct ObjectScheduleTests {
     static let uses = Uses(interface: Uses.interface(of: []), objects: [:], lasting: [])
@@ -17,7 +17,7 @@ struct ObjectScheduleTests {
 
         actor Ticker {
             var count = 0
-            var tick: Schedule? = Schedule.every(minutes: 5)
+            @Subscribed var tick: Schedule? = Schedule.every(minutes: 5)
 
             func onTickFired(at time: Date) {
                 count += 1
@@ -33,13 +33,32 @@ struct ObjectScheduleTests {
         await ScriptInstance.problems(in: try Script(code: code, type: "Ticker", uses: uses)).map(\.message)
     }
 
-    /// A schedule's handler is the one its property names, taking when it was due.
+    /// A schedule it follows is handled by the function its property names, taking when it was due.
+    /// One it doesn't follow is only a value it holds: nothing handles it.
     @Test func aScheduleIsHandledByTheFunctionItsPropertyNames() async throws {
         #expect(try await Self.refusals(Self.ticker).isEmpty)
         let unhandled = Self.ticker.replacingOccurrences(of: "func onTickFired(at time: Date)", with: "func tock()")
-        #expect(try await Self.refusals(unhandled) == ["no function handles the schedule `tick`: onTickFired(at: Date)"])
+        #expect(
+            try await Self.refusals(unhandled) == ["no function handles the schedule `tick`: onTickFired(at date: Date)"])
         let mistyped = Self.ticker.replacingOccurrences(of: "onTickFired(at time: Date)", with: "onTickFired(when: Date)")
-        #expect(try await Self.refusals(mistyped) == ["the schedule `tick` calls onTickFired(at: Date)"])
+        #expect(try await Self.refusals(mistyped) == ["the schedule `tick` calls onTickFired(at date: Date)"])
+        // Made from its value, with no type written.
+        let made = Self.ticker.replacingOccurrences(
+            of: "@Subscribed var tick: Schedule? = Schedule.every(minutes: 5)",
+            with: "@Subscribed var tick = Schedule.every(minutes: 5)"
+        ).replacingOccurrences(of: "tick = nil", with: "tick = .every(minutes: 10)")
+        #expect(try await Self.refusals(made).isEmpty)
+        let madeUnhandled = made.replacingOccurrences(of: "func onTickFired(at time: Date)", with: "func tock()")
+        #expect(
+            try await Self.refusals(madeUnhandled) == [
+                "no function handles the schedule `tick`: onTickFired(at date: Date)"
+            ])
+        // Kept, not followed.
+        let kept = Self.ticker.replacingOccurrences(of: "@Subscribed var tick", with: "var tick")
+            .replacingOccurrences(of: "func onTickFired(at time: Date)", with: "func tock()")
+        #expect(try await Self.refusals(kept).isEmpty)
+        #expect(try ObjectShape(try Script(code: Self.ticker, type: "Ticker", uses: Self.uses)).schedules == ["tick"])
+        #expect(try ObjectShape(try Script(code: kept, type: "Ticker", uses: Self.uses)).schedules.isEmpty)
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -76,7 +95,7 @@ struct ObjectScheduleTests {
 
         actor Reminder {
             var count = 0
-            var reminder = Timer.at(Date(timeIntervalSince1970: 0))
+            @Subscribed var reminder = Timer.at(Date(timeIntervalSince1970: 0))
 
             func onReminderFired(at time: Date) {
                 count += 1

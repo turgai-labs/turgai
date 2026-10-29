@@ -285,7 +285,7 @@ struct ObjectProtocolTests {
         let ann = try ObjectSource(
             try Script(
                 code:
-                    "actor Ann: Shop.RefundManager {\n    private var notes = \"\"\n    @Subscribed var website = Website(id: \"website\")\n    @Event func decided(order: Int)\n\n    func refundRequested(order: Int, total: Double) async throws {}\n}",
+                    "actor Ann: Shop.RefundManager {\n    private var notes = \"\"\n    @Subscribed var website = Website(id: \"website\")\n    @Event struct Decided {\n        var order: Int\n    }\n\n    func refundRequested(order: Int, total: Double) async throws {}\n}",
                 type: "Ann")
         ).yaml
         #expect(
@@ -295,7 +295,7 @@ struct ObjectProtocolTests {
         #expect(ann.contains("conforms:\n- Shop.RefundManager"), "\(ann)")
         #expect(ann.contains("data: |\n  private notes = \"\""), "\(ann)")
         #expect(ann.contains("follows: |\n  website = Website(id: \"website\")"), "\(ann)")
-        #expect(ann.contains("announces:\n- 'decided(order: Int)'"), "\(ann)")
+        #expect(ann.contains("announces:\n- 'Decided(order: Int)'"), "\(ann)")
         #expect(!ann.contains("helpers"), "\(ann)")
     }
 }

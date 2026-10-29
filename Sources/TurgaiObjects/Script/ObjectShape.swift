@@ -195,26 +195,35 @@ public struct ObjectShape: Sendable, Equatable {
         if named.count == 1 { return named[0] }
         return named.first { $0.takes(given, byNames: false) } ?? named.first { $0.takes(given, byNames: true) }
     }
-    /// What it announces: its `@Event` methods, which nobody else can call.
-    public private(set) var events: [Message]
+    /// An event it announces: a struct or an enum in it marked `@Event`, by the type's name, with
+    /// what its `///` comment says it is.
+    public struct Event: Sendable, Equatable {
+        public let name: String
+        public let summary: String?
+    }
+
+    /// What it announces: its `@Event` types, whose values `announce(_:)` sends.
+    public private(set) var events: [Event]
     /// The fields whose object it follows the events of: its `@Subscribed` properties.
     public let subscriptions: [String]
     /// Whether it declares `_check()`, which says which of its checks its data breaks, if any.
     public let checks: Bool
 
-    /// The fields that are schedules, as the checker resolved their types: each `Schedule` it
-    /// holds, or optional one, is due as it says.
-    public var schedules: [String] { fields(of: "\(Schedule.self)") }
+    /// The schedules it follows, as the checker resolved their types: each `@Subscribed` `Schedule`
+    /// it holds, or optional one, is due as it says.
+    public var schedules: [String] { subscribed(to: "\(Schedule.self)") }
 
-    /// The fields that are timers: each `Timer` it holds, or optional one, is due once, at its date.
-    public var timers: [String] { fields(of: "\(Timer.self)") }
+    /// The timers it follows: each `@Subscribed` `Timer` it holds, or optional one, is due once, at
+    /// its date.
+    public var timers: [String] { subscribed(to: "\(Timer.self)") }
 
-    /// The fields of `type`, or optional ones of it, as the checker resolved their types.
-    private func fields(of type: String) -> [String] {
+    /// Its `@Subscribed` fields of `type`, or optional ones of it, as the checker resolved their types.
+    private func subscribed(to type: String) -> [String] {
         fields.filter { field in
+            guard subscriptions.contains(field.name) else { return false }
             switch field.resolved {
-            case .named(let name, _), .optional(.named(let name, _)): name == type
-            default: false
+            case .named(let name, _), .optional(.named(let name, _)): return name == type
+            default: return false
             }
         }.map(\.name)
     }
@@ -226,7 +235,12 @@ public struct ObjectShape: Sendable, Equatable {
 
     /// A declaration's `///` comment, as one line.
     static func summary(of function: FunctionDeclSyntax) -> String? {
-        let lines = function.leadingTrivia.compactMap { piece -> String? in
+        summary(of: function.leadingTrivia)
+    }
+
+    /// The `///` comment in `trivia`, as one line.
+    static func summary(of trivia: Trivia) -> String? {
+        let lines = trivia.compactMap { piece -> String? in
             if case .docLineComment(let text) = piece { return text.dropFirst(3).trimmingCharacters(in: .whitespaces) }
             return nil
         }
@@ -332,7 +346,6 @@ public struct ObjectShape: Sendable, Equatable {
             return field
         }
         messages = messages.map { Self.typed($0, by: methods, in: declarations) }
-        events = events.map { Self.typed($0, by: methods, in: declarations) }
     }
 
     /// `message` with its parameters' and reply's types as the checker resolved them.
@@ -390,11 +403,19 @@ public struct ObjectShape: Sendable, Equatable {
             })
         var fields: [Field] = []
         var messages: [Message] = []
-        var events: [Message] = []
+        var events: [Event] = []
         var subscriptions: [String] = []
         var checks = false
         for member in actor.members.members {
             if let function = member.decl.as(FunctionDeclSyntax.self), function.name.text == "_check" { checks = true }
+            if let structure = member.decl.as(StructDeclSyntax.self), Self.carries(structure.attributes, RuntimeMacros.event) {
+                events.append(Event(name: structure.name.text, summary: Self.summary(of: structure.leadingTrivia)))
+            }
+            if let enumeration = member.decl.as(EnumDeclSyntax.self),
+                Self.carries(enumeration.attributes, RuntimeMacros.event)
+            {
+                events.append(Event(name: enumeration.name.text, summary: Self.summary(of: enumeration.leadingTrivia)))
+            }
             if let variable = member.decl.as(VariableDeclSyntax.self) {
                 let constant = variable.bindingSpecifier.tokenKind == .keyword(.let)
                 for binding in variable.bindings {
@@ -432,12 +453,6 @@ public struct ObjectShape: Sendable, Equatable {
                     specifiers?.asyncSpecifier != nil ? .async : nil, specifiers?.throwsClause != nil ? .throws : nil,
                 ].compactMap { $0 }
                 // What it says it does, or else what its code shows it does.
-                // An event is announced by calling it, from its own code: it isn't a message.
-                if Self.carries(function.attributes, RuntimeMacros.event) {
-                    message.summary = Self.summary(of: function)
-                    events.append(message)
-                    continue
-                }
                 message.summary = Self.summary(of: function) ?? Self.effects(of: function, holding: held)
                 // What it calls on each parameter: what an object it's given is known by.
                 for parameter in parameters {

@@ -78,9 +78,6 @@ public struct Script: Codable, Sendable, Equatable {
             Parser.parse(source: code).statements.compactMap { $0.item.as(ActorDeclSyntax.self)?.name.text })
     }
 
-    /// Its code with the runtime's macros expanded: what runs, with the module it imports.
-    public var expanded: String { RuntimeMacros.expanding(code) }
-
     /// Whether, in the state named `state`, it takes `message`, as its YAML view reads its states:
     /// code it can't read as states takes every message.
     public func takes(_ message: String, in state: String?) -> Bool {
@@ -124,7 +121,7 @@ public struct Script: Codable, Sendable, Equatable {
         }
         // As it runs: a `@Subscribed` property's object is made by its type there.
         let made = Made()
-        made.walk(Parser.parse(source: expanded))
+        made.walk(Parser.parse(source: ObjectModule.expanded(code, type: type)))
         var seen: Set<String> = []
         return made.made.filter { !made.declared.contains($0) && seen.insert($0).inserted }
     }
@@ -200,10 +197,13 @@ extension Script {
             actions[shape.actionKey(of: message)] = ObjectAction(
                 description: message.summary, input: message.input, output: message.output, effects: message.effects)
         }
+        // Each event as its type is declared: its value is what subscribers are sent.
         var events: [String: ObjectEvent] = [:]
         for event in shape.events {
-            events[event.name] = ObjectEvent(
-                description: event.summary, data: event.input ?? ["type": "object", "properties": [:]])
+            let data =
+                declarations.map { SwiftTypeSchema.schema(of: .named("\(type).\(event.name)", arguments: []), in: $0) }
+                ?? ["type": "object", "properties": [:]]
+            events[event.name] = ObjectEvent(description: event.summary, data: data)
         }
         // The protocols it declares within it, each requirement described as an action is.
         var protocols: [String: ObjectProtocol] = [:]
