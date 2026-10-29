@@ -92,18 +92,30 @@ public final class ScriptInstance {
     /// What the Swift compiler would refuse in `source` before it runs, every one at its line, as
     /// it lists them, against the module it imports.
     public static func problems(in source: Script) async -> [CodeProblem] {
+        // What it's given has to be Swift, or nothing it's checked against is there: a problem in
+        // it is Turgai's own, never the code's, and the code isn't checked as if it weren't.
+        let module = files(source)
+        for given in ObjectModule(source).given {
+            if let problem = SwiftCheck.problems(in: given.name, of: module).first {
+                return [
+                    CodeProblem(
+                        "Turgai couldn't declare what this code is written against: \(given.name), line \(problem.line): \(problem.message)"
+                    )
+                ]
+            }
+        }
         // How its stored properties get their values comes first: the rest of its Swift is
         // checked as an object made with its id.
         let starting = StartingValues.problems(in: source.code, type: source.type)
         guard starting.isEmpty else { return starting.sorted { ($0.line ?? 0) < ($1.line ?? 0) } }
-        let swift = SwiftCheck.problems(in: ObjectModule.objectFile, of: files(source)).map { diagnostic in
+        let swift = SwiftCheck.problems(in: ObjectModule.objectFile, of: module).map { diagnostic in
             CodeProblem(line: diagnostic.line, span: diagnostic.code, diagnostic.message)
         }
         // And how it uses the runtime's macros, which are Turgai's, as Turgai has them, the
         // objects it names, which exist, and what it sends and keeps, which the runtime keeps as data.
         var problems = swift + RuntimeMacros.problems(in: source) + ExistingObjects.problems(in: source)
         if swift.isEmpty,
-            let declarations = SwiftCheck.declarations(of: source.type, in: ObjectModule.objectFile, of: files(source))
+            let declarations = SwiftCheck.declarations(of: source.type, in: ObjectModule.objectFile, of: module)
                 .declarations
         {
             problems += CodableValues.problems(

@@ -412,13 +412,25 @@ extension Uses {
             }
             return (parameter.name, text)
         }
-        guard said.count > 1 else { return said.map { "\(indent)/// - Parameter \($0.0): \($0.1)" } }
-        return ["\(indent)/// - Parameters:"] + said.map { "\(indent)///   - \($0.0): \($0.1)" }
+        guard said.count > 1 else {
+            return said.flatMap { commented($0.1, indent: indent, first: "- Parameter \($0.0): ", rest: "  ") }
+        }
+        return ["\(indent)/// - Parameters:"]
+            + said.flatMap { commented($0.1, indent: indent, first: "  - \($0.0): ", rest: "    ") }
     }
 
     static func documented(_ description: JSONValue?, indent: String) -> [String] {
         guard case .string(let text)? = description, !text.isEmpty else { return [] }
-        return ["\(indent)/// \(text)"]
+        return commented(text, indent: indent)
+    }
+
+    /// `text` as a `///` comment, each of its lines one: a description written over several lines
+    /// stays a comment, never Swift. The first line starts with `first`, the others with `rest`.
+    private static func commented(_ text: String, indent: String, first: String = "", rest: String = "") -> [String] {
+        text.split(separator: "\n", omittingEmptySubsequences: false).enumerated().map { index, line in
+            let written = (index == 0 ? first : rest) + line
+            return written.trimmingCharacters(in: .whitespaces).isEmpty ? "\(indent)///" : "\(indent)/// \(written)"
+        }
     }
 }
 

@@ -24,15 +24,32 @@ func withClusterSystem<Result>(
         installing(&settings)
     }
     let virtualNode = hostsVirtualActors ? await VirtualNode(actorSystem: system) : nil
-    defer {
-        _ = virtualNode
-        _ = try? system.shutdown()
+    let result: Result
+    do {
+        if let other {
+            system.cluster.join(endpoint: other.cluster.endpoint)
+            try await other.cluster.waitFor(system.cluster.node, .up, within: .seconds(10))
+        }
+        result = try await body(system)
+    } catch {
+        await shutDown(system, keeping: virtualNode)
+        throw error
     }
-    if let other {
-        system.cluster.join(endpoint: other.cluster.endpoint)
-        try await other.cluster.waitFor(system.cluster.node, .up, within: .seconds(10))
+    await shutDown(system, keeping: virtualNode)
+    return result
+}
+
+/// Shuts `system` down on a thread of its own, holding `virtualNode` until it has: its shutdown
+/// waits on its event loops and on work of its own, so on one of Swift's concurrency threads it
+/// holds that thread, and enough tests ending at once would hold every one, with none left to
+/// finish any of them.
+private func shutDown(_ system: ClusterSystem, keeping virtualNode: VirtualNode?) async {
+    await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
+        Thread.detachNewThread {
+            withExtendedLifetime(virtualNode) { _ = try? system.shutdown() }
+            finished.resume()
+        }
     }
-    return try await body(system)
 }
 
 /// Settings for every node in these tests, journaled to `store`, all able to host the journal

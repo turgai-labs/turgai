@@ -39,9 +39,9 @@ struct ObjectScheduleTests {
         #expect(try await Self.refusals(Self.ticker).isEmpty)
         let unhandled = Self.ticker.replacingOccurrences(of: "func onTickFired(at time: Date)", with: "func tock()")
         #expect(
-            try await Self.refusals(unhandled) == ["no function handles the schedule `tick`: onTickFired(at date: Date)"])
+            try await Self.refusals(unhandled) == ["no function handles the events of tick: onTickFired(at: Date)"])
         let mistyped = Self.ticker.replacingOccurrences(of: "onTickFired(at time: Date)", with: "onTickFired(when: Date)")
-        #expect(try await Self.refusals(mistyped) == ["the schedule `tick` calls onTickFired(at date: Date)"])
+        #expect(try await Self.refusals(mistyped) == ["the event of tick calls onTickFired(at: Date)"])
         // Made from its value, with no type written.
         let made = Self.ticker.replacingOccurrences(
             of: "@Subscribed var tick: Schedule? = Schedule.every(minutes: 5)",
@@ -51,7 +51,7 @@ struct ObjectScheduleTests {
         let madeUnhandled = made.replacingOccurrences(of: "func onTickFired(at time: Date)", with: "func tock()")
         #expect(
             try await Self.refusals(madeUnhandled) == [
-                "no function handles the schedule `tick`: onTickFired(at date: Date)"
+                "no function handles the events of tick: onTickFired(at: Date)"
             ])
         // Kept, not followed.
         let kept = Self.ticker.replacingOccurrences(of: "@Subscribed var tick", with: "var tick")

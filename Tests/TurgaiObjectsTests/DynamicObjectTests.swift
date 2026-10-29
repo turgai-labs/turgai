@@ -198,7 +198,7 @@ struct DynamicObjectTests {
         #expect(try await refusals("@Subscribed var tea = CoffeeCounter(id: \"tea-counter\")").isEmpty)
         #expect(
             try await refusals("@Subscribed(id: \"tea-counter\") var tea = CoffeeCounter(id: \"tea-counter\")") == [
-                "@Subscribed takes no arguments: it follows what its property holds"
+                "@Subscribed takes no arguments: it follows the object its property holds"
             ])
         #expect(
             try await refusals("@Subscribed var tea = Clock(id: \"clock\")") == [
@@ -479,6 +479,64 @@ struct DynamicObjectTests {
         let notAnEvent = try await refusals(
             "actor Bell {\n    struct Rang {}\n\n    func ring() {\n        announce(Rang())\n    }\n}")
         #expect(notAnEvent.contains { $0.contains("announce") }, "\(notAnEvent)")
+    }
+
+    /// What an object says it is can run over lines: in the spec other code is checked against,
+    /// it stays a comment, and the objects after it are still there to be followed and checked.
+    @Test
+    func aDescriptionOverLinesStaysAComment() async throws {
+        let announcer = try Script(
+            code: "actor Check {\n    @Event struct Morning {\n        var temperature: Double\n    }\n}", type: "Check"
+        ).spec(description: "Checks the weather.\n\nHolds:\n• place: \"Haar\"\nConstraints:\n- it says nothing else")
+        let after = try Script(code: "actor Later {\n    func ping() {}\n}", type: "Later").spec(description: nil)
+        let interface = Uses.interface(of: [
+            Uses.Object(description: announcer, publishes: true), Uses.Object(description: after, publishes: true),
+        ])
+        let uses = Uses(interface: interface, objects: [ObjectIdentity(rawValue: "check"): "Check"], lasting: ["Check"])
+        func refusals(_ handler: String) async throws -> [String] {
+            let code =
+                "actor Follower {\n    @Subscribed var check = Check(id: \"check\")\n\n    \(handler) {}\n}"
+            return await ScriptInstance.problems(in: try Script(code: code, type: "Follower", uses: uses)).map(\.message)
+        }
+        #expect(try await refusals("func onMorning(_ morning: Check.Morning)").isEmpty, "\(interface.source)")
+        #expect(
+            try await refusals("func onMorning(_ text: String)") == [
+                "the event of check calls onMorning(_ morning: Check.Morning)"
+            ])
+    }
+
+    /// What code is checked against is Swift, or the code isn't checked: a spec that isn't is
+    /// Turgai's problem, said as one, never passed.
+    @Test
+    func codeIsntCheckedAgainstASpecThatIsntSwift() async throws {
+        let uses = Uses(
+            interface: ModuleInterface(name: Uses.module, source: "Holds:\n• nothing\nactor Check {\n}"),
+            objects: [:], lasting: [])
+        let problems = await ScriptInstance.problems(
+            in: try Script(code: "actor A {\n    func f() {\n        let x: Int = \"s\"\n        _ = x\n    }\n}", type: "A", uses: uses)
+        ).map(\.message)
+        #expect(problems.count == 1, "\(problems)")
+        #expect(problems.first?.hasPrefix("Turgai couldn't declare what this code is written against: Objects.swift") == true)
+    }
+
+    /// `@Subscribed` is a stored property's: on anything else it follows nothing, so it's refused.
+    @Test
+    func subscribedIsAStoredPropertys() async throws {
+        let uses = Uses(
+            interface: ModuleInterface(
+                name: Uses.module,
+                source: "actor Check {\n    init(id: String)\n    @Event struct Morning: Codable {\n        var temperature: Double\n    }\n}"),
+            objects: [ObjectIdentity(rawValue: "check"): "Check"], lasting: ["Check"])
+        func refusals(_ member: String) async throws -> [String] {
+            let code = "actor Follower {\n    var heard = 0\n\n    \(member)\n}"
+            return await ScriptInstance.problems(in: try Script(code: code, type: "Follower", uses: uses)).map(\.message)
+        }
+        let refusal = "@Subscribed is a stored property's, in `actor Follower`: it follows what the property holds"
+        #expect(
+            try await refusals(
+                "@Subscribed(to: \"Check.morning\")\n    func onMorning(_ morning: Check.Morning) {\n        heard += 1\n    }"
+            ) == [refusal])
+        #expect(try await refusals("@Subscribed var check: Int { 1 }") == [refusal])
     }
 
     /// Objects made here are each listed for the tools that take them, whatever they hold: one

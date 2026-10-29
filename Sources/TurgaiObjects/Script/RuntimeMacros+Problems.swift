@@ -22,10 +22,12 @@ extension RuntimeMacros {
             first
         }
         let methods = actor.memberBlock.members.compactMap { $0.decl.as(FunctionDeclSyntax.self) }
-        var problems = Self.misplacedEvents(in: file, actor: actor, line: line)
+        var problems = Self.misplaced(in: file, actor: actor, line: line)
         for member in actor.memberBlock.members {
+            // A stored property's: one worked out from others is misplaced, said above.
             guard let variable = member.decl.as(VariableDeclSyntax.self),
                 let attribute = subscribedAttribute(in: variable.attributes),
+                variable.bindings.allSatisfy({ $0.accessorBlock == nil }),
                 let binding = variable.bindings.first
             else { continue }
             let written = binding.typeAnnotation.map {
@@ -37,111 +39,108 @@ extension RuntimeMacros {
                 problems.append(
                     CodeProblem(
                         line: line(variable), span: attribute.trimmedDescription,
-                        "@\(subscribed) takes no arguments: it follows what its property holds"))
+                        "@\(subscribed) takes no arguments: it follows the object its property holds"))
                 continue
             }
-            // A schedule or a timer it follows is due as it says: each time, the function named
-            // by its property is called, with when it was due.
-            if let due = Self.due(written: written, value: binding.initializer?.value) {
-                let handler = Schedule.handler(for: property)
-                let wanted = "\(handler)(at date: Date)"
-                guard let function = methods.first(where: { $0.name.text == handler }) else {
+            // What it follows, and the function each of its events calls: a Schedule or a Timer
+            // announces it's due, to the function its property names; an object announces its
+            // events, each to the function named like it.
+            let object: String
+            let handlers: [Handler]
+            if Self.isDue(written: written, value: binding.initializer?.value) {
+                object = property
+                let name = Schedule.handler(for: property)
+                handlers = [
+                    Handler(name: name, written: "\(name)(at: Date)") { parameters in
+                        parameters.count == 1 && parameters.first?.firstName.text == "at"
+                            && parameters.first?.type.trimmedDescription == "Date"
+                    }
+                ]
+            } else {
+                // An object that exists, which it holds: as written, or as made.
+                let made = binding.initializer?.value.as(FunctionCallExprSyntax.self)?.calledExpression.as(
+                    DeclReferenceExprSyntax.self)?.baseName.text
+                guard let type = [written, made].compactMap({ $0 }).first(where: { objects[$0] != nil }),
+                    let followed = objects[type]
+                else {
+                    let held =
+                        written ?? binding.initializer?.value.trimmedDescription ?? binding.pattern.trimmedDescription
                     problems.append(
                         CodeProblem(
                             line: line(variable), span: variable.trimmedDescription,
-                            "no function handles the \(due) `\(property)`: \(wanted)"))
+                            "@\(subscribed) should hold the object that sends the events, while `\(held)` is no object"))
                     continue
                 }
-                let parameters = function.signature.parameterClause.parameters
-                guard parameters.count == 1, let at = parameters.first, at.firstName.text == "at",
-                    at.type.trimmedDescription == "Date"
-                else {
+                guard !followed.events.isEmpty else {
                     problems.append(
                         CodeProblem(
-                            line: line(function.name),
-                            span: "func \(handler)\(function.signature.parameterClause.trimmedDescription)",
-                            "the \(due) `\(property)` calls \(wanted)"))
+                            line: line(variable), span: variable.trimmedDescription,
+                            "@\(subscribed) should hold an object that announces events, while `\(type)` announces none"))
                     continue
                 }
-                continue
+                object = script.uses.ids(of: type).first?.rawValue ?? type
+                let owner = followed.name
+                // Each takes its event's value, and nothing else.
+                handlers = followed.events.keys.sorted().map { event in
+                    Handler(name: DynamicObject.handler(for: event), written: handler(of: event, in: owner)) {
+                        parameters in
+                        parameters.count == 1 && parameters.first?.firstName.text == "_"
+                            && parameters.first?.type.trimmedDescription == "\(owner).\(event)"
+                    }
+                }
             }
-            // What it follows is an object that exists, which it holds: as written, or as made.
-            let made = binding.initializer?.value.as(FunctionCallExprSyntax.self)?.calledExpression.as(
-                DeclReferenceExprSyntax.self)?.baseName.text
-            guard let type = [written, made].compactMap({ $0 }).first(where: { objects[$0] != nil }),
-                let followed = objects[type]
-            else {
-                let held =
-                    written ?? binding.initializer?.value.trimmedDescription ?? binding.pattern.trimmedDescription
-                problems.append(
-                    CodeProblem(
-                        line: line(variable), span: variable.trimmedDescription,
-                        "@\(subscribed) should hold the object that sends the events, a Schedule or a Timer, while `\(held)` is none"))
-                continue
-            }
-            let events = Dictionary(followed.events.map { (DynamicObject.handler(for: $0.key), $0.value) }) {
-                first, _ in first
-            }
-            let owner = followed.name
-            guard !events.isEmpty else {
-                problems.append(
-                    CodeProblem(
-                        line: line(variable), span: variable.trimmedDescription,
-                        "@\(subscribed) should hold an object that announces events, while `\(type)` announces none"))
-                continue
-            }
-            let object = script.uses.ids(of: type).first?.rawValue ?? type
-            let handling = methods.filter { events[$0.name.text] != nil }
+            let handling = methods.filter { method in handlers.contains { $0.name == method.name.text } }
             guard !handling.isEmpty else {
-                let listed = events.sorted { $0.key < $1.key }.map { handler(of: $0.value.name, in: owner) }.joined(
-                    separator: ", ")
                 problems.append(
                     CodeProblem(
                         line: line(variable), span: variable.trimmedDescription,
-                        "no function handles the events of \(object): \(listed)"))
+                        "no function handles the events of \(object): \(handlers.map(\.written).joined(separator: ", "))"
+                    ))
                 continue
             }
-            // Each takes its event's value, and nothing else.
             for method in handling {
-                guard let event = events[method.name.text] else { continue }
-                let parameters = method.signature.parameterClause.parameters
-                guard parameters.count == 1, let value = parameters.first, value.firstName.text == "_",
-                    value.type.trimmedDescription == "\(owner).\(event.name)"
-                else {
-                    problems.append(
-                        CodeProblem(
-                            line: line(method.name),
-                            span: "func \(method.name.text)\(method.signature.parameterClause.trimmedDescription)",
-                            "the event of \(object) calls \(handler(of: event.name, in: owner))"))
-                    continue
-                }
+                guard let handler = handlers.first(where: { $0.name == method.name.text }),
+                    !handler.takes(method.signature.parameterClause.parameters)
+                else { continue }
+                problems.append(
+                    CodeProblem(
+                        line: line(method.name),
+                        span: "func \(method.name.text)\(method.signature.parameterClause.trimmedDescription)",
+                        "the event of \(object) calls \(handler.written)"))
             }
         }
         return problems
     }
 
-    /// What a `@Subscribed` property is due as, `schedule` or `timer`, when it holds a `Schedule` or
-    /// a `Timer`, as its type is written or its value is made: `Schedule.daily(…)`.
-    private static func due(written: String?, value: ExprSyntax?) -> String? {
+    /// A function an event calls: its name, as Swift declares it, and whether what it's declared to
+    /// take is what the event gives.
+    private struct Handler {
+        let name: String
+        let written: String
+        let takes: (FunctionParameterListSyntax) -> Bool
+    }
+
+    /// Whether a `@Subscribed` property holds a `Schedule` or a `Timer`, as its type is written or its
+    /// value is made: `Schedule.daily(…)`.
+    private static func isDue(written: String?, value: ExprSyntax?) -> Bool {
         let made =
             (value?.as(FunctionCallExprSyntax.self)?.calledExpression ?? value)?.as(MemberAccessExprSyntax.self)?.base?
             .trimmedDescription
-        switch written ?? made {
-        case "\(Schedule.self)": return "schedule"
-        case "\(Timer.self)": return "timer"
-        default: return nil
-        }
+        return ["\(Schedule.self)", "\(Timer.self)"].contains(written ?? made ?? "")
     }
 
-    /// Each `@Event` that isn't a struct or an enum in the actor `actor`, where an event is
-    /// declared and announced.
-    private static func misplacedEvents(
+    /// Each of the runtime's attributes where it marks nothing it knows: an `@Event` that isn't a
+    /// struct or an enum in the actor `actor`, where an event is declared and announced, and a
+    /// `@Subscribed` that isn't on one of its stored properties, whose value it follows.
+    private static func misplaced(
         in file: SourceFileSyntax, actor: ActorDeclSyntax, line: (AttributeSyntax) -> Int
     ) -> [CodeProblem] {
         final class Marks: SyntaxVisitor {
             var found: [AttributeSyntax] = []
             override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
-                if node.attributeName.trimmedDescription == RuntimeMacros.event { found.append(node) }
+                if [RuntimeMacros.event, RuntimeMacros.subscribed].contains(node.attributeName.trimmedDescription) {
+                    found.append(node)
+                }
                 return .skipChildren
             }
         }
@@ -150,14 +149,21 @@ extension RuntimeMacros {
         let declared = Set(ObjectModule.events(in: actor))
         return marks.found.compactMap { attribute in
             let declaration = attribute.parent?.parent
+            // Declared in the actor itself, as one of its members.
+            let inActor =
+                declaration?.parent?.parent?.parent?.parent?.as(ActorDeclSyntax.self)?.name.text == actor.name.text
+            let written = declaration.map { $0.trimmedDescription.split(separator: "\n").first.map(String.init) ?? "" }
+            if attribute.attributeName.trimmedDescription == subscribed {
+                let stored =
+                    declaration?.as(VariableDeclSyntax.self)?.bindings.allSatisfy { $0.accessorBlock == nil } == true
+                if inActor, stored { return nil }
+                return CodeProblem(
+                    line: line(attribute), span: written,
+                    "@\(subscribed) is a stored property's, in `actor \(actor.name.text)`: it follows what the property holds")
+            }
             let name =
                 declaration?.as(StructDeclSyntax.self)?.name.text ?? declaration?.as(EnumDeclSyntax.self)?.name.text
-            if let name, declared.contains(name),
-                declaration?.parent?.parent?.parent?.parent?.as(ActorDeclSyntax.self)?.name.text == actor.name.text
-            {
-                return nil
-            }
-            let written = declaration.map { $0.trimmedDescription.split(separator: "\n").first.map(String.init) ?? "" }
+            if let name, declared.contains(name), inActor { return nil }
             return CodeProblem(
                 line: line(attribute), span: written,
                 "@\(event) is a struct's or an enum's, declared in `actor \(actor.name.text)`: `announce(_:)` sends a value of it")

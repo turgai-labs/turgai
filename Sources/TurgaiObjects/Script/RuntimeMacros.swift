@@ -25,13 +25,12 @@ public enum RuntimeMacros {
         "\(DynamicObject.handler(for: name))(_ \(name.prefix(1).lowercased() + name.dropFirst()): \(owner).\(name))"
     }
 
-    /// The attributes as code uses them, for whoever writes an object's code: what each marks, and
-    /// the function each calls.
+    /// What events are, and the attributes that make them, for whoever writes an object's code.
     public static let declared = """
-        Macros:
-          @Event: a struct or an enum in the actor, whose values are its events. `announce(value)` sends one to the actor's subscribers.
-          @Subscribed: a property the actor follows, holding an object, a Schedule or a Timer.
-            An object: each event it announces calls the function named `on` and the event's type, taking the event's value as its one unlabeled parameter.
-            A Schedule or a Timer: each time it's due, it calls the function named `on`, the property and `Fired`, taking `at date: Date`.
+        Events:
+          An object announces events. Objects that follow it receive them.
+          @Event marks a struct or enum in the actor. Its values are the events. The actor sends one with announce.
+          @Subscribed marks a stored property that holds another object. The actor follows that object.
+          Each event it receives calls its function named on plus the event's name, with the event.
         """
 }
