@@ -102,9 +102,7 @@ struct EvalNode: Sendable {
         let session = ObjectSession(
             actorSystem: actorSystem, objectCatalog: catalog, agents: offered, writer: writer,
             request: context.input.text)
-        let roots: [any HailCore.Tool] = try await ObjectTools(session: session).tools().filter {
-            (tool: any HailCore.Tool) -> Bool in tool.name != "use_object"
-        }
+        let roots: [any HailCore.Tool] = try await ObjectTools(session: session).offered()
         // The node's own tools, for a task that sends requests: as every conversation has them.
         let tools: [any HailCore.Tool] =
             roots + (await session.objectTools()) + (sendsRequests ? Self.nodeTools.turn : [])

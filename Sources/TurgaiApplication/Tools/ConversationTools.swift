@@ -54,7 +54,7 @@ public enum ConversationTools {
             )
             // What objects can be: found, listed, made, changed and removed, at the root; and the
             // objects themselves, each a tool to read it.
-            tools += try await ObjectTools(session: session).tools().filter { $0.name != "use_object" }
+            tools += try await ObjectTools(session: session).offered()
             tools += await session.objectTools()
             pages = session
             if let owner { tools.append(RecallTool(actorSystem: actorSystem, person: owner)) }

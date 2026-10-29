@@ -991,7 +991,7 @@ public actor ObjectSession {
         var objectLinks: [any HailCore.Tool] = []
         for handle in handles { objectLinks.append(await pageLink(handle)) }
         named = []
-        let tools = try await ObjectTools(session: self).tools().filter { $0.name != "use_object" }
+        let tools = try await ObjectTools(session: self).offered()
         return ToolPage(.text(lines.joined(separator: "\n\n")), links: tools + objectLinks)
     }
 
@@ -1360,7 +1360,8 @@ public struct MakeObjectEffect: ScopedEffect, Sendable {
     let task: String
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
         let (session, name, task) = token.withConfiguration { ($0.session, $0.objectName, $0.task) }
-        return try await session.make(name, described: task)
+        // There's one more object to choose from: the root's tools offer it from now on.
+        return try await session.make(name, described: task).offering(try await ObjectTools(session: session).offered())
     }
 }
 
@@ -1370,7 +1371,9 @@ public struct RemoveObjectEffect: ScopedEffect, Sendable {
     let handle: ObjectID
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
         let (session, handle) = token.withConfiguration { ($0.session, $0.handle) }
-        return await session.page(try ObjectSession.text(try await session.remove(handle)))
+        let removed = await session.page(try ObjectSession.text(try await session.remove(handle)))
+        // There's one object fewer to choose from: the root's tools offer what there is now.
+        return removed.offering(try await ObjectTools(session: session).offered())
     }
 }
 
@@ -1507,6 +1510,12 @@ public struct ObjectTools: Sendable {
             try ShareObjectTool(session: session, objects: objects),
             try RemoveObjectTool(session: session, objects: objects),
         ]
+    }
+
+    /// The tools a turn offers at its root: all of these but `use_object`, which each object's own
+    /// link stands in for.
+    public func offered() async throws -> [any HailCore.Tool] {
+        try await tools().filter { $0.name != "use_object" }
     }
 }
 
