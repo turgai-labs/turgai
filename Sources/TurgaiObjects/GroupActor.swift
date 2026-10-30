@@ -11,8 +11,8 @@ import VirtualActors
 #endif
 
 /// A group, in a journal of its own: the people in it, each with their role, who may run each
-/// exact request it decides, and what's asked of its admins until they answer. A conversation's
-/// group, and the dashboard's, are each one. It settles each chain's scope as the chain starts.
+/// exact request it decides, and what's asked of its admins until they answer: a conversation's,
+/// and Turgai's own. It settles each chain's scope as the chain starts.
 @EventSourced
 @VirtualActor
 public distributed actor Group {
@@ -35,11 +35,11 @@ public distributed actor Group {
     }
 
     public static func actorID(for id: GroupID) -> VirtualActorID {
-        VirtualActorID(rawValue: "group:\(id.rawValue)")
+        VirtualActorID(rawValue: "group:\(id.rawValue.uuidString)")
     }
 
     public static func persistenceID(for id: GroupID) -> String {
-        "turgai-group-\(id.rawValue)"
+        "turgai-group-\(id.rawValue.uuidString)"
     }
 
     /// The group `id`, wherever and whenever it runs.

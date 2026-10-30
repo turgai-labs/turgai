@@ -13,7 +13,7 @@ import struct AnyLanguageModel.GeneratedContent
 /// change it: anyone else is refused, as any change is.
 @Suite(.serialized)
 struct SharingTests {
-    private let family = GroupID(rawValue: "family")
+    private let family = GroupID()
     private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
     private var bob: CallScope { CallScope(UserID("bob"), in: family, as: .member, allowed: []) }
     private let counter =

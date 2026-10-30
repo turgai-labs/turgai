@@ -7,7 +7,7 @@ import TurgaiDomain
 /// A group: who's in it, and who may run exactly what, which it settles into each scope as the
 /// scope opens; its admins answer what's asked of them.
 struct GroupTests {
-    private let family = GroupID(rawValue: "family")
+    private let family = GroupID()
     private let ann = UserID("ann")
     private let bob = UserID("bob")
     private let cat = UserID("cat")
@@ -90,7 +90,7 @@ struct GroupTests {
         #expect(shared.scope(of: bob).allows(forecast))
         #expect(shared.scope(of: cat).allows(forecast))
         // Not elsewhere: another group's scope doesn't have it.
-        #expect(!GroupState(id: GroupID(rawValue: "school")).scope(of: bob).allows(forecast))
+        #expect(!GroupState(id: GroupID()).scope(of: bob).allows(forecast))
     }
 
     /// What's allowed once goes to exactly the one that asked: an object's own work asking for Bob

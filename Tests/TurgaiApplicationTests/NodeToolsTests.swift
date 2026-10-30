@@ -51,7 +51,7 @@ struct NodeToolsTests {
 
         let said = Said()
         let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-        let ann = CallScope(UserID("ann"), in: GroupID(chat), as: .member, allowed: [])
+        let ann = CallScope(UserID("ann"), in: GroupID(), as: .member, allowed: [])
         func say(_ text: String, in place: ConversationID?) async throws -> ChatSaid {
             try await withActorSystemDependency(said.dependency) {
                 try await CallChain.$current.withValue(.start(ann, in: place)) {
@@ -84,7 +84,7 @@ struct NodeToolsTests {
 
         let said = Said()
         let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-        let ann = CallScope(UserID("ann"), in: GroupID(chat), as: .member, allowed: [])
+        let ann = CallScope(UserID("ann"), in: GroupID(), as: .member, allowed: [])
         func ask(_ text: String, in place: ConversationID?) async throws -> ChatAnswer {
             try await withActorSystemDependency(said.dependency) {
                 try await CallChain.$current.withValue(.start(ann, in: place)) {
@@ -109,7 +109,7 @@ struct NodeToolsTests {
         let effect = try Http().send(
             HttpRequest(method: .get, url: "https://example.com/forecast", headers: nil, body: nil))
         let forecast = ExactRequest.http(method: "GET", url: "https://example.com/forecast", body: Data())
-        let family = GroupID(rawValue: "family")
+        let family = GroupID()
         func decision(as scope: CallScope) -> EffectDecision {
             CallChain.$current.withValue(.start(scope, in: nil)) { TurgaiAuthority().decision(on: effect) }
         }

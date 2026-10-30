@@ -90,8 +90,8 @@ private enum PublishEvent: Sendable {
             self = .userMessage(pending)
         case .inbox(.turnStarted(let pending)):
             self = .turnStarted(pending)
-        case .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyQueued, .replyDelivered,
-            .reset, .noted, .unnoted:
+        case .started, .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyQueued,
+            .replyDelivered, .reset, .noted, .unnoted:
             return nil
         }
     }
@@ -344,6 +344,8 @@ public distributed actor Conversation {
     private var liveState = ConversationLiveState()
     /// Takes the noted message's mark off once it has shown long enough.
     private var unnoting: Task<Void, Never>?
+    /// One change of its state at a time: each decides from the state the one before left.
+    private let changes = AsyncSemaphore(value: 1)
     /// How long a noted message shows its mark.
     private static let notedFor: Duration = .seconds(60)
     /// Live-only echo bookkeeping: message IDs whose user-message echo was
@@ -416,9 +418,25 @@ public distributed actor Conversation {
         state.inbox.status
     }
 
-    /// Its group: who's in it, and what its admins allow.
+    /// Its group: who's in it, and what its admins allow. A new one is made with it when it starts,
+    /// and it's in that one from then on.
     private func group() async throws -> Group {
-        try await Group.resolve(on: actorSystem, id: GroupID(conversationID))
+        if let group = state.group { return try await Group.resolve(on: actorSystem, id: group) }
+        let started = try await changing {
+            if let group = state.group { return group }
+            let group = GroupID()
+            try await emit(event: .started(in: group))
+            return group
+        }
+        return try await Group.resolve(on: actorSystem, id: started)
+    }
+
+    /// Makes `change` to its state once no other change is being made: it reads the state, decides
+    /// and emits, calling nothing that could call back.
+    private func changing<Result>(_ change: () async throws -> Result) async rethrows -> Result {
+        await changes.wait()
+        defer { changes.signal() }
+        return try await change()
     }
 
     /// The agent's past turns, step by step, as `person` asks for them.
@@ -523,7 +541,7 @@ public distributed actor Conversation {
     public distributed func noted(_ message: NotedMessage) async {
         await unnote()
         do {
-            try await emit(event: .noted(message))
+            try await changing { try await emit(event: .noted(message)) }
         } catch {
             actorSystem.log.warning(
                 "Could not mark a noted message", metadata: ["error": .string(String(describing: error))])
@@ -546,15 +564,20 @@ public distributed actor Conversation {
     }
 
     private func takeMarkOff() async {
-        guard let noted = state.noted else { return }
+        let taken: NotedMessage?
         do {
-            try await emit(event: .unnoted)
+            taken = try await changing {
+                guard let noted = state.noted else { return nil }
+                try await emit(event: .unnoted)
+                return noted
+            }
         } catch {
             actorSystem.log.warning(
                 "Could not take a noted mark off", metadata: ["error": .string(String(describing: error))])
             return
         }
-        await publish(.unnoted(conversationID: conversationID, noted))
+        guard let taken else { return }
+        await publish(.unnoted(conversationID: conversationID, taken))
     }
 
     /// Delivers a non-agent notification through the currently attached
@@ -887,13 +910,15 @@ public distributed actor Conversation {
     private func dispatch(
         _ requestedAction: ConversationAction
     ) async throws {
-        let previous = state
         let action = requestedAction
-
-        let decision = ConversationDecision(action, in: previous)
+        // Decided from the state the change before left, and emitted before the next is decided.
+        let decision = try await changing {
+            let decision = ConversationDecision(action, in: state)
+            for event in decision.events { try await emit(event: event) }
+            return decision
+        }
         let effects = decision.effects
         for event in decision.events {
-            try await emit(event: event)
             if let publishEvent = PublishEvent(conversationEvent: event) {
                 await publish(publishEvent)
             }

@@ -1,3 +1,9 @@
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
+
 /// What a person may do in a group.
 public enum GroupRole: String, Hashable, Codable, Sendable {
     /// Takes part, and uses what the group has.
@@ -17,22 +23,14 @@ public struct Membership: Hashable, Codable, Sendable {
     }
 }
 
-/// Which group something happens in: a conversation's, known by the conversation's id, or the
-/// dashboard's.
-public struct GroupID: RawRepresentable, Hashable, Codable, Sendable {
-    public let rawValue: String
+/// A group's own identity: minted when the group is made, and only ever given by whoever holds it,
+/// never worked out from anything else.
+public struct GroupID: Hashable, Codable, Sendable {
+    public let rawValue: UUID
 
-    public init(rawValue: String) {
+    public init(rawValue: UUID = UUID()) {
         self.rawValue = rawValue
     }
-
-    /// The group of the conversation with `id`: its members.
-    public init(_ id: ConversationID) {
-        self.init(rawValue: id.stableKey)
-    }
-
-    /// The dashboard's group: the accounts that sign in to it, its administrators as its admins.
-    public static let dashboard = GroupID(rawValue: "dashboard")
 }
 
 /// Who a call is on behalf of, and what they may do: the person who started its chain, in the

@@ -91,6 +91,7 @@ public struct TurgaiServer: Sendable {
             channelSecrets: channelSecrets,
             conversations: try await .live(in: persistence),
             channels: try await .live(in: persistence),
+            turgaiGroup: try await .turgai(in: persistence),
             runtimeSnapshotSource: runtimeSnapshotSource,
             objectCatalogSource: objects,
             webChatBridge: webChatBridge,

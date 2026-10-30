@@ -559,6 +559,9 @@ actor LiveSession {
                     to: conversation,
                     conversationID: message.conversationID
                 )
+                // A web chat is its owner's: they're its group's admin, as a private chat's one
+                // person is.
+                if case .web = source { try await conversation.setAdmins([message.userID]) }
                 // A conversation is there from its first message.
                 try await conversationStorage.add(message.conversationID)
                 try await conversation.send(

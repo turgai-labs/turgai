@@ -25,7 +25,7 @@ struct Echoed: Codable {
 /// call is for, with the values their types are.
 @Suite(.serialized)
 struct ToolsAPITests {
-    private let family = GroupID(rawValue: "family")
+    private let family = GroupID()
     private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
 
     /// A tool that gives back the bytes of what it's given, and whom it was called for.

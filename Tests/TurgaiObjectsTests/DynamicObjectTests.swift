@@ -724,7 +724,7 @@ struct DynamicObjectTests {
     @Test(.timeLimit(.minutes(2)))
     func anObjectKeepsWhoMadeIt() async throws {
         let store = MemoryEventStore()
-        let ann = CallScope(UserID("ann"), in: GroupID(rawValue: "family"), as: .admin, allowed: [])
+        let ann = CallScope(UserID("ann"), in: GroupID(), as: .admin, allowed: [])
         let counter = "actor Counter {\n    var count = 0\n}"
         let drinks = "actor Drinks {\n    private let tea = Counter(id: \"tea\")\n}"
         let uses = Uses(

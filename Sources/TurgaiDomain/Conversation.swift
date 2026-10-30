@@ -546,6 +546,8 @@ public struct PendingConversationReply: Hashable, Codable, Sendable {
 }
 
 public enum ConversationEvent: Codable, Sendable, Equatable {
+    /// It started, in `group`: the group it's in from then on.
+    case started(in: GroupID)
     /// Its agent's inbox: a message waiting, or a turn starting or ending.
     case inbox(AgentInboxEvent)
     /// The turn answering `message` needed what its scope didn't allow, which its group's admins
@@ -698,6 +700,8 @@ public enum AgentInboxEvent: Hashable, Codable, Sendable {
 
 public struct ConversationState: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
+    /// The group it's in, once it has started: it never changes.
+    public internal(set) var group: GroupID?
     /// Its agent's inbox.
     public internal(set) var inbox: AgentInbox
     /// The turns that wait for an answer from its group's admins, by what each asked for.
@@ -723,6 +727,9 @@ public struct ConversationState: Hashable, Codable, Sendable {
 
     public mutating func apply(_ event: ConversationEvent) {
         switch event {
+        case .started(let group):
+            self.group = group
+
         case .awaiting(let id, let message):
             awaiting[id] = message
 

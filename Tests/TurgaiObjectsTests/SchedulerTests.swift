@@ -14,7 +14,7 @@ import TurgaiDomain
 struct SchedulerTests {
     static let chat = ConversationID(
         channel: ChannelID(provider: "telegram", instanceID: "bot"), externalAddress: ExternalConversationAddress("42"))
-    static let group = GroupID(rawValue: "telegram/bot:42")
+    static let group = GroupID()
     static let ann = CallScope(UserID("ann"), in: group, as: .member, allowed: [])
     static let bob = CallScope(UserID("bob"), in: group, as: .member, allowed: [])
 

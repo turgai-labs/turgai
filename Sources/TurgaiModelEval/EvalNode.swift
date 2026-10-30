@@ -123,7 +123,7 @@ struct EvalNode: Sendable {
 
     /// Who the eval asks as: one person, the admin of a group of their own.
     static let askerID = TurgaiDomain.UserID("eval")
-    static let group = GroupID(rawValue: "eval")
+    static let group = GroupID()
 
     /// The asker's scope, as their group settles it.
     func asker() async throws -> CallScope {

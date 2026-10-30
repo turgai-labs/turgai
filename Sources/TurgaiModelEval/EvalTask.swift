@@ -56,7 +56,7 @@ struct EvalTask: Sendable {
     /// and whom it doesn't.
     private static let inTheChat = CallScope(UserID("eval-member"), in: EvalNode.group, as: .member, allowed: [])
     private static let outside = CallScope(
-        UserID("eval-outsider"), in: GroupID(rawValue: "elsewhere"), as: .member, allowed: [])
+        UserID("eval-outsider"), in: GroupID(), as: .member, allowed: [])
 
     /// A planner, whose every plan starts the same way, so an answer can be told to be its.
     private static let planner = EvalAgent(

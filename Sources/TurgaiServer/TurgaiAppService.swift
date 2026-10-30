@@ -64,6 +64,8 @@ struct TurgaiAppService: Service, Sendable {
     private let channelSecrets: ChannelSecretStore
     private let conversations: ConversationStorage
     private let channels: ChannelStorage
+    /// Turgai's own group, which the dashboard is used in.
+    private let turgaiGroup: GroupID
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let objectCatalogSource: TurgaiObjectCatalogSource
     private let webChatBridge: TurgaiWebChatBridge
@@ -82,6 +84,7 @@ struct TurgaiAppService: Service, Sendable {
         channelSecrets: ChannelSecretStore,
         conversations: ConversationStorage,
         channels: ChannelStorage,
+        turgaiGroup: GroupID,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
         webChatBridge: TurgaiWebChatBridge,
@@ -98,6 +101,7 @@ struct TurgaiAppService: Service, Sendable {
         self.channelSecrets = channelSecrets
         self.conversations = conversations
         self.channels = channels
+        self.turgaiGroup = turgaiGroup
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
         self.webChatBridge = webChatBridge
@@ -259,8 +263,9 @@ struct TurgaiAppService: Service, Sendable {
             let channelRuntime = try await system.turgaiChannelRuntime.dependencies()
             let connections = channelRuntime.connections
             await objectCatalogSource.set(channelRuntime.objectCatalog)
+            let turgaiGroup = turgaiGroup
             let runtimeSnapshotProvider: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot] = {
-                await Self.runtimeSnapshots(on: system, as: $0)
+                await Self.runtimeSnapshots(on: system, as: $0, in: turgaiGroup)
             }
             await runtimeSnapshotSource.setProvider(runtimeSnapshotProvider)
             let clusterService = TurgaiClusterService(
@@ -576,10 +581,11 @@ extension TurgaiAppService {
     }
 
     /// What each running profile agent is doing, for the dashboard, asked on behalf of `viewer`, as
-    /// the dashboard's group settles their scope: none when it can't.
-    static func runtimeSnapshots(on system: ClusterSystem, as viewer: Membership) async -> [TurgaiAgentRuntimeSnapshot]
-    {
-        guard let group = try? await Group.resolve(on: system, id: .dashboard),
+    /// Turgai's own group settles their scope: none when it can't.
+    static func runtimeSnapshots(
+        on system: ClusterSystem, as viewer: Membership, in turgaiGroup: GroupID
+    ) async -> [TurgaiAgentRuntimeSnapshot] {
+        guard let group = try? await Group.resolve(on: system, id: turgaiGroup),
             (try? await group.setRole(viewer.role, of: viewer.person)) != nil,
             // Viewing does nothing: it spends nothing that's allowed once.
             let scope = try? await group.scope(of: viewer.person)

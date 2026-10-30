@@ -9,7 +9,7 @@ import TurgaiDomain
 /// write it, and what's listed to a caller is what they may read.
 @Suite(.serialized)
 struct AccessCheckTests {
-    private let family = GroupID(rawValue: "family")
+    private let family = GroupID()
     private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
     private var bob: CallScope { CallScope(UserID("bob"), in: family, as: .member, allowed: []) }
     private let counter =
