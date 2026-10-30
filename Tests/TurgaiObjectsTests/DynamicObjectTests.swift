@@ -196,9 +196,11 @@ struct DynamicObjectTests {
                 \.message)
         }
         #expect(try await refusals("@Subscribed var tea = CoffeeCounter(id: \"tea-counter\")").isEmpty)
+        // Swift says it, as the macro the runtime declares, and the runtime says why.
         #expect(
-            try await refusals("@Subscribed(id: \"tea-counter\") var tea = CoffeeCounter(id: \"tea-counter\")") == [
-                "@Subscribed takes no arguments: it follows the object its property holds"
+            try await refusals("@Subscribed(id: \"tea-counter\") var tea = CoffeeCounter(id: \"tea-counter\")").sorted() == [
+                "@Subscribed takes no arguments: it follows the object its property holds",
+                "argument passed to macro expansion that takes no arguments",
             ])
         #expect(
             try await refusals("@Subscribed var tea = Clock(id: \"clock\")") == [
@@ -472,10 +474,14 @@ struct DynamicObjectTests {
             "actor Bell {\n    @Event enum Rang {\n        case once\n        case twice(loud: Bool)\n    }\n\n    func ring() {\n        announce(Rang.twice(loud: true))\n    }\n}"
         )
         #expect(enumeration.isEmpty, "\(enumeration)")
+        // On a function, Swift refuses it, as the macro the runtime declares; outside the actor,
+        // where Swift takes it, the runtime does.
         let function = try await refusals("actor Bell {\n    @Event func rang() {}\n}")
+        #expect(function == ["'extension' macro cannot be attached to instance method ('rang')"], "\(function)")
+        let outside = try await refusals("actor Bell {\n    func ring() {}\n}\n\n@Event struct Rang {}")
         #expect(
-            function == ["@Event is a struct's or an enum's, declared in `actor Bell`: `announce(_:)` sends a value of it"],
-            "\(function)")
+            outside == ["@Event is a struct's or an enum's, declared in `actor Bell`: `announce(_:)` sends a value of it"],
+            "\(outside)")
         let notAnEvent = try await refusals(
             "actor Bell {\n    struct Rang {}\n\n    func ring() {\n        announce(Rang())\n    }\n}")
         #expect(notAnEvent.contains { $0.contains("announce") }, "\(notAnEvent)")
@@ -519,6 +525,20 @@ struct DynamicObjectTests {
         #expect(problems.first?.hasPrefix("Turgai couldn't declare what this code is written against: Objects.swift") == true)
     }
 
+    /// An attribute is Swift's, or a macro the runtime declares: any other is refused as Swift
+    /// refuses it, and a declaration modifier written as one is said to be one.
+    @Test
+    func attributesAreSwiftsOrTheRuntimes() async throws {
+        let stored = await ScriptInstance.problems(
+            in: try Script(code: "actor Counter {\n    @Stored var count = 0\n}", type: "Counter")
+        ).map(\.message)
+        #expect(stored == ["unknown attribute 'Stored'"], "\(stored)")
+        let modifier = #expect(throws: CodeProblem.self) {
+            try Script(code: "@actor Counter {\n    var count = 0\n}", type: "Counter")
+        }
+        #expect(modifier?.message == "'actor' is a declaration modifier, not an attribute")
+    }
+
     /// `@Subscribed` is a stored property's: on anything else it follows nothing, so it's refused.
     @Test
     func subscribedIsAStoredPropertys() async throws {
@@ -531,12 +551,19 @@ struct DynamicObjectTests {
             let code = "actor Follower {\n    var heard = 0\n\n    \(member)\n}"
             return await ScriptInstance.problems(in: try Script(code: code, type: "Follower", uses: uses)).map(\.message)
         }
-        let refusal = "@Subscribed is a stored property's, in `actor Follower`: it follows what the property holds"
+        // On a function, Swift refuses it, as the macro the runtime declares.
         #expect(
             try await refusals(
                 "@Subscribed(to: \"Check.morning\")\n    func onMorning(_ morning: Check.Morning) {\n        heard += 1\n    }"
-            ) == [refusal])
-        #expect(try await refusals("@Subscribed var check: Int { 1 }") == [refusal])
+            ).sorted() == [
+                "'accessor' macro cannot be attached to instance method ('onMorning')",
+                "argument passed to macro expansion that takes no arguments",
+            ])
+        // On a property worked out from others, where Swift takes it, the runtime refuses it.
+        #expect(
+            try await refusals("@Subscribed var check: Int { 1 }") == [
+                "@Subscribed is a stored property's, in `actor Follower`: it follows what the property holds"
+            ])
     }
 
     /// Objects made here are each listed for the tools that take them, whatever they hold: one

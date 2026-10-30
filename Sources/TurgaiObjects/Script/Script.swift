@@ -20,12 +20,23 @@ public struct Script: Codable, Sendable, Equatable {
     /// isn't Swift, or declares no such actor, as the Swift compiler refuses a file.
     public init(code: String, type: String, uses: Uses = .nothing) throws(CodeProblem) {
         let file = Parser.parse(source: code)
-        guard file.statements.contains(where: { $0.item.is(DeclSyntax.self) }) else {
-            throw CodeProblem("The answer isn't Swift code.")
-        }
         let lines = SourceLocationConverter(fileName: "", tree: file)
         func line(_ node: some SyntaxProtocol) -> Int {
             lines.location(for: node.positionAfterSkippingLeadingTrivia).line
+        }
+        // A declaration modifier written as an attribute, `@actor`, is what's wrong, as Swift says:
+        // what follows it isn't read as a declaration.
+        for statement in file.statements {
+            let tokens = Array(statement.tokens(viewMode: .sourceAccurate).prefix(2))
+            if tokens.count == 2, tokens[0].tokenKind == .atSign, SwiftCheck.declarationModifiers.contains(tokens[1].text)
+            {
+                throw CodeProblem(
+                    line: line(statement), span: "@\(tokens[1].text)",
+                    "'\(tokens[1].text)' is a declaration modifier, not an attribute")
+            }
+        }
+        guard file.statements.contains(where: { $0.item.is(DeclSyntax.self) }) else {
+            throw CodeProblem("The answer isn't Swift code.")
         }
         if let error = ParseDiagnosticsGenerator.diagnostics(for: file).first(where: {
             $0.diagMessage.severity == .error

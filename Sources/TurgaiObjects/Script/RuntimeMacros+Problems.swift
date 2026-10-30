@@ -129,9 +129,10 @@ extension RuntimeMacros {
         return ["\(Schedule.self)", "\(Timer.self)"].contains(written ?? made ?? "")
     }
 
-    /// Each of the runtime's attributes where it marks nothing it knows: an `@Event` that isn't a
-    /// struct or an enum in the actor `actor`, where an event is declared and announced, and a
-    /// `@Subscribed` that isn't on one of its stored properties, whose value it follows.
+    /// Each of the runtime's attributes where Swift lets it attach but the runtime has nothing for
+    /// it: an `@Event` type not declared in the actor `actor`, where an event is declared and
+    /// announced, and a `@Subscribed` property that isn't one of its stored properties, whose
+    /// value it follows. Anywhere else, Swift refuses it, as the macros the runtime declares.
     private static func misplaced(
         in file: SourceFileSyntax, actor: ActorDeclSyntax, line: (AttributeSyntax) -> Int
     ) -> [CodeProblem] {
@@ -146,24 +147,25 @@ extension RuntimeMacros {
         }
         let marks = Marks(viewMode: .sourceAccurate)
         marks.walk(file)
-        let declared = Set(ObjectModule.events(in: actor))
         return marks.found.compactMap { attribute in
-            let declaration = attribute.parent?.parent
+            guard let declaration = attribute.parent?.parent?.as(DeclSyntax.self) else { return nil }
             // Declared in the actor itself, as one of its members.
             let inActor =
-                declaration?.parent?.parent?.parent?.parent?.as(ActorDeclSyntax.self)?.name.text == actor.name.text
-            let written = declaration.map { $0.trimmedDescription.split(separator: "\n").first.map(String.init) ?? "" }
+                declaration.parent?.parent?.parent?.parent?.as(ActorDeclSyntax.self)?.name.text == actor.name.text
+            let written = declaration.trimmedDescription.split(separator: "\n").first.map(String.init) ?? ""
             if attribute.attributeName.trimmedDescription == subscribed {
-                let stored =
-                    declaration?.as(VariableDeclSyntax.self)?.bindings.allSatisfy { $0.accessorBlock == nil } == true
-                if inActor, stored { return nil }
+                guard let variable = declaration.as(VariableDeclSyntax.self) else { return nil }
+                if inActor, variable.bindings.allSatisfy({ $0.accessorBlock == nil }) { return nil }
                 return CodeProblem(
                     line: line(attribute), span: written,
                     "@\(subscribed) is a stored property's, in `actor \(actor.name.text)`: it follows what the property holds")
             }
-            let name =
-                declaration?.as(StructDeclSyntax.self)?.name.text ?? declaration?.as(EnumDeclSyntax.self)?.name.text
-            if let name, declared.contains(name), inActor { return nil }
+            let isType =
+                declaration.is(StructDeclSyntax.self) || declaration.is(EnumDeclSyntax.self)
+                || declaration.is(ClassDeclSyntax.self) || declaration.is(ActorDeclSyntax.self)
+                || declaration.is(ProtocolDeclSyntax.self)
+            guard isType else { return nil }
+            if inActor, declaration.is(StructDeclSyntax.self) || declaration.is(EnumDeclSyntax.self) { return nil }
             return CodeProblem(
                 line: line(attribute), span: written,
                 "@\(event) is a struct's or an enum's, declared in `actor \(actor.name.text)`: `announce(_:)` sends a value of it")

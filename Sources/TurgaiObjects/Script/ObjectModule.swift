@@ -44,6 +44,13 @@ public struct ObjectModule: Sendable {
             "",
             "/// What an event's `announce(_:)` calls: the event, announced as its value.",
             "func \(RuntimeMacros.announce)(_ event: String, _ value: any Sendable) {}",
+            "",
+            "/// A stored property whose object the actor follows. The runtime follows it.",
+            "@attached(accessor) macro \(RuntimeMacros.subscribed)() = #externalMacro(module: \"Objects\", type: \"SubscribedMacro\")",
+            "",
+            "/// A struct or enum in the actor whose values are its events. The runtime makes it `Codable` and",
+            "/// gives the actor its `announce(_:)`.",
+            "@attached(extension, conformances: Codable) macro \(RuntimeMacros.event)() = #externalMacro(module: \"Objects\", type: \"EventMacro\")",
         ]
         return [
             // Foundation's value types are the module's, as the objects' declarations use them.
@@ -134,9 +141,10 @@ public struct ObjectModule: Sendable {
         return name == RuntimeMacros.event || name == RuntimeMacros.subscribed
     }
 
-    /// The code with the runtime's macros expanded where they're written, keeping its lines: an
-    /// `@Event` type is `Codable`, as its values are sent as data, and its actor announces a value
-    /// of it with `announce(_:)`; a `@Subscribed` property stays as it's written.
+    /// The code with the runtime's macros expanded where they're written, keeping its lines and
+    /// its attributes, which Swift checks as the macros the runtime declares: an `@Event` type is
+    /// `Codable`, as its values are sent as data, and its actor announces a value of it with
+    /// `announce(_:)`; a `@Subscribed` property stays as it's written.
     static func expanded(_ code: String, type: String? = nil) -> String {
         let file = Parser.parse(source: code)
         var edits: [(range: Range<Int>, text: String)] = []
@@ -184,16 +192,6 @@ public struct ObjectModule: Sendable {
                     edits.append((declared.after..<declared.after, ": Codable"))
                 }
             }
-        }
-        for token in file.tokens(viewMode: .sourceAccurate) {
-            guard token.tokenKind == .atSign, let attribute = token.parent?.as(AttributeSyntax.self),
-                isRuntimeMacro(.attribute(attribute))
-            else { continue }
-            edits.append(
-                (
-                    attribute.positionAfterSkippingLeadingTrivia
-                        .utf8Offset..<attribute.endPositionBeforeTrailingTrivia.utf8Offset, ""
-                ))
         }
         var bytes = Array(code.utf8)
         for edit in edits.sorted(by: { $0.range.lowerBound > $1.range.lowerBound }) {
