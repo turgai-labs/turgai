@@ -2,6 +2,7 @@ import Elementary
 import Hail
 import Hummingbird
 import HummingbirdElementary
+import Logging
 import NIOCore
 import ServiceLifecycle
 import TurgaiApplication
@@ -36,6 +37,15 @@ enum TurgaiWebSupport {
         await TurgaiModelCatalogLoader.load(profiles: profiles)
     }
 
+    /// An error a form didn't expect: logged, and, unless the page is one anyone may open, said
+    /// with what failed.
+    private static func unexpected(_ error: Error, _ failed: String, shown: Bool = true) -> String {
+        logger.error("\(failed)", metadata: ["error": "\(error)"])
+        return shown ? "\(failed): \(error)" : failed
+    }
+
+    private static let logger = Logger(label: "turgai.web")
+
     static func storageErrorMessage(_ error: Error) -> String {
         switch error {
         case FormValidationError.invalidValue(let field):
@@ -45,7 +55,7 @@ enum TurgaiWebSupport {
         case TurgaiStorageConfigurationError.invalidPostgresUsername:
             "A PostgreSQL username is required."
         default:
-            "Could not save storage configuration."
+            unexpected(error, "Could not save storage configuration")
         }
     }
 
@@ -68,7 +78,7 @@ enum TurgaiWebSupport {
         case TelegramAPIError.rateLimited:
             "Telegram is temporarily rate-limiting validation. Wait a moment and try again."
         default:
-            "Could not save the channel."
+            unexpected(error, "Could not save the channel")
         }
     }
 
@@ -81,7 +91,7 @@ enum TurgaiWebSupport {
         case TurgaiAuthError.usernameTaken:
             "That username is already taken."
         default:
-            "Could not create the account. Try again."
+            unexpected(error, "Could not create the account. Try again.", shown: false)
         }
     }
 
@@ -92,7 +102,7 @@ enum TurgaiWebSupport {
         case TurgaiAuthError.accountNotApproved:
             "Keep at least one approved administrator."
         default:
-            "Could not update the account."
+            unexpected(error, "Could not update the account")
         }
     }
 
@@ -113,7 +123,7 @@ enum TurgaiWebSupport {
         case TurgaiAgentProfileError.cannotDeleteDefaultProfile:
             "The default agent cannot be deleted."
         default:
-            "Could not save the agent configuration."
+            unexpected(error, "Could not save the agent configuration")
         }
     }
 
