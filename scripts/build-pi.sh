@@ -5,14 +5,8 @@
 # The private packages come from the clones SwiftPM keeps in .build/repositories, mirrored into
 # the container, which has no GitHub login.
 #
-# On the Pi, Turgai needs libcurl (`apt install libcurl4t64`) and its secret key, which systemd
-# keeps encrypted and gives it as its `turgai-key` credential:
-#
-#   openssl rand -base64 32 | sudo systemd-creds encrypt --name=turgai-key - /etc/credstore.encrypted/turgai-key
-#
-# and, in the service's unit:
-#
-#   LoadCredentialEncrypted=turgai-key
+# To install it on the Pi, copy dist/pi there and run `sudo ./install.sh` in it. Turgai needs
+# libcurl there (`apt install libcurl4t64`).
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -57,4 +51,5 @@ docker run --rm \
         cp -R /build/release/Turgai_TurgaiBrand.bundle /build/release/swift-transformers_Hub.bundle /dist/pi/
     "
 
+cp "$root/scripts/install-pi.sh" "$root/dist/pi/install.sh"
 echo "Built into $root/dist/pi"
