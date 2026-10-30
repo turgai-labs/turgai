@@ -564,6 +564,11 @@ struct DynamicObjectTests {
             try await refusals("@Subscribed var check: Int { 1 }") == [
                 "@Subscribed is a stored property's, in `actor Follower`: it follows what the property holds"
             ])
+        // Holding a value, it follows nothing: that's what's wrong, not that it starts from none.
+        let value = try await refusals("@Subscribed var morning: Check.Morning")
+        #expect(
+            value == ["@Subscribed should hold the object that sends the events, while `Check.Morning` is no object"],
+            "\(value)")
     }
 
     /// Objects made here are each listed for the tools that take them, whatever they hold: one

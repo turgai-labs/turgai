@@ -104,16 +104,22 @@ public final class ScriptInstance {
                 ]
             }
         }
+        // How it uses the runtime's macros, which are Turgai's, as Turgai has them.
+        let macros = RuntimeMacros.problems(in: source)
         // How its stored properties get their values comes first: the rest of its Swift is
-        // checked as an object made with its id.
+        // checked as an object made with its id. Unless it uses the macros wrong: a property that
+        // follows a value, which sends no events, is what's wrong with it, not that it starts
+        // from none.
         let starting = StartingValues.problems(in: source.code, type: source.type)
-        guard starting.isEmpty else { return starting.sorted { ($0.line ?? 0) < ($1.line ?? 0) } }
+        guard starting.isEmpty else {
+            return (macros.isEmpty ? starting : macros).sorted { ($0.line ?? 0) < ($1.line ?? 0) }
+        }
         let swift = SwiftCheck.problems(in: ObjectModule.objectFile, of: module).map { diagnostic in
             CodeProblem(line: diagnostic.line, span: diagnostic.code, diagnostic.message)
         }
-        // And how it uses the runtime's macros, which are Turgai's, as Turgai has them, the
-        // objects it names, which exist, and what it sends and keeps, which the runtime keeps as data.
-        var problems = swift + RuntimeMacros.problems(in: source) + ExistingObjects.problems(in: source)
+        // And the objects it names, which exist, and what it sends and keeps, which the runtime
+        // keeps as data.
+        var problems = swift + macros + ExistingObjects.problems(in: source)
         if swift.isEmpty,
             let declarations = SwiftCheck.declarations(of: source.type, in: ObjectModule.objectFile, of: module)
                 .declarations
