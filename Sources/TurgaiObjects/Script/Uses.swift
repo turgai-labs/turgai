@@ -243,14 +243,15 @@ extension Uses {
         return lines.joined(separator: "\n")
     }
 
-    /// An enumeration: what it is, then each case with its values.
+    /// An enumeration: what it is, then each case with its values, as code writes it where its
+    /// type is known: `.every(minutes: Int)`.
     private static func inWords(_ enumeration: EnumDeclSyntax, named name: String) -> String {
         var lines: [String] = [titled(name, summary(enumeration.leadingTrivia)) + " One of:"]
         for member in enumeration.memberBlock.members {
             guard let cases = member.decl.as(EnumCaseDeclSyntax.self) else { continue }
             let said: String = Self.said(summary(cases.leadingTrivia))
             for element in cases.elements {
-                lines.append("    \(element.name.text)\(values(of: element))\(said)")
+                lines.append("    .\(element.name.text)\(values(of: element))\(said)")
             }
         }
         return lines.joined(separator: "\n")

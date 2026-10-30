@@ -79,7 +79,7 @@ public enum Schedule: Codable, Sendable, Equatable {
 /// object's `on<Property>Fired(at:)` is called, once.
 @Describable
 public enum Timer: Codable, Sendable, Equatable {
-    /// Once, at this date.
+    /// At this date.
     case at(Date)
 
     /// The date it's due at.

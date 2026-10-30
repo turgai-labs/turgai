@@ -32,7 +32,7 @@ public struct ObjectWriter: Sendable {
         "Its stored properties start from their default values.",
         "Stored properties are what it keeps; methods are what it can be asked to do.",
         CodableValues.rule,
-        "Only the actor goes in the file: code outside it never runs.",
+        "Only the object goes in the file: code outside it never runs.",
     ]
 
     /// Writes the actor `type` for `task`, starting from `current` code when it's changed, with

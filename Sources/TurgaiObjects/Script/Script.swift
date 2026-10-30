@@ -32,7 +32,7 @@ public struct Script: Codable, Sendable, Equatable {
             {
                 throw CodeProblem(
                     line: line(statement), span: "@\(tokens[1].text)",
-                    "'\(tokens[1].text)' is a declaration modifier, not an attribute")
+                    "'\(tokens[1].text)' is a declaration modifier, not an attribute: it's written without '@'")
             }
         }
         guard file.statements.contains(where: { $0.item.is(DeclSyntax.self) }) else {

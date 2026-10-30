@@ -376,7 +376,7 @@ struct DynamicObjectTests {
                     words.contains(
                         "- Track: a track, as a player plays it.\n  Fields:\n    title: String\n    artist: String?"))
                 #expect(
-                    words.contains("- Card: what a board shows. One of:\n    piece(Piece)\n    row(items: [Piece])"))
+                    words.contains("- Card: what a board shows. One of:\n    .piece(Piece)\n    .row(items: [Piece])"))
                 #expect(!words.contains("struct"))
                 // A built-in object's card is its spec.
                 guard case .markdown(let card) = try await session.card(try await session.id(written: "player")) else { return }
@@ -536,7 +536,7 @@ struct DynamicObjectTests {
         let modifier = #expect(throws: CodeProblem.self) {
             try Script(code: "@actor Counter {\n    var count = 0\n}", type: "Counter")
         }
-        #expect(modifier?.message == "'actor' is a declaration modifier, not an attribute")
+        #expect(modifier?.message == "'actor' is a declaration modifier, not an attribute: it's written without '@'")
     }
 
     /// `@Subscribed` is a stored property's: on anything else it follows nothing, so it's refused.

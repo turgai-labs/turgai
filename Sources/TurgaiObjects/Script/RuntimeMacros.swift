@@ -29,8 +29,8 @@ public enum RuntimeMacros {
     public static let declared = """
         Events:
           An object announces events. Objects that follow it receive them.
-          @Event marks a struct or enum in the actor. Its values are the events. The actor sends one with announce.
-          @Subscribed marks a stored property that holds another object. The actor follows that object.
+          @Event marks a struct or enum in the object. Its values are the events. The object sends one with announce.
+          @Subscribed marks a stored property that holds another object. The object follows it.
           Each event it receives calls its function named on plus the event's name, with the event.
         """
 }
