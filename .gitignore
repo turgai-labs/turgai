@@ -5,3 +5,4 @@
 .turgai/
 .vscode/
 .wrangler/
+dist/
