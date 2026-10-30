@@ -40,8 +40,6 @@ enum TurgaiWebSupport {
         switch error {
         case FormValidationError.invalidValue(let field):
             "Enter a valid \(field)."
-        case TurgaiStorageConfigurationError.invalidFileURL:
-            "File storage needs a file:// URL."
         case TurgaiStorageConfigurationError.invalidPostgresURL:
             "PostgreSQL URL must look like postgres://host:5432/database."
         case TurgaiStorageConfigurationError.invalidPostgresUsername:

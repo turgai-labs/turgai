@@ -26,7 +26,7 @@ extension TurgaiMainWebApp {
         let webChatBridge = dependencies.webChatBridge
         channels.get { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             var items: [ChannelListItem] = []
             for id in (try? await webChatBridge.channelIDs()) ?? [] {
@@ -37,7 +37,7 @@ extension TurgaiMainWebApp {
                 }
                 var botName: String?
                 if let binding = configuration.agentRouting.profileID {
-                    botName = await agentProfiles.profile(id: binding)?.name
+                    botName = try await agentProfiles.profile(id: binding)?.name
                 }
                 items.append(
                     ChannelListItem(
@@ -56,7 +56,7 @@ extension TurgaiMainWebApp {
 
         channels.get("new") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             return HTMLResponse {
                 NewChannelPage(user: user)
@@ -65,7 +65,7 @@ extension TurgaiMainWebApp {
 
         channels.post("create") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             let values = ChannelCreateFormValues(form: form)
@@ -95,7 +95,7 @@ extension TurgaiMainWebApp {
 
         channels.get(":id") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard let id = Self.channelID(from: context),
                 (try? await webChatBridge.channelIDs().contains(id)) == true
@@ -112,7 +112,7 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/channels")
             }
             let draft = ChannelDraft(configuration, hasToken: await channelSecrets.hasToken(for: configuration.id))
-            let bots = await Self.botOptions(agentProfiles: agentProfiles)
+            let bots = try await Self.botOptions(agentProfiles: agentProfiles)
             return HTMLResponse {
                 ChannelEditPage(user: user, channel: draft, bots: bots)
             }.response(from: request, context: context)
@@ -120,7 +120,7 @@ extension TurgaiMainWebApp {
 
         channels.post("update") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             guard let id = UUID(uuidString: form["id"]?.first ?? ""),
@@ -137,7 +137,7 @@ extension TurgaiMainWebApp {
                     // The runtime would fall back to default routing for an
                     // unusable binding; reject here instead so the form never
                     // silently pretends a binding it cannot honor.
-                    guard let profile = await agentProfiles.profile(id: binding),
+                    guard let profile = try await agentProfiles.profile(id: binding),
                         profile.availability == .enabled
                     else {
                         throw ChannelFormError.unknownBot
@@ -183,7 +183,7 @@ extension TurgaiMainWebApp {
                 var shown = draft
                 shown.hasToken = await channelSecrets.hasToken(for: id)
                 shown.token = ""
-                let bots = await Self.botOptions(agentProfiles: agentProfiles)
+                let bots = try await Self.botOptions(agentProfiles: agentProfiles)
                 return HTMLResponse {
                     ChannelEditPage(
                         user: user,
@@ -197,7 +197,7 @@ extension TurgaiMainWebApp {
 
         channels.post("delete") { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             if let id = UUID(uuidString: form["id"]?.first ?? "") {
@@ -222,8 +222,8 @@ extension TurgaiMainWebApp {
 
     private static func botOptions(
         agentProfiles: TurgaiAgentProfileStore
-    ) async -> [ChannelBotOption] {
-        await agentProfiles.profiles()
+    ) async throws -> [ChannelBotOption] {
+        try await agentProfiles.profiles()
             .filter { $0.availability == .enabled }
             .map { ChannelBotOption(id: $0.id, name: $0.name) }
     }

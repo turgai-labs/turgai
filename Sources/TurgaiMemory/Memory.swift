@@ -1,6 +1,5 @@
 #if canImport(FoundationEssentials)
     import FoundationEssentials
-    import FoundationInternationalization
 #else
     import Foundation
 #endif
@@ -72,97 +71,76 @@ public struct MemoryObservation: Hashable, Codable, Sendable {
     }
 }
 
-public enum MemoryNamespace: String, Codable, Sendable, CaseIterable {
-    case profile
-    case preference
-    case relationship
-    case project
-    case environment
-}
+/// A name in a person's memory, as it's compared: trimmed, lowercased, its spaces collapsed, so
+/// `Lives in` and `lives  in` are the same name.
+public struct MemoryName: Hashable, Codable, Sendable, CustomStringConvertible {
+    public let rawValue: String
 
-/// Typed enough to distinguish a place, person, date, boolean preference,
-/// and free text — no single prose profile blob.
-public enum MemoryValue: Hashable, Codable, Sendable {
-    case text(String)
-    case person(String)
-    case place(String)
-    case date(Date)
-    case preference(Bool)
-
-    public var rendered: String {
-        switch self {
-        case .text(let value): value
-        case .person(let value): value
-        case .place(let value): value
-        case .date(let value): value.formatted(date: .abbreviated, time: .omitted)
-        case .preference(let value): value ? "yes" : "no"
-        }
+    /// `written`, as a name: `nil` when nothing's written.
+    public init?(_ written: String) {
+        let name = written.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard !name.isEmpty else { return nil }
+        self.rawValue = name
     }
+
+    public var description: String { rawValue }
 }
 
-/// How likely a fact is to change. Drives supersession and expiration.
-public enum MemoryStability: String, Codable, Sendable, CaseIterable {
-    /// Low-value short-lived context (for example "checking the weather in
-    /// Munich this week"). Expires quickly.
-    case transient
-    /// Currently true but expected to change on its own.
-    case situational
-    /// A durable attribute that can still change (residence, job, pets).
-    case mutable
-    /// Effectively permanent (birth date, given name).
-    case stable
+/// Where a fact is in a person's memory: the names from them down, `lives in` or
+/// `family › sister`. A fact is known by its path: a new value at the same path replaces it.
+public struct MemoryPath: Hashable, Codable, Sendable, CustomStringConvertible {
+    /// How deep a path goes, at most.
+    public static let maximumDepth = 3
+
+    public let names: [MemoryName]
+
+    /// `written`, from the person down, as a path: `nil` when a name is empty, or there are none
+    /// or too many.
+    public init?(_ written: [String]) {
+        let names = written.compactMap(MemoryName.init)
+        guard names.count == written.count, (1...Self.maximumDepth).contains(names.count) else { return nil }
+        self.names = names
+    }
+
+    public var description: String {
+        names.map(\.rawValue).joined(separator: " › ")
+    }
 }
 
 public enum MemoryFactStatus: Hashable, Codable, Sendable {
     case active
     case superseded(by: MemoryFactID)
-    case expired
     case forgotten
 }
 
-/// A durable statement about the user, derived from observations.
+/// Something the person said about themselves, at its place in their memory, with the messages it
+/// came from.
 ///
-/// Contradictory facts are retained with status and validity ranges; a newer
-/// residence does not erase the older one.
+/// A newer value at the same path supersedes the older one, which is kept as superseded.
 public struct MemoryFact: Hashable, Codable, Sendable {
     public let id: MemoryFactID
-    public let namespace: MemoryNamespace
-    public let predicate: String
-    public let value: MemoryValue
+    public let path: MemoryPath
+    public let value: String
     public private(set) var evidence: [ObservationID]
     public private(set) var confidence: Double
-    public let importance: Double
-    public let stability: MemoryStability
     public let observedAt: Date
-    public let validFrom: Date?
-    public let validUntil: Date?
     public private(set) var status: MemoryFactStatus
 
     public init(
         id: MemoryFactID = MemoryFactID(),
-        namespace: MemoryNamespace,
-        predicate: String,
-        value: MemoryValue,
+        path: MemoryPath,
+        value: String,
         evidence: [ObservationID],
         confidence: Double,
-        importance: Double,
-        stability: MemoryStability,
         observedAt: Date,
-        validFrom: Date? = nil,
-        validUntil: Date? = nil,
         status: MemoryFactStatus = .active
     ) {
         self.id = id
-        self.namespace = namespace
-        self.predicate = predicate
+        self.path = path
         self.value = value
         self.evidence = evidence
         self.confidence = min(max(confidence, 0), 1)
-        self.importance = min(max(importance, 0), 1)
-        self.stability = stability
         self.observedAt = observedAt
-        self.validFrom = validFrom
-        self.validUntil = validUntil
         self.status = status
     }
 
@@ -181,9 +159,8 @@ public struct MemoryFact: Hashable, Codable, Sendable {
 /// deterministic ``MemoryPolicy`` decides what becomes a durable fact, while
 /// ``MemoryEvidence`` validates that its provenance is user-authored.
 public struct FactCandidate: Hashable, Codable, Sendable {
-    public let namespace: MemoryNamespace
-    public let predicate: String
-    public let value: MemoryValue
+    public let path: MemoryPath
+    public let value: String
     public let evidence: [ObservationID]
     /// A short verbatim fragment from one of the referenced user
     /// observations. This is deliberately separate from the assistant
@@ -191,33 +168,22 @@ public struct FactCandidate: Hashable, Codable, Sendable {
     /// cannot establish a personal fact.
     public let supportingText: String
     public let confidence: Double
-    public let importance: Double
-    public let stability: MemoryStability
     public let observedAt: Date
-    public let validUntil: Date?
 
     public init(
-        namespace: MemoryNamespace,
-        predicate: String,
-        value: MemoryValue,
+        path: MemoryPath,
+        value: String,
         evidence: [ObservationID],
         supportingText: String,
         confidence: Double,
-        importance: Double,
-        stability: MemoryStability,
-        observedAt: Date = Date(),
-        validUntil: Date? = nil
+        observedAt: Date = Date()
     ) {
-        self.namespace = namespace
-        self.predicate = predicate
+        self.path = path
         self.value = value
         self.evidence = evidence
         self.supportingText = supportingText
         self.confidence = min(max(confidence, 0), 1)
-        self.importance = min(max(importance, 0), 1)
-        self.stability = stability
         self.observedAt = observedAt
-        self.validUntil = validUntil
     }
 }
 
@@ -252,18 +218,6 @@ public enum MemoryEvidence {
             .split(whereSeparator: { $0.isWhitespace })
             .joined(separator: " ")
     }
-}
-
-/// A model or application proposal over one user's memory.
-///
-/// An addition that contradicts an active fact with the same namespace and
-/// predicate supersedes it; ``MemoryPolicy`` resolves the contradiction
-/// deterministically. A revision must identify the active fact it is
-/// correcting; ``MemoryPolicy`` validates that identity before producing a
-/// journal event.
-public enum MemoryProposal: Hashable, Codable, Sendable {
-    case add(FactCandidate)
-    case revise(factID: MemoryFactID, candidate: FactCandidate)
 }
 
 /// The immutable input captured for one memory extraction.

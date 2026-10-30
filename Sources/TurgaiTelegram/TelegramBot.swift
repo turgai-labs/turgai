@@ -495,10 +495,26 @@ public actor TelegramBot {
                     userID: userID
                 )
             )
+        case .forgetFact:
+            return .command(
+                .forgetFact(
+                    id: argument(in: text) ?? "",
+                    conversationID: conversationID,
+                    participantID: participantID,
+                    userID: userID
+                )
+            )
+        case .memoryOn:
+            return .command(
+                .memoryOn(conversationID: conversationID, participantID: participantID, userID: userID))
+        case .memoryOff:
+            return .command(
+                .memoryOff(conversationID: conversationID, participantID: participantID, userID: userID))
         default:
             return .message(
                 InboundMessage(
                     id: messageID,
+                    channelMessageID: ChannelMessageID(rawValue: String(message.messageID)),
                     conversationID: conversationID,
                     participantID: participantID,
                     userID: userID,
@@ -724,7 +740,10 @@ extension TelegramInboundEvent {
                 .cancelTask(_, let conversationID, _, _),
                 .cancelReminder(_, let conversationID, _, _),
                 .objects(let conversationID, _, _),
-                .object(_, let conversationID, _, _):
+                .object(_, let conversationID, _, _),
+                .forgetFact(_, let conversationID, _, _),
+                .memoryOn(let conversationID, _, _),
+                .memoryOff(let conversationID, _, _):
                 conversationID
             }
         }

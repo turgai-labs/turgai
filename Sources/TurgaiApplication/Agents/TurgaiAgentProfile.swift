@@ -191,104 +191,67 @@ public enum TurgaiAgentProfileError: Error, Equatable, Sendable {
 /// Durable catalog of user-facing agent definitions and the application
 /// default. Channel-specific routing belongs to the channel aggregate.
 ///
-/// The catalog is intentionally a small local file rather than a distributed
-/// actor. It is application configuration, and all writes are atomic. Reads
-/// are actor-isolated so the dashboard and the runtime can share one value
-/// without an unchecked sendability escape hatch.
+/// The profiles are kept in their storage, and every read asks it: the store keeps no copy.
+/// What must hold across profiles, one default that exists, is the storage's.
 public actor TurgaiAgentProfileStore {
     public static let defaultProfileID = "conversation"
     /// The context window a new profile starts with, for providers where it's a choice.
     public static let defaultContextWindow = 16_384
 
-    private struct State: Codable, Sendable {
-        var defaultProfileID: String = TurgaiAgentProfileStore.defaultProfileID
-        var profiles: [TurgaiAgentProfile] = []
+    private let storage: AgentProfileStorage
+
+    /// The profiles kept in `storage`.
+    public init(storage: AgentProfileStorage) {
+        self.storage = storage
     }
 
-    private static let statePath = "agents/profiles.json"
-
-    private let files: FileClient
-    private var state: State
-
-    public init(files: FileClient) throws {
-        self.files = files
-        var initialState: State = try files.loadDocument(at: Self.statePath) ?? State()
-        var shouldPersist = false
-        if !initialState.profiles.isEmpty,
-            !initialState.profiles.contains(where: { $0.id == initialState.defaultProfileID })
-        {
-            // A hand-edited file may predate the explicit default ID. Keep
-            // startup deterministic while leaving an empty catalog empty.
-            initialState.defaultProfileID = initialState.profiles[0].id
-            shouldPersist = true
-        }
-        let canonicalProfiles = initialState.profiles.map { profile in
-            var canonical = profile
-            if canonical.id == initialState.defaultProfileID, canonical.name == "Conversation" {
-                canonical.name = "Turgai"
-                shouldPersist = true
-            }
-            return canonical
-        }
-        if canonicalProfiles != initialState.profiles {
-            initialState.profiles = canonicalProfiles
-            shouldPersist = true
-        }
-        try Self.validateState(initialState)
-        self.state = initialState
-        if shouldPersist {
-            try files.saveDocument(initialState, at: Self.statePath)
-        }
+    /// Every profile, by name.
+    public func profiles() async throws -> [TurgaiAgentProfile] {
+        try await storage.all()
     }
 
-    public func profiles() -> [TurgaiAgentProfile] {
-        state.profiles.sorted { $0.name.lowercased() < $1.name.lowercased() }
+    public func profile(id: String) async throws -> TurgaiAgentProfile? {
+        try await storage.withID(id)
     }
 
-    public func profile(id: String) -> TurgaiAgentProfile? {
-        state.profiles.first { $0.id == id }
+    public func defaultProfile() async throws -> TurgaiAgentProfile? {
+        try await storage.defaultProfile()
     }
 
-    public func defaultProfile() -> TurgaiAgentProfile? {
-        state.profiles.first { $0.id == state.defaultProfileID }
+    public func isDefaultProfile(id: String) async throws -> Bool {
+        try await storage.defaultProfile()?.id == id
     }
 
-    public func isDefaultProfile(id: String) -> Bool {
-        state.defaultProfileID == id
-    }
-
-    public func setDefaultProfile(id: String) throws {
-        guard let profile = state.profiles.first(where: { $0.id == id }) else {
+    public func setDefaultProfile(id: String) async throws {
+        guard let profile = try await storage.withID(id) else {
             throw TurgaiAgentProfileError.unknownProfile(id)
         }
         guard case .enabled = profile.availability else {
             throw TurgaiAgentProfileError.invalidName
         }
-        state.defaultProfileID = id
-        try persist()
+        try await storage.setDefault(id)
     }
 
     /// Resolves the configured default agent. Channel-specific routing is
     /// owned by the channel actor and never inferred from this catalog.
-    public func defaultProfileID() throws -> String {
-        guard let profile = defaultProfile(), profile.availability == .enabled else {
+    public func defaultProfileID() async throws -> String {
+        guard let profile = try await storage.defaultProfile(), profile.availability == .enabled else {
             throw TurgaiAgentProfileError.noEnabledProfile
         }
         return profile.id
     }
 
-    public func update(_ profile: TurgaiAgentProfile) throws {
-        guard let index = state.profiles.firstIndex(where: { $0.id == profile.id }) else {
-            throw TurgaiAgentProfileError.unknownProfile(profile.id)
-        }
+    public func update(_ profile: TurgaiAgentProfile) async throws {
         try Self.validate(profile)
-        if profile.id == state.defaultProfileID, case .disabled = profile.availability {
+        if case .disabled = profile.availability, try await isDefaultProfile(id: profile.id) {
             throw TurgaiAgentProfileError.invalidName
         }
-        state.profiles[index] = profile
-        try persist()
+        guard try await storage.update(profile) else {
+            throw TurgaiAgentProfileError.unknownProfile(profile.id)
+        }
     }
 
+    /// Makes a profile: the first one made is the default.
     @discardableResult
     public func create(
         name: String,
@@ -297,11 +260,9 @@ public actor TurgaiAgentProfileStore {
         providerConfiguration: AgentProviderConfiguration,
         persona: String? = nil,
         instructions: String = ""
-    ) throws -> TurgaiAgentProfile {
-        let wasEmpty = state.profiles.isEmpty
-        let id = Self.uniqueID(for: name, existing: Set(state.profiles.map(\.id)))
+    ) async throws -> TurgaiAgentProfile {
         let profile = TurgaiAgentProfile(
-            id: id,
+            id: Self.uniqueID(for: name, existing: try await storage.ids()),
             name: name,
             model: model,
             reasoningEffort: reasoningEffort,
@@ -310,23 +271,17 @@ public actor TurgaiAgentProfileStore {
             instructions: instructions
         )
         try Self.validate(profile)
-        state.profiles.append(profile)
-        if wasEmpty {
-            state.defaultProfileID = profile.id
-        }
-        try persist()
+        try await storage.insert(profile)
         return profile
     }
 
-    public func delete(id: String) throws {
-        guard id != state.defaultProfileID else {
+    public func delete(id: String) async throws {
+        guard try await !isDefaultProfile(id: id) else {
             throw TurgaiAgentProfileError.cannotDeleteDefaultProfile
         }
-        guard state.profiles.contains(where: { $0.id == id }) else {
+        guard try await storage.delete(id) else {
             throw TurgaiAgentProfileError.unknownProfile(id)
         }
-        state.profiles.removeAll { $0.id == id }
-        try persist()
     }
 
     private static func validate(_ profile: TurgaiAgentProfile) throws {
@@ -369,20 +324,6 @@ public actor TurgaiAgentProfileStore {
         guard profile.contextWindow > 0 else {
             throw TurgaiAgentProfileError.invalidContextWindow(profile.contextWindow)
         }
-    }
-
-    private static func validateState(_ state: State) throws {
-        var ids = Set<String>()
-        for profile in state.profiles {
-            guard ids.insert(profile.id).inserted else {
-                throw TurgaiAgentProfileError.invalidID(profile.id)
-            }
-            try validate(profile)
-        }
-    }
-
-    private func persist() throws {
-        try files.saveDocument(state, at: Self.statePath)
     }
 
     private static func validID(_ value: String) -> Bool {

@@ -75,6 +75,14 @@ let package = Package(
             from: "1.27.0"
         ),
         .package(
+            url: "https://github.com/turgai-labs/sqlite-event-store.git",
+            branch: "main"
+        ),
+        .package(
+            url: "https://github.com/vapor/sqlite-nio.git",
+            from: "1.13.0"
+        ),
+        .package(
             url: "https://github.com/apple/swift-nio-ssl.git",
             from: "2.25.0"
         ),
@@ -202,6 +210,7 @@ let package = Package(
         .target(
             name: "TurgaiApplication",
             dependencies: [
+                .product(name: "SQLiteNIO", package: "sqlite-nio"),
                 "TurgaiDomain",
                 "TurgaiMemory",
                 "TurgaiHail",
@@ -252,6 +261,8 @@ let package = Package(
                 .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 .product(name: "PostgresEventStore", package: "postgres-event-store"),
                 .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "SQLiteEventStore", package: "sqlite-event-store"),
+                .product(name: "SQLiteNIO", package: "sqlite-nio"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Logging", package: "swift-log"),
             ]
@@ -358,6 +369,7 @@ let package = Package(
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "PostgresEventStore", package: "postgres-event-store"),
                 .product(name: "PostgresNIO", package: "postgres-nio"),
+                .product(name: "SQLiteNIO", package: "sqlite-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "SystemPackage", package: "swift-system"),
             ]

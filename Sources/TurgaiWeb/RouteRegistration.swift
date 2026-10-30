@@ -23,7 +23,8 @@ struct TurgaiRouteDependencies: Sendable {
     let agentCredentials: AgentCredentialStore
     let requestLimits: RequestLimitStore
     let channelSecrets: ChannelSecretStore
-    let defaultFileDirectory: URL
+    /// Turgai's directory, where its own database is.
+    let directory: URL
     let runtimeSnapshots: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot]
     let userToolRegistry: UserToolRegistry
     let webChatBridge: TurgaiWebChatBridge
@@ -39,7 +40,7 @@ extension TurgaiMainWebApp {
             agentCredentials: agentCredentials,
             requestLimits: requestLimits,
             channelSecrets: channelSecrets,
-            defaultFileDirectory: directory,
+            directory: directory,
             runtimeSnapshots: runtimeSnapshots,
             userToolRegistry: UserToolRegistry(
                 directory: directory.appendingPathComponent("tools", isDirectory: true)

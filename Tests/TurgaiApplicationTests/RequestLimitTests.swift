@@ -1,7 +1,6 @@
 import Foundation
 import Hail
 import Testing
-import TurgaiPersistence
 
 @testable import TurgaiApplication
 
@@ -27,17 +26,29 @@ struct RequestLimitTests {
         )
     }
 
+    /// The default is kept whatever is set next, and a lifted one stays lifted.
+    @Test func theDefaultIsKeptAndALiftedLimitStaysLifted() async throws {
+        let storage = RequestLimitStorage.test
+        let first = try await RequestLimitStore(storage: storage)
+        try await first.setLimit(2, for: ModelAccount(rawValue: "anthropic"))
+        let second = try await RequestLimitStore(storage: storage)
+        #expect(try await second.limit(for: ModelAccount(rawValue: "ollama-cloud")) == 1)
+        try await second.setLimit(nil, for: ModelAccount(rawValue: "ollama-cloud"))
+        let third = try await RequestLimitStore(storage: storage)
+        #expect(try await third.limit(for: ModelAccount(rawValue: "ollama-cloud")) == nil)
+        #expect(try await third.limit(for: ModelAccount(rawValue: "anthropic")) == 2)
+    }
+
     @Test func aLimitIsKeptAcrossRestarts() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let first = try RequestLimitStore(files: try FileClient(directory: directory))
+        let storage = RequestLimitStorage.test
+        let first = try await RequestLimitStore(storage: storage)
         // A new installation starts with Ollama's cloud at one request at a time.
-        #expect(await first.limit(for: ModelAccount(rawValue: "ollama-cloud")) == 1)
+        #expect(try await first.limit(for: ModelAccount(rawValue: "ollama-cloud")) == 1)
         try await first.setLimit(3, for: ModelAccount(rawValue: "ollama-cloud"))
         try await first.setLimit(4, for: ModelAccount(rawValue: "anthropic"))
-        let second = try RequestLimitStore(files: try FileClient(directory: directory))
-        #expect(await second.limit(for: ModelAccount(rawValue: "ollama-cloud")) == 3)
-        #expect(await second.limit(for: ModelAccount(rawValue: "anthropic")) == 4)
+        let second = try await RequestLimitStore(storage: storage)
+        #expect(try await second.limit(for: ModelAccount(rawValue: "ollama-cloud")) == 3)
+        #expect(try await second.limit(for: ModelAccount(rawValue: "anthropic")) == 4)
         #expect(
             await second.transports.limits == [
                 ModelAccount(rawValue: "ollama-cloud"): 3, ModelAccount(rawValue: "anthropic"): 4,

@@ -91,22 +91,42 @@ private enum PublishEvent: Sendable {
         case .inbox(.turnStarted(let pending)):
             self = .turnStarted(pending)
         case .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyQueued, .replyDelivered,
-            .reset:
+            .reset, .noted, .unnoted:
             return nil
         }
     }
 }
 
-private enum MemoryPresentation {
-    static func facts(_ facts: [MemoryFact]) -> String {
-        guard !facts.isEmpty else {
-            return "I don't have any saved personal memory for you."
-        }
+/// What's remembered about a person, as `/memory` shows it, and its buttons.
+enum MemoryPresentation {
+    /// How long a fact is on its button, at most.
+    private static let maximumLabel = 48
 
-        return "Saved personal memory:\n"
-            + facts.map { fact in
-                "- [\(fact.namespace.rawValue)] \(fact.predicate): \(fact.value.rendered)"
-            }.joined(separator: "\n")
+    /// What's remembered, as its tree, drawn in a code block so its lines stay in place.
+    static func text(_ remembered: MemoryTree, remembering: Remembering) -> String {
+        let off = remembering == .off ? "Memory is off: nothing new is remembered.\n" : ""
+        guard !remembered.isEmpty else { return off + "Nothing is remembered." }
+        return off + "Remembered:\n```\n" + remembered.rendered() + "\n```"
+    }
+
+    /// A button to forget each fact, one to turn remembering off or on, and one to forget everything.
+    static func actions(for remembered: MemoryTree, remembering: Remembering) -> [OutboundAction] {
+        let forgetting = remembered.facts.map { fact in
+            OutboundAction(
+                label: "Forget " + shortened("\(fact.path): \(fact.value)"),
+                command: "/forget-fact \(fact.id.rawValue.uuidString)")
+        }
+        let turning =
+            switch remembering {
+            case .on: OutboundAction(label: "Turn memory off", command: "/memory-off")
+            case .off: OutboundAction(label: "Turn memory on", command: "/memory-on")
+            }
+        return forgetting + [turning]
+            + (remembered.isEmpty ? [] : [OutboundAction(label: "Forget everything", command: "/forget")])
+    }
+
+    private static func shortened(_ text: String) -> String {
+        text.count <= maximumLabel ? text : String(text.prefix(maximumLabel - 1)) + "…"
     }
 
     static func forgotten(factCount: Int) -> String {
@@ -114,6 +134,13 @@ private enum MemoryPresentation {
             ? "There was no saved personal memory to forget."
             : "I forgot your saved personal memory."
     }
+}
+
+/// A fact's id that isn't one.
+private struct NotAFact: Error, CustomStringConvertible {
+    let written: String
+
+    var description: String { "`\(written)` isn't a remembered fact's id" }
 }
 
 /// Why an object can't be shown: it isn't one of the person's here, with those that are.
@@ -315,6 +342,10 @@ public distributed actor Conversation {
     private var memoryExtractionConfiguration: MemoryExtractionConfiguration?
     private var connections: Set<ConversationConnection> = []
     private var liveState = ConversationLiveState()
+    /// Takes the noted message's mark off once it has shown long enough.
+    private var unnoting: Task<Void, Never>?
+    /// How long a noted message shows its mark.
+    private static let notedFor: Duration = .seconds(60)
     /// Live-only echo bookkeeping: message IDs whose user-message echo was
     /// already broadcast. Bounded like `AgentInbox.acceptedMessageIDs`.
     private var echoedMessageIDs: [MessageID] = []
@@ -363,11 +394,14 @@ public distributed actor Conversation {
 
     /// A conversation can passivate while idle, but never while a model turn
     /// is marked running. The running bit is journaled, so this does not rely
-    /// on a transient Task existing.
+    /// on a transient Task existing. Nor while a noted message shows its mark, or one of its
+    /// agents waits to extract what was said.
     public func shouldDeactivate() async -> Bool {
-        let noConnections = connections.isEmpty
-        return state.inbox.activeTurnID == nil
-            && noConnections
+        guard state.inbox.activeTurnID == nil, connections.isEmpty, unnoting == nil else { return false }
+        for participant in participants.values {
+            if await participant.whenLocal({ $0.isRemembering }) == true { return false }
+        }
+        return true
     }
 
     public distributed func currentRecord() -> ConversationState {
@@ -465,6 +499,8 @@ public distributed actor Conversation {
             throw ConversationActorError.conversationMismatch
         }
 
+        // A mark a restart left is taken off with the next message.
+        await unnote()
         memoryExtractionConfiguration = configuration.memoryExtraction
         turnConfigurations[turnID] = configuration
         // Whoever writes takes part in its group.
@@ -479,6 +515,46 @@ public distributed actor Conversation {
         if !state.inbox.acceptedMessageIDs.contains(message.id) {
             turnConfigurations[turnID] = nil
         }
+    }
+
+    /// Marks `message` as noted for its author's memory, for a moment: a mark already shown is
+    /// taken off first. It's kept until it's taken off, so one a restart leaves goes with the next
+    /// message.
+    public distributed func noted(_ message: NotedMessage) async {
+        await unnote()
+        do {
+            try await emit(event: .noted(message))
+        } catch {
+            actorSystem.log.warning(
+                "Could not mark a noted message", metadata: ["error": .string(String(describing: error))])
+            return
+        }
+        await publish(.noted(conversationID: conversationID, message))
+        unnoting = Task {
+            try? await Task.sleep(for: Self.notedFor)
+            guard !Task.isCancelled else { return }
+            unnoting = nil
+            await takeMarkOff()
+        }
+    }
+
+    /// Takes the noted message's mark off now, if one is shown.
+    private func unnote() async {
+        unnoting?.cancel()
+        unnoting = nil
+        await takeMarkOff()
+    }
+
+    private func takeMarkOff() async {
+        guard let noted = state.noted else { return }
+        do {
+            try await emit(event: .unnoted)
+        } catch {
+            actorSystem.log.warning(
+                "Could not take a noted mark off", metadata: ["error": .string(String(describing: error))])
+            return
+        }
+        await publish(.unnoted(conversationID: conversationID, noted))
     }
 
     /// Delivers a non-agent notification through the currently attached
@@ -523,14 +599,30 @@ public distributed actor Conversation {
     /// turn or become a new memory observation.
     public distributed func showMemory(for userID: TurgaiDomain.UserID) async throws {
         let user = try await User.resolve(on: actorSystem, userID: userID)
-        let facts = try await user.currentMemoryFacts(limit: 20)
+        let remembered = try await user.remembered()
+        let remembering = try await user.currentRemembering()
         await publish(
-            .notice(
+            .noticeWithActions(
                 conversationID: conversationID,
                 turnID: nil,
-                text: MemoryPresentation.facts(facts)
+                text: MemoryPresentation.text(remembered, remembering: remembering),
+                actions: MemoryPresentation.actions(for: remembered, remembering: remembering)
             )
         )
+    }
+
+    /// Forgets `userID`'s remembered fact `written`, by its id, then shows what's remembered.
+    public distributed func forgetFact(_ written: String, for userID: TurgaiDomain.UserID) async throws {
+        guard let id = UUID(uuidString: written) else { throw NotAFact(written: written) }
+        let user = try await User.resolve(on: actorSystem, userID: userID)
+        _ = try await user.forgetFact(MemoryFactID(rawValue: id))
+        try await showMemory(for: userID)
+    }
+
+    /// Turns remembering what `userID` says on or off, then shows what's remembered.
+    public distributed func setRemembering(_ remembering: Remembering, for userID: TurgaiDomain.UserID) async throws {
+        try await User.resolve(on: actorSystem, userID: userID).setRemembering(remembering)
+        try await showMemory(for: userID)
     }
 
     /// Shows durable runtime diagnostics without opening a model turn. The

@@ -96,47 +96,12 @@ public enum TurgaiAuthError: Error, Equatable, Sendable {
     case invalidSession
 }
 
-/// Local authentication state. Account data and the JWT signing secret live
+/// Local authentication state. Accounts are kept in their storage, and the JWT signing secret
 /// under `.turgai/auth`. The first administrator is claimed through a short-lived
 /// browser challenge rather than a terminal-visible secret.
 public actor TurgaiAuth {
     public static let sessionLifetime: TimeInterval = 86_400
     public static let bootstrapChallengeLifetime: TimeInterval = 600
-
-    private struct State: Codable, Sendable {
-        var accounts: [String: StoredAccount] = [:]
-    }
-
-    private struct StoredAccount: Codable, Sendable {
-        let id: UUID
-        let username: String
-        let passwordHash: String
-        let status: Account.Status
-        let role: Account.Role
-
-        init(
-            id: UUID = UUID(),
-            username: String,
-            passwordHash: String,
-            status: Account.Status,
-            role: Account.Role
-        ) {
-            self.id = id
-            self.username = username
-            self.passwordHash = passwordHash
-            self.status = status
-            self.role = role
-        }
-
-        var publicValue: Account {
-            Account(
-                id: id,
-                username: username,
-                status: status,
-                role: role
-            )
-        }
-    }
 
     private struct Claims: Codable, Sendable {
         let sub: String
@@ -145,25 +110,19 @@ public actor TurgaiAuth {
         let expiresAt: Int
     }
 
-    private let stateURL: URL
+    private let accounts: AccountStorage
     private let secret: SymmetricKey
-    private var state: State
     private var bootstrapChallenges: [String: Date] = [:]
     private var bootstrapInProgress = false
 
-    public init(directory: URL) throws {
+    /// Accounts kept in `accounts`, and the secret that signs sessions in `directory`.
+    public init(directory: URL, accounts: AccountStorage) throws {
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        self.stateURL = directory.appendingPathComponent("accounts.json")
-
-        if let data = try? Data(contentsOf: stateURL) {
-            self.state = try JSONDecoder().decode(State.self, from: data)
-        } else {
-            self.state = State()
-        }
+        self.accounts = accounts
 
         let secretURL = directory.appendingPathComponent("session-secret")
         let secretData: Data
@@ -180,12 +139,12 @@ public actor TurgaiAuth {
         self.secret = SymmetricKey(data: secretData)
     }
 
-    public func hasAdmin() -> Bool {
-        state.accounts.values.contains { $0.role == .administrator && $0.status == .approved }
+    public func hasAdmin() async throws -> Bool {
+        try await accounts.hasApprovedAdministrator()
     }
 
-    public func accounts() -> [Account] {
-        state.accounts.values.map(\.publicValue).sorted { $0.username < $1.username }
+    public func accounts() async throws -> [Account] {
+        try await accounts.all().map(\.account)
     }
 
     /// Issues a short-lived, in-memory challenge for the browser that opened
@@ -205,7 +164,8 @@ public actor TurgaiAuth {
 
     /// Creates the first administrator. The challenge is consumed before the
     /// password hash awaits, so two concurrent browser submissions cannot both
-    /// claim the installation.
+    /// claim the installation; and the account is kept only while no approved
+    /// administrator exists, in the same write.
     @discardableResult
     public func bootstrap(
         username: String,
@@ -214,7 +174,7 @@ public actor TurgaiAuth {
         confirmation: String,
         now: Date = Date()
     ) async throws -> Account {
-        guard !hasAdmin() else { throw TurgaiAuthError.setupAlreadyCompleted }
+        guard try await !hasAdmin() else { throw TurgaiAuthError.setupAlreadyCompleted }
         guard !bootstrapInProgress else { throw TurgaiAuthError.invalidSetupChallenge }
         guard constantTimeEquals(challenge, confirmation),
             let expiration = bootstrapChallenges.removeValue(forKey: challenge),
@@ -224,109 +184,70 @@ public actor TurgaiAuth {
         }
         bootstrapInProgress = true
         defer { bootstrapInProgress = false }
-        return try await createAccount(username: username, password: password, role: .administrator)
+        let account = try await newAccount(username: username, password: password, role: .administrator)
+        do {
+            guard try await accounts.insertFirstAdministrator(account) else {
+                throw TurgaiAuthError.setupAlreadyCompleted
+            }
+        } catch AccountStorageError.usernameTaken {
+            throw TurgaiAuthError.usernameTaken
+        }
+        return account.account
     }
 
     /// Creates a chat-only account. It can sign in immediately; an
     /// administrator may promote it to member access later.
     @discardableResult
     public func register(username: String, password: String) async throws -> Account {
-        try await createAccount(username: username, password: password, role: .user)
-    }
-
-    public func approve(username: String) throws {
-        guard let account = state.accounts[username] else { throw TurgaiAuthError.unknownUser }
-        state.accounts[username] = StoredAccount(
-            id: account.id,
-            username: account.username,
-            passwordHash: account.passwordHash,
-            status: .approved,
-            role: account.role
-        )
-        try persist()
-    }
-
-    public func approve(id: UUID) throws {
-        let (key, account) = try accountEntry(id: id)
-        state.accounts[key] = StoredAccount(
-            id: account.id,
-            username: account.username,
-            passwordHash: account.passwordHash,
-            status: .approved,
-            role: account.role
-        )
-        try persist()
-    }
-
-    public func enable(id: UUID) throws {
-        let (key, account) = try accountEntry(id: id)
-        state.accounts[key] = StoredAccount(
-            id: account.id,
-            username: account.username,
-            passwordHash: account.passwordHash,
-            status: .approved,
-            role: account.role
-        )
-        try persist()
-    }
-
-    public func disable(username: String) throws {
-        guard let account = state.accounts[username] else { throw TurgaiAuthError.unknownUser }
-        if account.role == .administrator && account.status == .approved {
-            let adminCount = state.accounts.values.filter { $0.role == .administrator && $0.status == .approved }.count
-            guard adminCount > 1 else { throw TurgaiAuthError.accountNotApproved }
+        let account = try await newAccount(username: username, password: password, role: .user)
+        do {
+            try await accounts.insert(account)
+        } catch AccountStorageError.usernameTaken {
+            throw TurgaiAuthError.usernameTaken
         }
-        state.accounts[username] = StoredAccount(
-            id: account.id,
-            username: account.username,
-            passwordHash: account.passwordHash,
-            status: .disabled,
-            role: account.role
-        )
-        try persist()
+        return account.account
     }
 
-    public func disable(id: UUID) throws {
-        let (key, account) = try accountEntry(id: id)
-        if account.role == .administrator && account.status == .approved {
-            let adminCount = state.accounts.values.filter { $0.role == .administrator && $0.status == .approved }.count
-            guard adminCount > 1 else { throw TurgaiAuthError.accountNotApproved }
-        }
-        state.accounts[key] = StoredAccount(
-            id: account.id,
-            username: account.username,
-            passwordHash: account.passwordHash,
-            status: .disabled,
-            role: account.role
-        )
-        try persist()
+    public func approve(username: String) async throws {
+        guard let account = try await accounts.named(username) else { throw TurgaiAuthError.unknownUser }
+        try await set(.approved, of: account.id)
     }
 
-    public func setRole(_ id: UUID, role: Account.Role) throws {
-        let (key, account) = try accountEntry(id: id)
-        if role != .administrator && account.role == .administrator && account.status == .approved {
-            let adminCount = state.accounts.values.filter { $0.role == .administrator && $0.status == .approved }.count
-            guard adminCount > 1 else { throw TurgaiAuthError.accountNotApproved }
-        }
-        state.accounts[key] = StoredAccount(
-            id: account.id,
-            username: account.username,
-            passwordHash: account.passwordHash,
-            status: account.status,
-            role: role
-        )
-        try persist()
+    public func approve(id: UUID) async throws {
+        try await set(.approved, of: id)
     }
 
-    private func accountEntry(id: UUID) throws -> (String, StoredAccount) {
-        guard let entry = state.accounts.first(where: { $0.value.id == id }) else {
-            throw TurgaiAuthError.unknownUser
-        }
-        return entry
+    public func enable(id: UUID) async throws {
+        try await set(.approved, of: id)
+    }
+
+    public func disable(username: String) async throws {
+        guard let account = try await accounts.named(username) else { throw TurgaiAuthError.unknownUser }
+        try await set(.disabled, of: account.id)
+    }
+
+    public func disable(id: UUID) async throws {
+        try await set(.disabled, of: id)
+    }
+
+    /// Gives the account `id` `role`: refused when it's unknown, or it would leave no approved
+    /// administrator.
+    public func setRole(_ id: UUID, role: Account.Role) async throws {
+        guard try await accounts.withID(id) != nil else { throw TurgaiAuthError.unknownUser }
+        guard try await accounts.setRole(role, id) else { throw TurgaiAuthError.accountNotApproved }
+    }
+
+    /// Sets the account `id`'s status: refused when it's unknown, or it would leave no approved
+    /// administrator.
+    private func set(_ status: Account.Status, of id: UUID) async throws {
+        guard try await accounts.withID(id) != nil else { throw TurgaiAuthError.unknownUser }
+        guard try await accounts.setStatus(status, id) else { throw TurgaiAuthError.accountNotApproved }
     }
 
     public func signIn(username: String, password: String, now: Date = Date()) async throws -> TurgaiSession {
-        guard let account = state.accounts[username] else { throw TurgaiAuthError.invalidCredentials }
+        guard let account = try await accounts.named(username) else {
+            throw TurgaiAuthError.invalidCredentials
+        }
         guard account.status != .disabled else { throw TurgaiAuthError.accountDisabled }
         guard try await verify(password, hash: account.passwordHash) else {
             throw TurgaiAuthError.invalidCredentials
@@ -347,7 +268,7 @@ public actor TurgaiAuth {
             token: "\(input).\(Self.base64URL(Data(signature)))", username: username, expiresAt: expiresAt)
     }
 
-    public func authenticate(_ token: String, now: Date = Date()) throws -> Account {
+    public func authenticate(_ token: String, now: Date = Date()) async throws -> Account {
         let parts = token.split(separator: ".")
         guard parts.count == 3,
             let payload = Self.decodeBase64URL(String(parts[1])),
@@ -361,29 +282,23 @@ public actor TurgaiAuth {
         let expected = HMAC<SHA256>.authenticationCode(for: Data(input.utf8), using: secret)
         guard constantTimeEquals(Data(expected), signatureData) else { throw TurgaiAuthError.invalidSession }
         guard let accountID = UUID(uuidString: claims.sub),
-            let account = state.accounts.values.first(where: { $0.id == accountID }),
+            let account = try await accounts.withID(accountID),
             account.status != .disabled
         else {
             throw TurgaiAuthError.invalidSession
         }
-        return account.publicValue
+        return account.account
     }
 
-    private func createAccount(username: String, password: String, role: Account.Role) async throws -> Account {
+    /// A new, approved account for `username`, its password hashed: refused when either isn't
+    /// one an account can have, or the username is taken.
+    private func newAccount(username: String, password: String, role: Account.Role) async throws -> StoredAccount {
         guard Self.validUsername(username) else { throw TurgaiAuthError.invalidUsername }
         guard password.count >= 12 else { throw TurgaiAuthError.weakPassword }
-        guard state.accounts[username] == nil else { throw TurgaiAuthError.usernameTaken }
-        let hash = try await hash(password)
-        let account = StoredAccount(
-            id: UUID(),
-            username: username,
-            passwordHash: hash,
-            status: .approved,
-            role: role
-        )
-        state.accounts[username] = account
-        try persist()
-        return account.publicValue
+        // Before the hash, which is slow: the insert decides, but this answers sooner.
+        guard try await accounts.named(username) == nil else { throw TurgaiAuthError.usernameTaken }
+        return StoredAccount(
+            id: UUID(), username: username, passwordHash: try await hash(password), status: .approved, role: role)
     }
 
     private func hash(_ password: String) async throws -> String {
@@ -392,11 +307,6 @@ public actor TurgaiAuth {
 
     private func verify(_ password: String, hash: String) async throws -> Bool {
         try await NIOThreadPool.singleton.runIfActive { Bcrypt.verify(password, hash: hash) }
-    }
-
-    private func persist() throws {
-        try JSONEncoder().encode(state).write(to: stateURL, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
     }
 
     private static func makeChallenge() -> String {

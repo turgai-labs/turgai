@@ -41,6 +41,8 @@ public enum TelegramReaction: String, Equatable, Sendable {
     case seen = "👀"
     case thinking = "🤔"
     case typing = "👨‍💻"
+    /// Something said was noted for its author's memory.
+    case noted = "✍"
 }
 
 public enum TelegramParseMode: String, Codable, Equatable, Sendable {

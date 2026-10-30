@@ -3,6 +3,7 @@ import DistributedCluster
 import Hail
 import ServiceLifecycle
 import TurgaiDomain
+import TurgaiMemory
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -215,16 +216,19 @@ public actor TurgaiConnections: Service {
 
     private let actorSystem: ClusterSystem
     private let agentProfiles: TurgaiAgentProfileStore
+    private let conversations: ConversationStorage
     private let connectionStream: AsyncStream<Connection>
     private let connectionContinuation: AsyncStream<Connection>.Continuation
     private let outboundConnections = OutboundConnections()
 
     public init(
         actorSystem: ClusterSystem,
-        agentProfiles: TurgaiAgentProfileStore
+        agentProfiles: TurgaiAgentProfileStore,
+        conversations: ConversationStorage
     ) {
         self.actorSystem = actorSystem
         self.agentProfiles = agentProfiles
+        self.conversations = conversations
         (self.connectionStream, self.connectionContinuation) =
             AsyncStream<Connection>.makeStream()
     }
@@ -237,7 +241,7 @@ public actor TurgaiConnections: Service {
             conversationID: id,
             agentDirectoryID: "agent-directory",
             agentRole: agentRole,
-            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(forProfileID: agentRole)
+            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(forProfileID: agentRole)
         )
     }
 
@@ -257,7 +261,7 @@ public actor TurgaiConnections: Service {
         case .defaultProfile:
             return try await agentProfiles.defaultProfileID()
         case .profile(let binding):
-            guard let profile = await agentProfiles.profile(id: binding), profile.availability == .enabled else {
+            guard let profile = try await agentProfiles.profile(id: binding), profile.availability == .enabled else {
                 throw LiveSessionRoutingError.unavailableProfile(binding)
             }
             return profile.id
@@ -278,6 +282,7 @@ public actor TurgaiConnections: Service {
             actorSystem: actorSystem,
             inbound: inbound,
             agentProfiles: agentProfiles,
+            conversations: conversations,
             source: source
         )
         actorSystem.log.debug("Live session added", metadata: ["session": "\(id)"])
@@ -305,7 +310,7 @@ public actor TurgaiConnections: Service {
             conversationID: conversationID,
             agentDirectoryID: "agent-directory",
             agentRole: role.rawValue,
-            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
                 forProfileID: role.rawValue
             )
         )
@@ -323,7 +328,7 @@ public actor TurgaiConnections: Service {
             conversationID: conversationID,
             agentDirectoryID: "agent-directory",
             agentRole: role.rawValue,
-            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
                 forProfileID: role.rawValue
             )
         )
@@ -341,7 +346,7 @@ public actor TurgaiConnections: Service {
             conversationID: conversationID,
             agentDirectoryID: "agent-directory",
             agentRole: role.rawValue,
-            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
                 forProfileID: role.rawValue
             )
         )
@@ -357,7 +362,7 @@ public actor TurgaiConnections: Service {
             conversationID: conversationID,
             agentDirectoryID: "agent-directory",
             agentRole: role.rawValue,
-            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
                 forProfileID: role.rawValue
             )
         )
@@ -424,6 +429,8 @@ private enum UserCommand {
     case cancelReminder(String)
     case objects
     case object(String)
+    case forgetFact(String)
+    case remembering(Remembering)
 }
 
 actor LiveSession {
@@ -442,6 +449,8 @@ actor LiveSession {
     private let inbound: AsyncChannel<ConversationInputDelivery>
     private let outputContinuation: OutputStream.Continuation
     private let agentProfiles: TurgaiAgentProfileStore
+    /// The conversations there are, which a conversation joins with its first message.
+    private let conversationStorage: ConversationStorage
     private let source: LiveSessionSource
     private let conversationConnection: ConversationConnection
     private let deliveryRegistry: OutboundDeliveryRegistry
@@ -453,12 +462,14 @@ actor LiveSession {
         actorSystem: ClusterSystem,
         inbound: AsyncChannel<ConversationInputDelivery>,
         agentProfiles: TurgaiAgentProfileStore,
+        conversations: ConversationStorage,
         source: LiveSessionSource
     ) {
         self.id = id
         self.actorSystem = actorSystem
         self.inbound = inbound
         self.agentProfiles = agentProfiles
+        self.conversationStorage = conversations
         self.source = source
         let (output, outputContinuation) = OutputStream.makeStream()
         self.output = output
@@ -548,12 +559,14 @@ actor LiveSession {
                     to: conversation,
                     conversationID: message.conversationID
                 )
+                // A conversation is there from its first message.
+                try await conversationStorage.add(message.conversationID)
                 try await conversation.send(
                     message,
                     turnID: turnID,
                     configuration: Conversation.TurnConfiguration(
                         agentRole: agentRole,
-                        memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+                        memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
                             forProfileID: agentRole
                         )
                     ),
@@ -717,6 +730,15 @@ actor LiveSession {
                     participantID: participantID,
                     userID: userID
                 )
+            case .forgetFact(let id, let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .forgetFact(id), conversationID: conversationID, participantID: participantID, userID: userID)
+            case .memoryOn(let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .remembering(.on), conversationID: conversationID, participantID: participantID, userID: userID)
+            case .memoryOff(let conversationID, let participantID, let userID):
+                return await handleUserCommand(
+                    .remembering(.off), conversationID: conversationID, participantID: participantID, userID: userID)
             }
         }
     }
@@ -766,6 +788,10 @@ actor LiveSession {
                 try await conversation.showObjects(for: userID)
             case .object(let id):
                 try await conversation.showObject(id, for: userID)
+            case .forgetFact(let id):
+                try await conversation.forgetFact(id, for: userID)
+            case .remembering(let remembering):
+                try await conversation.setRemembering(remembering, for: userID)
             }
             return true
         } catch {
@@ -795,7 +821,7 @@ actor LiveSession {
             conversationID: conversationID,
             agentDirectoryID: "agent-directory",
             agentRole: agentRole,
-            memoryExtraction: await agentProfiles.memoryExtractionConfiguration(
+            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
                 forProfileID: agentRole
             )
         )

@@ -7,6 +7,8 @@ import Hail
 import Logging
 import PostgresEventStore
 import PostgresNIO
+import SQLiteEventStore
+import SQLiteNIO
 import ServiceLifecycle
 import TurgaiApplication
 import TurgaiDomain
@@ -54,10 +56,14 @@ struct TurgaiAppService: Service, Sendable {
     private let environment: [String: String]
     private let workspaceRoot: String
     private let turgaiDirectory: URL
+    /// Turgai's database, which the journal is kept in unless it's kept in PostgreSQL.
+    private let persistence: TurgaiPersistence
     private let agentProfiles: TurgaiAgentProfileStore
     private let agentCredentials: AgentCredentialStore
     private let requestLimits: RequestLimitStore
     private let channelSecrets: ChannelSecretStore
+    private let conversations: ConversationStorage
+    private let channels: ChannelStorage
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let objectCatalogSource: TurgaiObjectCatalogSource
     private let webChatBridge: TurgaiWebChatBridge
@@ -69,10 +75,13 @@ struct TurgaiAppService: Service, Sendable {
         environment: [String: String],
         workspaceRoot: String,
         turgaiDirectory: URL,
+        persistence: TurgaiPersistence,
         agentProfiles: TurgaiAgentProfileStore,
         agentCredentials: AgentCredentialStore,
         requestLimits: RequestLimitStore,
         channelSecrets: ChannelSecretStore,
+        conversations: ConversationStorage,
+        channels: ChannelStorage,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
         webChatBridge: TurgaiWebChatBridge,
@@ -82,10 +91,13 @@ struct TurgaiAppService: Service, Sendable {
         self.environment = environment
         self.workspaceRoot = workspaceRoot
         self.turgaiDirectory = turgaiDirectory
+        self.persistence = persistence
         self.agentProfiles = agentProfiles
         self.agentCredentials = agentCredentials
         self.requestLimits = requestLimits
         self.channelSecrets = channelSecrets
+        self.conversations = conversations
+        self.channels = channels
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
         self.webChatBridge = webChatBridge
@@ -99,29 +111,16 @@ struct TurgaiAppService: Service, Sendable {
             throw ValidationError("Turgai onboarding is incomplete.")
         }
 
-        guard let defaultAgentProfile = await agentProfiles.defaultProfile() else {
+        guard try await agentProfiles.defaultProfile() != nil else {
             throw ValidationError("At least one agent must be configured.")
         }
-        let configuredProfiles = await agentProfiles.profiles()
-        let modelContextWindows: [AgentModel: Int] = configuredProfiles.reduce(into: [:]) {
-            (windows: inout [AgentModel: Int], profile: TurgaiAgentProfile) in
-            windows[profile.model] = profile.contextWindow
-        }
-        let runtimeConfiguration = HailRuntimeConfiguration(
-            contextWindow: defaultAgentProfile.contextWindow,
-            modelContextWindows: modelContextWindows,
-            contextWindowProvider: { model, agentID in
-                guard let profile = await Self.profile(of: agentID, in: agentProfiles), profile.model == model else {
-                    return nil
-                }
-                return profile.contextWindow
-            }
-        )
+        // A profile's endpoint carries its own context window, read with the profile on each turn.
+        let runtimeConfiguration = HailRuntimeConfiguration()
         let endpointFactory = AgentModelEndpointFactory(
             credentials: agentCredentials, transports: requestLimits.transports)
         let modelEndpointProvider: ModelEndpointProvider = { request in
             guard let model = try? AgentModel(request.model),
-                let profile = await Self.profile(of: request.agentID, in: agentProfiles), profile.model == model
+                let profile = try await Self.profile(of: request.agentID, in: agentProfiles), profile.model == model
             else { return nil }
             return try await endpointFactory.endpoint(
                 for: profile,
@@ -133,7 +132,7 @@ struct TurgaiAppService: Service, Sendable {
         guard let storageConfiguration = configuration.storage else {
             throw ValidationError("Storage configuration is missing.")
         }
-        let persistence = try TurgaiPersistence(
+        let journal = try JournalStorage(
             configuration: storageConfiguration,
             postgresPassword: configuration.postgresPassword
         )
@@ -142,9 +141,9 @@ struct TurgaiAppService: Service, Sendable {
             // Each store is built exactly once, here at the composition root:
             // the same instance serves boot recovery and the journal plugin.
             let stores: Stores
-            switch persistence.backend {
-            case .file(let client):
-                stores = Self.stores(on: client)
+            switch journal {
+            case .local:
+                stores = try await Self.stores(on: persistence.connection)
             case .postgres(let client):
                 // A PostgreSQL query naturally waits until PostgresClient.run
                 // is active. The client task remains structured around the
@@ -156,9 +155,6 @@ struct TurgaiAppService: Service, Sendable {
             }
             let eventStore = stores.events
             let snapshotStore = stores.snapshots
-            let loadPersistedConversationIDs = stores.conversationIDs
-            let discoverChannelIDs = stores.channelIDs
-            let persistedConversationIDs = try await loadPersistedConversationIDs()
             let userToolsDirectory =
                 turgaiDirectory
                 .appendingPathComponent("tools", isDirectory: true)
@@ -204,7 +200,8 @@ struct TurgaiAppService: Service, Sendable {
                 agentProfiles: agentProfiles,
                 secrets: channelSecrets,
                 telegramFiles: telegramFiles,
-                loadPersistedConversationIDs: loadPersistedConversationIDs
+                endpoints: endpointFactory,
+                conversations: conversations
             )
 
             // Nodes find each other through the cluster daemon, as in swift-chat.
@@ -251,10 +248,6 @@ struct TurgaiAppService: Service, Sendable {
                 actorSystem: system,
                 activities: TimerActivities(agentProfiles: agentProfiles)
             )
-            let memoryExtractionWorker = await DurableActivityDispatchWorker<MemoryExtractionWorkflow>(
-                actorSystem: system,
-                activities: MemoryExtractionActivities(endpointFactory: endpointFactory)
-            )
             let objectScheduleWorker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
                 actorSystem: system,
                 activities: ObjectScheduleActivities()
@@ -275,7 +268,6 @@ struct TurgaiAppService: Service, Sendable {
                 virtualNode: virtualNode,
                 scheduleWorker: scheduleWorker,
                 scheduleTimerWorker: scheduleTimerWorker,
-                memoryExtractionWorker: memoryExtractionWorker,
                 objectScheduleWorker: objectScheduleWorker,
                 objectTimerWorker: objectTimerWorker
             )
@@ -301,7 +293,6 @@ struct TurgaiAppService: Service, Sendable {
                 Startup("workflows", logger: logger) {
                     try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
                     try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
-                    try await system.workflows.recoverAll(ofType: MemoryExtractionWorkflow.self)
                     try await system.workflows.recoverAll(ofType: ObjectScheduleWorkflow.self)
                     try await system.workflows.recoverAll(ofType: ObjectTimerWorkflow.self)
                 },
@@ -309,15 +300,15 @@ struct TurgaiAppService: Service, Sendable {
                     await webChatBridge.install(
                         connections,
                         objectCatalog: channelRuntime.objectCatalog,
-                        discoverChannelIDs: discoverChannelIDs,
-                        actorSystem: system,
-                        persistedConversationIDs: persistedConversationIDs
+                        conversations: conversations,
+                        channels: channels,
+                        actorSystem: system
                     )
                 },
             ]
             // Every channel's bot, run by the node while its channel is enabled.
             let telegram = TelegramService(
-                actorSystem: system, dependencies: channelRuntime, discoverChannelIDs: discoverChannelIDs)
+                actorSystem: system, dependencies: channelRuntime, channels: channels)
 
             logger.info("Turgai is ready")
             logger.info("Workspace: \(workspaceRoot)")
@@ -331,10 +322,6 @@ struct TurgaiAppService: Service, Sendable {
             try await serviceGroup.run()
             persistenceTasks.cancelAll()
         }
-    }
-
-    private static func conversationIDs(persistenceIDs: [String]) -> [ConversationID] {
-        persistenceIDs.compactMap { ConversationPersistenceID(rawValue: $0)?.conversationID }
     }
 
     private static func makeSearchBackend(environment: [String: String]) throws -> WebSearchBackend {
@@ -397,7 +384,6 @@ struct TurgaiClusterService: Service {
     let virtualNode: VirtualNode
     let scheduleWorker: DurableActivityDispatchWorker<ScheduleWorkflow>
     let scheduleTimerWorker: DurableActivityDispatchWorker<TimerWorkflow>
-    let memoryExtractionWorker: DurableActivityDispatchWorker<MemoryExtractionWorkflow>
     let objectScheduleWorker: DurableActivityDispatchWorker<ObjectScheduleWorkflow>
     let objectTimerWorker: DurableActivityDispatchWorker<ObjectTimerWorkflow>
 
@@ -444,9 +430,11 @@ struct TurgaiClusterService: Service {
 
 extension TurgaiAppService {
     /// The profile an agent runs as: its own, or the default one for a helper.
-    static func profile(of agentID: AgentID, in agentProfiles: TurgaiAgentProfileStore) async -> TurgaiAgentProfile? {
+    static func profile(of agentID: AgentID, in agentProfiles: TurgaiAgentProfileStore) async throws
+        -> TurgaiAgentProfile?
+    {
         let role = agentID.role.rawValue
-        return role == "user-tool" ? await agentProfiles.defaultProfile() : await agentProfiles.profile(id: role)
+        return role == "user-tool" ? try await agentProfiles.defaultProfile() : try await agentProfiles.profile(id: role)
     }
 
     /// The user's tools in `directory`, each problem with one logged.
@@ -483,7 +471,7 @@ extension TurgaiAppService {
     ) async throws -> ModelConfiguration {
         let role = request.agentID.role.rawValue
         if role == "user-tool" {
-            guard let currentDefault = await agentProfiles.defaultProfile() else {
+            guard let currentDefault = try await agentProfiles.defaultProfile() else {
                 throw TurgaiModelSelectionError.missingProfile(
                     TurgaiAgentProfileStore.defaultProfileID
                 )
@@ -493,7 +481,7 @@ extension TurgaiAppService {
                 reasoningEffort: currentDefault.reasoningEffort
             )
         }
-        guard let profile = await agentProfiles.profile(id: role) else {
+        guard let profile = try await agentProfiles.profile(id: role) else {
             throw TurgaiModelSelectionError.missingProfile(role)
         }
         guard profile.availability == .enabled else {
@@ -513,8 +501,8 @@ extension TurgaiAppService {
         let agentKind: RuntimeAgentKind = role == "user-tool" ? .userTool : .profile
         let profile: TurgaiAgentProfile?
         switch agentKind {
-        case .userTool: profile = await agentProfiles.defaultProfile()
-        case .profile: profile = await agentProfiles.profile(id: role)
+        case .userTool: profile = try await agentProfiles.defaultProfile()
+        case .profile: profile = try await agentProfiles.profile(id: role)
         }
         guard let profile else {
             throw TurgaiModelSelectionError.missingProfile(role)
@@ -645,24 +633,15 @@ extension TurgaiAppService {
     struct Stores: Sendable {
         let events: any EventStore
         let snapshots: any SnapshotStore
-        let conversationIDs: @Sendable () async throws -> [ConversationID]
-        let channelIDs: @Sendable () async throws -> [UUID]
     }
 
-    /// The journal in files.
-    static func stores(on client: FileClient) -> Stores {
-        let reader = FileJournalReader(client: client)
-        return Stores(
-            events: FileEventStore(client: client),
-            snapshots: FileSnapshotStore(client: client),
-            conversationIDs: {
-                Self.conversationIDs(
-                    persistenceIDs: try await reader.persistenceIDs(withPrefix: ConversationPersistenceID.prefix))
-            },
-            channelIDs: {
-                try await reader.persistenceIDs(withPrefix: TelegramChannel.persistencePrefix)
-                    .compactMap(TelegramChannel.channelID(from:))
-            })
+    /// The journal in one SQLite file, its tables set up.
+    static func stores(on connection: SQLiteConnection) async throws -> Stores {
+        let events = SQLiteEventStore(connection: connection)
+        let snapshots = SQLiteSnapshotStore(connection: connection)
+        try await events.setupDatabase()
+        try await snapshots.setupDatabase()
+        return Stores(events: events, snapshots: snapshots)
     }
 
     /// The journal in PostgreSQL, its tables set up.
@@ -671,15 +650,7 @@ extension TurgaiAppService {
         let snapshots = PostgresSnapshotStore(client: client)
         try await events.setupDatabase()
         try await snapshots.setupDatabase()
-        let reader = PostgresJournalReader(client: client)
-        return Stores(
-            events: events,
-            snapshots: snapshots,
-            conversationIDs: { try await reader.conversationIDs() },
-            channelIDs: {
-                try await reader.persistenceIDs(withPrefix: TelegramChannel.persistencePrefix)
-                    .compactMap(TelegramChannel.channelID(from:))
-            })
+        return Stores(events: events, snapshots: snapshots)
     }
 }
 
@@ -698,7 +669,7 @@ struct TurnToolSources: Sendable {
         let objectCatalog = try await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog
         // An object's Swift is written by the agent's own model, in a session of its own.
         let writer: ObjectWriter? =
-            if let profile = await agentProfiles.profile(id: context.agentID.role.rawValue) {
+            if let profile = try await agentProfiles.profile(id: context.agentID.role.rawValue) {
                 ObjectWriter(
                     endpoint: try await endpointFactory.endpoint(
                         for: profile,
@@ -720,7 +691,7 @@ struct TurnToolSources: Sendable {
             objectCatalog: objectCatalog,
             writer: writer,
             // Every enabled profile's agent can be asked, as an object.
-            agents: await agentProfiles.profiles().filter { $0.availability == .enabled }.map {
+            agents: try await agentProfiles.profiles().filter { $0.availability == .enabled }.map {
                 Role($0.id)
             },
             includeConversationTools: context.agentID.role.rawValue != "user-tool"

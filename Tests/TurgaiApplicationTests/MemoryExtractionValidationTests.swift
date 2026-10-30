@@ -6,8 +6,8 @@ import TurgaiMemory
 @testable import TurgaiApplication
 
 /// The Conversation-side candidate validation: a model candidate becomes a
-/// concrete proposal only when it is grounded in exactly one durable
-/// observation and every field parses.
+/// concrete one only when it is grounded in exactly one durable
+/// observation, its path is one, and its value is written.
 struct MemoryExtractionValidationTests {
     @Test("short answers retain the assistant question while evidence remains user-owned")
     func exchangeContext() throws {
@@ -17,31 +17,28 @@ struct MemoryExtractionValidationTests {
         let answer = observation("Haar, Germany")
         let transcript = MemoryExtractionService.transcript([question, answer])
         #expect(transcript == "user [1]: Weather please\nassistant [1]: Which location?\nuser [2]: Haar, Germany")
-        let proposal = MemoryExtractionService.proposal(
-            from: candidate(
-                supportingText: "Haar, Germany", namespace: "environment",
-                predicate: "weatherLocation", value: "Haar, Germany", valueKind: "place"),
-            evidence: [question, answer])
-        let accepted = try #require(proposal)
-        guard case .add(let fact) = accepted else { return }
+        let fact = try #require(
+            MemoryExtractionService.candidate(
+                from: candidate(quote: "Haar, Germany", path: ["lives in"], value: "Haar, Germany"),
+                evidence: [question, answer]))
         #expect(MemoryEvidence.supports(fact, in: [question, answer]))
         #expect(fact.evidence == [answer.id])
-        var memory = MemoryProjection()
+        var memory = Memory()
         memory.apply(.observationRecorded(question))
         memory.apply(.observationRecorded(answer))
         let input = ExtractionInput(observations: [question, answer], generation: memory.generation, existingFacts: [])
-        guard case .commit(let commit) = MemoryExtraction.decide(state: memory, input: input, proposals: [accepted])
+        guard case .commit(let commit) = MemoryExtraction.decide(state: memory, input: input, candidates: [fact])
         else {
             Issue.record("Expected the grounded location to be committed")
             return
         }
         memory.apply(.extractionCommitted(commit))
-        #expect(memory.currentFacts().first?.value == .place("Haar, Germany"))
+        #expect(memory.currentFacts().first?.value == "Haar, Germany")
         memory.apply(.cleared(at: Date()))
-        #expect(MemoryExtraction.decide(state: memory, input: input, proposals: [accepted]) == .stale)
+        #expect(MemoryExtraction.decide(state: memory, input: input, candidates: [fact]) == .stale)
         #expect(
-            MemoryExtractionService.proposal(
-                from: candidate(supportingText: "Which location?"), evidence: [question, answer]) == nil)
+            MemoryExtractionService.candidate(from: candidate(quote: "Which location?"), evidence: [question, answer])
+                == nil)
     }
 
     private let observedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -56,62 +53,34 @@ struct MemoryExtractionValidationTests {
     }
 
     private func candidate(
-        supportingText: String = "I drink coffee every morning",
-        namespace: String = "preference",
-        predicate: String = "drinksCoffee",
-        value: String = "true",
-        valueKind: String = "preference"
+        quote: String = "I drink coffee every morning",
+        path: [String] = ["drinks", "coffee"],
+        value: String = "every morning"
     ) -> MemoryExtractionReport.MemoryExtractionCandidate {
-        MemoryExtractionReport.MemoryExtractionCandidate(
-            namespace: namespace,
-            predicate: predicate,
-            value: value,
-            valueKind: valueKind,
-            confidence: 0.9,
-            importance: 0.8,
-            stability: "stable",
-            supportingText: supportingText
-        )
+        MemoryExtractionReport.MemoryExtractionCandidate(path: path, value: value, quote: quote, confidence: 0.9)
     }
 
-    @Test("a candidate grounded in exactly one observation becomes an add proposal")
-    func validCandidateBecomesProposal() throws {
+    @Test("a candidate grounded in exactly one observation becomes a fact candidate at its path")
+    func validCandidateBecomesAFactCandidate() throws {
         let evidence = [observation("I drink coffee every morning before work")]
-        let proposal = MemoryExtractionService.proposal(
-            from: candidate(),
-            evidence: evidence
-        )
-        guard case .add(let fact) = proposal else {
-            Issue.record("Expected an add proposal, got \(String(describing: proposal))")
-            return
-        }
-        #expect(fact.namespace == .preference)
-        #expect(fact.predicate == "drinksCoffee")
-        #expect(fact.value == .preference(true))
+        let fact = try #require(MemoryExtractionService.candidate(from: candidate(), evidence: evidence))
+        #expect(fact.path == MemoryPath(["drinks", "coffee"]))
+        #expect(fact.value == "every morning")
         #expect(fact.evidence == [evidence[0].id])
     }
 
     @Test("repeated evidence entries do not make one observation ambiguous")
     func repeatedEvidenceStillHasOneSource() throws {
         let source = observation("I drink coffee every morning before work")
-        let proposal = MemoryExtractionService.proposal(
-            from: candidate(),
-            evidence: [source, source]
-        )
-        guard case .add(let fact) = proposal else {
-            Issue.record("Expected an add proposal, got \(String(describing: proposal))")
-            return
-        }
+        let fact = try #require(MemoryExtractionService.candidate(from: candidate(), evidence: [source, source]))
         #expect(fact.evidence == [source.id])
     }
 
     @Test("a quote matching nothing is rejected")
     func unmatchedQuoteIsRejected() {
-        let proposal = MemoryExtractionService.proposal(
-            from: candidate(),
-            evidence: [observation("something else entirely")]
-        )
-        #expect(proposal == nil)
+        #expect(
+            MemoryExtractionService.candidate(from: candidate(), evidence: [observation("something else entirely")])
+                == nil)
     }
 
     @Test("a quote matching two observations is rejected, not guessed")
@@ -120,28 +89,14 @@ struct MemoryExtractionValidationTests {
             observation("I drink coffee every morning", id: "00000000-0000-0000-0000-000000000001"),
             observation("I drink coffee every morning, always", id: "00000000-0000-0000-0000-000000000002"),
         ]
-        let proposal = MemoryExtractionService.proposal(
-            from: candidate(),
-            evidence: evidence
-        )
-        #expect(proposal == nil)
+        #expect(MemoryExtractionService.candidate(from: candidate(), evidence: evidence) == nil)
     }
 
-    @Test("an unparseable namespace is rejected")
-    func unknownNamespaceIsRejected() {
-        let proposal = MemoryExtractionService.proposal(
-            from: candidate(namespace: "not-a-namespace"),
-            evidence: [observation("I drink coffee every morning")]
-        )
-        #expect(proposal == nil)
-    }
-
-    @Test("an invalid typed value is rejected")
-    func invalidTypedValueIsRejected() {
-        let proposal = MemoryExtractionService.proposal(
-            from: candidate(value: "not-a-date", valueKind: "date"),
-            evidence: [observation("I drink coffee every morning")]
-        )
-        #expect(proposal == nil)
+    @Test("a path that isn't one, or a value that's empty, is rejected")
+    func pathAndValueMustBeWritten() {
+        let evidence = [observation("I drink coffee every morning")]
+        #expect(MemoryExtractionService.candidate(from: candidate(path: []), evidence: evidence) == nil)
+        #expect(MemoryExtractionService.candidate(from: candidate(path: ["a", "b", "c", "d"]), evidence: evidence) == nil)
+        #expect(MemoryExtractionService.candidate(from: candidate(value: " "), evidence: evidence) == nil)
     }
 }

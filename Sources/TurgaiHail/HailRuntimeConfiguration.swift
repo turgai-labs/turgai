@@ -59,11 +59,6 @@ private enum WorkspaceDirectoryName {
 public struct HailRuntimeConfiguration: Sendable {
     public let temperature: Double
     public let contextWindow: Int?
-    /// Optional per-model context capacities. Hosts can use this when
-    /// several user-facing profiles share one runtime but have different
-    /// context budgets.
-    public let modelContextWindows: [AgentModel: Int]
-    public let contextWindowProvider: (@Sendable (AgentModel, AgentID) async -> Int?)?
     public let compactionMaxOutputTokens: Int
     public let maxToolRounds: Int
     public let ollamaKeepAlive: String?
@@ -71,16 +66,12 @@ public struct HailRuntimeConfiguration: Sendable {
     public init(
         temperature: Double = 0.2,
         contextWindow: Int? = nil,
-        modelContextWindows: [AgentModel: Int] = [:],
-        contextWindowProvider: (@Sendable (AgentModel, AgentID) async -> Int?)? = nil,
         compactionMaxOutputTokens: Int = 8_192,
         maxToolRounds: Int = 64,
         ollamaKeepAlive: String? = "10m"
     ) {
         self.temperature = temperature
         self.contextWindow = contextWindow
-        self.modelContextWindows = modelContextWindows
-        self.contextWindowProvider = contextWindowProvider
         self.compactionMaxOutputTokens = compactionMaxOutputTokens
         self.maxToolRounds = maxToolRounds
         self.ollamaKeepAlive = ollamaKeepAlive
@@ -98,18 +89,7 @@ public struct HailRuntimeConfiguration: Sendable {
     ) throws -> AgentRuntimePlugin {
         let routerConfiguration = try ModelRouterConfiguration(
             temperature: temperature,
-            contextWindowResolver: ModelContextWindowResolver(
-                configured: { candidate, agentID in
-                    if let contextWindowProvider {
-                        // A host provider is authoritative. If it cannot
-                        // resolve this agent/model pair, preserve that miss
-                        // instead of falling back to another profile's model
-                        // value.
-                        return await contextWindowProvider(candidate, agentID)
-                    }
-                    return modelContextWindows[candidate] ?? contextWindow
-                }
-            )
+            contextWindowResolver: ModelContextWindowResolver(configured: { _, _ in contextWindow })
         )
 
         return try AgentRuntimePlugin(

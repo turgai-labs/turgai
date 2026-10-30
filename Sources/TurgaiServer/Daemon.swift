@@ -9,9 +9,11 @@ struct Daemon: Service {
     func run() async throws {
         let logLevel = logLevel
         let system = await ClusterSystem.startClusterDaemon { $0.logging.logLevel = logLevel }.system
-        try await withGracefulShutdownHandler {
+        // Stopped by a graceful shutdown, or when the group is cancelled: waiting for the system
+        // to end doesn't end on cancellation.
+        try await withTaskCancellationOrGracefulShutdownHandler {
             try await system.terminated
-        } onGracefulShutdown: {
+        } onCancelOrGracefulShutdown: {
             _ = try? system.shutdown()
         }
     }

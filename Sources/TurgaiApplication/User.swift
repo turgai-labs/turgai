@@ -19,12 +19,12 @@ import VirtualActors
 public struct UserRecord: Codable, Sendable, Equatable {
     public let userID: UserID
     public private(set) var participantLinks: [UserParticipantLink]
-    public private(set) var memory: MemoryProjection
+    public private(set) var memory: Memory
 
     public init(
         userID: UserID,
         participantLinks: [UserParticipantLink] = [],
-        memory: MemoryProjection = MemoryProjection()
+        memory: Memory = Memory()
     ) {
         self.userID = userID
         self.participantLinks = participantLinks
@@ -48,9 +48,9 @@ public struct UserRecord: Codable, Sendable, Equatable {
         // Older User snapshots predate semantic memory.
         self.memory =
             try container.decodeIfPresent(
-                MemoryProjection.self,
+                Memory.self,
                 forKey: .memory
-            ) ?? MemoryProjection()
+            ) ?? Memory()
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -84,7 +84,7 @@ public struct MemoryExtractionSnapshot: Codable, Sendable {
     public let evidence: [MemoryObservation]
 
     public var latestObservationSourceID: MemorySourceID? {
-        MemoryProjection.latestObservation(in: evidence)?.sourceID
+        Memory.latestObservation(in: evidence)?.sourceID
     }
 }
 
@@ -188,7 +188,7 @@ public distributed actor User {
     /// Applies the pure extraction decision as one memory journal event.
     public distributed func commitExtraction(
         _ input: ExtractionInput,
-        proposals: [MemoryProposal],
+        candidates: [FactCandidate],
         expectedLatestSourceID: MemorySourceID
     ) async throws -> ExtractionOutcome {
         guard state.memory.latestObservationSourceID == expectedLatestSourceID else {
@@ -197,7 +197,7 @@ public distributed actor User {
         switch MemoryExtraction.decide(
             state: state.memory,
             input: input,
-            proposals: proposals
+            candidates: candidates
         ) {
         case .stale:
             return .stale
@@ -236,7 +236,7 @@ public distributed actor User {
             input: ExtractionInput(
                 observations: pending,
                 generation: state.memory.generation,
-                existingFacts: Array(state.memory.currentFacts().suffix(32)),
+                existingFacts: state.memory.currentFacts(),
                 previousObservations: state.memory.recentObservations(limit: 32)
             ),
             evidence: state.memory.observations
@@ -251,68 +251,37 @@ public distributed actor User {
         }
     }
 
-    private func recordProposalInJournal(
-        _ proposal: MemoryProposal
-    ) async throws -> MemoryFactChange? {
-        let candidate: FactCandidate
-        switch proposal {
-        case .add(let value), .revise(_, let value):
-            candidate = value
-        }
-        guard MemoryEvidence.supports(candidate, in: state.memory.observations) else {
-            return nil
-        }
-
-        let alreadyApplied: Bool
-        switch proposal {
-        case .add:
-            alreadyApplied = state.memory.facts.contains { fact in
-                fact.namespace == candidate.namespace
-                    && fact.predicate == candidate.predicate
-                    && fact.value == candidate.value
-                    && candidate.evidence.allSatisfy(fact.evidence.contains)
-            }
-        case .revise(let factID, _):
-            alreadyApplied = state.memory.facts.contains { fact in
-                fact.id != factID
-                    && fact.namespace == candidate.namespace
-                    && fact.predicate == candidate.predicate
-                    && fact.value == candidate.value
-                    && candidate.evidence.allSatisfy(fact.evidence.contains)
-            }
-        }
-        guard !alreadyApplied else { return nil }
-
-        let decision = MemoryPolicy().decide(
-            proposal: proposal,
-            against: state.memory.facts,
-            factID: MemoryFactID()
-        )
-        guard let event = decision.event else { return nil }
-        try await emit(event: .memory(event))
-
-        switch decision {
-        case .accepted:
-            return .accepted
-        case .reinforced:
-            return .reinforced
-        case .superseded:
-            return .superseded
-        case .rejected:
-            return nil
-        }
+    /// What's remembered about them, as a recall answers it.
+    public distributed func recalled() -> String {
+        MemoryRetrieval.recalled(state.memory.tree)
     }
 
-    /// What's remembered about `topic`, as a recall answers it.
-    public distributed func recall(_ topic: String) -> String {
-        MemoryRetrieval.recalled(MemoryRetrieval.facts(from: state.memory, matching: MemoryQuery(text: topic)))
+    /// Whether there's anything to recall: they remember, and something is remembered.
+    public distributed func recallable() -> Bool {
+        state.memory.remembering == .on && !state.memory.currentFacts().isEmpty
     }
 
-    /// Returns a bounded view for explicit user inspection. The journal and
-    /// projection remain owned by this aggregate; callers cannot request an
-    /// unbounded memory dump through the distributed API.
-    public distributed func currentMemoryFacts(limit: Int = 20) -> [MemoryFact] {
-        state.memory.currentFacts(limit: limit)
+    /// What's remembered about them, as they see it.
+    public distributed func remembered() -> MemoryTree {
+        state.memory.tree
+    }
+
+    /// Forgets the fact `id`: whether it was remembered.
+    public distributed func forgetFact(_ id: MemoryFactID) async throws -> Bool {
+        guard state.memory.currentFacts().contains(where: { $0.id == id }) else { return false }
+        try await emit(event: .memory(.factForgotten(id)))
+        return true
+    }
+
+    /// Whether what they say is kept for their memory.
+    public distributed func currentRemembering() -> Remembering {
+        state.memory.remembering
+    }
+
+    /// Turns keeping what they say for their memory on or off.
+    public distributed func setRemembering(_ remembering: Remembering) async throws {
+        guard state.memory.remembering != remembering else { return }
+        try await emit(event: .memory(.rememberingChanged(remembering)))
     }
 
     public distributed func memoryGeneration() -> MemoryGeneration {

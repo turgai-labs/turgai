@@ -9,7 +9,8 @@ struct TurgaiAuthTests {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let auth = try TurgaiAuth(directory: directory)
+        let accounts = AccountStorage.test
+        let auth = try TurgaiAuth(directory: directory, accounts: accounts)
         let challenge = await auth.issueBootstrapChallenge()
         let account = try await auth.bootstrap(
             username: "admin",
@@ -19,7 +20,7 @@ struct TurgaiAuthTests {
         )
 
         #expect(account.administrator != nil)
-        #expect(await auth.hasAdmin())
+        #expect(try await auth.hasAdmin())
         await #expect(throws: TurgaiAuthError.setupAlreadyCompleted) {
             try await auth.bootstrap(
                 username: "second",
@@ -29,7 +30,7 @@ struct TurgaiAuthTests {
             )
         }
 
-        let restarted = try TurgaiAuth(directory: directory)
+        let restarted = try TurgaiAuth(directory: directory, accounts: accounts)
         let session = try await restarted.signIn(
             username: "admin",
             password: "correct horse battery staple"
@@ -43,7 +44,7 @@ struct TurgaiAuthTests {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let auth = try TurgaiAuth(directory: directory)
+        let auth = try TurgaiAuth(directory: directory, accounts: .test)
         let issuedAt = Date(timeIntervalSince1970: 1_000)
         let expiredChallenge = await auth.issueBootstrapChallenge(now: issuedAt)
         await #expect(throws: TurgaiAuthError.invalidSetupChallenge) {
@@ -80,7 +81,7 @@ struct TurgaiAuthTests {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let auth = try TurgaiAuth(directory: directory)
+        let auth = try TurgaiAuth(directory: directory, accounts: .test)
         let account = try await auth.register(
             username: "member",
             password: "correct horse battery staple"
@@ -100,7 +101,7 @@ struct TurgaiAuthTests {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let auth = try TurgaiAuth(directory: directory)
+        let auth = try TurgaiAuth(directory: directory, accounts: .test)
         let invalidChallenge = await auth.issueBootstrapChallenge()
         await #expect(throws: TurgaiAuthError.invalidSetupChallenge) {
             try await auth.bootstrap(

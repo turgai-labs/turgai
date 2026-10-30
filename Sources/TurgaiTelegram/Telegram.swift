@@ -213,6 +213,9 @@ public enum TelegramCommand: String, Sendable, Equatable {
     case cancelReminder = "cancel-reminder"
     case objects
     case object
+    case forgetFact = "forget-fact"
+    case memoryOn = "memory-on"
+    case memoryOff = "memory-off"
 }
 
 public enum TelegramInboundEvent: Equatable, Sendable {
@@ -289,6 +292,8 @@ public enum TelegramAnswerButton {
 
 public enum TelegramPublisherError: Error, Equatable, Sendable {
     case invalidConversation(ConversationID)
+    /// A message id that isn't Telegram's.
+    case invalidMessage(ChannelMessageID)
 }
 
 /// Transport limits for Telegram's streaming and activity endpoints.
@@ -534,6 +539,12 @@ public actor TelegramEventPublisher {
             }
             lastTypingActionReservation[conversationID] = nil
 
+        case .noted(let conversationID, let message):
+            try await mark(message, .noted, in: conversationID)
+
+        case .unnoted(let conversationID, let message):
+            try await mark(message, nil, in: conversationID)
+
         case .asked(let conversationID, let request):
             // Asked in the chat; whoever taps answers, and its group decides whose answer counts.
             let markup = TelegramInlineKeyboardMarkup(
@@ -767,6 +778,18 @@ public actor TelegramEventPublisher {
             return nil
         }
         return TelegramReplyParameters(messageID: messageID)
+    }
+
+    /// Marks `message` with `reaction`, or takes its mark off: a message from another channel, or
+    /// one Telegram gave no id, has no mark here.
+    private func mark(
+        _ message: NotedMessage, _ reaction: TelegramReaction?, in conversationID: ConversationID
+    ) async throws {
+        guard let channelID = message.channelID else { return }
+        guard let messageID = Int64(channelID.rawValue) else {
+            throw TelegramPublisherError.invalidMessage(channelID)
+        }
+        try await client.setMessageReaction(try chatID(for: conversationID), messageID, reaction)
     }
 
     private func setReaction(

@@ -20,45 +20,53 @@ public actor TurgaiWebChatBridge {
     private struct Runtime {
         let connections: TurgaiConnections
         let objectCatalog: ObjectCatalog
-        let discoverChannelIDs: @Sendable () async throws -> [UUID]
+        let conversations: ConversationStorage
+        let channels: ChannelStorage
         let actorSystem: ClusterSystem
     }
 
     private var runtime: Runtime?
-    private var persistedConversationIDs: [ConversationID] = []
 
     public init() {}
 
     public func install(
         _ connections: TurgaiConnections,
         objectCatalog: ObjectCatalog,
-        discoverChannelIDs: @escaping @Sendable () async throws -> [UUID],
-        actorSystem: ClusterSystem,
-        persistedConversationIDs: [ConversationID]
+        conversations: ConversationStorage,
+        channels: ChannelStorage,
+        actorSystem: ClusterSystem
     ) {
         self.runtime = Runtime(
             connections: connections,
             objectCatalog: objectCatalog,
-            discoverChannelIDs: discoverChannelIDs,
+            conversations: conversations,
+            channels: channels,
             actorSystem: actorSystem
         )
-        self.persistedConversationIDs = persistedConversationIDs
     }
 
-    public func conversationIDs() -> [ConversationID] {
-        persistedConversationIDs
+    /// Every conversation there is, in the order they started.
+    public func conversationIDs() async throws -> [ConversationID] {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return try await runtime.conversations.all()
     }
 
+    /// Every Telegram channel there is, in the order they were made.
     public func channelIDs() async throws -> [UUID] {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        return try await runtime.discoverChannelIDs()
+        return try await runtime.channels.ids(TelegramProvider.providerID)
     }
 
-    public func rememberConversation(_ conversationID: ConversationID) {
-        guard !persistedConversationIDs.contains(conversationID) else { return }
-        persistedConversationIDs.append(conversationID)
+    /// Starts the conversation `conversationID`, unless it's started already.
+    public func startConversation(_ conversationID: ConversationID) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await runtime.conversations.add(conversationID)
     }
 
     public func openSession(id: WebSessionID) async throws -> TurgaiConnections.WebSession {
@@ -77,6 +85,7 @@ public actor TurgaiWebChatBridge {
             configuration: configuration
         )
         try await channel.replaceConfiguration(configuration)
+        try await runtime.channels.add(configuration.id, TelegramProvider.providerID)
     }
 
     public func channelState(
@@ -112,6 +121,7 @@ public actor TurgaiWebChatBridge {
             configuration: configuration
         )
         try await channel.delete()
+        try await runtime.channels.remove(configuration.id)
     }
 
     public func deleteChannel(id: UUID) async throws {
@@ -123,6 +133,7 @@ public actor TurgaiWebChatBridge {
             channelID: id
         )
         try await channel.delete()
+        try await runtime.channels.remove(id)
     }
 
     public func conversationHistory(

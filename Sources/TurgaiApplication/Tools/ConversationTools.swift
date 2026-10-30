@@ -57,7 +57,10 @@ public enum ConversationTools {
             tools += try await ObjectTools(session: session).offered()
             tools += await session.objectTools()
             pages = session
-            if let owner { tools.append(RecallTool(actorSystem: actorSystem, person: owner)) }
+            // What's remembered about whoever it answers, when there's anything to recall.
+            if let owner, try await User.resolve(on: actorSystem, userID: owner).recallable() {
+                tools.append(RecallTool(actorSystem: actorSystem, person: owner))
+            }
         }
 
         if let userTools {

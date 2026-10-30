@@ -1,6 +1,5 @@
 import AnyLanguageModel
 import DistributedCluster
-import DurableWorkflows
 import Hail
 import TurgaiDomain
 import TurgaiMemory
@@ -11,69 +10,50 @@ import TurgaiMemory
     import Foundation
 #endif
 
-/// The background memory-extraction report. One instance is generated per
-/// extraction pass over a slice of conversation history; the User aggregate
-/// reconciles every candidate against its durable observations, so a
-/// candidate whose supportingText does not match a user message verbatim is
-/// rejected there, not here.
-@Generable(
-    description: "Candidate memories grounded in user-provided information."
-)
+/// What one extraction pass found the person said about themselves. The User
+/// aggregate reconciles every candidate against its durable observations, so a
+/// candidate whose quote does not match a user message verbatim is rejected.
+@Generable(description: "What the person said about themselves.")
 public struct MemoryExtractionReport: Codable, Sendable {
     @Generable
     public struct MemoryExtractionCandidate: Codable, Sendable {
         @Guide(
-            description: "Fact group. Use exactly one of: profile, preference, relationship, project, environment.",
-            .anyOf(["profile", "preference", "relationship", "project", "environment"])
+            description:
+                "Where it goes in their memory: the names from them down, one to three, each a few words."
         )
-        public let namespace: String
-        @Guide(description: "A short stable attribute name for the fact, e.g. drinksCoffee or school")
-        public let predicate: String
-        @Guide(description: "The fact's content, in the form valueKind describes")
+        public let path: [String]
+        @Guide(description: "What it is.")
         public let value: String
-        @Guide(
-            description: "The value's form. Use exactly one of: text, person, place, date, preference.",
-            .anyOf(["text", "person", "place", "date", "preference"])
-        )
-        public let valueKind: String
-        @Guide(description: "Certainty the fact is true, between 0 and 1")
+        @Guide(description: "The words it comes from, copied exactly from the person's own message.")
+        public let quote: String
+        @Guide(description: "How certain it is that this is true, between 0 and 1.")
         public let confidence: Double
-        @Guide(description: "How much the fact matters for future conversations, between 0 and 1")
-        public let importance: Double
-        @Guide(
-            description:
-                "How likely the fact is to change. Use exactly one of: transient, situational, mutable, stable.",
-            .anyOf(["transient", "situational", "mutable", "stable"])
-        )
-        public let stability: String
-        @Guide(
-            description:
-                "A short verbatim quote copied from the user's own message. Facts without a verbatim quote that matches the conversation are rejected, so never paraphrase."
-        )
-        public let supportingText: String
     }
 
     public let memories: [MemoryExtractionCandidate]
 }
 
 /// Runs one background extraction pass: renders the user messages under
-/// consideration as a transcript, asks the model for the typed extraction
-/// report, and returns it. Runs on a dedicated endpoint whose context window
-/// is sized for the task; the window, not an output cap, bounds the report.
+/// consideration as a transcript, with the person's memory as it is, asks the
+/// model for the typed extraction report, and returns it.
 public enum MemoryExtractionService {
     /// Task instructions that are not field requirements belong here; the
     /// generated schema carries the report and field descriptions.
     private static let task = """
-        Extract user-provided information that may help future conversations,
-        including brief answers understood from the assistant's question. Use
-        assistant replies only as context; ground every fact in user text. Return
-        an empty memories list when nothing useful is supported.
+        Find what the person says about themselves that matters in later conversations: who they \
+        are, where they live, what they like, the people they know, their habits. A request to \
+        make or do something is not about them. Assistant replies are only context. Put each at a \
+        path in their memory, under the names it already has. Return an empty list when they say \
+        nothing about themselves.
         """
 
     public static func extract(
         endpoint: any ModelEndpoint,
-        observations: [MemoryObservation]
+        observations: [MemoryObservation],
+        remembered: MemoryTree
     ) async throws -> MemoryExtractionReport {
+        let memory =
+            remembered.isEmpty ? "Their memory is empty." : "Their memory now:\n" + remembered.rendered(root: "They")
         let entries: [Transcript.Entry] = [
             .instructions(
                 .init(
@@ -81,7 +61,7 @@ public enum MemoryExtractionService {
                     toolDefinitions: []
                 )
             ),
-            .prompt(.init(segments: [.text(.init(content: transcript(observations)))])),
+            .prompt(.init(segments: [.text(.init(content: memory + "\n\n" + transcript(observations)))])),
         ]
 
         let stream = endpoint.stream(
@@ -119,26 +99,22 @@ public enum MemoryExtractionService {
         guard !snapshot.input.observations.isEmpty else { return .alreadyHandled }
 
         let evidence = snapshot.input.chronologicalObservations
-        let report = try await extract(endpoint: endpoint, observations: evidence)
+        let report = try await extract(
+            endpoint: endpoint, observations: evidence, remembered: MemoryTree(snapshot.input.existingFacts))
 
         // Keep the input and generation captured before the model call so a
         // concurrent forget cannot associate this report with a new generation.
-        let proposals = report.memories.compactMap { candidate in
-            proposal(
-                from: candidate,
-                evidence: evidence
-            )
+        let candidates = report.memories.compactMap { candidate in
+            Self.candidate(from: candidate, evidence: evidence)
         }
-        let rejected = report.memories.count - proposals.count
+        let rejected = report.memories.count - candidates.count
         if rejected > 0 {
             actorSystem.log.warning(
                 "Memory extraction rejected candidates",
                 metadata: [
                     "returned": "\(report.memories.count)",
-                    "kept": "\(proposals.count)",
-                    "rejectedQuotes": .string(
-                        report.memories.map(\.supportingText).joined(separator: " | ")
-                    ),
+                    "kept": "\(candidates.count)",
+                    "rejectedQuotes": .string(report.memories.map(\.quote).joined(separator: " | ")),
                 ]
             )
         } else {
@@ -152,61 +128,38 @@ public enum MemoryExtractionService {
         }
         return try await user.commitExtraction(
             snapshot.input,
-            proposals: proposals,
+            candidates: candidates,
             expectedLatestSourceID: expectedLatestSourceID
         )
     }
 
-    /// Maps one model candidate to a concrete proposal. Validation, not
-    /// trust: the supporting quote must match exactly one stored observation
-    /// verbatim, identifiers must parse, and values must coerce. Candidates
-    /// that fail are dropped here, before User ever sees them.
-    static func proposal(
+    /// Maps one model candidate to a concrete one. Validation, not trust: the quote must match
+    /// exactly one stored observation verbatim, the path must be one, and the value must be
+    /// written. Candidates that fail are dropped here, before User ever sees them.
+    static func candidate(
         from candidate: MemoryExtractionReport.MemoryExtractionCandidate,
         evidence: [MemoryObservation]
-    ) -> MemoryProposal? {
-        let quote = normalize(candidate.supportingText)
-        guard !quote.isEmpty else { return nil }
-        let predicate = candidate.predicate.trimmed()
-        let rawValue = candidate.value.trimmed()
-        guard !predicate.isEmpty, !rawValue.isEmpty,
-            predicate.count <= 500, rawValue.count <= 500
+    ) -> FactCandidate? {
+        let quote = normalize(candidate.quote)
+        let value = candidate.value.trimmed()
+        guard !quote.isEmpty, !value.isEmpty, value.count <= 500,
+            let path = MemoryPath(candidate.path),
+            path.names.allSatisfy({ $0.rawValue.count <= 100 })
         else { return nil }
         let matchingSources = evidence.filter { normalize($0.text).contains(quote) }
         let matchingSourceIDs = Set(matchingSources.map(\.sourceID))
         guard matchingSourceIDs.count == 1,
             let sourceID = matchingSourceIDs.first,
-            let source = matchingSources.first(where: { $0.sourceID == sourceID }),
-            let namespace = MemoryNamespace(rawValue: candidate.namespace),
-            let stability = MemoryStability(rawValue: candidate.stability)
+            let source = matchingSources.first(where: { $0.sourceID == sourceID })
         else { return nil }
-
-        let value: MemoryValue
-        switch candidate.valueKind {
-        case "text": value = .text(rawValue)
-        case "person": value = .person(rawValue)
-        case "place": value = .place(rawValue)
-        case "date":
-            guard let date = try? Date.ISO8601FormatStyle().parse(rawValue) else { return nil }
-            value = .date(date)
-        case "preference":
-            guard let preference = Bool(rawValue) else { return nil }
-            value = .preference(preference)
-        default: return nil
-        }
-
-        let fact = FactCandidate(
-            namespace: namespace,
-            predicate: predicate,
+        return FactCandidate(
+            path: path,
             value: value,
             evidence: [source.id],
-            supportingText: candidate.supportingText,
+            supportingText: candidate.quote,
             confidence: candidate.confidence,
-            importance: candidate.importance,
-            stability: stability,
             observedAt: source.observedAt
         )
-        return .add(fact)
     }
 
     static func transcript(_ observations: [MemoryObservation]) -> String {
@@ -230,99 +183,60 @@ public enum MemoryExtractionService {
     }
 }
 
-/// Durable delay and retry boundary for one completed user exchange.
-public struct MemoryExtractionWorkflowInput: Codable, Sendable {
-    public let userID: TurgaiDomain.UserID
-    public let observation: MemoryObservation
-    public let configuration: MemoryExtractionConfiguration
-    public let fireAt: Date
-
-    public init(
-        userID: TurgaiDomain.UserID,
-        observation: MemoryObservation,
-        configuration: MemoryExtractionConfiguration,
-        fireAt: Date
-    ) {
-        self.userID = userID
-        self.observation = observation
-        self.configuration = configuration
-        self.fireAt = fireAt
-    }
-}
-
-@Workflow
-public struct MemoryExtractionWorkflow {
-    public typealias Input = MemoryExtractionWorkflowInput
-    public typealias Output = DurableVoid
-    public typealias Activities = MemoryExtractionActivities
-
-    public static let retryPolicy = RetryPolicy(
-        initialInterval: .seconds(5),
-        backoffCoefficient: 2,
-        maximumInterval: .seconds(300),
-        maximumAttempts: 6
-    )
-
-    public init() {}
-
-    public func run(input: Input, context: WorkflowContext) async throws -> Output {
-        try await context.sleep(until: input.fireAt, summary: "memory extraction quiet period")
-        return try await context.executeActivity(
-            MemoryExtractionActivities.Activities.Extract.self,
-            input: input
-        )
+extension MemoryExtractionService {
+    public enum EndpointError: Error, Equatable, Sendable {
+        /// Memory names no model to extract with.
+        case notConfigured
     }
 
-    public static func id(userID: TurgaiDomain.UserID, sourceID: MemorySourceID) -> WorkflowID {
-        let identity = "memory-extraction:\(userID.rawValue):\(sourceID.rawValue.uuidString)"
-        return WorkflowID(
-            rawValue: "memory-extraction-\(turgaiDeterministicUUID(identity).uuidString)"
-        )
-    }
-}
-
-@ActivityContainer
-public struct MemoryExtractionActivities {
-    private let endpointFactory: AgentModelEndpointFactory
-
-    public init(endpointFactory: AgentModelEndpointFactory) {
-        self.endpointFactory = endpointFactory
-    }
-
-    @Activity
-    public func extract(
-        input: MemoryExtractionWorkflowInput,
-        context: ActivityContext
-    ) async throws -> DurableVoid {
-        let user = try await User.resolve(on: context.system, userID: input.userID)
-        // This idempotent write closes the gap between durable workflow
-        // acceptance and Conversation's immediate observation write.
-        try await user.recordObservation(input.observation)
-
-        guard case .configured(let provider, let ollamaKeepAlive) = input.configuration.provider else {
-            return DurableVoid()
+    /// The model a pass extracts with, as `configuration` names it, from the node's `endpoints`.
+    static func endpoint(
+        for configuration: MemoryExtractionConfiguration, from endpoints: AgentModelEndpointFactory
+    ) async throws -> any ModelEndpoint {
+        guard case .configured(let provider, let ollamaKeepAlive) = configuration.provider else {
+            throw EndpointError.notConfigured
         }
         let reasoning: ReasoningEffortSelection? =
-            switch input.configuration.model.provider {
+            switch configuration.model.provider {
             case .ollama, .gemini:
                 .init(effort: .none, encoding: .disabled)
             default:
                 nil
             }
-        let endpoint = try await endpointFactory.endpoint(
-            model: input.configuration.model,
+        return try await endpoints.endpoint(
+            model: configuration.model,
             configuration: provider,
             temperature: 0.2,
             ollamaKeepAlive: ollamaKeepAlive,
             reasoning: reasoning
         )
+    }
+}
 
-        _ = try await MemoryExtractionService.extractAndCommit(
-            endpoint: endpoint,
-            actorSystem: context.system,
-            user: user,
-            expectedLatestSourceID: input.observation.sourceID
-        )
-        return DurableVoid()
+/// One memory pass: once its author has been quiet for a while, what they said is extracted, tried
+/// again after each failure, a while longer each time.
+enum MemoryPass {
+    /// Whether, after `quiet`, `extract` noted something: tried again after each of `retries` when it
+    /// fails, each failure given to `failed`. Cancelled, it notes nothing.
+    static func run(
+        after quiet: Duration,
+        retries: [Duration],
+        extract: () async throws -> ExtractionOutcome,
+        failed: (any Error) -> Void
+    ) async -> Bool {
+        do { try await Task.sleep(for: quiet) } catch { return false }
+        var waits = retries[...]
+        while true {
+            do {
+                guard case .committed(let update) = try await extract() else { return false }
+                return update.shouldNotify
+            } catch is CancellationError {
+                return false
+            } catch {
+                failed(error)
+                guard let wait = waits.popFirst() else { return false }
+                do { try await Task.sleep(for: wait) } catch { return false }
+            }
+        }
     }
 }

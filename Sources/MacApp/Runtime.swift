@@ -20,34 +20,35 @@ final class Runtime {
     private(set) var status = Status.running
     /// The live objects, for the objects window.
     let objects: ObjectsClient
-    @ObservationIgnored private let group: ServiceGroup?
+    @ObservationIgnored private var group: ServiceGroup?
     @ObservationIgnored private var run: Task<Void, Never>?
 
     init() {
-        let server: TurgaiServer
-        do {
-            server = try TurgaiServer(
-                directory: TurgaiServer.defaultDirectory,
-                port: LocalServer.baseURL.port ?? 3333,
-                websitePort: WebsitePort(rawValue: LocalWebsite.port),
-                logLevel: .info,
-                api: APIConfiguration(),
-                environment: ProcessInfo.processInfo.environment,
-                workspaceRoot: FileManager.default.homeDirectoryForCurrentUser.path
-            )
-        } catch {
-            self.status = .stopped(reason: String(describing: error))
-            self.objects = .unavailable
-            self.group = nil
-            return
-        }
-        var configuration = ServiceGroupConfiguration(services: server.services, logger: Logger(label: "turgai"))
-        configuration.maximumGracefulShutdownDuration = .seconds(10)
-        configuration.maximumCancellationDuration = .seconds(5)
-        let group = ServiceGroup(configuration: configuration)
-        self.objects = .live(server.objects)
-        self.group = group
+        // The objects window can open before the server is up: its catalog waits for the runtime.
+        let catalog = TurgaiObjectCatalogSource()
+        self.objects = .live(catalog)
         self.run = Task {
+            let server: TurgaiServer
+            do {
+                server = try await TurgaiServer(
+                    directory: TurgaiServer.defaultDirectory,
+                    port: LocalServer.baseURL.port ?? 3333,
+                    websitePort: WebsitePort(rawValue: LocalWebsite.port),
+                    logLevel: .info,
+                    api: APIConfiguration(),
+                    environment: ProcessInfo.processInfo.environment,
+                    workspaceRoot: FileManager.default.homeDirectoryForCurrentUser.path,
+                    objects: catalog
+                )
+            } catch {
+                self.stopped(reason: String(describing: error))
+                return
+            }
+            var configuration = ServiceGroupConfiguration(services: server.services, logger: Logger(label: "turgai"))
+            configuration.maximumGracefulShutdownDuration = .seconds(10)
+            configuration.maximumCancellationDuration = .seconds(5)
+            let group = ServiceGroup(configuration: configuration)
+            self.group = group
             do {
                 try await group.run()
                 self.stopped(reason: "the server exited")

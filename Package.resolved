@@ -1,5 +1,5 @@
 {
-  "originHash" : "578cd831c812d183d9912ea858c9e07c2b07382c6a8bebcb2f71714c562217dd",
+  "originHash" : "e7f35f2e9e9bc63b3d89e4a0cbf8e10c7d21c48b3e9eaacdae36d7b5ee538480",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -188,6 +188,24 @@
       "state" : {
         "revision" : "39ce38a93408937bcd27f521f3cdf88266136b80",
         "version" : "1.33.1"
+      }
+    },
+    {
+      "identity" : "sqlite-event-store",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/turgai-labs/sqlite-event-store.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "738f99747017e0f2670ac561576aa1a961e48011"
+      }
+    },
+    {
+      "identity" : "sqlite-nio",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/vapor/sqlite-nio.git",
+      "state" : {
+        "revision" : "52fd69b9b2ee614d90ba277616fb6cc98ea5a64c",
+        "version" : "1.13.2"
       }
     },
     {

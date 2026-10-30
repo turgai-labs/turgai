@@ -632,7 +632,7 @@ private struct ControlText: HTML {
             "Permissions settle what an agent may do when a tool acts. A business, especially a public body or a regulated one, also needs to know who runs the system, where its data is kept, who sets its rules and what record it leaves."
         }
         p {
-            "Turgai runs where you run it, on a Mac, on your own servers or in a cloud you choose, Linux included, with no Turgai-operated service in between. Conversations, memory and journals stay in your own storage, as files or in PostgreSQL, and what leaves your machines is what you send out, such as calls to a cloud model or messages on Telegram. Each agent’s model, keys and instructions are your configuration, and so are client authentication, channels and permissions. The journal is the system’s record, and every permission decision can be reported to an audit observer you install."
+            "Turgai runs where you run it, on a Mac, on your own servers or in a cloud you choose, Linux included, with no Turgai-operated service in between. Conversations, memory and journals stay in your own storage, in one SQLite file or in PostgreSQL, and what leaves your machines is what you send out, such as calls to a cloud model or messages on Telegram. Each agent’s model, keys and instructions are your configuration, and so are client authentication, channels and permissions. The journal is the system’s record, and every permission decision can be reported to an audit observer you install."
         }
         p {
             "An agent is described by a profile like this one, and the server starts with the authentication you require."

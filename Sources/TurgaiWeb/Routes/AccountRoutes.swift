@@ -31,7 +31,7 @@ extension TurgaiMainWebApp {
         let setup = dependencies.setup
         let agentProfiles = dependencies.agentProfiles
         login.get { request, context in
-            guard await auth.hasAdmin() else {
+            guard try await auth.hasAdmin() else {
                 return TurgaiWebSupport.redirect(to: "/onboarding")
             }
             if await TurgaiWebSupport.authenticatedUser(from: request, auth: auth) != nil {
@@ -42,7 +42,7 @@ extension TurgaiMainWebApp {
                 }
                 let isComplete = await setup.isComplete
                 let isReady = await setup.isReady
-                let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
+                let hasDefaultProfile = try await agentProfiles.defaultProfile() != nil
                 return TurgaiWebSupport.redirect(
                     to: isComplete && isReady && hasDefaultProfile ? "/" : "/onboarding/model"
                 )
@@ -58,7 +58,7 @@ extension TurgaiMainWebApp {
                     username: credentials.username,
                     password: credentials.password
                 )
-                let account = await auth.accounts().first { $0.username == credentials.username }
+                let account = try await auth.accounts().first { $0.username == credentials.username }
                 if account?.role == .user {
                     return TurgaiWebSupport.redirect(
                         to: "/chat", settingCookie: TurgaiWebSupport.sessionCookie(session.token)
@@ -66,7 +66,7 @@ extension TurgaiMainWebApp {
                 }
                 let isComplete = await setup.isComplete
                 let isReady = await setup.isReady
-                let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
+                let hasDefaultProfile = try await agentProfiles.defaultProfile() != nil
                 let destination = isComplete && isReady && hasDefaultProfile ? "/" : "/onboarding/model"
                 return TurgaiWebSupport.redirect(
                     to: destination, settingCookie: TurgaiWebSupport.sessionCookie(session.token))
@@ -83,14 +83,14 @@ extension TurgaiMainWebApp {
     ) {
         let auth = dependencies.auth
         registration.get { request, context in
-            guard await auth.hasAdmin() else {
+            guard try await auth.hasAdmin() else {
                 return TurgaiWebSupport.redirect(to: "/onboarding")
             }
             return HTMLResponse { RegisterAccountPage() }.response(from: request, context: context)
         }
 
         registration.post { request, context in
-            guard await auth.hasAdmin() else {
+            guard try await auth.hasAdmin() else {
                 return TurgaiWebSupport.redirect(to: "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
@@ -133,9 +133,9 @@ extension TurgaiMainWebApp {
         let auth = dependencies.auth
         accounts.get { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            let accounts = await auth.accounts().map(TurgaiWebSupport.accountSummary)
+            let accounts = try await auth.accounts().map(TurgaiWebSupport.accountSummary)
             return HTMLResponse {
                 AccountsPage(
                     user: user,
@@ -146,7 +146,7 @@ extension TurgaiMainWebApp {
 
         accounts.post("action") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             guard let accountIDValue = form["id"]?.first,
@@ -174,7 +174,7 @@ extension TurgaiMainWebApp {
                 }
                 return TurgaiWebSupport.redirect(to: "/accounts")
             } catch {
-                let accounts = await auth.accounts().map(TurgaiWebSupport.accountSummary)
+                let accounts = try await auth.accounts().map(TurgaiWebSupport.accountSummary)
                 return HTMLResponse {
                     AccountsPage(
                         user: user,

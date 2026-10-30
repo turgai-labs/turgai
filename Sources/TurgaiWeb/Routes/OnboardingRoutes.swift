@@ -33,7 +33,7 @@ extension TurgaiOnboardingWebApp {
     ) {
         let auth = dependencies.auth
         step.get { request, context in
-            guard !(await auth.hasAdmin()) else {
+            guard !(try await auth.hasAdmin()) else {
                 return TurgaiWebSupport.redirect(to: "/login")
             }
             let challenge = await auth.issueBootstrapChallenge()
@@ -45,7 +45,7 @@ extension TurgaiOnboardingWebApp {
         }
 
         step.post { request, context in
-            guard !(await auth.hasAdmin()) else {
+            guard !(try await auth.hasAdmin()) else {
                 return TurgaiWebSupport.redirect(to: "/login")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
@@ -92,11 +92,11 @@ extension TurgaiOnboardingWebApp {
         let agentCredentials = dependencies.agentCredentials
         step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            let profiles = await agentProfiles.profiles()
+            let profiles = try await agentProfiles.profiles()
             let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-            let draft = await agentProfiles.defaultProfile().map { AgentDraft($0, requestLimit: nil) }
+            let draft = try await agentProfiles.defaultProfile().map { AgentDraft($0, requestLimit: nil) }
             return HTMLResponse {
                 ModelPage(modelCatalog: modelCatalog, draft: draft ?? .new(named: "Turgai", in: modelCatalog))
             }.response(from: request, context: context)
@@ -104,11 +104,11 @@ extension TurgaiOnboardingWebApp {
 
         step.post { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: await agentProfiles.profiles())
-            let existingProfile = await agentProfiles.defaultProfile()
+            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: try await agentProfiles.profiles())
+            let existingProfile = try await agentProfiles.defaultProfile()
             let draft = AgentDraft(
                 form: form,
                 over: existingProfile.map { AgentDraft($0, requestLimit: nil) }
@@ -126,7 +126,7 @@ extension TurgaiOnboardingWebApp {
                     pendingCredential = credential.reference
                     try await agentCredentials.save(credential.value, for: credential.reference)
                 }
-                if var profile = await agentProfiles.defaultProfile() {
+                if var profile = try await agentProfiles.defaultProfile() {
                     profile.model = model
                     profile.reasoningEffort = reasoningEffort
                     let oldReference = profile.providerConfiguration.credentialReference
@@ -172,31 +172,28 @@ extension TurgaiOnboardingWebApp {
     ) {
         let auth = dependencies.auth
         let setup = dependencies.setup
-        let defaultFileDirectory = dependencies.defaultFileDirectory
+        let directory = dependencies.directory
         step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let storage = await setup.storageConfiguration
             return HTMLResponse {
                 StoragePage(
                     storage: storage,
-                    defaultFileDirectory: defaultFileDirectory
+                    directory: directory
                 )
             }.response(from: request, context: context)
         }
 
         step.post { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let values = StorageFormValues(form: form, defaultFileDirectory: defaultFileDirectory)
+            let values = StorageFormValues(form: form)
             do {
-                let storage = try OnboardingInput.storageConfiguration(
-                    from: form,
-                    defaultFileDirectory: defaultFileDirectory
-                )
+                let storage = try OnboardingInput.storageConfiguration(from: form)
                 try await setup.setStorage(
                     storage,
                     postgresPassword: form["postgresPassword"]?.first
@@ -206,7 +203,7 @@ extension TurgaiOnboardingWebApp {
                 return HTMLResponse {
                     StoragePage(
                         values: values,
-                        defaultFileDirectory: defaultFileDirectory,
+                        directory: directory,
                         error: TurgaiWebSupport.storageErrorMessage(error)
                     )
                 }.response(from: request, context: context)
@@ -223,9 +220,9 @@ extension TurgaiOnboardingWebApp {
         let agentProfiles = dependencies.agentProfiles
         step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            guard await setup.isReady, await agentProfiles.defaultProfile() != nil else {
+            guard await setup.isReady, try await agentProfiles.defaultProfile() != nil else {
                 return TurgaiWebSupport.redirect(to: "/onboarding/model")
             }
             guard !(await setup.isComplete) else {
@@ -237,9 +234,9 @@ extension TurgaiOnboardingWebApp {
 
         step.post { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            guard await setup.isReady, await agentProfiles.defaultProfile() != nil else {
+            guard await setup.isReady, try await agentProfiles.defaultProfile() != nil else {
                 return TurgaiWebSupport.redirect(to: "/onboarding/model")
             }
             try await setup.complete()
@@ -253,7 +250,7 @@ extension TurgaiOnboardingWebApp {
     ) {
         let auth = dependencies.auth
         welcome.get { request, context in
-            if await auth.hasAdmin() {
+            if try await auth.hasAdmin() {
                 guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                     return TurgaiWebSupport.redirect(to: "/login")
                 }

@@ -26,7 +26,7 @@ extension TurgaiMainWebApp {
         let api = router.group("api/v1").add(
             middleware: PublicAPIAuthorization(configuration: dependencies.apiConfiguration))
         api.get("bots") { _, _ in
-            let bots = await dependencies.agentProfiles.profiles()
+            let bots = try await dependencies.agentProfiles.profiles()
                 .filter { $0.availability == .enabled }
                 .map { TurgaiModels.Bot(id: .init(rawValue: $0.id), name: $0.name) }
             return try publicAPIResponse(bots)
@@ -38,7 +38,7 @@ extension TurgaiMainWebApp {
         api.get("objects") { request, _ in
             let owner = await chatOwner(from: request, auth: dependencies.auth)
             guard case .account = owner,
-                let conversation = await chatConversation(
+                let conversation = try await chatConversation(
                     owner: owner, conversationID: nil, botID: request.uri.queryParameters["botID"].map(String.init),
                     profiles: dependencies.agentProfiles)
             else { return publicAPIUnauthorizedResponse() }
@@ -52,7 +52,7 @@ extension TurgaiMainWebApp {
         api.post("objects/:id/share") { request, context in
             let owner = await chatOwner(from: request, auth: dependencies.auth)
             guard case .account = owner,
-                let conversation = await chatConversation(
+                let conversation = try await chatConversation(
                     owner: owner, conversationID: nil, botID: nil, profiles: dependencies.agentProfiles),
                 let id = context.parameters.get("id")
             else { return publicAPIUnauthorizedResponse() }
@@ -90,17 +90,17 @@ extension TurgaiMainWebApp {
             switch (request.uri.queryParameters["conversationID"], request.uri.queryParameters["botID"]) {
             case (.some(let conversationID), _):
                 guard
-                    await apiConversation(
+                    try await apiConversation(
                         from: String(conversationID),
                         profiles: dependencies.agentProfiles
                     ) != nil
                 else { return .dontUpgrade }
             case (nil, .some(let botID)):
-                guard let profile = await dependencies.agentProfiles.profile(id: String(botID)),
+                guard let profile = try await dependencies.agentProfiles.profile(id: String(botID)),
                     profile.availability == .enabled
                 else { return .dontUpgrade }
             case (nil, nil):
-                guard await dependencies.agentProfiles.defaultProfile() != nil else {
+                guard try await dependencies.agentProfiles.defaultProfile() != nil else {
                     return .dontUpgrade
                 }
             }
@@ -109,7 +109,7 @@ extension TurgaiMainWebApp {
             let query = context.request.uri.queryParameters
             let owner = await chatOwner(from: context.request, auth: dependencies.auth)
             guard
-                let conversation = await chatConversation(
+                let conversation = try await chatConversation(
                     owner: owner,
                     conversationID: query["conversationID"].map(String.init),
                     botID: query["botID"].map(String.init),
@@ -119,7 +119,7 @@ extension TurgaiMainWebApp {
                 try await outbound.close(.policyViolation, reason: "Bot or conversation not found")
                 return
             }
-            await dependencies.webChatBridge.rememberConversation(conversation.domainID)
+            try await dependencies.webChatBridge.startConversation(conversation.domainID)
             let session: TurgaiConnections.WebSession
             do {
                 session = try await dependencies.webChatBridge.openSession(id: WebSessionID())
@@ -287,12 +287,12 @@ extension TurgaiMainWebApp {
                     }
                     group.addTask {
                         for await delivery in session.output {
-                            try await writer.write(
-                                PublicChatEvent(
-                                    event: delivery.event,
-                                    publicConversationID: conversation.publicID
-                                ).event
-                            )
+                            if let event = PublicChatEvent(
+                                event: delivery.event,
+                                publicConversationID: conversation.publicID
+                            ).event {
+                                try await writer.write(event)
+                            }
                             await delivery.delivered()
                         }
                     }
@@ -311,11 +311,11 @@ extension TurgaiMainWebApp {
         on conversations: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
     ) {
         conversations.get { _, _ in
-            let persistedIDs = await dependencies.webChatBridge.conversationIDs()
+            let conversationIDs = try await dependencies.webChatBridge.conversationIDs()
             var conversations: [TurgaiModels.Conversation] = []
-            for domainID in persistedIDs where domainID.channel == publicAPIChannel {
+            for domainID in conversationIDs where domainID.channel == publicAPIChannel {
                 guard
-                    let conversation = await apiConversation(
+                    let conversation = try await apiConversation(
                         from: domainID.externalAddress.rawValue,
                         profiles: dependencies.agentProfiles
                     )
@@ -344,9 +344,9 @@ extension TurgaiMainWebApp {
 
             let profile: TurgaiAgentProfile?
             if let botID = input.botID {
-                profile = await dependencies.agentProfiles.profile(id: botID.rawValue)
+                profile = try await dependencies.agentProfiles.profile(id: botID.rawValue)
             } else {
-                profile = await dependencies.agentProfiles.defaultProfile()
+                profile = try await dependencies.agentProfiles.defaultProfile()
             }
             guard let profile, profile.availability == .enabled else {
                 return publicAPIErrorResponse(
@@ -357,7 +357,7 @@ extension TurgaiMainWebApp {
             }
 
             let conversationID = apiConversationID(profileID: profile.id)
-            await dependencies.webChatBridge.rememberConversation(conversationID)
+            try await dependencies.webChatBridge.startConversation(conversationID)
             return try publicAPIResponse(
                 TurgaiModels.Conversation(
                     id: publicAPIConversationID(for: conversationID),
@@ -370,7 +370,7 @@ extension TurgaiMainWebApp {
 
         conversations.get(":id") { _, context in
             guard
-                let conversation = await apiConversation(
+                let conversation = try await apiConversation(
                     from: context.parameters.get("id"),
                     profiles: dependencies.agentProfiles
                 )
@@ -392,7 +392,7 @@ extension TurgaiMainWebApp {
     ) {
         messages.get { _, context in
             guard
-                let conversation = await apiConversation(
+                let conversation = try await apiConversation(
                     from: context.parameters.get("id"),
                     profiles: dependencies.agentProfiles
                 )
@@ -421,7 +421,7 @@ extension TurgaiMainWebApp {
 
         messages.post { request, context in
             guard
-                let conversation = await apiConversation(
+                let conversation = try await apiConversation(
                     from: context.parameters.get("id"),
                     profiles: dependencies.agentProfiles
                 )
@@ -525,15 +525,15 @@ private func apiConversation(
     conversationID: String?,
     botID: String?,
     profiles: TurgaiAgentProfileStore
-) async -> APIConversation? {
+) async throws -> APIConversation? {
     if let conversationID {
-        return await apiConversation(from: conversationID, profiles: profiles)
+        return try await apiConversation(from: conversationID, profiles: profiles)
     }
     let profile: TurgaiAgentProfile?
     if let botID {
-        profile = await profiles.profile(id: botID)
+        profile = try await profiles.profile(id: botID)
     } else {
-        profile = await profiles.defaultProfile()
+        profile = try await profiles.defaultProfile()
     }
     guard let profile, profile.availability == .enabled else { return nil }
     let domainID = apiConversationID(profileID: profile.id)
@@ -561,16 +561,16 @@ private func chatConversation(
     conversationID: String?,
     botID: String?,
     profiles: TurgaiAgentProfileStore
-) async -> APIConversation? {
+) async throws -> APIConversation? {
     if let conversationID {
-        return await apiConversation(from: conversationID, profiles: profiles)
+        return try await apiConversation(from: conversationID, profiles: profiles)
     }
 
     let profile: TurgaiAgentProfile?
     if let botID {
-        profile = await profiles.profile(id: botID)
+        profile = try await profiles.profile(id: botID)
     } else {
-        profile = await profiles.defaultProfile()
+        profile = try await profiles.defaultProfile()
     }
     guard let profile, profile.availability == .enabled else { return nil }
 
@@ -597,7 +597,7 @@ private func chatConversation(
 private func apiConversation(
     from rawValue: String?,
     profiles: TurgaiAgentProfileStore
-) async -> APIConversation? {
+) async throws -> APIConversation? {
     guard let rawValue else { return nil }
     let decodedValue = rawValue.percentDecoded ?? rawValue
 
@@ -624,7 +624,7 @@ private func apiConversation(
     let uuidStart = address.index(address.endIndex, offsetBy: -36)
     guard address[address.index(before: uuidStart)] == "-",
         UUID(uuidString: String(address[uuidStart...])) != nil,
-        let profile = await profiles.profile(
+        let profile = try await profiles.profile(
             id: String(address[profileStart..<address.index(before: uuidStart)])
         ),
         profile.availability == .enabled
@@ -718,6 +718,7 @@ private func send(
                 publicConversationID: conversation.publicID
             ).event
             await delivery.delivered()
+            guard let event else { continue }
             if event.type == .turnCompleted || event.type == .turnFailed {
                 terminalEvent = event
                 break
@@ -871,6 +872,8 @@ private actor HTMLChatSocketWriter {
             return ChatLiveFragment.accessRequested(.init(request))
         case .answered(_, let request, let answer, _):
             return ChatLiveFragment.accessAnswered(request.id.rawValue, answer: answer.public)
+        case .noted, .unnoted:
+            return nil
         }
     }
 }
@@ -980,7 +983,8 @@ private func runHTMLChatSocket(
 }
 
 private struct PublicChatEvent: Sendable {
-    let event: TurgaiModels.ChatEvent
+    /// What the client is sent, or `nil` for what the API doesn't show.
+    let event: TurgaiModels.ChatEvent?
 
     init(
         event: OutboundEvent,
@@ -1016,6 +1020,8 @@ private struct PublicChatEvent: Sendable {
             self.event = .init(
                 payload: .accessAnswered(
                     conversationID: publicConversationID, requestID: request.id.rawValue, answer: answer.public))
+        case .noted, .unnoted:
+            self.event = nil
         }
     }
 

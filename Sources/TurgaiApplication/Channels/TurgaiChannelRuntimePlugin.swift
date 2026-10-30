@@ -8,20 +8,25 @@ public struct TurgaiChannelRuntimeDependencies: Sendable {
     /// Each running Telegram bot's files, by the channel its chats are in.
     public let telegramFiles: TelegramFiles
     public let objectCatalog: ObjectCatalog
-    public let loadPersistedConversationIDs: @Sendable () async throws -> [ConversationID]
+    /// The node's models, as agents' profiles name them.
+    public let endpoints: AgentModelEndpointFactory
+    /// The conversations there are.
+    public let conversations: ConversationStorage
 
     fileprivate init(
         secrets: ChannelSecretStore,
         connections: TurgaiConnections,
         telegramFiles: TelegramFiles,
         objectCatalog: ObjectCatalog,
-        loadPersistedConversationIDs: @escaping @Sendable () async throws -> [ConversationID]
+        endpoints: AgentModelEndpointFactory,
+        conversations: ConversationStorage
     ) {
         self.secrets = secrets
         self.connections = connections
         self.telegramFiles = telegramFiles
         self.objectCatalog = objectCatalog
-        self.loadPersistedConversationIDs = loadPersistedConversationIDs
+        self.endpoints = endpoints
+        self.conversations = conversations
     }
 }
 
@@ -46,19 +51,22 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
     private let agentProfiles: TurgaiAgentProfileStore
     private let secrets: ChannelSecretStore
     private let telegramFiles: TelegramFiles
-    private let loadPersistedConversationIDs: @Sendable () async throws -> [ConversationID]
+    private let endpoints: AgentModelEndpointFactory
+    private let conversations: ConversationStorage
     private var lifecycle: Lifecycle = .awaitingStart
 
     public init(
         agentProfiles: TurgaiAgentProfileStore,
         secrets: ChannelSecretStore,
         telegramFiles: TelegramFiles,
-        loadPersistedConversationIDs: @escaping @Sendable () async throws -> [ConversationID]
+        endpoints: AgentModelEndpointFactory,
+        conversations: ConversationStorage
     ) {
         self.agentProfiles = agentProfiles
         self.secrets = secrets
         self.telegramFiles = telegramFiles
-        self.loadPersistedConversationIDs = loadPersistedConversationIDs
+        self.endpoints = endpoints
+        self.conversations = conversations
     }
 
     public func start(_ system: ClusterSystem) async throws {
@@ -67,11 +75,13 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
                 secrets: secrets,
                 connections: TurgaiConnections(
                     actorSystem: system,
-                    agentProfiles: agentProfiles
+                    agentProfiles: agentProfiles,
+                    conversations: conversations
                 ),
                 telegramFiles: telegramFiles,
                 objectCatalog: await ObjectCatalog(actorSystem: system),
-                loadPersistedConversationIDs: loadPersistedConversationIDs
+                endpoints: endpoints,
+                conversations: conversations
             )
         )
     }
@@ -95,5 +105,10 @@ extension ClusterSystem {
             fatalError("No plugin found for key: [\(key)], installed plugins: \(settings.plugins)")
         }
         return plugin
+    }
+
+    /// The runtime's plugin, when it's installed: a node without it, such as a test's, has none.
+    public var installedTurgaiChannelRuntime: TurgaiChannelRuntimePlugin? {
+        settings.plugins[TurgaiChannelRuntimePlugin.pluginKey]
     }
 }

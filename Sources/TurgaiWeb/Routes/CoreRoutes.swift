@@ -23,7 +23,7 @@ extension TurgaiMainWebApp {
         let agentProfiles = dependencies.agentProfiles
         let runtimeSnapshots = dependencies.runtimeSnapshots
         router.get { request, context in
-            guard await auth.hasAdmin() else {
+            guard try await auth.hasAdmin() else {
                 return TurgaiWebSupport.redirect(to: "/onboarding")
             }
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
@@ -36,9 +36,9 @@ extension TurgaiMainWebApp {
             }
             let isComplete = await setup.isComplete
             let isReady = await setup.isReady
-            let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
+            let hasDefaultProfile = try await agentProfiles.defaultProfile() != nil
             if isComplete && isReady && hasDefaultProfile {
-                let profiles = await agentProfiles.profiles()
+                let profiles = try await agentProfiles.profiles()
                 let runtime = await runtimeSnapshots(user.dashboardMembership)
                 return HTMLResponse {
                     TurgaiPage(
@@ -53,10 +53,10 @@ extension TurgaiMainWebApp {
         }
         // Public: lets a client such as the Mac app wait for setup before opening chat.
         router.get("/api/v1/status") { _, _ in
-            let hasAdmin = await auth.hasAdmin()
+            let hasAdmin = try await auth.hasAdmin()
             let isComplete = await setup.isComplete
             let isReady = await setup.isReady
-            let hasDefaultProfile = await agentProfiles.defaultProfile() != nil
+            let hasDefaultProfile = try await agentProfiles.defaultProfile() != nil
             let complete = hasAdmin && isComplete && isReady && hasDefaultProfile
             return try TurgaiWebSupport.jsonResponse(TurgaiServerStatus(setup: complete ? .complete : .pending))
         }
@@ -64,7 +64,7 @@ extension TurgaiMainWebApp {
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
                 return Response(status: .unauthorized)
             }
-            let profiles = await agentProfiles.profiles()
+            let profiles = try await agentProfiles.profiles()
             let runtime = await runtimeSnapshots(user.dashboardMembership)
             return try TurgaiWebSupport.jsonResponse(
                 TurgaiDashboardSnapshot(

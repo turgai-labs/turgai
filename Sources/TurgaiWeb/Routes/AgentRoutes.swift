@@ -23,11 +23,11 @@ extension TurgaiMainWebApp {
         let auth = dependencies.auth
         let agentProfiles = dependencies.agentProfiles
         chat.get { request, context in
-            guard let profile = await agentProfiles.defaultProfile() else {
+            guard let profile = try await agentProfiles.defaultProfile() else {
                 return TurgaiWebSupport.redirect(to: "/onboarding")
             }
             guard let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let response = HTMLResponse {
                 ChatPage(
@@ -41,10 +41,10 @@ extension TurgaiMainWebApp {
 
         chat.get(":id") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard let id = context.parameters.get("id"),
-                let profile = await agentProfiles.profile(id: id)
+                let profile = try await agentProfiles.profile(id: id)
             else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
@@ -63,9 +63,9 @@ extension TurgaiMainWebApp {
         let agentCredentials = dependencies.agentCredentials
         let requestLimits = dependencies.requestLimits
         /// The limit of `profile`'s provider account, if it has one.
-        @Sendable func requestLimit(of profile: TurgaiAgentProfile) async -> Int? {
+        @Sendable func requestLimit(of profile: TurgaiAgentProfile) async throws -> Int? {
             guard let account = profile.providerConfiguration.account(for: profile.model) else { return nil }
-            return await requestLimits.limit(for: account)
+            return try await requestLimits.limit(for: account)
         }
         /// Sets the limit `draft` gives for `profile`'s provider account: empty lifts it.
         @Sendable func saveRequestLimit(of draft: AgentDraft, for profile: TurgaiAgentProfile) async throws {
@@ -75,9 +75,9 @@ extension TurgaiMainWebApp {
         let runtimeSnapshots = dependencies.runtimeSnapshots
         agents.get("new") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            let profiles = await agentProfiles.profiles()
+            let profiles = try await agentProfiles.profiles()
             let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
             return HTMLResponse {
                 NewAgentPage(user: user, modelCatalog: modelCatalog, draft: .new(named: "", in: modelCatalog))
@@ -86,19 +86,19 @@ extension TurgaiMainWebApp {
 
         agents.get(":id") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard let id = context.parameters.get("id"),
-                let profile = await agentProfiles.profile(id: id)
+                let profile = try await agentProfiles.profile(id: id)
             else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
-            let profiles = await agentProfiles.profiles()
+            let profiles = try await agentProfiles.profiles()
             let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
             let runtime = await runtimeSnapshots(user.dashboardMembership).filter { $0.profileID == profile.id }
             let placement: AgentDetailPage.Placement =
-                await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
-            let draft = AgentDraft(profile, requestLimit: await requestLimit(of: profile))
+                try await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
+            let draft = AgentDraft(profile, requestLimit: try await requestLimit(of: profile))
             return HTMLResponse {
                 AgentDetailPage(
                     user: user,
@@ -113,15 +113,15 @@ extension TurgaiMainWebApp {
 
         agents.post("update") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             let id = form["id"]?.first ?? ""
-            guard let existingProfile = await agentProfiles.profile(id: id) else {
+            guard let existingProfile = try await agentProfiles.profile(id: id) else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
             let draft = AgentDraft(
-                form: form, over: AgentDraft(existingProfile, requestLimit: await requestLimit(of: existingProfile)))
+                form: form, over: AgentDraft(existingProfile, requestLimit: try await requestLimit(of: existingProfile)))
             var pendingCredential: AgentCredentialReference?
             do {
                 var profile = existingProfile
@@ -153,13 +153,13 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/agents/\(profile.id)")
             } catch {
                 if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
-                let profiles = await agentProfiles.profiles()
+                let profiles = try await agentProfiles.profiles()
                 let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
                 let runtime = await runtimeSnapshots(user.dashboardMembership).filter {
                     $0.profileID == existingProfile.id
                 }
                 let placement: AgentDetailPage.Placement =
-                    await agentProfiles.isDefaultProfile(id: existingProfile.id) ? .default : .additional
+                    try await agentProfiles.isDefaultProfile(id: existingProfile.id) ? .default : .additional
                 return HTMLResponse {
                     AgentDetailPage(
                         user: user,
@@ -176,7 +176,7 @@ extension TurgaiMainWebApp {
 
         agents.post("default") { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             let id = form["id"]?.first ?? ""
@@ -190,10 +190,10 @@ extension TurgaiMainWebApp {
 
         agents.post("create") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: await agentProfiles.profiles())
+            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: try await agentProfiles.profiles())
             let draft = AgentDraft(form: form, over: .new(named: "", in: modelCatalog))
             var pendingCredential: AgentCredentialReference?
             do {
@@ -230,11 +230,11 @@ extension TurgaiMainWebApp {
 
         agents.post("delete") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             let id = form["id"]?.first ?? ""
-            guard let profile = await agentProfiles.profile(id: id) else {
+            guard let profile = try await agentProfiles.profile(id: id) else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
             do {
@@ -244,12 +244,12 @@ extension TurgaiMainWebApp {
                 }
                 return TurgaiWebSupport.redirect(to: "/")
             } catch {
-                let profiles = await agentProfiles.profiles()
+                let profiles = try await agentProfiles.profiles()
                 let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
                 let runtime = await runtimeSnapshots(user.dashboardMembership).filter { $0.profileID == profile.id }
                 let placement: AgentDetailPage.Placement =
-                    await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
-                let draft = AgentDraft(profile, requestLimit: await requestLimit(of: profile))
+                    try await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
+                let draft = AgentDraft(profile, requestLimit: try await requestLimit(of: profile))
                 return HTMLResponse {
                     AgentDetailPage(
                         user: user,

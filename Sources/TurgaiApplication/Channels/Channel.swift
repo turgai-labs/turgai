@@ -201,13 +201,6 @@ public distributed actor Channel<Provider: ChannelProvider> {
         "\(persistencePrefix)\(channelID.uuidString)"
     }
 
-    public static func channelID(from persistenceID: String) -> UUID? {
-        guard persistenceID.hasPrefix(persistencePrefix) else { return nil }
-        return UUID(
-            uuidString: String(persistenceID.dropFirst(persistencePrefix.count))
-        )
-    }
-
     public static func resolve(
         on actorSystem: ClusterSystem,
         configuration: ChannelConfiguration<Provider>

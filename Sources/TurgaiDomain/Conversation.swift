@@ -272,8 +272,32 @@ public struct MessageAuthor: Hashable, Codable, Sendable {
     }
 }
 
+/// A message's id in the channel it came through, as the channel names it: what the channel finds
+/// it by again.
+public struct ChannelMessageID: RawRepresentable, Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+}
+
+/// A person's message something was noted from for their memory: by its id, and by its id in its
+/// channel, when the channel gave it one.
+public struct NotedMessage: Hashable, Codable, Sendable {
+    public let id: MessageID
+    public let channelID: ChannelMessageID?
+
+    public init(id: MessageID, channelID: ChannelMessageID?) {
+        self.id = id
+        self.channelID = channelID
+    }
+}
+
 public struct InboundMessage: Hashable, Codable, Sendable {
     public let id: MessageID
+    /// Its id in the channel it came through, when the channel gave it one.
+    public let channelMessageID: ChannelMessageID?
     public let conversationID: ConversationID
     public let participantID: ParticipantID
     public let userID: UserID
@@ -284,6 +308,7 @@ public struct InboundMessage: Hashable, Codable, Sendable {
 
     public init(
         id: MessageID = MessageID(),
+        channelMessageID: ChannelMessageID? = nil,
         conversationID: ConversationID,
         participantID: ParticipantID,
         userID: UserID? = nil,
@@ -293,6 +318,7 @@ public struct InboundMessage: Hashable, Codable, Sendable {
         receivedAt: Date
     ) {
         self.id = id
+        self.channelMessageID = channelMessageID
         self.conversationID = conversationID
         self.participantID = participantID
         self.userID = userID ?? UserID(participantID: participantID)
@@ -304,6 +330,7 @@ public struct InboundMessage: Hashable, Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case channelMessageID
         case conversationID
         case participantID
         case userID
@@ -316,6 +343,7 @@ public struct InboundMessage: Hashable, Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.id = try container.decode(MessageID.self, forKey: .id)
+        self.channelMessageID = try container.decodeIfPresent(ChannelMessageID.self, forKey: .channelMessageID)
         self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
         self.participantID = try container.decode(ParticipantID.self, forKey: .participantID)
         self.userID =
@@ -330,6 +358,7 @@ public struct InboundMessage: Hashable, Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(channelMessageID, forKey: .channelMessageID)
         try container.encode(conversationID, forKey: .conversationID)
         try container.encode(participantID, forKey: .participantID)
         try container.encode(userID, forKey: .userID)
@@ -388,6 +417,25 @@ public enum ConversationCommand: Sendable, Equatable {
     /// One of those objects, by its id, shown as its card.
     case object(
         id: String,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    /// One of the person's remembered facts, by its id, forgotten.
+    case forgetFact(
+        id: String,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    /// What the person says is remembered again.
+    case memoryOn(
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
+    /// What the person says is no longer remembered.
+    case memoryOff(
         conversationID: ConversationID,
         participantID: ParticipantID,
         userID: UserID
@@ -508,6 +556,10 @@ public enum ConversationEvent: Codable, Sendable, Equatable {
     case replyQueued(PendingConversationReply)
     case replyDelivered(TurnID)
     case reset
+    /// Something was noted from `message` for its author's memory: it's marked until it's unmarked.
+    case noted(NotedMessage)
+    /// The noted message's mark was taken off.
+    case unnoted
 }
 
 /// The durable history of one conversation, read by an infrastructure adapter
@@ -652,6 +704,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public internal(set) var awaiting: [AccessRequestID: PendingConversationMessage]
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var history: [ConversationHistoryEntry]
+    /// The message marked as noted for its author's memory, until its mark is taken off.
+    public internal(set) var noted: NotedMessage?
 
     public init(
         conversationID: ConversationID,
@@ -712,6 +766,12 @@ public struct ConversationState: Hashable, Codable, Sendable {
             inbox = inbox.emptied()
             pendingReplies.removeAll(keepingCapacity: true)
             history.removeAll(keepingCapacity: true)
+
+        case .noted(let message):
+            noted = message
+
+        case .unnoted:
+            noted = nil
         }
     }
 
@@ -853,6 +913,10 @@ public enum OutboundEvent: Hashable, Codable, Sendable {
         actions: [OutboundAction]
     )
     case reset(conversationID: ConversationID)
+    /// Something was noted from `message` for its author's memory: it's marked so for a moment.
+    case noted(conversationID: ConversationID, NotedMessage)
+    /// The mark on `message` is taken off.
+    case unnoted(conversationID: ConversationID, NotedMessage)
 }
 
 public enum ConversationEffect: Hashable, Codable, Sendable {

@@ -21,9 +21,17 @@ public indirect enum MemoryEvent: Codable, Sendable, Equatable {
     /// One atomic event: the old fact becomes `superseded(by:)` and the
     /// replacement fact is appended as active.
     case factSuperseded(MemoryFactID, by: MemoryFact)
-    case factExpired(MemoryFactID)
     case factForgotten(MemoryFactID)
     case extractionCommitted(MemoryExtractionCommit)
+    /// The person turned remembering what they say on or off.
+    case rememberingChanged(Remembering)
+}
+
+/// Whether what a person says is remembered. Off, nothing new is kept or extracted, and what's
+/// remembered stays until it's forgotten.
+public enum Remembering: String, Codable, Sendable, Equatable {
+    case on
+    case off
 }
 
 /// One atomic extraction result: processed sources plus any accepted

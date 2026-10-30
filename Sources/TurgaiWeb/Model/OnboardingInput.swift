@@ -174,17 +174,11 @@ enum OnboardingInput {
         return effort
     }
 
-    static func storageConfiguration(
-        from form: [String: [String]],
-        defaultFileDirectory: URL
-    ) throws -> TurgaiStorageConfiguration {
-        let values = StorageFormValues(form: form, defaultFileDirectory: defaultFileDirectory)
+    static func storageConfiguration(from form: [String: [String]]) throws -> TurgaiStorageConfiguration {
+        let values = StorageFormValues(form: form)
         switch values.backend {
-        case .file:
-            let value = values.fileURL.trimmed()
-            let url = URL(string: value) ?? defaultFileDirectory
-            guard url.isFileURL else { throw FormValidationError.invalidValue("file store URL") }
-            return try TurgaiStorageConfiguration.fileStore(directory: url)
+        case .local:
+            return .local
         case .postgres:
             guard let rawURL = URL(string: values.postgresURL.trimmed()) else {
                 throw FormValidationError.invalidValue("PostgreSQL URL")

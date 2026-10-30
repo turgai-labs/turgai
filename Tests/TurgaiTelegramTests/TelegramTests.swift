@@ -51,6 +51,38 @@ struct TelegramTests {
         #expect(TelegramAnswerButton.answer(in: "turgai-access:sometimes:\(request)") == nil)
     }
 
+    /// What `/memory`'s buttons send: forgetting one fact by its id, and turning memory on or off.
+    @Test
+    func botMapsMemoryButtonsToTheirCommands() {
+        let user = TelegramUser(id: 7, firstName: "John")
+        let chat = TelegramChat(id: 42)
+        let participantID = TelegramBot.participantID(for: user.id)
+        let userID = UserID(participantID: participantID)
+        let conversationID = TelegramBot.conversationID(for: chat.id)
+        func event(_ text: String) -> TelegramInboundEvent? {
+            TelegramBot.event(
+                for: TelegramUpdate(
+                    updateID: 1, message: TelegramMessage(messageID: 1, from: user, chat: chat, date: 100, text: text)),
+                conversationChannel: ChannelID("telegram"),
+                messageID: MessageID(rawValue: UUID()),
+                turnID: TurnID()
+            )
+        }
+
+        #expect(
+            event("/forget-fact 5E8E4B9A-0000-4000-8000-000000000001")
+                == .command(
+                    .forgetFact(
+                        id: "5E8E4B9A-0000-4000-8000-000000000001", conversationID: conversationID,
+                        participantID: participantID, userID: userID)))
+        #expect(
+            event("/memory-off")
+                == .command(.memoryOff(conversationID: conversationID, participantID: participantID, userID: userID)))
+        #expect(
+            event("/memory-on")
+                == .command(.memoryOn(conversationID: conversationID, participantID: participantID, userID: userID)))
+    }
+
     @Test
     func botMapsMemoryCommandsToTheRequestingUser() {
         let user = TelegramUser(id: 7, firstName: "John")
@@ -454,6 +486,7 @@ struct TelegramTests {
         let received = await consumer.value
         if case .message(let message, _) = received {
             #expect(message.text == "What is this?")
+            #expect(message.channelMessageID == ChannelMessageID(rawValue: "1"))
             #expect(message.attachments.count == 1)
             #expect(message.attachments.first?.kind == AttachmentKind.image)
             #expect(message.attachments.first?.id.rawValue == "large")
@@ -628,6 +661,24 @@ struct TelegramTests {
         #expect(await recorder.sentReactions == [.seen, .thinking, .typing, nil])
         #expect(await recorder.sentMessages == ["done"])
         #expect(await recorder.sentReplyMessageIDs == [123])
+    }
+
+    /// A noted message is marked by its Telegram id, and its mark is taken off again; one Telegram
+    /// gave no id has none.
+    @Test
+    func publisherMarksANotedMessageAndTakesTheMarkOff() async throws {
+        let recorder = TelegramCallRecorder(responses: [])
+        let publisher = TelegramEventPublisher(client: makeClient(recorder: recorder))
+        let conversationID = TelegramBot.conversationID(for: 42)
+        let noted = NotedMessage(id: MessageID(), channelID: ChannelMessageID(rawValue: "123"))
+
+        try await publisher.publish(.noted(conversationID: conversationID, noted))
+        try await publisher.publish(.unnoted(conversationID: conversationID, noted))
+        try await publisher.publish(
+            .noted(conversationID: conversationID, NotedMessage(id: MessageID(), channelID: nil)))
+
+        #expect(await recorder.reactionMessageIDs == [123, 123])
+        #expect(await recorder.sentReactions == [.noted, nil])
     }
 
     @Test

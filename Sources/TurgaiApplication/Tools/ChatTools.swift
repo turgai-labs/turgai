@@ -163,7 +163,7 @@ public struct ChatModels: Sendable {
     /// its own.
     func ask(_ question: String, in conversation: ConversationID, on system: ClusterSystem) async throws -> String {
         let role = try await TurgaiConnections.agentRole(for: conversation, agentProfiles: agentProfiles, on: system)
-        guard let profile = await agentProfiles.profile(id: role) else {
+        guard let profile = try await agentProfiles.profile(id: role) else {
             throw TurgaiAgentProfileError.unknownProfile(role)
         }
         let endpoint = try await endpoints.endpoint(

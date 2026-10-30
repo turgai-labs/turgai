@@ -42,8 +42,8 @@ public struct MemoryExtractionConfiguration: Codable, Sendable, Equatable {
 }
 
 extension TurgaiAgentProfileStore {
-    func memoryExtractionConfiguration(forProfileID id: String) async -> MemoryExtractionConfiguration? {
-        guard let profile = profile(id: id) else { return nil }
+    func memoryExtractionConfiguration(forProfileID id: String) async throws -> MemoryExtractionConfiguration? {
+        guard let profile = try await profile(id: id) else { return nil }
         return MemoryExtractionConfiguration(profile: profile)
     }
 }

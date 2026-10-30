@@ -9,16 +9,14 @@ import TurgaiPersistence
 
 @Suite("Turgai storage configuration")
 struct StorageConfigurationTests {
-    @Test("file storage round trips without changing its directory")
-    func fileRoundTrip() throws {
-        let directory = URL(fileURLWithPath: "/tmp/turgai-data")
-        let configuration = try TurgaiStorageConfiguration.fileStore(directory: directory)
+    @Test("local storage round trips")
+    func localRoundTrip() throws {
         let decoded = try JSONDecoder().decode(
             TurgaiStorageConfiguration.self,
-            from: JSONEncoder().encode(configuration)
+            from: JSONEncoder().encode(TurgaiStorageConfiguration.local)
         )
 
-        #expect(decoded == .file(directory: directory.standardizedFileURL))
+        #expect(decoded == .local)
     }
 
     @Test("PostgreSQL storage keeps connection settings but not a password")
@@ -56,15 +54,6 @@ struct StorageConfigurationTests {
             try TurgaiStorageConfiguration.postgresStore(
                 url: URL(string: "postgres://db.example.test")!,
                 username: "turgai"
-            )
-        }
-    }
-
-    @Test("file storage rejects non-file URLs")
-    func invalidFileURL() {
-        #expect(throws: TurgaiStorageConfigurationError.invalidFileURL) {
-            try TurgaiStorageConfiguration.fileStore(
-                directory: URL(string: "https://example.com/data")!
             )
         }
     }

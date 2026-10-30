@@ -6,31 +6,28 @@ import TurgaiDomain
 #endif
 
 enum StorageBackend: String, Sendable, Equatable {
-    case file
+    /// Turgai's own database, on this machine.
+    case local
     case postgres
 }
 
 struct StorageFormValues: Sendable, Equatable {
     let backend: StorageBackend
-    let fileURL: String
     let postgresURL: String
     let postgresUsername: String
 
     init(
         backend: StorageBackend,
-        fileURL: String,
         postgresURL: String,
         postgresUsername: String
     ) {
         self.backend = backend
-        self.fileURL = fileURL
         self.postgresURL = postgresURL
         self.postgresUsername = postgresUsername
     }
 
-    init(form: [String: [String]], defaultFileDirectory: URL) {
-        self.backend = StorageBackend(rawValue: form["backend"]?.first ?? "") ?? .file
-        self.fileURL = form["fileURL"]?.first ?? defaultFileDirectory.absoluteString
+    init(form: [String: [String]]) {
+        self.backend = StorageBackend(rawValue: form["backend"]?.first ?? "") ?? .local
         self.postgresURL = form["postgresURL"]?.first ?? ""
         self.postgresUsername = form["postgresUsername"]?.first ?? ""
     }

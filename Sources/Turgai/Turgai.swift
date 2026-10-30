@@ -62,7 +62,7 @@ struct Serve: AsyncParsableCommand {
         if apiAuthMode == .apiKey, apiKey?.isEmpty != false {
             throw ValidationError("TURGAI_API_KEY is required when --api-auth is api-key.")
         }
-        let server = try TurgaiServer(
+        let server = try await TurgaiServer(
             directory: Self.dataDirectory(option: directory, fileManager: .default),
             port: port,
             websitePort: WebsitePort(rawValue: websitePort),

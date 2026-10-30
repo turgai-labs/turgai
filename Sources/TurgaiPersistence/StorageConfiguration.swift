@@ -11,25 +11,18 @@ import TurgaiDomain
 #endif
 
 public enum TurgaiStorageConfigurationError: Error, Equatable, Sendable {
-    case invalidFileURL
     case invalidPostgresURL
     case invalidPostgresUsername
     case invalidPostgresPassword
 }
 
-/// The persisted storage choice. Credentials are intentionally split: the
-/// connection URL and username are configuration, while the password lives in
-/// a separate mode-600 file managed by the dashboard.
+/// The persisted choice of where the journal is kept. Credentials are intentionally split: the
+/// connection URL and username are configuration, while the password lives in a separate
+/// mode-600 file managed by the dashboard.
 public enum TurgaiStorageConfiguration: Codable, Equatable, Sendable {
-    case file(directory: URL)
+    /// In Turgai's own database, in its directory.
+    case local
     case postgres(url: URL, username: String)
-
-    public static func fileStore(directory: URL) throws -> Self {
-        guard directory.isFileURL else {
-            throw TurgaiStorageConfigurationError.invalidFileURL
-        }
-        return .file(directory: directory.standardizedFileURL)
-    }
 
     public static func postgresStore(url: URL, username: String) throws -> Self {
         guard Self.isValidPostgresURL(url) else {
@@ -40,11 +33,6 @@ public enum TurgaiStorageConfiguration: Codable, Equatable, Sendable {
             throw TurgaiStorageConfigurationError.invalidPostgresUsername
         }
         return .postgres(url: url, username: username)
-    }
-
-    public var fileDirectory: URL? {
-        guard case .file(let directory) = self else { return nil }
-        return directory
     }
 
     public var postgres: PostgresStorageConfiguration? {
@@ -73,22 +61,20 @@ public enum TurgaiStorageConfiguration: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case kind
-        case directory
         case url
         case username
     }
 
     private enum Kind: String, Codable {
-        case file
+        case local
         case postgres
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .file(let directory):
-            try container.encode(Kind.file, forKey: .kind)
-            try container.encode(directory, forKey: .directory)
+        case .local:
+            try container.encode(Kind.local, forKey: .kind)
         case .postgres(let url, let username):
             try container.encode(Kind.postgres, forKey: .kind)
             try container.encode(url, forKey: .url)
@@ -99,10 +85,8 @@ public enum TurgaiStorageConfiguration: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(Kind.self, forKey: .kind) {
-        case .file:
-            self = try Self.fileStore(
-                directory: container.decode(URL.self, forKey: .directory)
-            )
+        case .local:
+            self = .local
         case .postgres:
             self = try Self.postgresStore(
                 url: container.decode(URL.self, forKey: .url),
@@ -134,35 +118,25 @@ public struct PostgresStorageConfiguration: Codable, Equatable, Sendable {
     }
 }
 
-/// One persistence backend selected before the cluster starts.
-///
-/// Nothing here retains an event or snapshot store: stores are constructed at
-/// the point of use — the composition root builds each one exactly once and
-/// passes it to the cluster journal plugin's factory — so the plugin boundary
-/// is the only place a store ever lives.
-public struct TurgaiPersistence: Sendable {
-    /// The driver behind the selected backend. Store construction branches on
-    /// this, once, where the stores are used.
-    public enum Backend: Sendable {
-        case file(FileClient)
-        case postgres(PostgresClient)
-    }
-
-    public let backend: Backend
+/// Where the journal is kept, as the storage choice says: in Turgai's own database, or in
+/// PostgreSQL, through a client of its own.
+public enum JournalStorage: Sendable {
+    case local
+    case postgres(PostgresClient)
 
     public init(
         configuration: TurgaiStorageConfiguration,
         postgresPassword: String?
     ) throws {
         switch configuration {
-        case .file(let directory):
-            backend = .file(try FileClient(directory: directory))
+        case .local:
+            self = .local
         case .postgres(let url, let username):
             guard let postgresPassword, !postgresPassword.isEmpty else {
                 throw TurgaiStorageConfigurationError.invalidPostgresPassword
             }
             let configuration = PostgresStorageConfiguration(url: url, username: username)
-            backend = .postgres(
+            self = .postgres(
                 PostgresClient(
                     configuration: PostgresClient.Configuration(
                         host: configuration.host,

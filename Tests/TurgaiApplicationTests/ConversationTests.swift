@@ -67,6 +67,45 @@ struct ConversationTests {
         #expect(record.pendingReplies.isEmpty)
     }
 
+    /// A noted message keeps its mark until it's taken off: one a restart leaves is still known, to
+    /// take off with the next message.
+    @Test
+    func aNotedMessageIsKeptUntilItsMarkIsTakenOff() {
+        var record = ConversationState(conversationID: conversationID)
+        let noted = NotedMessage(id: MessageID(), channelID: ChannelMessageID(rawValue: "123"))
+        record.apply(.noted(noted))
+        #expect(record.noted == noted)
+        record.apply(.unnoted)
+        #expect(record.noted == nil)
+    }
+
+    /// `/memory` shows what's remembered, with a button to forget each fact, one to turn memory off
+    /// or on, and one to forget everything when anything is remembered.
+    @Test
+    func memoryIsShownWithItsButtons() {
+        let fact = MemoryFact(
+            id: MemoryFactID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!),
+            path: MemoryPath(["lives in"])!,
+            value: "Haar, Germany",
+            evidence: [],
+            confidence: 0.9,
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        let remembered = MemoryTree([fact])
+        #expect(
+            MemoryPresentation.text(remembered, remembering: .on)
+                == "Remembered:\n```\nYou\n└─ lives in: Haar, Germany\n```")
+        #expect(
+            MemoryPresentation.actions(for: remembered, remembering: .on).map(\.command) == [
+                "/forget-fact 00000000-0000-0000-0000-000000000001", "/memory-off", "/forget",
+            ])
+        #expect(MemoryPresentation.actions(for: remembered, remembering: .on).first?.label == "Forget lives in: Haar, Germany")
+        #expect(
+            MemoryPresentation.text(MemoryTree([]), remembering: .off)
+                == "Memory is off: nothing new is remembered.\nNothing is remembered.")
+        #expect(MemoryPresentation.actions(for: MemoryTree([]), remembering: .off).map(\.label) == ["Turn memory on"])
+    }
+
     @Test
     func failedConversationDoesNotAutomaticallyRetry() {
         var record = ConversationState(conversationID: conversationID)

@@ -4,17 +4,17 @@
     import Foundation
 #endif
 
-/// The materialized "what is current?" view over one user's memory events.
+/// A person's memory: whether what they say is remembered, and what is, with the messages it was
+/// learned from.
 ///
-/// The journal keeps full provenance; this projection keeps only a bounded
+/// The journal keeps full provenance; memory keeps only a bounded
 /// tail of recent observations (extraction context) plus every fact with its
 /// status, so contradictions stay visible after supersession.
-public struct MemoryProjection: Codable, Sendable, Equatable {
+public struct Memory: Codable, Sendable, Equatable {
     /// The observation tail is hard-bounded; older observations remain in
     /// the journal, not in memory. `processedSources` is keyed by sourceID,
     /// so trimming the tail never un-marks a consumed source.
     public static let maximumObservations = 500
-    public static let maximumCurrentFacts = 50
 
     public private(set) var generation: MemoryGeneration
     /// The logical boundary prevents delayed observations from a turn that
@@ -23,6 +23,8 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
     public private(set) var observations: [MemoryObservation] = []
     public private(set) var processedSources: Set<MemorySourceID> = []
     public private(set) var facts: [MemoryFact] = []
+    /// Whether what they say is remembered.
+    public private(set) var remembering: Remembering = .on
 
     public var latestObservationSourceID: MemorySourceID? {
         Self.latestObservation(in: observations)?.sourceID
@@ -48,6 +50,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         case observations
         case processedSources
         case facts
+        case remembering
     }
 
     public init(from decoder: Decoder) throws {
@@ -76,6 +79,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
                 [MemoryFact].self,
                 forKey: .facts
             ) ?? []
+        remembering = try container.decode(Remembering.self, forKey: .remembering)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -85,6 +89,7 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         try container.encode(observations, forKey: .observations)
         try container.encode(processedSources, forKey: .processedSources)
         try container.encode(facts, forKey: .facts)
+        try container.encode(remembering, forKey: .remembering)
     }
 
     public mutating func apply(_ event: MemoryEvent) {
@@ -113,10 +118,6 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         case .factSuperseded(let id, let replacement):
             applyFactEvent(.factSuperseded(id, by: replacement))
 
-        case .factExpired(let id):
-            guard let index = facts.firstIndex(where: { $0.id == id }) else { return }
-            facts[index].transition(to: .expired)
-
         case .factForgotten(let id):
             guard let index = facts.firstIndex(where: { $0.id == id }) else { return }
             facts[index].transition(to: .forgotten)
@@ -133,6 +134,9 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
             for change in commit.changes {
                 applyFactEvent(change)
             }
+
+        case .rememberingChanged(let remembering):
+            self.remembering = remembering
         }
     }
 
@@ -158,34 +162,14 @@ public struct MemoryProjection: Codable, Sendable, Equatable {
         }
     }
 
-    /// Facts that may be shown to the model: active and not past their
-    /// validity range. Defensive about `validUntil` even though expiration is
-    /// event-driven — a restart may land after a deadline passed.
-    public func currentFacts(now: Date = Date()) -> [MemoryFact] {
-        facts.filter { fact in
-            guard fact.status == .active else { return false }
-            if let validUntil = fact.validUntil, validUntil < now { return false }
-            return true
-        }
+    /// The facts that are true now, in the order they were learned.
+    public func currentFacts() -> [MemoryFact] {
+        facts.filter { $0.status == .active }
     }
 
-    public func currentFacts(
-        limit: Int,
-        now: Date = Date()
-    ) -> [MemoryFact] {
-        Array(
-            currentFacts(now: now).suffix(
-                min(max(0, limit), Self.maximumCurrentFacts)
-            )
-        )
-    }
-
-    public func activeFact(namespace: MemoryNamespace, predicate: String) -> MemoryFact? {
-        facts.first {
-            $0.status == .active
-                && $0.namespace == namespace
-                && $0.predicate == predicate
-        }
+    /// What's remembered now, as a tree.
+    public var tree: MemoryTree {
+        MemoryTree(currentFacts())
     }
 
     public func recentObservations(limit: Int) -> [MemoryObservation] {

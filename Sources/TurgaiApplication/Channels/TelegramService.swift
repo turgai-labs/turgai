@@ -268,7 +268,7 @@ enum TelegramDelivery {
             turnID
         case .noticeWithActions(_, let turnID, _, _):
             turnID
-        case .reset, .asked, .answered:
+        case .reset, .asked, .answered, .noted, .unnoted:
             nil
         }
     }
@@ -286,7 +286,7 @@ public actor TelegramService: Service {
 
     private let actorSystem: ClusterSystem
     private let dependencies: TurgaiChannelRuntimeDependencies
-    private let discoverChannelIDs: @Sendable () async throws -> [UUID]
+    private let channels: ChannelStorage
     private let logger: Logger
     /// How often each channel is asked again, and the channels looked for.
     private let round: Duration
@@ -294,12 +294,12 @@ public actor TelegramService: Service {
     public init(
         actorSystem: ClusterSystem,
         dependencies: TurgaiChannelRuntimeDependencies,
-        discoverChannelIDs: @escaping @Sendable () async throws -> [UUID],
+        channels: ChannelStorage,
         round: Duration = .seconds(30)
     ) {
         self.actorSystem = actorSystem
         self.dependencies = dependencies
-        self.discoverChannelIDs = discoverChannelIDs
+        self.channels = channels
         self.logger = actorSystem.log
         self.round = round
     }
@@ -310,7 +310,7 @@ public actor TelegramService: Service {
                 var running: Set<UUID> = []
                 while !Task.isCancelled {
                     do {
-                        for channelID in try await self.discoverChannelIDs() where running.insert(channelID).inserted {
+                        for channelID in try await self.channels.ids(TelegramProvider.providerID) where running.insert(channelID).inserted {
                             group.addTask { await self.keepRunning(channelID) }
                         }
                     } catch {
@@ -382,7 +382,7 @@ public actor TelegramService: Service {
             let channel = try await TelegramChannel.resolve(on: actorSystem, channelID: channelID)
             guard case .active(_, let state) = try await channel.currentState() else { return }
             // Its chats that were talked in before, so what they do by themselves reaches them.
-            let persisted = try await dependencies.loadPersistedConversationIDs().filter { conversationID in
+            let persisted = try await dependencies.conversations.all().filter { conversationID in
                 guard conversationID.channel == conversationChannel,
                     let chatID = Int64(conversationID.externalAddress.rawValue)
                 else { return false }

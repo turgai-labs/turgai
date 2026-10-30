@@ -20,7 +20,7 @@ struct MemoryTests {
             text: "Berlin",
             observedAt: Date(timeIntervalSince1970: 1)
         )
-        var projection = MemoryProjection()
+        var projection = Memory()
 
         projection.apply(.observationRecorded(observation))
         projection.apply(.observationRecorded(observation))
@@ -41,7 +41,7 @@ struct MemoryTests {
             text: "sent earlier, completed later",
             observedAt: Date(timeIntervalSince1970: 1)
         )
-        var projection = MemoryProjection()
+        var projection = Memory()
         projection.apply(.observationRecorded(laterMessage))
         projection.apply(.observationRecorded(earlierMessage))
 
@@ -50,7 +50,7 @@ struct MemoryTests {
 
     @Test
     func observationTailDropsOldestObservationsBeyondTheCap() {
-        var projection = MemoryProjection()
+        var projection = Memory()
         let first = MemoryObservation(
             sourceID: sourceID,
             text: "first",
@@ -58,7 +58,7 @@ struct MemoryTests {
         )
         projection.apply(.observationRecorded(first))
 
-        for index in 2...(MemoryProjection.maximumObservations + 1) {
+        for index in 2...(Memory.maximumObservations + 1) {
             projection.apply(
                 .observationRecorded(
                     MemoryObservation(
@@ -70,11 +70,11 @@ struct MemoryTests {
             )
         }
 
-        #expect(projection.observations.count == MemoryProjection.maximumObservations)
+        #expect(projection.observations.count == Memory.maximumObservations)
         #expect(!projection.containsObservation(for: sourceID))
         #expect(
             projection.recentObservations(limit: 1).first?.text
-                == "message \(MemoryProjection.maximumObservations + 1)"
+                == "message \(Memory.maximumObservations + 1)"
         )
     }
 
@@ -92,29 +92,26 @@ struct MemoryTests {
             existingFacts: []
         )
         let candidate = FactCandidate(
-            namespace: .environment,
-            predicate: "lives_in",
-            value: .place("Haar"),
+            path: MemoryPath(["lives_in"])!,
+            value: "Haar",
             evidence: [observationID],
             supportingText: "I live in Haar",
             confidence: 1,
-            importance: 1,
-            stability: .mutable,
             observedAt: observation.observedAt
         )
 
         guard
             case .commit(let commit) = MemoryExtraction.decide(
-                state: MemoryProjection(),
+                state: Memory(),
                 input: input,
-                proposals: [.add(candidate)]
+                candidates: [candidate]
             )
         else {
             Issue.record("expected a memory extraction commit")
             return
         }
 
-        var projection = MemoryProjection()
+        var projection = Memory()
         projection.apply(.extractionCommitted(commit))
         #expect(projection.containsObservation(for: sourceID))
         #expect(projection.currentFacts().count == 1)
@@ -123,7 +120,7 @@ struct MemoryTests {
             MemoryExtraction.decide(
                 state: projection,
                 input: input,
-                proposals: [.add(candidate)]
+                candidates: [candidate]
             ) == .alreadyHandled
         )
     }
@@ -142,28 +139,25 @@ struct MemoryTests {
             existingFacts: []
         )
         let candidate = FactCandidate(
-            namespace: .profile,
-            predicate: "name",
-            value: .person("Ada"),
+            path: MemoryPath(["name"])!,
+            value: "Ada",
             evidence: [observationID],
             supportingText: "a quote that appears nowhere in the observation",
             confidence: 1,
-            importance: 1,
-            stability: .stable,
             observedAt: observation.observedAt
         )
 
         let decision = MemoryExtraction.decide(
-            state: MemoryProjection(),
+            state: Memory(),
             input: input,
-            proposals: [.add(candidate)]
+            candidates: [candidate]
         )
 
         guard case .commit(let commit) = decision else {
             Issue.record("Expected the examined batch to be committed without facts")
             return
         }
-        var projection = MemoryProjection()
+        var projection = Memory()
         projection.apply(.observationRecorded(observation))
         projection.apply(.extractionCommitted(commit))
         #expect(projection.isProcessed(observation))
@@ -190,22 +184,19 @@ struct MemoryTests {
             existingFacts: []
         )
         let candidate = FactCandidate(
-            namespace: .environment,
-            predicate: "lives_in",
-            value: .place("Haar"),
+            path: MemoryPath(["lives_in"])!,
+            value: "Haar",
             evidence: [observationID],
             supportingText: "I live in Haar",
             confidence: 1,
-            importance: 1,
-            stability: .mutable,
             observedAt: first.observedAt
         )
 
         guard
             case .commit(let commit) = MemoryExtraction.decide(
-                state: MemoryProjection(),
+                state: Memory(),
                 input: input,
-                proposals: [.add(candidate)]
+                candidates: [candidate]
             )
         else {
             Issue.record("expected a memory extraction commit")
@@ -213,7 +204,7 @@ struct MemoryTests {
         }
 
         #expect(commit.processedSources == [sourceID, secondSourceID])
-        var projection = MemoryProjection()
+        var projection = Memory()
         projection.apply(.extractionCommitted(commit))
         #expect(projection.isProcessed(first))
         #expect(projection.isProcessed(second))
@@ -229,16 +220,13 @@ struct MemoryTests {
         )
         let fact = MemoryFact(
             id: factID,
-            namespace: .profile,
-            predicate: "name",
-            value: .person("Ada"),
+            path: MemoryPath(["name"])!,
+            value: "Ada",
             evidence: [observationID],
             confidence: 1,
-            importance: 1,
-            stability: .stable,
             observedAt: observation.observedAt
         )
-        var projection = MemoryProjection()
+        var projection = Memory()
         projection.apply(.observationRecorded(observation))
         projection.apply(.factAccepted(fact))
         let generation = projection.generation
@@ -252,7 +240,7 @@ struct MemoryTests {
 
     @Test
     func observationsFromBeforeForgetCannotEnterTheNewGeneration() {
-        var projection = MemoryProjection()
+        var projection = Memory()
         projection.apply(.cleared(at: Date(timeIntervalSince1970: 10)))
 
         #expect(
@@ -273,6 +261,18 @@ struct MemoryTests {
                 )
             )
         )
+    }
+
+    /// Whether a person is remembered is theirs to change, and forgetting what's remembered keeps it.
+    @Test
+    func rememberingIsKeptThroughForgettingAndAsData() throws {
+        var memory = Memory()
+        #expect(memory.remembering == .on)
+        memory.apply(.rememberingChanged(.off))
+        memory.apply(.cleared(at: Date(timeIntervalSince1970: 10)))
+        #expect(memory.remembering == .off)
+        let decoded = try JSONDecoder().decode(Memory.self, from: try JSONEncoder().encode(memory))
+        #expect(decoded.remembering == .off)
     }
 
     @Test
@@ -304,7 +304,7 @@ struct MemoryTests {
             text: "I moved to London.",
             observedAt: Date(timeIntervalSince1970: 3)
         )
-        var projection = MemoryProjection()
+        var projection = Memory()
         projection.apply(.observationRecorded(first))
         projection.apply(.observationRecorded(second))
         projection.apply(.observationRecorded(third))
@@ -366,14 +366,11 @@ struct MemoryTests {
     @Test
     func policyAcceptsAndSupersedesFactsWithoutReinforcingRepeats() {
         let candidate = FactCandidate(
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Berlin"),
+            path: MemoryPath(["home"])!,
+            value: "Berlin",
             evidence: [observationID],
             supportingText: "Berlin",
             confidence: 0.95,
-            importance: 0.9,
-            stability: .mutable
         )
         let policy = MemoryPolicy()
 
@@ -400,19 +397,15 @@ struct MemoryTests {
         }
 
         let replacement = FactCandidate(
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Munich"),
+            path: MemoryPath(["home"])!,
+            value: "Munich",
             evidence: [observationID],
             supportingText: "Munich",
             confidence: 0.99,
-            importance: 0.9,
-            stability: .mutable,
-            validUntil: nil
         )
         guard
             case .superseded(let oldID, let newFact) = policy.decide(
-                proposal: .revise(factID: factID, candidate: replacement),
+                candidate: replacement,
                 against: [fact],
                 factID: MemoryFactID()
             )
@@ -421,84 +414,56 @@ struct MemoryTests {
             return
         }
         #expect(oldID == factID)
-        #expect(newFact.value == .place("Munich"))
+        #expect(newFact.value == "Munich")
 
-        let differentlyNamedRevision = FactCandidate(
-            namespace: .profile,
-            predicate: "lives_in",
-            value: .place("London"),
-            evidence: [observationID],
-            supportingText: "London",
-            confidence: 0.99,
-            importance: 0.9,
-            stability: .mutable
-        )
-        guard
-            case .superseded(_, let canonicalFact) = policy.decide(
-                proposal: .revise(factID: factID, candidate: differentlyNamedRevision),
-                against: [fact],
-                factID: MemoryFactID()
-            )
-        else {
-            Issue.record("Expected an explicit revision to target the existing fact")
-            return
-        }
-        #expect(canonicalFact.predicate == fact.predicate)
+        // The same name, written another way, is the same path.
+        #expect(MemoryPath(["Home "]) == fact.path)
     }
 
     @Test
     func additionsSupersedeContradictionsAndLeaveOtherFactsAlone() {
         let berlin = MemoryFact(
             id: factID,
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Berlin"),
+            path: MemoryPath(["home"])!,
+            value: "Berlin",
             evidence: [observationID],
             confidence: 0.95,
-            importance: 0.9,
-            stability: .mutable,
             observedAt: Date(timeIntervalSince1970: 1)
         )
         let policy = MemoryPolicy()
 
-        // Same namespace, predicate, and value: repeating an equivalent
+        // The same path and value: repeating an equivalent
         // claim does not change memory.
         let equivalent = FactCandidate(
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Berlin"),
+            path: MemoryPath(["home"])!,
+            value: "Berlin",
             evidence: [observationID],
             supportingText: "Berlin",
             confidence: 0.95,
-            importance: 0.9,
-            stability: .mutable,
             observedAt: Date(timeIntervalSince1970: 2)
         )
         #expect(
             policy.decide(
-                proposal: .add(equivalent),
+                candidate: equivalent,
                 against: [berlin],
                 factID: MemoryFactID()
             ) == .rejected
         )
 
-        // Same namespace and predicate, different value: the contradiction
+        // The same path, a different value: the contradiction
         // is resolved in policy — the incoming claim supersedes the active
         // fact, and the old fact is no longer active.
         let london = FactCandidate(
-            namespace: .profile,
-            predicate: "home",
-            value: .place("London"),
+            path: MemoryPath(["home"])!,
+            value: "London",
             evidence: [ObservationID(rawValue: UUID())],
             supportingText: "London",
             confidence: 0.8,
-            importance: 0.8,
-            stability: .mutable,
             observedAt: Date(timeIntervalSince1970: 2)
         )
         guard
             case .superseded(let oldID, let replacement) = policy.decide(
-                proposal: .add(london),
+                candidate: london,
                 against: [berlin],
                 factID: MemoryFactID()
             )
@@ -507,40 +472,34 @@ struct MemoryTests {
             return
         }
         #expect(oldID == factID)
-        #expect(replacement.value == .place("London"))
+        #expect(replacement.value == "London")
 
-        var projection = MemoryProjection()
+        var projection = Memory()
         projection.apply(.factAccepted(berlin))
         projection.apply(.factSuperseded(oldID, by: replacement))
         #expect(projection.currentFacts().count == 1)
-        #expect(
-            projection.activeFact(namespace: .profile, predicate: "home")?.value
-                == .place("London")
-        )
+        #expect(projection.currentFacts().first { $0.path == MemoryPath(["home"]) }?.value == "London")
 
-        // A different predicate is an independent second fact.
+        // A different path is an independent second fact.
         let employer = FactCandidate(
-            namespace: .profile,
-            predicate: "employer",
-            value: .text("Acme"),
+            path: MemoryPath(["employer"])!,
+            value: "Acme",
             evidence: [ObservationID(rawValue: UUID())],
             supportingText: "Acme",
             confidence: 0.8,
-            importance: 0.8,
-            stability: .mutable,
             observedAt: Date(timeIntervalSince1970: 3)
         )
         guard
             case .accepted(let second) = policy.decide(
-                proposal: .add(employer),
+                candidate: employer,
                 against: projection.currentFacts(),
                 factID: MemoryFactID()
             )
         else {
-            Issue.record("Expected the different-predicate addition to be accepted")
+            Issue.record("Expected the different-path addition to be accepted")
             return
         }
-        #expect(second.predicate == "employer")
+        #expect(second.path == MemoryPath(["employer"]))
     }
 
     @Test
@@ -549,40 +508,31 @@ struct MemoryTests {
         let newerObservation = ObservationID(rawValue: UUID())
         let olderFact = MemoryFact(
             id: factID,
-            namespace: .preference,
-            predicate: "likes",
-            value: .text("Swift"),
+            path: MemoryPath(["likes"])!,
+            value: "Swift",
             evidence: [olderObservation],
             confidence: 0.8,
-            importance: 0.5,
-            stability: .situational,
             observedAt: Date(timeIntervalSince1970: 1)
         )
         let newerFact = MemoryFact(
-            namespace: .preference,
-            predicate: "likes",
-            value: .text("Elixir"),
+            path: MemoryPath(["likes"])!,
+            value: "Elixir",
             evidence: [newerObservation],
             confidence: 0.8,
-            importance: 0.5,
-            stability: .situational,
             observedAt: Date(timeIntervalSince1970: 2)
         )
         let repeated = FactCandidate(
-            namespace: .preference,
-            predicate: "likes",
-            value: .text("Swift"),
+            path: MemoryPath(["likes"])!,
+            value: "Swift",
             evidence: [observationID],
             supportingText: "I like Swift",
             confidence: 0.9,
-            importance: 0.5,
-            stability: .situational,
             observedAt: Date(timeIntervalSince1970: 3)
         )
 
         guard
             case .rejected = MemoryPolicy().decide(
-                proposal: .add(repeated),
+                candidate: repeated,
                 against: [olderFact, newerFact],
                 factID: MemoryFactID()
             )
@@ -592,88 +542,49 @@ struct MemoryTests {
         }
     }
 
+    /// What's remembered is a tree: names a path shares are one node, each fact sits at its path's
+    /// last name, and a recall gives it as data that can be out of date.
     @Test
-    func staleRevisionIsRejected() {
-        let current = MemoryFact(
-            id: factID,
-            namespace: .profile,
-            predicate: "home",
-            value: .place("London"),
-            evidence: [observationID],
-            confidence: 0.8,
-            importance: 0.8,
-            stability: .mutable,
-            observedAt: Date(timeIntervalSince1970: 2)
-        )
-        let stale = FactCandidate(
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Berlin"),
-            evidence: [ObservationID(rawValue: UUID())],
-            supportingText: "Berlin",
-            confidence: 1,
-            importance: 1,
-            stability: .mutable,
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
+    func whatsRememberedIsATreeOfPaths() {
+        func fact(_ path: [String], _ value: String) -> MemoryFact {
+            MemoryFact(
+                path: MemoryPath(path)!,
+                value: value,
+                evidence: [observationID],
+                confidence: 0.9,
+                observedAt: Date(timeIntervalSince1970: 1)
+            )
+        }
+        var memory = Memory()
+        for remembered in [
+            fact(["lives in"], "Haar, Germany"), fact(["family", "sister"], "Ann"), fact(["Family", "brother"], "Bob"),
+        ] {
+            memory.apply(.factAccepted(remembered))
+        }
 
-        let decision = MemoryPolicy().decide(
-            proposal: .revise(factID: factID, candidate: stale),
-            against: [current],
-            factID: MemoryFactID()
-        )
-        #expect(decision == .rejected)
+        #expect(memory.tree.nodes.map(\.name.rawValue) == ["lives in", "family"])
+        #expect(memory.tree.facts.map(\.value) == ["Haar, Germany", "Ann", "Bob"])
+        #expect(
+            memory.tree.rendered() == """
+                You
+                ├─ lives in: Haar, Germany
+                └─ family
+                   ├─ sister: Ann
+                   └─ brother: Bob
+                """)
+        #expect(MemoryRetrieval.recalled(memory.tree).hasSuffix(memory.tree.rendered()))
+        #expect(MemoryRetrieval.recalled(memory.tree).contains("may be out of date"))
+        #expect(MemoryRetrieval.recalled(Memory().tree) == "Nothing is remembered.")
     }
 
+    /// A path has one to three names, none of them empty.
     @Test
-    func retrievalUsesLexicalRelevanceAndRendersUntrustedContext() {
-        let berlin = MemoryFact(
-            id: factID,
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Berlin"),
-            evidence: [observationID],
-            confidence: 0.95,
-            importance: 0.9,
-            stability: .mutable,
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
-        var projection = MemoryProjection()
-        projection.apply(.factAccepted(berlin))
-
-        let facts = MemoryRetrieval.facts(
-            from: projection,
-            matching: MemoryQuery(text: "where is my home?", limit: 1),
-            now: Date(timeIntervalSince1970: 2)
-        )
-        #expect(facts == [berlin])
-        #expect(MemoryRetrieval.recalled(facts).contains("may be out of date"))
-        #expect(MemoryRetrieval.recalled([]) == "Nothing is remembered about that.")
-    }
-
-    @Test
-    func retrievalOmitsUnrelatedFacts() {
-        let home = MemoryFact(
-            id: factID,
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Berlin"),
-            evidence: [observationID],
-            confidence: 0.95,
-            importance: 1,
-            stability: .mutable,
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
-        var projection = MemoryProjection()
-        projection.apply(.factAccepted(home))
-
-        let facts = MemoryRetrieval.facts(
-            from: projection,
-            matching: MemoryQuery(text: "test without tools", limit: 6),
-            now: Date(timeIntervalSince1970: 2)
-        )
-
-        #expect(facts.isEmpty)
+    func aPathHasOneToThreeNames() {
+        #expect(MemoryPath([]) == nil)
+        #expect(MemoryPath(["family", " "]) == nil)
+        #expect(MemoryPath(["a", "b", "c", "d"]) == nil)
+        #expect(MemoryPath([" Lives   In "])?.description == "lives in")
+        #expect(MemoryPath(["family", "sister"])?.description == "family › sister")
     }
 
     @Test
@@ -686,28 +597,22 @@ struct MemoryTests {
             observedAt: Date(timeIntervalSince1970: 1)
         )
         let candidate = FactCandidate(
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Haar"),
+            path: MemoryPath(["home"])!,
+            value: "Haar",
             evidence: [observationID],
             supportingText: "You live in Haar",
             confidence: 0.95,
-            importance: 0.9,
-            stability: .mutable,
             observedAt: observation.observedAt
         )
 
         #expect(!MemoryEvidence.supports(candidate, in: [observation]))
 
         let userSupported = FactCandidate(
-            namespace: .profile,
-            predicate: "home",
-            value: .place("Haar"),
+            path: MemoryPath(["home"])!,
+            value: "Haar",
             evidence: [observationID],
             supportingText: "weather in Haar",
             confidence: 0.95,
-            importance: 0.9,
-            stability: .mutable,
             observedAt: observation.observedAt
         )
         #expect(MemoryEvidence.supports(userSupported, in: [observation]))

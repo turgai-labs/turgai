@@ -3,16 +3,12 @@ import Hail
 import Testing
 import TurgaiApplication
 import TurgaiHail
-import TurgaiPersistence
 
 @Suite("Turgai agent profiles")
 struct TurgaiAgentProfileTests {
     @Test("creates the default profile with a concrete Ollama endpoint")
     func defaultProfile() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let store = try TurgaiAgentProfileStore(files: FileClient(directory: directory))
+        let store = TurgaiAgentProfileStore(storage: .test)
         let profile = try await store.create(
             name: "Conversation",
             model: try AgentModel("ollama/qwen3.5:9b"),
@@ -31,10 +27,7 @@ struct TurgaiAgentProfileTests {
 
     @Test("does not require an Ollama endpoint for another provider")
     func nonOllamaProfile() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let store = try TurgaiAgentProfileStore(files: FileClient(directory: directory))
+        let store = TurgaiAgentProfileStore(storage: .test)
         let cloud = AgentProviderConfiguration.openAI(credential: .new(), contextWindow: 128_000)
         let profile = try await store.create(
             name: "Cloud",
@@ -49,10 +42,7 @@ struct TurgaiAgentProfileTests {
 
     @Test("does not invent a profile ID for an empty catalog")
     func emptyCatalogHasNoRoutableProfile() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let store = try TurgaiAgentProfileStore(files: FileClient(directory: directory))
+        let store = TurgaiAgentProfileStore(storage: .test)
         await #expect(throws: TurgaiAgentProfileError.noEnabledProfile) {
             try await store.defaultProfileID()
         }
@@ -60,10 +50,7 @@ struct TurgaiAgentProfileTests {
 
     @Test("preserves an explicitly empty persona without restoring a default")
     func emptyPersonaIsConfiguration() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let store = try TurgaiAgentProfileStore(files: FileClient(directory: directory))
+        let store = TurgaiAgentProfileStore(storage: .test)
         let profile = try await store.create(
             name: "Quiet",
             model: try AgentModel("openai/gpt-4.1"),
@@ -111,10 +98,7 @@ struct TurgaiAgentProfileTests {
 
     @Test("applies endpoint removal on the next profile snapshot")
     func endpointRemovalIsApplied() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let store = try TurgaiAgentProfileStore(files: FileClient(directory: directory))
+        let store = TurgaiAgentProfileStore(storage: .test)
         let local = try await store.create(
             name: "Local",
             model: try AgentModel("ollama/llama3.2"),
@@ -127,34 +111,34 @@ struct TurgaiAgentProfileTests {
 
         try await store.update(cloud)
 
-        let updated = try #require(await store.profile(id: local.id))
+        let updated = try #require(try await store.profile(id: local.id))
         #expect(updated.model.provider == .openAI)
         #expect(updated.providerConfiguration == cloudConfiguration)
     }
 
-    @Test("decodes the current profile representation")
-    func profileRoundTripShape() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let state = Data(
-            #"{"defaultProfileID":"conversation","profiles":[{"id":"conversation","name":"Conversation","model":"ollama/llama3.2","providerConfiguration":{"ollama":{"baseURL":"http://127.0.0.1:11434","contextWindow":8192}},"instructions":"","availability":"enabled"}]}"#
-                .utf8
+    @Test("the first profile is the default, and the default stays while it is")
+    func theDefaultStays() async throws {
+        let store = TurgaiAgentProfileStore(storage: .test)
+        let first = try await store.create(
+            name: "First",
+            model: try AgentModel("openai/gpt-4.1"),
+            providerConfiguration: .openAI(credential: .new(), contextWindow: 16_384)
         )
-        try FileManager.default.createDirectory(
-            at: directory.appendingPathComponent("agents", isDirectory: true), withIntermediateDirectories: true)
-        try state.write(to: directory.appendingPathComponent("agents/profiles.json"))
+        let second = try await store.create(
+            name: "Second",
+            model: try AgentModel("openai/gpt-4.1"),
+            providerConfiguration: .openAI(credential: .new(), contextWindow: 16_384)
+        )
 
-        let store = try TurgaiAgentProfileStore(files: FileClient(directory: directory))
-
-        #expect((await store.defaultProfile())?.persona == nil)
-        #expect((await store.defaultProfile())?.contextWindow == 8192)
-    }
-
-    private func makeDirectory() throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("turgai-agent-profile-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
+        #expect(try await store.defaultProfileID() == first.id)
+        await #expect(throws: TurgaiAgentProfileError.cannotDeleteDefaultProfile) {
+            try await store.delete(id: first.id)
+        }
+        try await store.setDefaultProfile(id: second.id)
+        try await store.delete(id: first.id)
+        #expect(try await store.profiles().map(\.id) == [second.id])
+        await #expect(throws: TurgaiAgentProfileError.unknownProfile(first.id)) {
+            try await store.delete(id: first.id)
+        }
     }
 }

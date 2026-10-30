@@ -16,13 +16,13 @@ struct TurgaiWebConfigurationTests {
         #expect(configuration.isReady == false)
     }
 
-    @Test("completed file storage is ready")
+    @Test("completed local storage is ready")
     func persistedState() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let state = Data(
-            #"{"storage":{"kind":"file","directory":"file:///tmp/turgai-data"},"complete":true}"#
+            #"{"storage":{"kind":"local"},"complete":true}"#
                 .utf8
         )
         try state.write(to: directory.appendingPathComponent("setup.json"))

@@ -28,7 +28,7 @@ extension TurgaiMainWebApp {
         let userToolRegistry = dependencies.userToolRegistry
         tools.get { request, context in
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             return HTMLResponse {
                 TurgaiToolsPage(
@@ -40,7 +40,7 @@ extension TurgaiMainWebApp {
 
         tools.get("new") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             return HTMLResponse {
                 TurgaiToolEditorPage(
@@ -52,7 +52,7 @@ extension TurgaiMainWebApp {
 
         tools.get(":file") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedDashboardUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             guard let fileName = context.parameters.get("file"),
                 let document = userToolRegistry.document(named: fileName)
@@ -70,7 +70,7 @@ extension TurgaiMainWebApp {
 
         tools.post("save") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             let draftKind: ToolDraftKind = form["isNew"]?.first == "true" ? .new : .existing
@@ -100,7 +100,7 @@ extension TurgaiMainWebApp {
 
         tools.post("delete") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
-                return TurgaiWebSupport.redirect(to: await auth.hasAdmin() ? "/login" : "/onboarding")
+                return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             let fileName = form["fileName"]?.first ?? ""
