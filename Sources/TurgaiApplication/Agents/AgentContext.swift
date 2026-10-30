@@ -30,21 +30,4 @@ public enum AgentContext: Equatable, Sendable {
         case .asked(let role): AgentContextID(Self.askedPrefix + role.rawValue)
         }
     }
-
-    /// The person it works for: a conversation's. One asked as an object works for no one person.
-    public var person: TurgaiDomain.UserID? {
-        switch self {
-        case .conversation(let conversation): conversation.participantUserID
-        case .asked: nil
-        }
-    }
-}
-
-extension ConversationID {
-    /// The user a conversation belongs to: its participant on that channel.
-    var participantUserID: TurgaiDomain.UserID? {
-        let participant = externalAddress.rawValue
-        guard !participant.isEmpty else { return nil }
-        return TurgaiDomain.UserID(rawValue: "participant:\(channel.rawValue):\(participant)")
-    }
 }

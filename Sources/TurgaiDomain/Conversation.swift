@@ -311,7 +311,7 @@ public struct InboundMessage: Hashable, Codable, Sendable {
         channelMessageID: ChannelMessageID? = nil,
         conversationID: ConversationID,
         participantID: ParticipantID,
-        userID: UserID? = nil,
+        userID: UserID,
         author: MessageAuthor? = nil,
         text: String,
         attachments: [Attachment] = [],
@@ -321,38 +321,11 @@ public struct InboundMessage: Hashable, Codable, Sendable {
         self.channelMessageID = channelMessageID
         self.conversationID = conversationID
         self.participantID = participantID
-        self.userID = userID ?? UserID(participantID: participantID)
+        self.userID = userID
         self.author = author?.isEmpty == true ? nil : author
         self.text = text
         self.attachments = attachments
         self.receivedAt = receivedAt
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case channelMessageID
-        case conversationID
-        case participantID
-        case userID
-        case author
-        case text
-        case attachments
-        case receivedAt
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = try container.decode(MessageID.self, forKey: .id)
-        self.channelMessageID = try container.decodeIfPresent(ChannelMessageID.self, forKey: .channelMessageID)
-        self.conversationID = try container.decode(ConversationID.self, forKey: .conversationID)
-        self.participantID = try container.decode(ParticipantID.self, forKey: .participantID)
-        self.userID =
-            try container.decodeIfPresent(UserID.self, forKey: .userID)
-            ?? UserID(participantID: participantID)
-        self.author = try container.decodeIfPresent(MessageAuthor.self, forKey: .author)
-        self.text = try container.decode(String.self, forKey: .text)
-        self.attachments = try container.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
-        self.receivedAt = try container.decode(Date.self, forKey: .receivedAt)
     }
 
     public func encode(to encoder: Encoder) throws {

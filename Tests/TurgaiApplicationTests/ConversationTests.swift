@@ -24,6 +24,7 @@ struct ConversationTests {
             message: InboundMessage(
                 conversationID: conversationID,
                 participantID: participantID,
+                userID: .ann,
                 text: "first",
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
@@ -34,6 +35,7 @@ struct ConversationTests {
             message: InboundMessage(
                 conversationID: conversationID,
                 participantID: participantID,
+                userID: .ann,
                 text: "second",
                 receivedAt: Date(timeIntervalSince1970: 2)
             ),
@@ -113,6 +115,7 @@ struct ConversationTests {
             message: InboundMessage(
                 conversationID: conversationID,
                 participantID: ParticipantID("user"),
+                userID: .ann,
                 text: "hello",
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
@@ -144,17 +147,10 @@ struct ConversationTests {
         #expect(recovered == [conversationID])
     }
 
+    /// A new person remembers what they say; a guest, whom no one signed in as, doesn't.
     @Test
-    func userRecordLinksParticipantsIdempotently() {
-        let userID = UserID("user:1")
-        let participantID = ParticipantID(channel: ChannelID("telegram"), rawValue: "1")
-        let link = UserParticipantLink(userID: userID, participantID: participantID)
-        var record = UserRecord(userID: userID)
-
-        record.apply(.participantLinked(link, at: Date(timeIntervalSince1970: 1)))
-        record.apply(.participantLinked(link, at: Date(timeIntervalSince1970: 2)))
-
-        #expect(record.participantLinks == [link])
-        #expect(record.isLinked(to: participantID))
+    func aGuestRemembersNothing() {
+        #expect(UserRecord(userID: .ann).memory.remembering == .on)
+        #expect(UserRecord(userID: .guest(UUID())).memory.remembering == .off)
     }
 }

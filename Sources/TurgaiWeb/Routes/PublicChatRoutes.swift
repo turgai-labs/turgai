@@ -459,6 +459,7 @@ extension TurgaiMainWebApp {
                     input: input,
                     text: text,
                     conversation: conversation,
+                    as: conversation.person(for: await chatOwner(from: request, auth: dependencies.auth)),
                     bridge: dependencies.webChatBridge
                 )
                 return try publicAPIResponse(event)
@@ -484,12 +485,12 @@ private struct APIConversation: Sendable {
     let profile: TurgaiAgentProfile
     let publicID: TurgaiModels.ConversationID
 
-    /// Who writes in it for `owner`: the signed-in account, the same person in each of its chats,
-    /// or else the API client the conversation is.
+    /// Who writes in it for `owner`: the signed-in account's person, the same in each of its
+    /// chats, or else a guest, new each time no one signed in comes.
     func person(for owner: ChatOwner) -> TurgaiDomain.UserID {
         switch owner {
-        case .account(let id): TurgaiDomain.UserID(account: id)
-        case .anonymous: TurgaiDomain.UserID(rawValue: "api:\(domainID.stableKey)")
+        case .account(let id): .account(id)
+        case .anonymous: .guest(UUID())
         }
     }
 
@@ -702,6 +703,7 @@ private func send(
     input: TurgaiModels.SendMessageRequest,
     text: String,
     conversation: APIConversation,
+    as person: TurgaiDomain.UserID,
     bridge: TurgaiWebChatBridge
 ) async throws -> TurgaiModels.ChatEvent {
     let session: TurgaiConnections.WebSession
@@ -751,7 +753,7 @@ private func send(
                         channel: publicAPIChannel,
                         rawValue: conversation.domainID.stableKey
                     ),
-                    userID: .init(rawValue: "api:\(conversation.domainID.stableKey)"),
+                    userID: person,
                     text: text,
                     receivedAt: Date()
                 ),

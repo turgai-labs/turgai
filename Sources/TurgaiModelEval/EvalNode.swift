@@ -121,7 +121,7 @@ struct EvalNode: Sendable {
     }
 
     /// Who the eval asks as: one person, the admin of a space of their own.
-    static let askerID = TurgaiDomain.UserID("eval")
+    static let askerID = TurgaiDomain.UserID.account(UUID())
     static let space = SpaceID()
 
     /// The asker's scope, as their space settles it.

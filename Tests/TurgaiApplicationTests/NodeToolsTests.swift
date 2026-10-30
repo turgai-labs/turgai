@@ -51,7 +51,7 @@ struct NodeToolsTests {
 
         let said = Said()
         let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-        let ann = CallScope(UserID("ann"), in: SpaceID(), as: .member, allowed: [])
+        let ann = CallScope(UserID.ann, in: SpaceID(), as: .member, allowed: [])
         func say(_ text: String, in place: ConversationID?) async throws -> ChatSaid {
             try await withActorSystemDependency(said.dependency) {
                 try await CallChain.$current.withValue(.start(ann, in: place)) {
@@ -84,7 +84,7 @@ struct NodeToolsTests {
 
         let said = Said()
         let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-        let ann = CallScope(UserID("ann"), in: SpaceID(), as: .member, allowed: [])
+        let ann = CallScope(UserID.ann, in: SpaceID(), as: .member, allowed: [])
         func ask(_ text: String, in place: ConversationID?) async throws -> ChatAnswer {
             try await withActorSystemDependency(said.dependency) {
                 try await CallChain.$current.withValue(.start(ann, in: place)) {
@@ -115,15 +115,15 @@ struct NodeToolsTests {
         }
 
         // Bob, with nothing shared: refused, as exactly that request.
-        guard case .denied(let refusal) = decision(as: CallScope(UserID("bob"), in: family, as: .member, allowed: []))
+        guard case .denied(let refusal) = decision(as: CallScope(UserID.bob, in: family, as: .member, allowed: []))
         else {
             Issue.record("a member's request ran without being shared")
             return
         }
         #expect(ExactRequest(refusal: refusal) == forecast)
         // Shared with Bob, or an admin's: it runs.
-        #expect(decision(as: CallScope(UserID("bob"), in: family, as: .member, allowed: [forecast])) == .granted)
-        #expect(decision(as: CallScope(UserID("ann"), in: family, as: .admin, allowed: [])) == .granted)
+        #expect(decision(as: CallScope(UserID.bob, in: family, as: .member, allowed: [forecast])) == .granted)
+        #expect(decision(as: CallScope(UserID.ann, in: family, as: .admin, allowed: [])) == .granted)
         // A call on behalf of no one: refused.
         guard case .denied = TurgaiAuthority().decision(on: effect) else {
             Issue.record("a call on behalf of no one ran")

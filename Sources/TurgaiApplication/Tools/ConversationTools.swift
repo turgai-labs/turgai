@@ -40,8 +40,10 @@ public enum ConversationTools {
             tools += Telegram(chat: conversation.channel, files: telegramFiles).tools
         }
         var pages: any ToolPages = NoToolPages()
-        // The person the agent works for.
-        let owner = working?.person
+        // The person the agent works for: in a conversation, whoever its turn answers. One asked
+        // as an object works for no one person.
+        let owner: TurgaiDomain.UserID? =
+            if case .conversation = working { CallChain.current?.scope.person } else { nil }
         if let actorSystem {
             // The other agents, which it can ask: never itself.
             let askable = try await Agent.offered(agents.filter { $0 != context.agentID.role }, on: actorSystem)

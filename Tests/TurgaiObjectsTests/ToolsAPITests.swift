@@ -26,7 +26,7 @@ struct Echoed: Codable {
 @Suite(.serialized)
 struct ToolsAPITests {
     private let family = SpaceID()
-    private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
+    private var ann: CallScope { CallScope(UserID.ann, in: family, as: .member, allowed: []) }
 
     /// A tool that gives back the bytes of what it's given, and whom it was called for.
     private let echo = ToolsAPI(tools: [
@@ -39,7 +39,7 @@ struct ToolsAPITests {
                 ) { input, _ in
                     // It runs in the chain of the call its code is handling.
                     let words = try JSONDecoder().decode(Words.self, from: try JSONEncoder().encode(input))
-                    let heard = CallChain.current?.scope.person.rawValue ?? "no one"
+                    let heard = CallChain.current?.scope.person.key ?? "no one"
                     let echoed = Echoed(bytes: Data(words.text.utf8), heard: heard)
                     return try JSONDecoder().decode(JSONValue.self, from: try JSONEncoder().encode(echoed))
                 }
@@ -69,7 +69,7 @@ struct ToolsAPITests {
                 let id = try await objects.create(
                     name: "Parrot", spec: .new(try Script(code: parrot, type: "Parrot", uses: uses)))
                 let reply = try await objects.held(id).respond("repeatBack", arguments: ["text": "héllo"]).reply
-                #expect(reply == .string("6 bytes, for ann"))
+                #expect(reply == .string("6 bytes, for \(UserID.ann.key)"))
             }
         }
     }

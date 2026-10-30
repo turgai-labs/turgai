@@ -10,8 +10,8 @@ import TurgaiDomain
 @Suite(.serialized)
 struct AccessCheckTests {
     private let family = SpaceID()
-    private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
-    private var bob: CallScope { CallScope(UserID("bob"), in: family, as: .member, allowed: []) }
+    private var ann: CallScope { CallScope(UserID.ann, in: family, as: .member, allowed: []) }
+    private var bob: CallScope { CallScope(UserID.bob, in: family, as: .member, allowed: []) }
     private let counter =
         "actor Counter {\n    var count = 0\n\n    func add() -> Int {\n        count += 1\n        return count\n    }\n}"
 

@@ -4,30 +4,29 @@
     import Foundation
 #endif
 
-/// Turgai's canonical identity for a person or other human-facing account.
-///
-/// The default initializer from `ParticipantID` gives every channel
-/// participant a stable Turgai identity. A later, explicit identity-linking
-/// policy may map several participants to the same `UserID`.
-public struct UserID: RawRepresentable, Hashable, Codable, Sendable {
-    public let rawValue: String
+/// Who a person is: the way they came into Turgai, each a person of their own. Two ways in that
+/// are the same human are linked, never merged.
+public enum UserID: Hashable, Codable, Sendable {
+    /// Whoever signs in with the Turgai account `id`, wherever they use it.
+    case account(UUID)
+    /// The Telegram user `id`, whichever bot they write to.
+    case telegram(Int64)
+    /// A guest: someone no one signed in as, given an id of their own when they came, who's
+    /// remembered by nothing.
+    case guest(UUID)
 
-    public init(rawValue: String) {
-        self.rawValue = rawValue
+    /// Its name for the actor and journal that keep what's theirs.
+    public var key: String {
+        switch self {
+        case .account(let id): "account-\(id.uuidString)"
+        case .telegram(let id): "telegram-\(id)"
+        case .guest(let id): "guest-\(id.uuidString)"
+        }
     }
 
-    public init(_ rawValue: String) {
-        self.init(rawValue: rawValue)
-    }
-
-    public init(participantID: ParticipantID) {
-        self.init(rawValue: "participant:\(participantID.stableKey)")
-    }
-
-    /// The person who signs in with the Turgai account `id`: the same in every chat they have with
-    /// it, with any bot, and on the dashboard.
-    public init(account id: UUID) {
-        self.init(rawValue: "account:\(id.uuidString)")
+    /// Whether it's a guest's.
+    public var isGuest: Bool {
+        if case .guest = self { true } else { false }
     }
 }
 
@@ -38,17 +37,5 @@ public struct User: Hashable, Codable, Sendable {
 
     public init(id: UserID) {
         self.id = id
-    }
-}
-
-/// A known association between a Turgai user and one channel participant.
-/// Keeping this explicit leaves room for consent-based cross-channel linking.
-public struct UserParticipantLink: Hashable, Codable, Sendable {
-    public let userID: UserID
-    public let participantID: ParticipantID
-
-    public init(userID: UserID, participantID: ParticipantID) {
-        self.userID = userID
-        self.participantID = participantID
     }
 }

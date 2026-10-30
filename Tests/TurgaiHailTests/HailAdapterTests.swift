@@ -137,6 +137,7 @@ struct HailAdapterTests {
                 id: MessageID(rawValue: UUID()),
                 conversationID: conversationID,
                 participantID: ParticipantID("user"),
+                userID: .telegram(1),
                 text: "hello",
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),

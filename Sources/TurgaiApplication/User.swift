@@ -18,59 +18,16 @@ import VirtualActors
 /// adapters and are never persisted here.
 public struct UserRecord: Codable, Sendable, Equatable {
     public let userID: UserID
-    public private(set) var participantLinks: [UserParticipantLink]
     public private(set) var memory: Memory
 
-    public init(
-        userID: UserID,
-        participantLinks: [UserParticipantLink] = [],
-        memory: Memory = Memory()
-    ) {
+    /// What a new person has: nothing remembered, and remembering on, unless they're a guest.
+    public init(userID: UserID) {
         self.userID = userID
-        self.participantLinks = participantLinks
-        self.memory = memory
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case userID
-        case participantLinks
-        case memory
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.userID = try container.decode(UserID.self, forKey: .userID)
-        self.participantLinks =
-            try container.decodeIfPresent(
-                [UserParticipantLink].self,
-                forKey: .participantLinks
-            ) ?? []
-        // Older User snapshots predate semantic memory.
-        self.memory =
-            try container.decodeIfPresent(
-                Memory.self,
-                forKey: .memory
-            ) ?? Memory()
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(userID, forKey: .userID)
-        try container.encode(participantLinks, forKey: .participantLinks)
-        try container.encode(memory, forKey: .memory)
-    }
-
-    public func isLinked(to participantID: ParticipantID) -> Bool {
-        participantLinks.contains { $0.participantID == participantID }
+        self.memory = Memory(remembering: userID.isGuest ? .off : .on)
     }
 
     public mutating func apply(_ event: UserEvent) {
         switch event {
-        case .participantLinked(let link, _):
-            guard !participantLinks.contains(link) else { return }
-            participantLinks.append(link)
-        case .participantUnlinked(let participantID, _):
-            participantLinks.removeAll { $0.participantID == participantID }
         case .memory(let event):
             memory.apply(event)
         }
@@ -97,8 +54,6 @@ public enum ExtractionOutcome: Codable, Sendable, Equatable {
 /// Events in one user's journal. Memory facts will be added beside these
 /// identity events later; they will not require a second user store.
 public enum UserEvent: Codable, Sendable, Equatable {
-    case participantLinked(UserParticipantLink, at: Date)
-    case participantUnlinked(ParticipantID, at: Date)
     case memory(MemoryEvent)
 }
 
@@ -141,11 +96,11 @@ public distributed actor User {
     }
 
     public static func actorID(for userID: UserID) -> VirtualActorID {
-        VirtualActorID(rawValue: "user:\(userID.rawValue)")
+        VirtualActorID(rawValue: "user:\(userID.key)")
     }
 
     public static func persistenceID(for userID: UserID) -> String {
-        "turgai-user-\(userID.rawValue)"
+        "turgai-user-\(userID.key)"
     }
 
     public static func resolve(
@@ -156,24 +111,6 @@ public distributed actor User {
             identifiedBy: actorID(for: userID),
             dependency: Config(userID: userID)
         )
-    }
-
-    /// Idempotently associates a channel participant with this Turgai user.
-    /// The initial identity policy creates one User per participant; a future
-    /// consented account-linking flow can call this for several participants.
-    public distributed func link(participantID: ParticipantID) async throws {
-        guard !state.isLinked(to: participantID) else { return }
-        try await emit(
-            event: .participantLinked(
-                UserParticipantLink(userID: userID, participantID: participantID),
-                at: Date()
-            )
-        )
-    }
-
-    public distributed func unlink(participantID: ParticipantID) async throws {
-        guard state.isLinked(to: participantID) else { return }
-        try await emit(event: .participantUnlinked(participantID, at: Date()))
     }
 
     /// Records a completed exchange once, keyed by its source message.

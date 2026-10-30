@@ -14,6 +14,7 @@ struct ConversationReducerTests {
         externalAddress: ExternalConversationAddress("conversation-1")
     )
     private let participantID = ParticipantID("user-1")
+    private let person = UserID.telegram(1)
 
     /// What `action` comes to, as the conversation runs it: its events applied, and its effects.
     private func step(
@@ -28,7 +29,8 @@ struct ConversationReducerTests {
     @Test
     func anAnswerContinuesTheTurnThatWaitedForIt() {
         let asked = InboundMessage(
-            conversationID: conversationID, participantID: participantID, text: "What's the forecast?",
+            conversationID: conversationID, participantID: participantID, userID: person,
+            text: "What's the forecast?",
             receivedAt: Date(timeIntervalSince1970: 1))
         let turn = TurnID()
         var state = step(
@@ -62,13 +64,12 @@ struct ConversationReducerTests {
     }
 
     @Test
-    func participantAndUserIdentityAreChannelScoped() {
+    func participantIdentityIsChannelScoped() {
         let telegram = ParticipantID(channel: ChannelID("telegram"), rawValue: "42")
         let discord = ParticipantID(channel: ChannelID("discord"), rawValue: "42")
 
         #expect(telegram != discord)
         #expect(telegram.stableKey == "telegram:42")
-        #expect(UserID(participantID: telegram) != UserID(participantID: discord))
     }
 
     @Test
@@ -97,18 +98,6 @@ struct ConversationReducerTests {
         #expect(ConversationPersistenceID(rawValue: "other-journal") == nil)
     }
 
-    @Test
-    func inboundMessageDefaultsToItsParticipantUser() {
-        let message = InboundMessage(
-            conversationID: conversationID,
-            participantID: participantID,
-            text: "hello",
-            receivedAt: Date(timeIntervalSince1970: 1)
-        )
-
-        #expect(message.userID == UserID(participantID: participantID))
-    }
-
     private func makeMessage(
         id: UUID = UUID(),
         text: String,
@@ -118,6 +107,7 @@ struct ConversationReducerTests {
             id: MessageID(rawValue: id),
             conversationID: conversationID,
             participantID: participantID,
+            userID: person,
             text: text,
             receivedAt: at
         )

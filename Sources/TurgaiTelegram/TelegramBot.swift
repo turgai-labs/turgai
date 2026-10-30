@@ -375,7 +375,7 @@ public actor TelegramBot {
             externalAddress: ExternalConversationAddress(String(message.chat.id))
         )
         let participantID = participantID(for: sender.id)
-        let userID = UserID(participantID: participantID)
+        let userID = UserID.telegram(sender.id)
         if let data = callbackQuery?.data, let answer = TelegramAnswerButton.answer(in: data) {
             return .answer(conversationID: conversationID, answer.id, answer.answer, by: userID)
         }
@@ -613,7 +613,7 @@ public actor TelegramBot {
         let chat = message.chat
         let conversationID = ConversationID(
             channel: conversationChannel, externalAddress: ExternalConversationAddress(String(chat.id)))
-        func person(_ user: TelegramUser) -> UserID { UserID(participantID: Self.participantID(for: user.id)) }
+        func person(_ user: TelegramUser) -> UserID { .telegram(user.id) }
         if chat.type == "private" {
             return .admins(conversationID: conversationID, [person(sender)])
         }

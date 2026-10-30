@@ -8,9 +8,9 @@ import TurgaiDomain
 /// scope opens; its admins answer what's asked of them.
 struct SpaceTests {
     private let family = SpaceID()
-    private let ann = UserID("ann")
-    private let bob = UserID("bob")
-    private let cat = UserID("cat")
+    private let ann = UserID.ann
+    private let bob = UserID.bob
+    private let cat = UserID.cat
     private let forecast = ExactRequest.http(method: "GET", url: "https://example.com/forecast", body: Data())
 
     private func group(_ events: [SpaceEvent]) -> SpaceState {

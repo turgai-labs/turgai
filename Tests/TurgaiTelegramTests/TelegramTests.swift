@@ -42,7 +42,7 @@ struct TelegramTests {
         }
 
         // Whoever taps answers; the chat's space decides whether their answer counts.
-        let parent = UserID(participantID: TelegramBot.participantID(for: tapper.id))
+        let parent = UserID.telegram(tapper.id)
         let conversationID = TelegramBot.conversationID(for: chat.id)
         for answer in [AccessAnswer.once, .always, .everyone, .no] {
             #expect(tap(answer) == .answer(conversationID: conversationID, request, answer, by: parent))
@@ -57,7 +57,7 @@ struct TelegramTests {
         let user = TelegramUser(id: 7, firstName: "John")
         let chat = TelegramChat(id: 42)
         let participantID = TelegramBot.participantID(for: user.id)
-        let userID = UserID(participantID: participantID)
+        let userID = UserID.telegram(user.id)
         let conversationID = TelegramBot.conversationID(for: chat.id)
         func event(_ text: String) -> TelegramInboundEvent? {
             TelegramBot.event(
@@ -88,7 +88,7 @@ struct TelegramTests {
         let user = TelegramUser(id: 7, firstName: "John")
         let chat = TelegramChat(id: 42)
         let participantID = TelegramBot.participantID(for: user.id)
-        let userID = UserID(participantID: participantID)
+        let userID = UserID.telegram(user.id)
 
         let memory = TelegramBot.event(
             for: TelegramUpdate(
@@ -262,7 +262,7 @@ struct TelegramTests {
         let received = await consumer.value
         #expect(received.count == 3)
         let participantID = TelegramBot.participantID(for: 7)
-        let userID = UserID(participantID: participantID)
+        let userID = UserID.telegram(7)
         // A private chat's one person decides for it.
         #expect(received[0] == .admins(conversationID: TelegramBot.conversationID(for: 42), [userID]))
         if case .message(let message, _) = received[1] {
@@ -336,7 +336,7 @@ struct TelegramTests {
         let runTask = Task { try await bot.run() }
 
         let received = await consumer.value
-        let annID = UserID(participantID: TelegramBot.participantID(for: 7))
+        let annID = UserID.telegram(7)
         #expect(received.first == .admins(conversationID: TelegramBot.conversationID(for: 42), [annID]))
         #expect(received.dropFirst().allSatisfy { if case .message = $0 { true } else { false } })
         #expect(await recorder.administratorRequests == 1)

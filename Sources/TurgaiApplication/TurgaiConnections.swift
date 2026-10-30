@@ -544,12 +544,6 @@ actor LiveSession {
                 "Message for conversation",
                 metadata: ["conversation": "\(message.conversationID.stableKey)", "turn": "\(turnID.rawValue)"])
             do {
-                let user = try await User.resolve(
-                    on: actorSystem,
-                    userID: message.userID
-                )
-                try await user.link(participantID: message.participantID)
-
                 let agentRole = try await self.resolvedAgentRole(for: message.conversationID)
                 let conversation = try await self.resolveConversation(
                     message.conversationID,
@@ -559,9 +553,11 @@ actor LiveSession {
                     to: conversation,
                     conversationID: message.conversationID
                 )
-                // A web chat is its owner's: they're its space's admin, as a private chat's one
-                // person is.
-                if case .web = source { try await conversation.setAdmins([message.userID]) }
+                // A web chat is its signed-in owner's: they're its space's admin, as a private
+                // chat's one person is. A guest never is: what they ask for waits for an admin.
+                if case .web = source, case .account = message.userID {
+                    try await conversation.setAdmins([message.userID])
+                }
                 // A conversation is there from its first message.
                 try await conversationStorage.add(message.conversationID)
                 try await conversation.send(
@@ -753,9 +749,6 @@ actor LiveSession {
         userID: TurgaiDomain.UserID
     ) async -> Bool {
         do {
-            let user = try await User.resolve(on: actorSystem, userID: userID)
-            try await user.link(participantID: participantID)
-
             let role = try await self.resolvedAgentRole(for: conversationID)
             let conversation = try await self.resolveConversation(
                 conversationID,

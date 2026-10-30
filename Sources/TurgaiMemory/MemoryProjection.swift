@@ -39,9 +39,10 @@ public struct Memory: Codable, Sendable, Equatable {
         observations.last
     }
 
-    public init(generation: MemoryGeneration = .initial) {
+    public init(generation: MemoryGeneration = .initial, remembering: Remembering = .on) {
         self.generation = generation
         self.lastClearedAt = nil
+        self.remembering = remembering
     }
 
     private enum CodingKeys: String, CodingKey {

@@ -87,9 +87,9 @@ public struct SpaceState: Hashable, Codable, Sendable {
     /// The space's admins becoming exactly `admins`: whoever isn't in it yet joins as one, and each
     /// whose role differs has it changed. Nothing when they already are.
     public func having(admins: Set<UserID>) -> [SpaceEvent] {
-        let joining = admins.subtracting(members.keys).sorted { $0.rawValue < $1.rawValue }
+        let joining = admins.subtracting(members.keys).sorted { $0.key < $1.key }
             .map { SpaceEvent.joined($0, as: .admin) }
-        let changing = members.keys.sorted { $0.rawValue < $1.rawValue }.compactMap { person -> SpaceEvent? in
+        let changing = members.keys.sorted { $0.key < $1.key }.compactMap { person -> SpaceEvent? in
             let role: SpaceRole = admins.contains(person) ? .admin : .member
             return members[person] == role ? nil : .roleChanged(person, to: role)
         }

@@ -6,9 +6,9 @@ import TurgaiDomain
 @Suite("Who may read and write an object")
 struct AccessTests {
     private let family = SpaceID()
-    private var dad: CallScope { CallScope(UserID("dad"), in: family, as: .admin, allowed: []) }
-    private var mom: CallScope { CallScope(UserID("mom"), in: family, as: .admin, allowed: []) }
-    private var kid: CallScope { CallScope(UserID("kid"), in: family, as: .member, allowed: []) }
+    private var dad: CallScope { CallScope(UserID.dad, in: family, as: .admin, allowed: []) }
+    private var mom: CallScope { CallScope(UserID.mom, in: family, as: .admin, allowed: []) }
+    private var kid: CallScope { CallScope(UserID.kid, in: family, as: .member, allowed: []) }
 
     @Test
     func aNewObjectIsItsMakersAlone() {
@@ -19,7 +19,7 @@ struct AccessTests {
         #expect(!access.allows(kid, .read))
         // In another chat, still his.
         #expect(
-            access.allows(CallScope(UserID("dad"), in: SpaceID(), as: .member, allowed: []), .write))
+            access.allows(CallScope(UserID.dad, in: SpaceID(), as: .member, allowed: []), .write))
     }
 
     @Test
@@ -33,7 +33,7 @@ struct AccessTests {
         #expect(access.allows(mom, .write))
         // Someone not in the family's chat, for that call, isn't in it.
         #expect(
-            !access.allows(CallScope(UserID("kid"), in: SpaceID(), as: .member, allowed: []), .read))
+            !access.allows(CallScope(UserID.kid, in: SpaceID(), as: .member, allowed: []), .read))
     }
 
     @Test
