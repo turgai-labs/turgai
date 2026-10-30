@@ -426,12 +426,12 @@ public actor ObjectSession {
     /// Changes an object made here as `change` says: its Swift is rewritten in a session of its
     /// own, from its code now, until it's saved. A change that's never saved leaves it as it was.
     /// Shares `handle` with `audience` as far as `level`, or takes their access away: on behalf of
-    /// whoever the turn is for, in the group they came in through. Only one who may change it does.
+    /// whoever the turn is for, in the space they came in through. Only one who may change it does.
     func share(_ handle: ObjectID, with audience: SharingAudience, _ level: SharingLevel) async throws -> CallReturn {
         let object = try await dynamicObject(handle)
         guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: handle) }
         do {
-            try await object.share(with: audience.audience(in: chain.scope.group), level.access)
+            try await object.share(with: audience.audience(in: chain.scope.space), level.access)
         } catch let refused as NotAllowed {
             throw ObjectToolError.failed(refused.description)
         }
@@ -1414,18 +1414,18 @@ public struct ShareObjectEffect: ScopedEffect, Sendable {
     }
 }
 
-/// Whom an object is shared with, as the model chooses it: the group the turn came in through,
-/// that group's admins, or everyone.
+/// Whom an object is shared with, as the model chooses it: the space the turn came in through,
+/// that space's admins, or everyone.
 public enum SharingAudience: String, CaseIterable, Sendable, Equatable {
     case members = "this chat's members"
     case admins = "this chat's admins"
     case everyone
 
-    /// Who it is for a call that came in through `group`.
-    func audience(in group: GroupID) -> Audience {
+    /// Who it is for a call that came in through `space`.
+    func audience(in space: SpaceID) -> Audience {
         switch self {
-        case .members: .group(group)
-        case .admins: .admins(of: group)
+        case .members: .space(space)
+        case .admins: .admins(of: space)
         case .everyone: .everyone
         }
     }

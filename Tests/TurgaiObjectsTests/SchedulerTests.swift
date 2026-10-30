@@ -14,9 +14,9 @@ import TurgaiDomain
 struct SchedulerTests {
     static let chat = ConversationID(
         channel: ChannelID(provider: "telegram", instanceID: "bot"), externalAddress: ExternalConversationAddress("42"))
-    static let group = GroupID()
-    static let ann = CallScope(UserID("ann"), in: group, as: .member, allowed: [])
-    static let bob = CallScope(UserID("bob"), in: group, as: .member, allowed: [])
+    static let space = SpaceID()
+    static let ann = CallScope(UserID("ann"), in: space, as: .member, allowed: [])
+    static let bob = CallScope(UserID("bob"), in: space, as: .member, allowed: [])
 
     private func `as`<Answer: Sendable>(_ scope: CallScope, _ body: () async throws -> Answer) async throws -> Answer {
         try await CallChain.$current.withValue(.start(scope, in: Self.chat)) { try await body() }

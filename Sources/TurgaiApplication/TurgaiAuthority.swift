@@ -10,9 +10,9 @@ import TurgaiObjects
 #endif
 
 /// What every effect made on this node may do, an agent's turn or an object's code alike: what the
-/// scope of the call allows, as its group settled it when the chain started. An exact request
+/// scope of the call allows, as its space settled it when the chain started. An exact request
 /// reaching outside runs when the scope allows it, and is refused otherwise, saying exactly what
-/// it was: whoever opened the scope asks its group. What Turgai's own objects, schedules and memory
+/// it was: whoever opened the scope asks its space. What Turgai's own objects, schedules and memory
 /// are asked is theirs to check, so it's granted here.
 public struct TurgaiAuthority: Authority {
     public init() {}

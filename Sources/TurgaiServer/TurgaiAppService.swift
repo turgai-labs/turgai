@@ -64,8 +64,8 @@ struct TurgaiAppService: Service, Sendable {
     private let channelSecrets: ChannelSecretStore
     private let conversations: ConversationStorage
     private let channels: ChannelStorage
-    /// Turgai's own group, which the dashboard is used in.
-    private let turgaiGroup: GroupID
+    /// Turgai's own space, which the dashboard is used in.
+    private let turgaiSpace: SpaceID
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let objectCatalogSource: TurgaiObjectCatalogSource
     private let webChatBridge: TurgaiWebChatBridge
@@ -84,7 +84,7 @@ struct TurgaiAppService: Service, Sendable {
         channelSecrets: ChannelSecretStore,
         conversations: ConversationStorage,
         channels: ChannelStorage,
-        turgaiGroup: GroupID,
+        turgaiSpace: SpaceID,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
         webChatBridge: TurgaiWebChatBridge,
@@ -101,7 +101,7 @@ struct TurgaiAppService: Service, Sendable {
         self.channelSecrets = channelSecrets
         self.conversations = conversations
         self.channels = channels
-        self.turgaiGroup = turgaiGroup
+        self.turgaiSpace = turgaiSpace
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
         self.webChatBridge = webChatBridge
@@ -263,9 +263,9 @@ struct TurgaiAppService: Service, Sendable {
             let channelRuntime = try await system.turgaiChannelRuntime.dependencies()
             let connections = channelRuntime.connections
             await objectCatalogSource.set(channelRuntime.objectCatalog)
-            let turgaiGroup = turgaiGroup
+            let turgaiSpace = turgaiSpace
             let runtimeSnapshotProvider: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot] = {
-                await Self.runtimeSnapshots(on: system, as: $0, in: turgaiGroup)
+                await Self.runtimeSnapshots(on: system, as: $0, in: turgaiSpace)
             }
             await runtimeSnapshotSource.setProvider(runtimeSnapshotProvider)
             let clusterService = TurgaiClusterService(
@@ -581,14 +581,14 @@ extension TurgaiAppService {
     }
 
     /// What each running profile agent is doing, for the dashboard, asked on behalf of `viewer`, as
-    /// Turgai's own group settles their scope: none when it can't.
+    /// Turgai's own space settles their scope: none when it can't.
     static func runtimeSnapshots(
-        on system: ClusterSystem, as viewer: Membership, in turgaiGroup: GroupID
+        on system: ClusterSystem, as viewer: Membership, in turgaiSpace: SpaceID
     ) async -> [TurgaiAgentRuntimeSnapshot] {
-        guard let group = try? await Group.resolve(on: system, id: turgaiGroup),
-            (try? await group.setRole(viewer.role, of: viewer.person)) != nil,
+        guard let space = try? await Space.resolve(on: system, id: turgaiSpace),
+            (try? await space.setRole(viewer.role, of: viewer.person)) != nil,
             // Viewing does nothing: it spends nothing that's allowed once.
-            let scope = try? await group.scope(of: viewer.person)
+            let scope = try? await space.scope(of: viewer.person)
         else { return [] }
         let entries = (try? await system.agentRuntime.allAgents()) ?? []
         return await CallChain.$current.withValue(.start(scope, in: nil)) { await snapshots(of: entries, on: system) }

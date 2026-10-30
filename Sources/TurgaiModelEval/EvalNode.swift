@@ -120,15 +120,15 @@ struct EvalNode: Sendable {
         }
     }
 
-    /// Who the eval asks as: one person, the admin of a group of their own.
+    /// Who the eval asks as: one person, the admin of a space of their own.
     static let askerID = TurgaiDomain.UserID("eval")
-    static let group = GroupID()
+    static let space = SpaceID()
 
-    /// The asker's scope, as their group settles it.
+    /// The asker's scope, as their space settles it.
     func asker() async throws -> CallScope {
-        let group = try await Group.resolve(on: system, id: Self.group)
-        try await group.setAdmins([Self.askerID])
-        return try await group.opening(scopeOf: Self.askerID, for: .person)
+        let space = try await Space.resolve(on: system, id: Self.space)
+        try await space.setAdmins([Self.askerID])
+        return try await space.opening(scopeOf: Self.askerID, for: .person)
     }
 
     /// An agent no one has talked to.

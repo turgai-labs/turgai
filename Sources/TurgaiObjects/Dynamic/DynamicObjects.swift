@@ -257,8 +257,8 @@ public distributed actor DynamicObjects {
         actorSystem.log.info("Starting made object", metadata: ["object": "\(entry.identity)"])
         do {
             let made = try await self.object(entry.identity)
-            // As their group settles their scope now.
-            let maker = try await Group.resolve(on: actorSystem, id: entry.maker.group).opening(
+            // As their space settles their scope now.
+            let maker = try await Space.resolve(on: actorSystem, id: entry.maker.space).opening(
                 scopeOf: entry.maker.person, for: .object(entry.identity))
             try await CallChain.$current.withValue(.own(entry.identity, for: maker, in: entry.place)) {
                 try await made.start()

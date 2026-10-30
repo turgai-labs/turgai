@@ -70,7 +70,7 @@ public enum DueInChatError: Error, Codable, Sendable, Equatable, CustomStringCon
     }
 
     /// Whether `chain`'s person may change what `owner` made: whoever made it, or an admin of the
-    /// chat's group.
+    /// chat's space.
     static func mayChange(madeBy owner: UserID, _ chain: CallChain) -> Bool {
         owner == chain.scope.person || chain.scope.role == .admin
     }

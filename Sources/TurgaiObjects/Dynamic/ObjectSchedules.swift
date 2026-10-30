@@ -120,12 +120,12 @@ public enum Weekday: String, Codable, Sendable, CaseIterable {
 }
 
 /// An object's property being due: which object, and the property that holds it, with who made the
-/// object, in which group: whose group says what its doing may do.
+/// object, in which space: whose space says what its doing may do.
 public struct ObjectFiring: Codable, Sendable, Equatable {
     public let object: ObjectIdentity
     public let property: String
     public let maker: UserID
-    public let group: GroupID
+    public let space: SpaceID
     /// What makes it due, and the chat the object was made in, which lists it.
     public let due: ObjectDue
     public let place: ConversationID?
@@ -182,8 +182,8 @@ public struct ObjectScheduleActivities {
     /// which spends nothing; the object handles it as its own doing, as it does its tasks.
     @Activity
     public func fire(input: ObjectFiring, context: ActivityContext) async throws -> DurableVoid {
-        let group = try await Group.resolve(on: context.system, id: input.group)
-        let scope = try await group.scope(of: input.maker)
+        let space = try await Space.resolve(on: context.system, id: input.space)
+        let scope = try await space.scope(of: input.maker)
         try await CallChain.$current.withValue(.own(input.object, for: scope, in: nil)) {
             try await DynamicObject.resolve(on: context.system, identity: input.object).fired(input.property)
         }

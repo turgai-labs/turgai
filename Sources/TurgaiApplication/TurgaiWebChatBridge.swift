@@ -150,7 +150,7 @@ public actor TurgaiWebChatBridge {
     }
 
     /// The objects `person` may read, as they list them in a conversation: on their behalf, in its
-    /// group.
+    /// space.
     public func objects(
         listedTo person: TurgaiDomain.UserID,
         in conversationID: ConversationID,

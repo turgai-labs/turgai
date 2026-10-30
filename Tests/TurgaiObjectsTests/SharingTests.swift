@@ -13,7 +13,7 @@ import struct AnyLanguageModel.GeneratedContent
 /// change it: anyone else is refused, as any change is.
 @Suite(.serialized)
 struct SharingTests {
-    private let family = GroupID()
+    private let family = SpaceID()
     private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
     private var bob: CallScope { CallScope(UserID("bob"), in: family, as: .member, allowed: []) }
     private let counter =
@@ -97,7 +97,7 @@ struct SharingTests {
                     name: "Drinks", spec: .new(try Script(code: drinks, type: "Drinks", uses: uses)))
             }
             let desk = try await objects.held(drinksID)
-            try await self.as(ann) { try await desk.share(with: .group(family), .read) }
+            try await self.as(ann) { try await desk.share(with: .space(family), .read) }
 
             // Bob uses Drinks, and through it the tea it holds.
             #expect(try await self.as(bob) { try await desk.respond("addTea", arguments: [:]).reply } == .integer(1))

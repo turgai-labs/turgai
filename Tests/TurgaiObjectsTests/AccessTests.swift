@@ -5,7 +5,7 @@ import TurgaiDomain
 
 @Suite("Who may read and write an object")
 struct AccessTests {
-    private let family = GroupID()
+    private let family = SpaceID()
     private var dad: CallScope { CallScope(UserID("dad"), in: family, as: .admin, allowed: []) }
     private var mom: CallScope { CallScope(UserID("mom"), in: family, as: .admin, allowed: []) }
     private var kid: CallScope { CallScope(UserID("kid"), in: family, as: .member, allowed: []) }
@@ -19,13 +19,13 @@ struct AccessTests {
         #expect(!access.allows(kid, .read))
         // In another chat, still his.
         #expect(
-            access.allows(CallScope(UserID("dad"), in: GroupID(), as: .member, allowed: []), .write))
+            access.allows(CallScope(UserID("dad"), in: SpaceID(), as: .member, allowed: []), .write))
     }
 
     @Test
     func sharedWithTheFamilyItsMembersReadAndItsAdminsWrite() {
         let access = Access(madeBy: dad)
-            .sharing(with: .group(family), .read)
+            .sharing(with: .space(family), .read)
             .sharing(with: .admins(of: family), .write)
 
         #expect(access.allows(kid, .read))
@@ -33,7 +33,7 @@ struct AccessTests {
         #expect(access.allows(mom, .write))
         // Someone not in the family's chat, for that call, isn't in it.
         #expect(
-            !access.allows(CallScope(UserID("kid"), in: GroupID(), as: .member, allowed: []), .read))
+            !access.allows(CallScope(UserID("kid"), in: SpaceID(), as: .member, allowed: []), .read))
     }
 
     @Test
@@ -45,9 +45,9 @@ struct AccessTests {
                 by: .start(dad, in: nil)))
 
         #expect(throws: NotAllowed(.write)) {
-            try object.live.sharing(with: .group(family), .read, by: .start(kid, in: nil))
+            try object.live.sharing(with: .space(family), .read, by: .start(kid, in: nil))
         }
-        object = object.applying(try object.live.sharing(with: .group(family), .read, by: .start(dad, in: nil)))
+        object = object.applying(try object.live.sharing(with: .space(family), .read, by: .start(dad, in: nil)))
         #expect(try object.live.access.allows(kid, .read))
     }
 

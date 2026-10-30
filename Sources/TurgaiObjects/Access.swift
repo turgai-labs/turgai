@@ -19,11 +19,11 @@ public enum AccessLevel: Int, Codable, Sendable, Comparable {
 public enum Audience: Hashable, Codable, Sendable {
     /// Anyone at all.
     case everyone
-    /// Anyone a call says is in the group.
-    case group(GroupID)
-    /// Only those a call says are the group's admins.
-    case admins(of: GroupID)
-    /// One person, in whichever group they come in through.
+    /// Anyone a call says is in the space.
+    case space(SpaceID)
+    /// Only those a call says are the space's admins.
+    case admins(of: SpaceID)
+    /// One person, in whichever space they come in through.
     case person(UserID)
     /// An object, when it's the one calling directly.
     case object(ObjectID)
@@ -32,8 +32,8 @@ public enum Audience: Hashable, Codable, Sendable {
     func includes(_ scope: CallScope) -> Bool {
         switch self {
         case .everyone: true
-        case .group(let group): group == scope.group
-        case .admins(let group): group == scope.group && scope.role == .admin
+        case .space(let space): space == scope.space
+        case .admins(let space): space == scope.space && scope.role == .admin
         case .person(let person): person == scope.person
         case .object: false
         }
@@ -45,9 +45,9 @@ public enum Audience: Hashable, Codable, Sendable {
 public struct Access: Hashable, Codable, Sendable {
     public private(set) var levels: [Audience: AccessLevel]
 
-    /// What a group decides for: its admins', which no one else uses until they share it.
-    public init(decidedBy group: GroupID) {
-        levels = [.admins(of: group): .write]
+    /// What a space decides for: its admins', which no one else uses until they share it.
+    public init(decidedBy space: SpaceID) {
+        levels = [.admins(of: space): .write]
     }
 
     /// A new object's access: its maker's alone.

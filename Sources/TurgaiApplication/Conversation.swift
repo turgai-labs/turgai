@@ -418,17 +418,17 @@ public distributed actor Conversation {
         state.inbox.status
     }
 
-    /// Its group: who's in it, and what its admins allow. A new one is made with it when it starts,
+    /// Its space: who's in it, and what its admins allow. A new one is made with it when it starts,
     /// and it's in that one from then on.
-    private func group() async throws -> Group {
-        if let group = state.group { return try await Group.resolve(on: actorSystem, id: group) }
+    private func space() async throws -> Space {
+        if let space = state.space { return try await Space.resolve(on: actorSystem, id: space) }
         let started = try await changing {
-            if let group = state.group { return group }
-            let group = GroupID()
-            try await emit(event: .started(in: group))
-            return group
+            if let space = state.space { return space }
+            let space = SpaceID()
+            try await emit(event: .started(in: space))
+            return space
         }
-        return try await Group.resolve(on: actorSystem, id: started)
+        return try await Space.resolve(on: actorSystem, id: started)
     }
 
     /// Makes `change` to its state once no other change is being made: it reads the state, decides
@@ -442,7 +442,7 @@ public distributed actor Conversation {
     /// The agent's past turns, step by step, as `person` asks for them.
     public distributed func turns(askedBy person: TurgaiDomain.UserID) async throws -> [ConversationTurn] {
         let participant = try await participant(for: agentRole)
-        let scope = try await group().scope(of: person)
+        let scope = try await space().scope(of: person)
         return try await CallChain.$current.withValue(.start(scope, in: conversationID)) { try await participant.turns() }
     }
 
@@ -466,42 +466,42 @@ public distributed actor Conversation {
                 break
             }
         }
-        // What's asked of its group's admins is shown through its links, this one too, from what
+        // What's asked of its space's admins is shown through its links, this one too, from what
         // still waits.
-        for request in try await group().waiting() {
+        for request in try await space().waiting() {
             try? await connection.receive(.asked(conversationID: conversationID, request))
         }
         await deliverPendingReplies()
     }
 
-    /// A turn of its own needed exactly `request`, which its scope didn't allow: its group asks its
+    /// A turn of its own needed exactly `request`, which its scope didn't allow: its space asks its
     /// admins, and its links show them what's asked.
     public distributed func needed(_ request: ExactRequest) async throws {
-        guard let opened = try await group().needed(request) else { return }
+        guard let opened = try await space().needed(request) else { return }
         // The turn waits for the answer, which continues it.
         try await dispatch(.awaiting(opened.id))
         await publishLive(.asked(conversationID: conversationID, opened))
     }
 
-    /// `person`'s answer to one of its group's access requests, as the link they answered through
+    /// `person`'s answer to one of its space's access requests, as the link they answered through
     /// says: its links show it, so each stops asking, when it counted.
     public distributed func answer(
         _ id: AccessRequestID, _ answer: AccessAnswer, by person: TurgaiDomain.UserID
     ) async throws {
-        guard let answered = try await group().answer(id, answer, by: person) else { return }
+        guard let answered = try await space().answer(id, answer, by: person) else { return }
         await publishLive(.answered(conversationID: conversationID, answered, answer, by: person))
         // The turn that waited for it continues, on behalf of whoever asked.
         try await dispatch(.answered(answered, answer, turnID: TurgaiDomain.TurnID(), at: Date()))
     }
 
-    /// Who its group's admins are now, as its platform says: they decide for it.
+    /// Who its space's admins are now, as its platform says: they decide for it.
     public distributed func setAdmins(_ admins: Set<TurgaiDomain.UserID>) async throws {
-        try await group().setAdmins(admins)
+        try await space().setAdmins(admins)
     }
 
     /// Whom a call `person` makes here is on behalf of, and what's shared with them.
     public distributed func scope(of person: TurgaiDomain.UserID) async throws -> CallScope {
-        try await group().scope(of: person)
+        try await space().scope(of: person)
     }
 
     public distributed func removeConnection(_ connection: ConversationConnection) async {
@@ -521,8 +521,8 @@ public distributed actor Conversation {
         await unnote()
         memoryExtractionConfiguration = configuration.memoryExtraction
         turnConfigurations[turnID] = configuration
-        // Whoever writes takes part in its group.
-        try await group().admit(message.userID)
+        // Whoever writes takes part in its space.
+        try await space().admit(message.userID)
         try await dispatch(
             .receive(
                 message: message,
@@ -653,7 +653,7 @@ public distributed actor Conversation {
     /// token usage and lifecycle data describe one coherent state.
     public distributed func showContext(for person: TurgaiDomain.UserID) async throws {
         let participant = try await participant(for: agentRole)
-        let scope = try await group().scope(of: person)
+        let scope = try await space().scope(of: person)
         let snapshot = try await CallChain.$current.withValue(.start(scope, in: conversationID)) {
             try await participant.contextSnapshot()
         }
@@ -789,7 +789,7 @@ public distributed actor Conversation {
     private func asking<Answer: Sendable>(
         _ person: TurgaiDomain.UserID, _ ask: @Sendable (ClusterSystem) async throws -> Answer
     ) async throws -> Answer {
-        let scope = try await group().scope(of: person)
+        let scope = try await space().scope(of: person)
         let system = actorSystem
         return try await CallChain.$current.withValue(.start(scope, in: conversationID)) { try await ask(system) }
     }
@@ -883,8 +883,8 @@ public distributed actor Conversation {
     private func startModel(for request: ConversationTurnRequest) async {
         let turnConfiguration = turnConfigurations.removeValue(forKey: request.turnID)
         do {
-            // The turn's scope, as its sender's group settles it now that it starts.
-            let scope = try await group().opening(scopeOf: request.message.userID, for: .person)
+            // The turn's scope, as its sender's space settles it now that it starts.
+            let scope = try await space().opening(scopeOf: request.message.userID, for: .person)
             try await participant(for: request.agentRole).answer(
                 request, as: scope,
                 memoryExtraction: turnConfiguration?.memoryExtraction ?? memoryExtractionConfiguration)

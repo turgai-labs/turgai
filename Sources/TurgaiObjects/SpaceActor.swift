@@ -10,40 +10,40 @@ import VirtualActors
     import Foundation
 #endif
 
-/// A group, in a journal of its own: the people in it, each with their role, who may run each
+/// A space, in a journal of its own: the people in it, each with their role, who may run each
 /// exact request it decides, and what's asked of its admins until they answer: a conversation's,
 /// and Turgai's own. It settles each chain's scope as the chain starts.
 @EventSourced
 @VirtualActor
-public distributed actor Group {
-    public typealias Event = GroupEvent
+public distributed actor Space {
+    public typealias Event = SpaceEvent
     public typealias ActorSystem = ClusterSystem
-    public typealias State = GroupState
-    public typealias Dependency = GroupID
+    public typealias State = SpaceState
+    public typealias Dependency = SpaceID
 
-    public var state: GroupState
+    public var state: SpaceState
 
-    public let snapshotting: Snapshotting<GroupEvent, GroupState> = .every(
+    public let snapshotting: Snapshotting<SpaceEvent, SpaceState> = .every(
         numberOfEvents: 50,
         retention: .keepLast(2)
     )
 
-    public init(actorSystem: ClusterSystem, dependency id: GroupID) async throws {
+    public init(actorSystem: ClusterSystem, dependency id: SpaceID) async throws {
         self.actorSystem = actorSystem
-        self.state = GroupState(id: id)
+        self.state = SpaceState(id: id)
         try await actorSystem.journal.register(actor: self, with: Self.persistenceID(for: id))
     }
 
-    public static func actorID(for id: GroupID) -> VirtualActorID {
-        VirtualActorID(rawValue: "group:\(id.rawValue.uuidString)")
+    public static func actorID(for id: SpaceID) -> VirtualActorID {
+        VirtualActorID(rawValue: "space:\(id.rawValue.uuidString)")
     }
 
-    public static func persistenceID(for id: GroupID) -> String {
-        "turgai-group-\(id.rawValue.uuidString)"
+    public static func persistenceID(for id: SpaceID) -> String {
+        "turgai-space-\(id.rawValue.uuidString)"
     }
 
-    /// The group `id`, wherever and whenever it runs.
-    public static func resolve(on actorSystem: ClusterSystem, id: GroupID) async throws -> Group {
+    /// The space `id`, wherever and whenever it runs.
+    public static func resolve(on actorSystem: ClusterSystem, id: SpaceID) async throws -> Space {
         try await actorSystem.virtualActors.getActor(identifiedBy: actorID(for: id), dependency: id)
     }
 
@@ -71,7 +71,7 @@ public distributed actor Group {
     }
 
     /// The role `person` has in it, as its platform says.
-    public distributed func setRole(_ role: GroupRole, of person: UserID) async throws {
+    public distributed func setRole(_ role: SpaceRole, of person: UserID) async throws {
         if let event = state.setting(role, of: person) { try await emit(event: event) }
     }
 
@@ -105,7 +105,7 @@ public distributed actor Group {
         }
     }
 
-    public func handleEvent(_ event: GroupEvent) {
+    public func handleEvent(_ event: SpaceEvent) {
         state = state.applying(event)
     }
 }

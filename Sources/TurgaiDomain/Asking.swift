@@ -4,7 +4,7 @@
     import Foundation
 #endif
 
-/// Exactly what someone wants done, compared as a value: a thing whose access a group's admins
+/// Exactly what someone wants done, compared as a value: a thing whose access a space's admins
 /// decide, as an object's own decide its. How it's sent, its headers and its credentials, isn't
 /// part of it.
 public enum ExactRequest: Hashable, Codable, Sendable, CustomStringConvertible {
@@ -60,7 +60,7 @@ public struct AccessRequestID: Hashable, Codable, Sendable, CustomStringConverti
     public var description: String { rawValue.uuidString }
 }
 
-/// Someone asking their group's admins to run exactly what they may not run yet, until they answer:
+/// Someone asking their space's admins to run exactly what they may not run yet, until they answer:
 /// waiting, or allowed once and not yet run.
 public struct AccessRequest: Hashable, Codable, Sendable, Identifiable {
     public let id: AccessRequestID
@@ -97,7 +97,7 @@ public enum AccessAnswer: Hashable, Codable, Sendable {
     case once
     /// It's shared with whoever asked: every scope that opens for them from now on has it.
     case always
-    /// It's shared with everyone in the group: every scope that opens for any of them has it.
+    /// It's shared with everyone in the space: every scope that opens for any of them has it.
     case everyone
     case no
 

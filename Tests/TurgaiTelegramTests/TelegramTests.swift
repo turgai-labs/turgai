@@ -41,7 +41,7 @@ struct TelegramTests {
             )
         }
 
-        // Whoever taps answers; the chat's group decides whether their answer counts.
+        // Whoever taps answers; the chat's space decides whether their answer counts.
         let parent = UserID(participantID: TelegramBot.participantID(for: tapper.id))
         let conversationID = TelegramBot.conversationID(for: chat.id)
         for answer in [AccessAnswer.once, .always, .everyone, .no] {

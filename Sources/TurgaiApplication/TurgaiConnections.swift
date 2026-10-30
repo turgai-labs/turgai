@@ -559,7 +559,7 @@ actor LiveSession {
                     to: conversation,
                     conversationID: message.conversationID
                 )
-                // A web chat is its owner's: they're its group's admin, as a private chat's one
+                // A web chat is its owner's: they're its space's admin, as a private chat's one
                 // person is.
                 if case .web = source { try await conversation.setAdmins([message.userID]) }
                 // A conversation is there from its first message.
@@ -633,7 +633,7 @@ actor LiveSession {
             }
 
         case .answer(let conversationID, let id, let answer, let person):
-            // Only a conversation this session is attached to hears its answer; its group decides
+            // Only a conversation this session is attached to hears its answer; its space decides
             // whose answer counts.
             guard let conversation = conversations[conversationID] else { return false }
             do {

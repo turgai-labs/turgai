@@ -9,7 +9,7 @@ import TurgaiDomain
 /// write it, and what's listed to a caller is what they may read.
 @Suite(.serialized)
 struct AccessCheckTests {
-    private let family = GroupID()
+    private let family = SpaceID()
     private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
     private var bob: CallScope { CallScope(UserID("bob"), in: family, as: .member, allowed: []) }
     private let counter =
@@ -42,7 +42,7 @@ struct AccessCheckTests {
             #expect(try await listed(objects, to: bob).isEmpty)
 
             // Shared with the family to read: Bob uses it and sees it, and still can't change it.
-            try await self.as(ann) { try await object.share(with: .group(family), .read) }
+            try await self.as(ann) { try await object.share(with: .space(family), .read) }
             #expect(try await self.as(bob) { try await object.respond("add", arguments: [:]).reply } == .integer(2))
             #expect(try await listed(objects, to: bob) == ["counter"])
             await #expect(throws: NotAllowed(.write)) {

@@ -25,7 +25,7 @@ struct Echoed: Codable {
 /// call is for, with the values their types are.
 @Suite(.serialized)
 struct ToolsAPITests {
-    private let family = GroupID()
+    private let family = SpaceID()
     private var ann: CallScope { CallScope(UserID("ann"), in: family, as: .member, allowed: []) }
 
     /// A tool that gives back the bytes of what it's given, and whom it was called for.
@@ -144,7 +144,7 @@ struct ToolsAPITests {
             _ = try await CallChain.$current.withValue(.start(ann, in: nil)) {
                 try await reader.respond("watch", arguments: [:])
             }
-            let group = try await Group.resolve(on: node, id: family)
+            let group = try await Space.resolve(on: node, id: family)
             var waiting: [AccessRequest] = []
             for _ in 0..<100 where waiting.isEmpty {
                 waiting = try await group.waiting()

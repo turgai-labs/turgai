@@ -258,7 +258,7 @@ public enum TelegramInboundEvent: Equatable, Sendable {
     case command(ConversationCommand)
     /// Who the chat's admins are now: a group's administrators, or a private chat's one person.
     case admins(conversationID: ConversationID, Set<UserID>)
-    /// Someone's answer to an access request of the chat's group, by tapping its button.
+    /// Someone's answer to an access request of the chat's space, by tapping its button.
     case answer(conversationID: ConversationID, AccessRequestID, AccessAnswer, by: UserID)
 }
 
@@ -546,7 +546,7 @@ public actor TelegramEventPublisher {
             try await mark(message, nil, in: conversationID)
 
         case .asked(let conversationID, let request):
-            // Asked in the chat; whoever taps answers, and its group decides whose answer counts.
+            // Asked in the chat; whoever taps answers, and its space decides whose answer counts.
             let markup = TelegramInlineKeyboardMarkup(
                 inlineKeyboard: [
                     [

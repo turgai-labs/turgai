@@ -176,7 +176,7 @@ public distributed actor AgentParticipant {
             turn.text = text
             await publishLive(.reply(.partial(conversationID: conversationID, turnID: turnID, text: turn.text)))
         case .needed(let request):
-            // The turn's scope didn't allow it: the conversation that opened it asks its group, in
+            // The turn's scope didn't allow it: the conversation that opened it asks its space, in
             // the turn's own chain.
             do {
                 try await conversation?.needed(request)

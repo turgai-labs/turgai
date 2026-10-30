@@ -51,7 +51,7 @@ struct NodeToolsTests {
 
         let said = Said()
         let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-        let ann = CallScope(UserID("ann"), in: GroupID(), as: .member, allowed: [])
+        let ann = CallScope(UserID("ann"), in: SpaceID(), as: .member, allowed: [])
         func say(_ text: String, in place: ConversationID?) async throws -> ChatSaid {
             try await withActorSystemDependency(said.dependency) {
                 try await CallChain.$current.withValue(.start(ann, in: place)) {
@@ -84,7 +84,7 @@ struct NodeToolsTests {
 
         let said = Said()
         let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-        let ann = CallScope(UserID("ann"), in: GroupID(), as: .member, allowed: [])
+        let ann = CallScope(UserID("ann"), in: SpaceID(), as: .member, allowed: [])
         func ask(_ text: String, in place: ConversationID?) async throws -> ChatAnswer {
             try await withActorSystemDependency(said.dependency) {
                 try await CallChain.$current.withValue(.start(ann, in: place)) {
@@ -104,12 +104,12 @@ struct NodeToolsTests {
     }
 
     /// A request reaching outside runs as its call's scope allows, and is refused otherwise, saying
-    /// exactly what it was, for whoever opened the scope to ask its group.
+    /// exactly what it was, for whoever opened the scope to ask its space.
     @Test func anExactRequestRunsAsItsScopeAllows() throws {
         let effect = try Http().send(
             HttpRequest(method: .get, url: "https://example.com/forecast", headers: nil, body: nil))
         let forecast = ExactRequest.http(method: "GET", url: "https://example.com/forecast", body: Data())
-        let family = GroupID()
+        let family = SpaceID()
         func decision(as scope: CallScope) -> EffectDecision {
             CallChain.$current.withValue(.start(scope, in: nil)) { TurgaiAuthority().decision(on: effect) }
         }

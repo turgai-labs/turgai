@@ -6,22 +6,22 @@ import TurgaiDomain
 
 /// A group: who's in it, and who may run exactly what, which it settles into each scope as the
 /// scope opens; its admins answer what's asked of them.
-struct GroupTests {
-    private let family = GroupID()
+struct SpaceTests {
+    private let family = SpaceID()
     private let ann = UserID("ann")
     private let bob = UserID("bob")
     private let cat = UserID("cat")
     private let forecast = ExactRequest.http(method: "GET", url: "https://example.com/forecast", body: Data())
 
-    private func group(_ events: [GroupEvent]) -> GroupState {
-        events.reduce(GroupState(id: family)) { $0.applying($1) }
+    private func group(_ events: [SpaceEvent]) -> SpaceState {
+        events.reduce(SpaceState(id: family)) { $0.applying($1) }
     }
 
     /// Ann decides for the family; Bob is in it.
-    private var annDecidesForBob: GroupState { group([.joined(ann, as: .admin), .joined(bob, as: .member)]) }
+    private var annDecidesForBob: SpaceState { group([.joined(ann, as: .admin), .joined(bob, as: .member)]) }
 
     @Test func whoeverWritesJoinsAsAMember() {
-        var state = GroupState(id: family)
+        var state = SpaceState(id: family)
         for person in [ann, bob, ann] {
             if let joined = state.admitting(person) { state = state.applying(joined) }
         }
@@ -90,7 +90,7 @@ struct GroupTests {
         #expect(shared.scope(of: bob).allows(forecast))
         #expect(shared.scope(of: cat).allows(forecast))
         // Not elsewhere: another group's scope doesn't have it.
-        #expect(!GroupState(id: GroupID()).scope(of: bob).allows(forecast))
+        #expect(!SpaceState(id: SpaceID()).scope(of: bob).allows(forecast))
     }
 
     /// What's allowed once goes to exactly the one that asked: an object's own work asking for Bob

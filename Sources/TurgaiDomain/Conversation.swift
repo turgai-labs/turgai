@@ -449,7 +449,7 @@ public enum ConversationInput: Sendable, Equatable {
     )
     case connect(ConversationID)
     case reset(ConversationID)
-    /// Someone answered an access request of its group, as the link they answered through says.
+    /// Someone answered an access request of its space, as the link they answered through says.
     case answer(conversationID: ConversationID, AccessRequestID, AccessAnswer, by: UserID)
     case memory(
         conversationID: ConversationID,
@@ -546,11 +546,11 @@ public struct PendingConversationReply: Hashable, Codable, Sendable {
 }
 
 public enum ConversationEvent: Codable, Sendable, Equatable {
-    /// It started, in `group`: the group it's in from then on.
-    case started(in: GroupID)
+    /// It started, in `space`: the space it's in from then on.
+    case started(in: SpaceID)
     /// Its agent's inbox: a message waiting, or a turn starting or ending.
     case inbox(AgentInboxEvent)
-    /// The turn answering `message` needed what its scope didn't allow, which its group's admins
+    /// The turn answering `message` needed what its scope didn't allow, which its space's admins
     /// are asked for: the answer continues it.
     case awaiting(AccessRequestID, PendingConversationMessage)
     /// The answer to it came, and continues the turn that waited.
@@ -700,11 +700,11 @@ public enum AgentInboxEvent: Hashable, Codable, Sendable {
 
 public struct ConversationState: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
-    /// The group it's in, once it has started: it never changes.
-    public internal(set) var group: GroupID?
+    /// The space it's in, once it has started: it never changes.
+    public internal(set) var space: SpaceID?
     /// Its agent's inbox.
     public internal(set) var inbox: AgentInbox
-    /// The turns that wait for an answer from its group's admins, by what each asked for.
+    /// The turns that wait for an answer from its space's admins, by what each asked for.
     public internal(set) var awaiting: [AccessRequestID: PendingConversationMessage]
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var history: [ConversationHistoryEntry]
@@ -727,8 +727,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
 
     public mutating func apply(_ event: ConversationEvent) {
         switch event {
-        case .started(let group):
-            self.group = group
+        case .started(let space):
+            self.space = space
 
         case .awaiting(let id, let message):
             awaiting[id] = message
@@ -908,7 +908,7 @@ public struct OutboundAction: Hashable, Codable, Sendable {
 
 public enum OutboundEvent: Hashable, Codable, Sendable {
     case reply(ReplyEvent)
-    /// Someone asked its group's admins for access: each link shows it to them.
+    /// Someone asked its space's admins for access: each link shows it to them.
     case asked(conversationID: ConversationID, AccessRequest)
     /// An admin answered it: every link hears the answer, so each stops asking.
     case answered(conversationID: ConversationID, AccessRequest, AccessAnswer, by: UserID)
@@ -938,7 +938,7 @@ public enum ConversationAction: Sendable {
         turnID: TurnID,
         agentRole: String
     )
-    /// The turn running now needed what its scope didn't allow, which its group's admins are asked
+    /// The turn running now needed what its scope didn't allow, which its space's admins are asked
     /// for, as `id`.
     case awaiting(AccessRequestID)
     /// An admin answered `request`: the turn that waited for it continues, as `turnID`, with the

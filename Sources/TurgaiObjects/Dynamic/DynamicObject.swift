@@ -533,9 +533,9 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                         return try await instance.runTask(id)
                     } catch let refusal as EffectDenied {
                         // It opened this scope: what it needed that the scope didn't allow, it asks
-                        // the scope's group for.
+                        // the scope's space for.
                         if let request = ExactRequest(refusal: refusal.refusal) {
-                            _ = try await Group.resolve(on: system, id: chain.scope.group).needed(request)
+                            _ = try await Space.resolve(on: system, id: chain.scope.space).needed(request)
                         }
                         throw refusal
                     }
@@ -689,7 +689,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                 try await workflows.schedule(
                     id: id, recurrence: try schedule.rule(), workflow: ObjectScheduleWorkflow.self,
                     input: ObjectFiring(
-                        object: own, property: property, maker: maker.person, group: maker.group,
+                        object: own, property: property, maker: maker.person, space: maker.space,
                         due: .schedule(schedule), place: place),
                     overlapPolicy: .skip)
                 scheduled[property] = schedule
@@ -717,7 +717,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                     type: ObjectTimerWorkflow.self,
                     options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: timer.date)),
                     input: ObjectFiring(
-                        object: own, property: property, maker: maker.person, group: maker.group,
+                        object: own, property: property, maker: maker.person, space: maker.space,
                         due: .timer(timer), place: place))
                 timed[property] = timer
             } catch {
@@ -734,10 +734,10 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         }
     }
 
-    /// The scope of a chain its own doing starts: whoever made it, as their group settles it now.
+    /// The scope of a chain its own doing starts: whoever made it, as their space settles it now.
     private func makersScope() async throws -> CallScope {
         let maker = try state.live.maker
-        return try await Group.resolve(on: actorSystem, id: maker.group).opening(
+        return try await Space.resolve(on: actorSystem, id: maker.space).opening(
             scopeOf: maker.person, for: .object(own))
     }
 
