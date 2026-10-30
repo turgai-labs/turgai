@@ -30,8 +30,8 @@ public struct Http: Sendable {
         try HttpEffect(request)
     }
 
-    /// What came back: a page as its readable text, anything else as it is; with its status, when
-    /// it isn't a success.
+    /// What came back: a page as its title and its readable text, other text as it is, both
+    /// bounded, and anything else as it is; with its status, when it isn't a success.
     public func render(_ response: HttpResponse) -> ToolOutput {
         let contentType = Self.contentType(of: response)
         guard (200..<300).contains(response.status) else {
@@ -44,11 +44,21 @@ public struct Http: Sendable {
             return .text("HTTP status \(response.status) from \(response.url.absoluteString), with an empty body")
         }
         guard contentType == "text/html" else {
-            return .data(ToolData(body: response.body, contentType: contentType, source: response.url))
+            let data = ToolData(body: response.body, contentType: contentType, source: response.url)
+            guard data.isTextLike else { return .data(data) }
+            let text = String(decoding: response.body, as: UTF8.self)
+            return .text(
+                "\(data.normalizedContentType) from \(response.url.absoluteString)\n\n"
+                    + Self.bounded(text, to: Self.maximumPageCharacters))
         }
-        let text = SearchHTML.text(String(decoding: response.body, as: UTF8.self))
+        let html = String(decoding: response.body, as: UTF8.self)
+        let text = SearchHTML.text(html)
         guard !text.isEmpty else { return .text("The page has no readable text: \(response.url.absoluteString)") }
-        return .text("Page: \(response.url.absoluteString)\n\n\(Self.bounded(text, to: Self.maximumPageCharacters))")
+        // Its title is in its head, which is never read as its text.
+        let named = SearchHTML.title(html).map { "Page: \($0)\nURL: \(response.url.absoluteString)" }
+        return .text(
+            (named ?? "Page: \(response.url.absoluteString)") + "\n\n"
+                + Self.bounded(text, to: Self.maximumPageCharacters))
     }
 
     private static let maximumPageCharacters = 4_000

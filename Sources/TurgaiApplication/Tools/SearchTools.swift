@@ -265,6 +265,13 @@ enum SearchHTML {
         }
     }
 
+    /// A page's title, as its `<title>` says it, when it says one.
+    static func title(_ html: String) -> String? {
+        guard let match = html.firstMatch(of: #/(?is)<title\b[^>]*>(.*?)</title>/#) else { return nil }
+        let title = normalizedText(decodeEntities(String(match.output.1))).replacing("\n", with: " ")
+        return title.isEmpty ? nil : title
+    }
+
     static func text(_ html: String) -> String {
         let root = Element(name: "#document")
         var stack = [root]

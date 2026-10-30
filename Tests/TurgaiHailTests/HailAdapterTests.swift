@@ -192,6 +192,44 @@ struct HailAdapterTests {
         #expect(text.count <= 4_000 + "Page: https://example.com/article\n\n".count)
     }
 
+    /// A page's title is in its head, with nothing else there that's read: it's given by name.
+    @Test
+    func aPageIsGivenWithItsTitle() {
+        let page = HttpResponse(
+            status: 200, headers: [HttpHeader(name: "Content-Type", value: "text/html")],
+            body: Data(
+                "<!doctype html><html><head><title>Example &amp; Domain</title><style>p{margin:0}</style></head><body><p>This domain is for use in documentation examples.</p></body></html>"
+                    .utf8),
+            url: URL(string: "https://example.com")!)
+        guard case .text(let text) = Http().render(page) else {
+            Issue.record("a page wasn't given as text")
+            return
+        }
+        #expect(text == "Page: Example & Domain\nURL: https://example.com\n\nThis domain is for use in documentation examples.")
+    }
+
+    /// JSON, as any text that isn't a page, is given as its text, bounded as a page is.
+    @Test
+    func jsonIsGivenAsItsBoundedText() {
+        func response(_ body: String) -> HttpResponse {
+            HttpResponse(
+                status: 200, headers: [HttpHeader(name: "Content-Type", value: "application/json")],
+                body: Data(body.utf8), url: URL(string: "https://httpbin.org/headers")!)
+        }
+        let json = #"{"headers": {"X-Turgai-Check": "blue-kettle"}}"#
+        guard case .text(let text) = Http().render(response(json)) else {
+            Issue.record("JSON wasn't given as text")
+            return
+        }
+        #expect(text == "application/json from https://httpbin.org/headers\n\n\(json)")
+        let overflowing = "[" + Array(repeating: #""cup""#, count: 2_000).joined(separator: ",") + "]"
+        guard case .text(let bounded) = Http().render(response(overflowing)) else {
+            Issue.record("JSON wasn't given as text")
+            return
+        }
+        #expect(bounded.count <= 4_000 + "application/json from https://httpbin.org/headers\n\n".count)
+    }
+
     @Test
     func whatAnHttpResponseIsComesFromItsHeaderThenItsURL() {
         let imageURL = URL(string: "https://api.telegram.org/file/bot-redacted/photos/file_0.jpg")!
