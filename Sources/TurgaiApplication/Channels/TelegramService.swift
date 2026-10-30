@@ -362,7 +362,7 @@ public actor TelegramService: Service {
         do {
             let channel = try await TelegramChannel.resolve(on: actorSystem, channelID: channelID)
             guard case .active(let configuration, _) = try await channel.currentState(), configuration.enabled,
-                let token = await dependencies.secrets.token(for: channelID)
+                let token = try await dependencies.secrets.token(for: channelID)
             else { return nil }
             return Bot(configuration: configuration, token: token)
         } catch {

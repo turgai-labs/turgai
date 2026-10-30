@@ -96,8 +96,8 @@ public enum TurgaiAuthError: Error, Equatable, Sendable {
     case invalidSession
 }
 
-/// Local authentication state. Accounts are kept in their storage, and the JWT signing secret
-/// under `.turgai/auth`. The first administrator is claimed through a short-lived
+/// Local authentication state. Accounts are kept in their storage, and the secret that signs
+/// sessions in its own. The first administrator is claimed through a short-lived
 /// browser challenge rather than a terminal-visible secret.
 public actor TurgaiAuth {
     public static let sessionLifetime: TimeInterval = 86_400
@@ -115,28 +115,10 @@ public actor TurgaiAuth {
     private var bootstrapChallenges: [String: Date] = [:]
     private var bootstrapInProgress = false
 
-    /// Accounts kept in `accounts`, and the secret that signs sessions in `directory`.
-    public init(directory: URL, accounts: AccountStorage) throws {
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
+    /// Accounts kept in `accounts`, and sessions signed with the secret `sessionSecret` keeps.
+    public init(accounts: AccountStorage, sessionSecret: SessionSecretStorage) async throws {
         self.accounts = accounts
-
-        let secretURL = directory.appendingPathComponent("session-secret")
-        let secretData: Data
-        if let existing = try? Data(contentsOf: secretURL), existing.count >= 32 {
-            secretData = existing
-        } else {
-            secretData = Data((0..<32).map { _ in UInt8.random(in: .min ... .max) })
-            try secretData.write(to: secretURL, options: .atomic)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: secretURL.path
-            )
-        }
-        self.secret = SymmetricKey(data: secretData)
+        self.secret = SymmetricKey(data: try await sessionSecret.secret())
     }
 
     public func hasAdmin() async throws -> Bool {

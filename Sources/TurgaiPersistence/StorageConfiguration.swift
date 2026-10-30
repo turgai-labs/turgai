@@ -10,15 +10,29 @@ import TurgaiDomain
     import Foundation
 #endif
 
-public enum TurgaiStorageConfigurationError: Error, Equatable, Sendable {
+public enum TurgaiStorageConfigurationError: Error, Equatable, Sendable, CustomStringConvertible {
     case invalidPostgresURL
     case invalidPostgresUsername
-    case invalidPostgresPassword
+    /// No password for PostgreSQL: neither `PGPASSWORD` nor a line of the password file.
+    case noPostgresPassword
+    /// The password file is readable by others than its owner, which PostgreSQL refuses too.
+    case postgresPasswordFileNotPrivate
+
+    public var description: String {
+        switch self {
+        case .invalidPostgresURL: "The PostgreSQL URL isn't postgres://host:port/database."
+        case .invalidPostgresUsername: "The PostgreSQL username is empty."
+        case .noPostgresPassword:
+            "No PostgreSQL password: set PGPASSWORD, or add a line for this database to ~/.pgpass."
+        case .postgresPasswordFileNotPrivate:
+            "The PostgreSQL password file can be read by others: make it readable only by its owner (chmod 600)."
+        }
+    }
 }
 
-/// The persisted choice of where the journal is kept. Credentials are intentionally split: the
-/// connection URL and username are configuration, while the password lives in a separate
-/// mode-600 file managed by the dashboard.
+/// The persisted choice of where the journal is kept. The connection URL and username are
+/// configuration; the password is PostgreSQL's own, from `PGPASSWORD` or its password file, as
+/// PostgreSQL's own clients read them.
 public enum TurgaiStorageConfiguration: Codable, Equatable, Sendable {
     /// In Turgai's own database, in its directory.
     case local
@@ -116,6 +130,49 @@ public struct PostgresStorageConfiguration: Codable, Equatable, Sendable {
     public var database: String {
         TurgaiStorageConfiguration.databaseName(in: url)
     }
+
+    /// Its password, as PostgreSQL's own clients find it: `PGPASSWORD`, or the first line of the
+    /// password file (`PGPASSFILE`, or `~/.pgpass`) that matches its host, port, database and
+    /// user, `*` matching any. A password file others than its owner can read is refused.
+    func password(environment: [String: String]) throws -> String {
+        if let password = environment["PGPASSWORD"], !password.isEmpty { return password }
+        let file =
+            environment["PGPASSFILE"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pgpass")
+        guard let lines = try? String(contentsOf: file, encoding: .utf8) else {
+            throw TurgaiStorageConfigurationError.noPostgresPassword
+        }
+        let permissions = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
+        guard let permissions, permissions & 0o077 == 0 else {
+            throw TurgaiStorageConfigurationError.postgresPasswordFileNotPrivate
+        }
+        let wanted = [host, String(port), database, username]
+        for line in lines.split(whereSeparator: \.isNewline) where !line.hasPrefix("#") {
+            let fields = Self.fields(of: line)
+            guard fields.count == 5 else { continue }
+            if zip(fields.prefix(4), wanted).allSatisfy({ $0 == "*" || $0 == $1 }) { return fields[4] }
+        }
+        throw TurgaiStorageConfigurationError.noPostgresPassword
+    }
+
+    /// A password file line's fields, split at each `:`, with `\:` and `\\` read as `:` and `\`.
+    private static func fields(of line: Substring) -> [String] {
+        var fields = [""]
+        var escaped = false
+        for character in line {
+            if escaped {
+                fields[fields.count - 1].append(character)
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == ":" {
+                fields.append("")
+            } else {
+                fields[fields.count - 1].append(character)
+            }
+        }
+        return fields
+    }
 }
 
 /// Where the journal is kept, as the storage choice says: in Turgai's own database, or in
@@ -124,18 +181,17 @@ public enum JournalStorage: Sendable {
     case local
     case postgres(PostgresClient)
 
+    /// - Parameter environment: where PostgreSQL's password is found, as its own clients find it.
     public init(
         configuration: TurgaiStorageConfiguration,
-        postgresPassword: String?
+        environment: [String: String]
     ) throws {
         switch configuration {
         case .local:
             self = .local
         case .postgres(let url, let username):
-            guard let postgresPassword, !postgresPassword.isEmpty else {
-                throw TurgaiStorageConfigurationError.invalidPostgresPassword
-            }
             let configuration = PostgresStorageConfiguration(url: url, username: username)
+            let postgresPassword = try configuration.password(environment: environment)
             self = .postgres(
                 PostgresClient(
                     configuration: PostgresClient.Configuration(

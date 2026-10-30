@@ -186,7 +186,7 @@ public actor AgentModelEndpointFactory {
     }
 
     private func credential(_ reference: AgentCredentialReference) async throws -> String {
-        guard let value = await credentials.value(for: reference) else {
+        guard let value = try await credentials.value(for: reference) else {
             throw AgentModelEndpointFactoryError.missingCredential(reference)
         }
         return value

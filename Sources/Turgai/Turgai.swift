@@ -2,6 +2,7 @@ import ArgumentParser
 import Logging
 import ServiceLifecycle
 import TurgaiObjects
+import TurgaiPersistence
 import TurgaiServer
 import TurgaiWeb
 
@@ -16,9 +17,27 @@ struct Turgai: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "turgai",
         abstract: "Run Turgai.",
-        subcommands: [Serve.self],
+        subcommands: [Serve.self, ForgetSecrets.self],
         defaultSubcommand: Serve.self
     )
+}
+
+/// Starts over with a new secret key: what was sealed with the old one can't be opened again.
+struct ForgetSecrets: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "forget-secrets",
+        abstract: "Forget every secret Turgai keeps, to start over with a new secret key.",
+        discussion: "Telegram tokens and API keys are entered again, and everyone signs in again."
+    )
+
+    @Option(name: .long, help: "Directory where Turgai stores its data. Defaults to ~/.turgai.")
+    var directory: String?
+
+    mutating func run() async throws {
+        let directory = Serve.dataDirectory(option: directory, fileManager: .default)
+        try await TurgaiServer.forgetSecrets(in: directory)
+        print("Forgot Turgai's secrets in \(directory.path). Its next start keeps them with the key it's given.")
+    }
 }
 
 struct Serve: AsyncParsableCommand {
@@ -64,6 +83,7 @@ struct Serve: AsyncParsableCommand {
         }
         let server = try await TurgaiServer(
             directory: Self.dataDirectory(option: directory, fileManager: .default),
+            secretKey: try Self.secretKey(environment: environment),
             port: port,
             websitePort: WebsitePort(rawValue: websitePort),
             logLevel: level,
@@ -78,7 +98,24 @@ struct Serve: AsyncParsableCommand {
         try await serviceGroup.run()
     }
 
-    private static func dataDirectory(
+    /// The key Turgai's secrets are sealed with, from where it's run: under systemd, its
+    /// `turgai-key` credential; otherwise `TURGAI_SECRET_KEY`. Both are 32 random bytes, base64.
+    private static func secretKey(environment: [String: String]) throws -> SecretKey {
+        if let credentials = environment["CREDENTIALS_DIRECTORY"] {
+            let file = URL(fileURLWithPath: credentials).appendingPathComponent("turgai-key")
+            guard let written = try? String(contentsOf: file, encoding: .utf8) else {
+                throw ValidationError("Turgai runs under systemd but has no turgai-key credential.")
+            }
+            return try SecretKey(base64: written)
+        }
+        guard let written = environment["TURGAI_SECRET_KEY"] else {
+            throw ValidationError(
+                "TURGAI_SECRET_KEY is required: 32 random bytes, base64, such as `openssl rand -base64 32` makes.")
+        }
+        return try SecretKey(base64: written)
+    }
+
+    static func dataDirectory(
         option: String?,
         fileManager: FileManager
     ) -> URL {

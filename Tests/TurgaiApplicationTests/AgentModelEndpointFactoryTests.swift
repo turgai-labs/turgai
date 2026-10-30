@@ -1,7 +1,6 @@
 import Foundation
 import Hail
 import Testing
-import TurgaiPersistence
 
 @testable import TurgaiApplication
 
@@ -10,10 +9,7 @@ struct AgentModelEndpointFactoryTests {
     /// still can't be expressed.
     @Test
     func ollamaTakesEffortNoneAsThinkingOff() async throws {
-        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let factory = AgentModelEndpointFactory(
-            credentials: AgentCredentialStore(files: try FileClient(directory: directory)))
+        let factory = AgentModelEndpointFactory(credentials: AgentCredentialStore(storage: .test))
         let model = try AgentModel(provider: .ollama, id: "qwen3.5:9b")
         let ollama = AgentProviderConfiguration.ollama(
             baseURL: URL(string: "http://127.0.0.1:11434")!, contextWindow: 8192)

@@ -37,23 +37,6 @@ struct FileClientTests {
     }
 
     @Test
-    func secretsAreStoredRawAndLoadedTrimmed() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let client = try FileClient(directory: directory)
-
-        #expect(try client.loadSecret(at: "secrets/token") == nil)
-
-        try client.saveSecret("  abc:123\n", at: "secrets/token")
-        #expect(try client.loadSecret(at: "secrets/token") == "abc:123")
-
-        try client.delete(at: "secrets/token")
-        #expect(try client.loadSecret(at: "secrets/token") == nil)
-        // Deleting twice is a no-op.
-        try client.delete(at: "secrets/token")
-    }
-
-    @Test
     func appendCreatesThenAppends() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

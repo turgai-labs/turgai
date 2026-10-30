@@ -176,10 +176,8 @@ struct PostgresStoragePanel: HTML, Sendable {
                     .type(.text), .name("postgresUsername"), .value(values.postgresUsername),
                     .autocomplete("username"))
             }
-            label(.class("form-field")) {
-                span(.class("field-label")) { "Password" }
-                input(.type(.password), .name("postgresPassword"), .autocomplete("new-password"))
-                p(.class("hint")) { "Kept separately from the connection details." }
+            p(.class("hint")) {
+                "Its password is PostgreSQL's own: Turgai reads PGPASSWORD, or ~/.pgpass, where it runs."
             }
         }
     }

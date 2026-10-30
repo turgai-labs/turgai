@@ -6,11 +6,9 @@ import TurgaiApplication
 struct TurgaiAuthTests {
     @Test("first administrator uses a browser challenge and survives restart")
     func bootstrapAndPersistence() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
         let accounts = AccountStorage.test
-        let auth = try TurgaiAuth(directory: directory, accounts: accounts)
+        let sessionSecret = SessionSecretStorage.test
+        let auth = try await TurgaiAuth(accounts: accounts, sessionSecret: sessionSecret)
         let challenge = await auth.issueBootstrapChallenge()
         let account = try await auth.bootstrap(
             username: "admin",
@@ -30,7 +28,7 @@ struct TurgaiAuthTests {
             )
         }
 
-        let restarted = try TurgaiAuth(directory: directory, accounts: accounts)
+        let restarted = try await TurgaiAuth(accounts: accounts, sessionSecret: sessionSecret)
         let session = try await restarted.signIn(
             username: "admin",
             password: "correct horse battery staple"
@@ -41,10 +39,7 @@ struct TurgaiAuthTests {
 
     @Test("bootstrap challenges expire and are consumed")
     func bootstrapChallengeLifetime() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let auth = try TurgaiAuth(directory: directory, accounts: .test)
+        let auth = try await TurgaiAuth(accounts: .test, sessionSecret: .test)
         let issuedAt = Date(timeIntervalSince1970: 1_000)
         let expiredChallenge = await auth.issueBootstrapChallenge(now: issuedAt)
         await #expect(throws: TurgaiAuthError.invalidSetupChallenge) {
@@ -78,10 +73,7 @@ struct TurgaiAuthTests {
 
     @Test("member registration is approved and can sign in immediately")
     func immediateRegistration() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let auth = try TurgaiAuth(directory: directory, accounts: .test)
+        let auth = try await TurgaiAuth(accounts: .test, sessionSecret: .test)
         let account = try await auth.register(
             username: "member",
             password: "correct horse battery staple"
@@ -98,10 +90,7 @@ struct TurgaiAuthTests {
 
     @Test("bad credentials and invalid setup challenges are rejected")
     func rejectsInvalidCredentials() async throws {
-        let directory = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-
-        let auth = try TurgaiAuth(directory: directory, accounts: .test)
+        let auth = try await TurgaiAuth(accounts: .test, sessionSecret: .test)
         let invalidChallenge = await auth.issueBootstrapChallenge()
         await #expect(throws: TurgaiAuthError.invalidSetupChallenge) {
             try await auth.bootstrap(
@@ -121,12 +110,5 @@ struct TurgaiAuthTests {
         await #expect(throws: TurgaiAuthError.invalidCredentials) {
             try await auth.signIn(username: "admin", password: "not the password")
         }
-    }
-
-    private func makeDirectory() throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("turgai-auth-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory
     }
 }

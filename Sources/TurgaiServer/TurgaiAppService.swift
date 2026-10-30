@@ -138,7 +138,7 @@ struct TurgaiAppService: Service, Sendable {
         }
         let journal = try JournalStorage(
             configuration: storageConfiguration,
-            postgresPassword: configuration.postgresPassword
+            environment: environment
         )
 
         try await withThrowingTaskGroup(of: Void.self) { persistenceTasks in

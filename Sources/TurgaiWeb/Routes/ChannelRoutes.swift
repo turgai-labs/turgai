@@ -44,7 +44,7 @@ extension TurgaiMainWebApp {
                         id: configuration.id,
                         label: configuration.label,
                         enabled: configuration.enabled,
-                        hasToken: await channelSecrets.hasToken(for: configuration.id),
+                        hasToken: try await channelSecrets.hasToken(for: configuration.id),
                         botName: botName
                     )
                 )
@@ -111,7 +111,7 @@ extension TurgaiMainWebApp {
             guard case .active(let configuration, _) = state else {
                 return TurgaiWebSupport.redirect(to: "/channels")
             }
-            let draft = ChannelDraft(configuration, hasToken: await channelSecrets.hasToken(for: configuration.id))
+            let draft = ChannelDraft(configuration, hasToken: try await channelSecrets.hasToken(for: configuration.id))
             let bots = try await Self.botOptions(agentProfiles: agentProfiles)
             return HTMLResponse {
                 ChannelEditPage(user: user, channel: draft, bots: bots)
@@ -130,7 +130,7 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/channels")
             }
             let draft = ChannelDraft(
-                form: form, over: ChannelDraft(existing, hasToken: await channelSecrets.hasToken(for: id)))
+                form: form, over: ChannelDraft(existing, hasToken: try await channelSecrets.hasToken(for: id)))
             do {
                 let chatIDs = try OnboardingInput.chatIDs(from: draft.chatIDs)
                 if case .profile(let binding) = draft.routing {
@@ -159,7 +159,7 @@ extension TurgaiMainWebApp {
                 )
                 let previousToken: String?
                 if newToken != nil {
-                    previousToken = await channelSecrets.token(for: id)
+                    previousToken = try await channelSecrets.token(for: id)
                 } else {
                     previousToken = nil
                 }
@@ -181,7 +181,7 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/channels/\(id.uuidString)")
             } catch {
                 var shown = draft
-                shown.hasToken = await channelSecrets.hasToken(for: id)
+                shown.hasToken = try await channelSecrets.hasToken(for: id)
                 shown.token = ""
                 let bots = try await Self.botOptions(agentProfiles: agentProfiles)
                 return HTMLResponse {

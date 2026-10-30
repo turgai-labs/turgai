@@ -34,8 +34,7 @@ struct EvalNode: Sendable {
         let catalog = Catalog()
         let configuration = try Self.configuration(for: model)
         let endpoints = AgentModelEndpointFactory(
-            credentials: AgentCredentialStore(
-                files: try FileClient(directory: workspace.appendingPathComponent("credentials"))),
+            credentials: AgentCredentialStore(storage: .test),
             transports: ModelTransports(limits: RequestLimitStore.defaultLimits))
         let runtime = HailRuntimeConfiguration(temperature: temperature, contextWindow: configuration.contextWindow)
         let plugin = try runtime.makeAgentRuntimePlugin(

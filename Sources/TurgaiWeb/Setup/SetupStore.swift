@@ -13,7 +13,6 @@ public actor TurgaiSetupStore {
         var complete = false
     }
     private let stateURL: URL
-    private let postgresPasswordURL: URL
     private let completionStream: AsyncStream<Void>
     private let completionContinuation: AsyncStream<Void>.Continuation
     private var state: State
@@ -22,7 +21,6 @@ public actor TurgaiSetupStore {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         stateURL = directory.appendingPathComponent("setup.json")
-        postgresPasswordURL = directory.appendingPathComponent("postgres-password")
         let completion = AsyncStream<Void>.makeStream()
         completionStream = completion.stream
         completionContinuation = completion.continuation
@@ -48,39 +46,10 @@ public actor TurgaiSetupStore {
     }
 
     var isReady: Bool {
-        guard let storage = state.storage else { return false }
-        switch storage {
-        case .postgres:
-            guard let password = try? String(contentsOf: postgresPasswordURL, encoding: .utf8) else {
-                return false
-            }
-            return !password.trimmed().isEmpty
-        default:
-            return true
-        }
+        state.storage != nil
     }
 
-    func setStorage(
-        _ storage: TurgaiStorageConfiguration,
-        postgresPassword: String?
-    ) throws {
-        switch storage {
-        case .postgres:
-            guard let postgresPassword,
-                !postgresPassword.trimmed().isEmpty
-            else {
-                throw TurgaiStorageConfigurationError.invalidPostgresPassword
-            }
-            try Data(postgresPassword.utf8).write(to: postgresPasswordURL, options: .atomic)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600],
-                ofItemAtPath: postgresPasswordURL.path
-            )
-        default:
-            if FileManager.default.fileExists(atPath: postgresPasswordURL.path) {
-                try FileManager.default.removeItem(at: postgresPasswordURL)
-            }
-        }
+    func setStorage(_ storage: TurgaiStorageConfiguration) throws {
         state.storage = storage
         try persist()
     }

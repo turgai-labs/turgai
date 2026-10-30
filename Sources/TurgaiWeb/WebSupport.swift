@@ -44,8 +44,6 @@ enum TurgaiWebSupport {
             "PostgreSQL URL must look like postgres://host:5432/database."
         case TurgaiStorageConfigurationError.invalidPostgresUsername:
             "A PostgreSQL username is required."
-        case TurgaiStorageConfigurationError.invalidPostgresPassword:
-            "A PostgreSQL password is required."
         default:
             "Could not save storage configuration."
         }

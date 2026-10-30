@@ -32,6 +32,7 @@ final class Runtime {
             do {
                 server = try await TurgaiServer(
                     directory: TurgaiServer.defaultDirectory,
+                    secretKey: try SecretKeychain.secretKey(),
                     port: LocalServer.baseURL.port ?? 3333,
                     websitePort: WebsitePort(rawValue: LocalWebsite.port),
                     logLevel: .info,

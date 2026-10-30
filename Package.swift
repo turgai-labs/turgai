@@ -271,6 +271,7 @@ let package = Package(
             name: "Turgai",
             dependencies: [
                 "TurgaiObjects",
+                "TurgaiPersistence",
                 "TurgaiServer",
                 "TurgaiWeb",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
@@ -284,6 +285,7 @@ let package = Package(
                 "TurgaiApplication",
                 "TurgaiModels",
                 "TurgaiObjects",
+                "TurgaiPersistence",
                 "TurgaiServer",
                 "TurgaiWeb",
                 .product(name: "HailAgentRuntime", package: "hail"),
@@ -372,6 +374,7 @@ let package = Package(
                 .product(name: "SQLiteNIO", package: "sqlite-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "SystemPackage", package: "swift-system"),
+                .product(name: "Crypto", package: "swift-crypto"),
             ]
         ),
         .testTarget(

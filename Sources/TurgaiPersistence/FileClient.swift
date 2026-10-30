@@ -122,20 +122,6 @@ extension FileClient {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try write(encoder.encode(document), at: path)
     }
-
-    /// A raw secret payload (token files, passwords), trimmed of surrounding
-    /// whitespace. Secrets share the document mechanics; the name exists so
-    /// call sites mark the intent.
-    public func loadSecret(at path: String) throws -> String? {
-        guard let data = try read(at: path) else { return nil }
-        let value = String(decoding: data, as: UTF8.self)
-            .trimmed()
-        return value.isEmpty ? nil : value
-    }
-
-    public func saveSecret(_ secret: String, at path: String) throws {
-        try write(Data(secret.utf8), at: path)
-    }
 }
 
 /// The lines of a file, pulled a chunk at a time with plain reads of its descriptor.

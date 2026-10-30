@@ -194,10 +194,7 @@ extension TurgaiOnboardingWebApp {
             let values = StorageFormValues(form: form)
             do {
                 let storage = try OnboardingInput.storageConfiguration(from: form)
-                try await setup.setStorage(
-                    storage,
-                    postgresPassword: form["postgresPassword"]?.first
-                )
+                try await setup.setStorage(storage)
                 return Response(status: .seeOther, headers: [.location: "/onboarding/finish"])
             } catch {
                 return HTMLResponse {

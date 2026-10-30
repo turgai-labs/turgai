@@ -33,11 +33,8 @@ enum WriterProbe {
     static let request = "Count each press of the website's button."
 
     static func run(model: AgentModel, runs: Int, temperature: Double) async throws {
-        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "turgai-probe-\(UUID().uuidString)")
         let endpoints = AgentModelEndpointFactory(
-            credentials: AgentCredentialStore(
-                files: try FileClient(directory: workspace.appendingPathComponent("credentials"))),
+            credentials: AgentCredentialStore(storage: .test),
             transports: ModelTransports(limits: RequestLimitStore.defaultLimits))
         let endpoint = try await endpoints.endpoint(
             model: model, configuration: try EvalNode.configuration(for: model), temperature: temperature)
@@ -142,11 +139,8 @@ enum PageProbe {
     ]
 
     static func run(model: AgentModel, runs: Int, temperature: Double) async throws {
-        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "turgai-probe-\(UUID().uuidString)")
         let endpoints = AgentModelEndpointFactory(
-            credentials: AgentCredentialStore(
-                files: try FileClient(directory: workspace.appendingPathComponent("credentials"))),
+            credentials: AgentCredentialStore(storage: .test),
             transports: ModelTransports(limits: RequestLimitStore.defaultLimits))
         let endpoint = try await endpoints.endpoint(
             model: model, configuration: try EvalNode.configuration(for: model), temperature: temperature)

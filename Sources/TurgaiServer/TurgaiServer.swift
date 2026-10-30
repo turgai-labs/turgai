@@ -23,8 +23,22 @@ public struct TurgaiServer: Sendable {
     /// The runtime's object catalog, available once its cluster is up.
     public let objects: TurgaiObjectCatalogSource
 
+    /// Forgets every secret Turgai keeps in `directory`, and the key they were sealed with, to start
+    /// over with another: tokens and API keys are entered again, and everyone signs in again.
+    public static func forgetSecrets(in directory: URL) async throws {
+        let persistence = try await TurgaiPersistence.open(in: directory)
+        try await ChannelTokenStorage.forgetAll(in: persistence)
+        try await AgentCredentialStorage.forgetAll(in: persistence)
+        try await SessionSecretStorage.forgetAll(in: persistence)
+        try await persistence.forgetKey()
+        try await persistence.close()
+    }
+
+    /// - Parameter secretKey: the key the platform holds, which every secret Turgai keeps is
+    ///   sealed with.
     public init(
         directory: URL,
+        secretKey: SecretKey,
         port: Int,
         websitePort: WebsitePort,
         logLevel: Logger.Level,
@@ -36,15 +50,16 @@ public struct TurgaiServer: Sendable {
         // Turgai's database first, opened once: accounts, agents, limits, conversations, channels
         // and the journal are kept there, each in tables of its own.
         let persistence = try await TurgaiPersistence.open(in: directory)
-        let auth = try TurgaiAuth(
-            directory: directory.appendingPathComponent("auth", isDirectory: true),
-            accounts: try await .live(in: persistence)
+        // Before any secret is opened: a key that isn't the database's stops Turgai here.
+        try await persistence.check(secretKey)
+        let auth = try await TurgaiAuth(
+            accounts: try await .live(in: persistence),
+            sessionSecret: try await .live(in: persistence, key: secretKey)
         )
-        let fileClient = try FileClient(directory: directory)
         let agentProfiles = TurgaiAgentProfileStore(storage: try await .live(in: persistence))
-        let agentCredentials = AgentCredentialStore(files: fileClient)
+        let agentCredentials = AgentCredentialStore(storage: try await .live(in: persistence, key: secretKey))
         let requestLimits = try await RequestLimitStore(storage: try await .live(in: persistence))
-        let channelSecrets = ChannelSecretStore(files: fileClient)
+        let channelSecrets = ChannelSecretStore(storage: try await .live(in: persistence, key: secretKey))
         let setup = try TurgaiSetupStore(directory: directory)
         let webChatBridge = TurgaiWebChatBridge()
         let runtimeSnapshotSource = TurgaiRuntimeSnapshotSource()
