@@ -23,7 +23,7 @@ struct HailAdapterTests {
         )
 
         #expect(
-            message == "I couldn’t complete that request. Please try again."
+            message == "The model's answer couldn't be used: internal detail"
         )
     }
 
