@@ -53,6 +53,7 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
     private let telegramFiles: TelegramFiles
     private let endpoints: AgentModelEndpointFactory
     private let conversations: ConversationStorage
+    private let linking: PersonLinking
     private var lifecycle: Lifecycle = .awaitingStart
 
     public init(
@@ -60,13 +61,15 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
         secrets: ChannelSecretStore,
         telegramFiles: TelegramFiles,
         endpoints: AgentModelEndpointFactory,
-        conversations: ConversationStorage
+        conversations: ConversationStorage,
+        linking: PersonLinking
     ) {
         self.agentProfiles = agentProfiles
         self.secrets = secrets
         self.telegramFiles = telegramFiles
         self.endpoints = endpoints
         self.conversations = conversations
+        self.linking = linking
     }
 
     public func start(_ system: ClusterSystem) async throws {
@@ -76,7 +79,8 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
                 connections: TurgaiConnections(
                     actorSystem: system,
                     agentProfiles: agentProfiles,
-                    conversations: conversations
+                    conversations: conversations,
+                    linking: linking
                 ),
                 telegramFiles: telegramFiles,
                 objectCatalog: await ObjectCatalog(actorSystem: system),

@@ -53,6 +53,8 @@ public struct TurgaiMainWebApp: Sendable {
     let channelSecrets: ChannelSecretStore
     let runtimeSnapshots: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot]
     let webChatBridge: TurgaiWebChatBridge
+    /// Who's the same human as whom.
+    let linking: PersonLinking
     let apiConfiguration: APIConfiguration
 
     public init(
@@ -65,6 +67,7 @@ public struct TurgaiMainWebApp: Sendable {
         runtimeSnapshots: @escaping @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot] = { _ in [] },
         setup: TurgaiSetupStore,
         webChatBridge: TurgaiWebChatBridge,
+        linking: PersonLinking,
         apiConfiguration: APIConfiguration = .init()
     ) throws {
         self.directory = directory
@@ -76,6 +79,7 @@ public struct TurgaiMainWebApp: Sendable {
         self.channelSecrets = channelSecrets
         self.runtimeSnapshots = runtimeSnapshots
         self.webChatBridge = webChatBridge
+        self.linking = linking
         self.apiConfiguration = apiConfiguration
     }
 }

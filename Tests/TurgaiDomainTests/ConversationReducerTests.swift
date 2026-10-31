@@ -63,6 +63,18 @@ struct ConversationReducerTests {
             ConversationDecision(.answered(request, .no, turnID: TurnID(), at: Date()), in: continued).events.isEmpty)
     }
 
+    /// What `/link` asks for, however the code is typed.
+    @Test
+    func linkAsksForWhatsGiven() {
+        #expect(LinkAsk(nil) == .newCode)
+        #expect(LinkAsk("") == .newCode)
+        #expect(LinkAsk("k7q-4p2") == .code(LinkCode("K7Q4P2")!))
+        #expect(LinkAsk(" K7Q 4P2 ") == .code(LinkCode("K7Q-4P2")!))
+        #expect(LinkAsk("hello") == .notACode("hello"))
+        #expect(LinkAsk("K7Q-4P0") == .notACode("K7Q-4P0"))
+        #expect(LinkCode("k7q4p2")!.description == "K7Q-4P2")
+    }
+
     @Test
     func participantIdentityIsChannelScoped() {
         let telegram = ParticipantID(channel: ChannelID("telegram"), rawValue: "42")

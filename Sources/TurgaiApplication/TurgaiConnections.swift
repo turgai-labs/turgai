@@ -217,6 +217,7 @@ public actor TurgaiConnections: Service {
     private let actorSystem: ClusterSystem
     private let agentProfiles: TurgaiAgentProfileStore
     private let conversations: ConversationStorage
+    private let linking: PersonLinking
     private let connectionStream: AsyncStream<Connection>
     private let connectionContinuation: AsyncStream<Connection>.Continuation
     private let outboundConnections = OutboundConnections()
@@ -224,11 +225,13 @@ public actor TurgaiConnections: Service {
     public init(
         actorSystem: ClusterSystem,
         agentProfiles: TurgaiAgentProfileStore,
-        conversations: ConversationStorage
+        conversations: ConversationStorage,
+        linking: PersonLinking
     ) {
         self.actorSystem = actorSystem
         self.agentProfiles = agentProfiles
         self.conversations = conversations
+        self.linking = linking
         (self.connectionStream, self.connectionContinuation) =
             AsyncStream<Connection>.makeStream()
     }
@@ -283,6 +286,7 @@ public actor TurgaiConnections: Service {
             inbound: inbound,
             agentProfiles: agentProfiles,
             conversations: conversations,
+            linking: linking,
             source: source
         )
         actorSystem.log.debug("Live session added", metadata: ["session": "\(id)"])
@@ -451,6 +455,8 @@ actor LiveSession {
     private let agentProfiles: TurgaiAgentProfileStore
     /// The conversations there are, which a conversation joins with its first message.
     private let conversationStorage: ConversationStorage
+    /// Who's the same human as whom, which `/link` says.
+    private let linking: PersonLinking
     private let source: LiveSessionSource
     private let conversationConnection: ConversationConnection
     private let deliveryRegistry: OutboundDeliveryRegistry
@@ -463,6 +469,7 @@ actor LiveSession {
         inbound: AsyncChannel<ConversationInputDelivery>,
         agentProfiles: TurgaiAgentProfileStore,
         conversations: ConversationStorage,
+        linking: PersonLinking,
         source: LiveSessionSource
     ) {
         self.id = id
@@ -470,6 +477,7 @@ actor LiveSession {
         self.inbound = inbound
         self.agentProfiles = agentProfiles
         self.conversationStorage = conversations
+        self.linking = linking
         self.source = source
         let (output, outputContinuation) = OutputStream.makeStream()
         self.output = output
@@ -673,6 +681,8 @@ actor LiveSession {
 
         case .command(let command):
             switch command {
+            case .link(let ask, let conversationID, _, let userID):
+                return await link(ask, by: userID, in: conversationID)
             case .reminders(let conversationID, let participantID, let userID):
                 return await handleUserCommand(
                     .reminders,
@@ -739,6 +749,47 @@ actor LiveSession {
                 return await handleUserCommand(
                     .remembering(.off), conversationID: conversationID, participantID: participantID, userID: userID)
             }
+        }
+    }
+
+    /// `/link`, asked in `conversationID` by `person`: answered there.
+    private func link(_ ask: LinkAsk, by person: TurgaiDomain.UserID, in conversationID: ConversationID) async
+        -> Bool
+    {
+        let reply: String
+        do {
+            switch ask {
+            case .newCode:
+                let code = try await linking.code(for: person)
+                let minutes = Int(PersonLinking.codeLifetime / 60)
+                reply = "Your link code: \(code). Enter it in Turgai on your Mac within \(minutes) minutes."
+            case .code(let code):
+                reply = "Linked: this is you, as \(Self.said(try await linking.link(person, using: code)))."
+            case .notACode:
+                reply = PersonLinkingError.codeDoesNotWork.description
+            }
+        } catch let error as PersonLinkingError {
+            reply = error.description
+        } catch {
+            reply = "Couldn't link: \(error)"
+        }
+        do {
+            let role = try await resolvedAgentRole(for: conversationID)
+            let conversation = try await resolveConversation(conversationID, agentRole: role)
+            try await attach(to: conversation, conversationID: conversationID)
+            try await conversation.notify(reply)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// A linked person, as a reply names them.
+    private static func said(_ person: TurgaiDomain.UserID) -> String {
+        switch person {
+        case .account: "your Turgai account"
+        case .telegram(let id): "Telegram user \(id)"
+        case .guest: "a guest"
         }
     }
 

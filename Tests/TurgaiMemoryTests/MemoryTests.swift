@@ -542,6 +542,26 @@ struct MemoryTests {
         }
     }
 
+    /// One human's linked persons remember in one tree: the same value at a path once, and
+    /// different ones each with the day it was learned, the earliest first.
+    @Test
+    func linkedPersonsRememberInOneTree() {
+        func fact(_ path: [String], _ value: String, on day: Int) -> MemoryFact {
+            MemoryFact(
+                path: MemoryPath(path)!, value: value, evidence: [observationID], confidence: 0.9,
+                observedAt: Date(timeIntervalSince1970: TimeInterval(day) * 86_400))
+        }
+        let telegram = [fact(["home"], "Munich", on: 20_390), fact(["sister"], "Ann", on: 20_000)]
+        let account = [fact(["home"], "Berlin", on: 20_373), fact(["sister"], "Ann", on: 20_100)]
+
+        #expect(
+            MemoryTree(telegram + account).rendered() == """
+                You
+                ├─ home: Berlin (2025-10-12) · Munich (2025-10-29)
+                └─ sister: Ann
+                """)
+    }
+
     /// What's remembered is a tree: names a path shares are one node, each fact sits at its path's
     /// last name, and a recall gives it as data that can be out of date.
     @Test

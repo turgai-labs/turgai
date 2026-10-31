@@ -28,6 +28,8 @@ struct TurgaiRouteDependencies: Sendable {
     let runtimeSnapshots: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot]
     let userToolRegistry: UserToolRegistry
     let webChatBridge: TurgaiWebChatBridge
+    /// Who's the same human as whom.
+    let linking: PersonLinking
     let apiConfiguration: APIConfiguration
 }
 
@@ -46,6 +48,7 @@ extension TurgaiMainWebApp {
                 directory: directory.appendingPathComponent("tools", isDirectory: true)
             ),
             webChatBridge: webChatBridge,
+            linking: linking,
             apiConfiguration: apiConfiguration
         )
         registerCoreRoutes(on: router, dependencies: dependencies)

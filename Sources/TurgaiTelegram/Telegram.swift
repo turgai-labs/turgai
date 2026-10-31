@@ -200,6 +200,7 @@ public struct TelegramUpdate: Codable, Equatable, Sendable {
 
 public enum TelegramCommand: String, Sendable, Equatable {
     case start
+    case link
     case reset
     case memory
     case forget

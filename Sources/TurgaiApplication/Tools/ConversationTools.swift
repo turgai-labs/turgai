@@ -25,6 +25,7 @@ public enum ConversationTools {
         objectCatalog: ObjectCatalog? = nil,
         writer: ObjectWriter? = nil,
         agents: [Role] = [],
+        linking: PersonLinking? = nil,
         includeConversationTools: Bool = true
     ) async throws -> TurnTools {
         guard includeConversationTools else { return TurnTools() }
@@ -59,9 +60,15 @@ public enum ConversationTools {
             tools += try await ObjectTools(session: session).offered()
             tools += await session.objectTools()
             pages = session
-            // What's remembered about whoever it answers, when there's anything to recall.
-            if let owner, try await User.resolve(on: actorSystem, userID: owner).recallable() {
-                tools.append(RecallTool(actorSystem: actorSystem, person: owner))
+            // What's remembered about whoever it answers, as each of their linked persons does too,
+            // when there's anything to recall.
+            if let owner {
+                let persons = [owner] + (try await linking?.linked(to: owner) ?? [])
+                var recallable = false
+                for person in persons where !recallable {
+                    recallable = try await User.resolve(on: actorSystem, userID: person).recallable()
+                }
+                if recallable { tools.append(RecallTool(actorSystem: actorSystem, persons: persons)) }
             }
         }
 

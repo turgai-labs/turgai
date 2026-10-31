@@ -59,6 +59,7 @@ public struct TurgaiServer: Sendable {
         let agentProfiles = TurgaiAgentProfileStore(storage: try await .live(in: persistence))
         let agentCredentials = AgentCredentialStore(storage: try await .live(in: persistence, key: secretKey))
         let requestLimits = try await RequestLimitStore(storage: try await .live(in: persistence))
+        let linking = PersonLinking(storage: try await .live(in: persistence))
         let channelSecrets = ChannelSecretStore(storage: try await .live(in: persistence, key: secretKey))
         let setup = try TurgaiSetupStore(directory: directory)
         let webChatBridge = TurgaiWebChatBridge()
@@ -70,7 +71,8 @@ public struct TurgaiServer: Sendable {
             agentCredentials: agentCredentials,
             requestLimits: requestLimits,
             setup: setup,
-            channelSecrets: channelSecrets
+            channelSecrets: channelSecrets,
+            linking: linking
         )
         let mainWebApp = try TurgaiMainWebApp(
             auth: auth,
@@ -82,6 +84,7 @@ public struct TurgaiServer: Sendable {
             runtimeSnapshots: { await runtimeSnapshotSource.snapshots(as: $0) },
             setup: setup,
             webChatBridge: webChatBridge,
+            linking: linking,
             apiConfiguration: api
         )
         let router = Router(context: BasicWebSocketRequestContext.self)
@@ -106,6 +109,7 @@ public struct TurgaiServer: Sendable {
             channelSecrets: channelSecrets,
             conversations: try await .live(in: persistence),
             channels: try await .live(in: persistence),
+            linking: linking,
             turgaiSpace: try await .turgai(in: persistence),
             runtimeSnapshotSource: runtimeSnapshotSource,
             objectCatalogSource: objects,

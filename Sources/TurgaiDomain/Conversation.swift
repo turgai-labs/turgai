@@ -347,6 +347,13 @@ public struct InboundMessage: Hashable, Codable, Sendable {
 /// Channel adapters translate their provider-specific updates into this
 /// value before they enter the application connection layer.
 public enum ConversationCommand: Sendable, Equatable {
+    /// `/link`: a code to link this way in with another, or one entered from it.
+    case link(
+        LinkAsk,
+        conversationID: ConversationID,
+        participantID: ParticipantID,
+        userID: UserID
+    )
     case reminders(
         conversationID: ConversationID,
         participantID: ParticipantID,

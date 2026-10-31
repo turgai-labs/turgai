@@ -17,6 +17,7 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
     private let agentCredentials: AgentCredentialStore
     private let requestLimits: RequestLimitStore
     private let channelSecrets: ChannelSecretStore
+    private let linking: PersonLinking
 
     public init(
         auth: TurgaiAuth,
@@ -25,7 +26,8 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
         agentCredentials: AgentCredentialStore,
         requestLimits: RequestLimitStore,
         setup: TurgaiSetupStore,
-        channelSecrets: ChannelSecretStore
+        channelSecrets: ChannelSecretStore,
+        linking: PersonLinking
     ) throws {
         self.directory = directory
         self.auth = auth
@@ -34,6 +36,7 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
         self.agentCredentials = agentCredentials
         self.requestLimits = requestLimits
         self.channelSecrets = channelSecrets
+        self.linking = linking
     }
 
     public func registerRoutes(on router: Router<BasicWebSocketRequestContext>) {
@@ -50,6 +53,7 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
                 directory: directory.appendingPathComponent("tools", isDirectory: true)
             ),
             webChatBridge: TurgaiWebChatBridge(),
+            linking: linking,
             apiConfiguration: .init()
         )
         registerOnboardingRoutes(on: router, dependencies: dependencies)

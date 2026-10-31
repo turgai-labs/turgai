@@ -32,6 +32,7 @@ extension TurgaiMainWebApp {
             return try publicAPIResponse(bots)
         }
         registerConversations(on: api.group("conversations"), dependencies: dependencies)
+        registerLinks(on: api.group("me/links"), dependencies: dependencies)
         registerMessages(on: api.group("conversations/:id/messages"), dependencies: dependencies)
         // What the signed-in account may read, listed on its behalf in its chat with a bot: the
         // default one, or `botID`'s.
@@ -386,6 +387,57 @@ extension TurgaiMainWebApp {
 
     }
 
+    /// The signed-in person's other ways in: listing them, a code for one to enter, entering a
+    /// code one got, and unlinking one.
+    private func registerLinks(
+        on links: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        let auth = dependencies.auth
+        let linking = dependencies.linking
+
+        links.get { request, _ in
+            guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
+            return try publicAPIResponse(try await linking.pairedWith(person).compactMap(LinkedPerson.init))
+        }
+
+        links.post("codes") { request, _ in
+            guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
+            let now = Date()
+            let code = try await linking.code(for: person, now: now)
+            return try publicAPIResponse(
+                LinkCodeOffer(code: code.description, expiresAt: now.addingTimeInterval(PersonLinking.codeLifetime)),
+                status: .created)
+        }
+
+        links.post { request, context in
+            guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
+            guard
+                let input = try? await JSONDecoder().decode(EnterLinkCodeRequest.self, from: request, context: context),
+                let code = LinkCode(input.code)
+            else {
+                return publicAPIErrorResponse(
+                    status: .badRequest, code: "not_a_code", message: PersonLinkingError.codeDoesNotWork.description)
+            }
+            do {
+                let other = try await linking.link(person, using: code)
+                guard let linked = LinkedPerson(other) else { return Response(status: .noContent) }
+                return try publicAPIResponse(linked, status: .created)
+            } catch let error as PersonLinkingError {
+                return publicAPIErrorResponse(
+                    status: .conflict, code: "code_does_not_work", message: error.description)
+            }
+        }
+
+        links.delete(":person") { request, context in
+            guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
+            guard let key = context.parameters.get("person"), let other = try? TurgaiDomain.UserID(key: key) else {
+                return publicAPIErrorResponse(status: .notFound, code: "not_linked", message: "No one like that is linked.")
+            }
+            try await linking.unlink(person, from: other)
+            return Response(status: .noContent)
+        }
+    }
+
     /// A conversation's messages, through the API: reading them, and sending one.
     private func registerMessages(
         on messages: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
@@ -543,6 +595,27 @@ private func apiConversation(
         profile: profile,
         publicID: publicAPIConversationID(for: domainID)
     )
+}
+
+/// The person a request is from: its signed-in account's.
+private func signedInPerson(from request: Request, auth: TurgaiAuth) async -> TurgaiDomain.UserID? {
+    await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth).map { .account($0.id) }
+}
+
+/// The answer to a request that needs a person, and has none.
+private func signInRequired() -> Response {
+    publicAPIErrorResponse(status: .unauthorized, code: "sign_in_required", message: "Sign in first.")
+}
+
+extension LinkedPerson {
+    /// `person` as the API names them: none for a guest, whom no one links.
+    fileprivate init?(_ person: TurgaiDomain.UserID) {
+        switch person {
+        case .account: self.init(id: person.key, kind: .account, telegramUserID: nil)
+        case .telegram(let id): self.init(id: person.key, kind: .telegram, telegramUserID: id)
+        case .guest: return nil
+        }
+    }
 }
 
 private enum ChatOwner: Sendable {

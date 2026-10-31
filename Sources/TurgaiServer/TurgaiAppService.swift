@@ -64,6 +64,8 @@ struct TurgaiAppService: Service, Sendable {
     private let channelSecrets: ChannelSecretStore
     private let conversations: ConversationStorage
     private let channels: ChannelStorage
+    /// Who's the same human as whom.
+    private let linking: PersonLinking
     /// Turgai's own space, which the dashboard is used in.
     private let turgaiSpace: SpaceID
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
@@ -84,6 +86,7 @@ struct TurgaiAppService: Service, Sendable {
         channelSecrets: ChannelSecretStore,
         conversations: ConversationStorage,
         channels: ChannelStorage,
+        linking: PersonLinking,
         turgaiSpace: SpaceID,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
@@ -101,6 +104,7 @@ struct TurgaiAppService: Service, Sendable {
         self.channelSecrets = channelSecrets
         self.conversations = conversations
         self.channels = channels
+        self.linking = linking
         self.turgaiSpace = turgaiSpace
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
@@ -174,7 +178,7 @@ struct TurgaiAppService: Service, Sendable {
                 agentProfiles: agentProfiles, endpointFactory: endpointFactory,
                 runtimeConfiguration: runtimeConfiguration,
                 telegramFiles: telegramFiles, nodeTools: nodeTools, workspaceRoot: workspaceRoot,
-                wasmRunnerURL: wasmRunnerURL, userToolRegistry: userToolRegistry)
+                wasmRunnerURL: wasmRunnerURL, userToolRegistry: userToolRegistry, linking: linking)
             let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
                 workspaceRoot: workspaceRoot,
                 // An agent is activated by identity alone, so its configuration
@@ -205,7 +209,8 @@ struct TurgaiAppService: Service, Sendable {
                 secrets: channelSecrets,
                 telegramFiles: telegramFiles,
                 endpoints: endpointFactory,
-                conversations: conversations
+                conversations: conversations,
+                linking: linking
             )
 
             // Nodes find each other through the cluster daemon, as in swift-chat.
@@ -670,6 +675,7 @@ struct TurnToolSources: Sendable {
     let workspaceRoot: String
     let wasmRunnerURL: URL?
     let userToolRegistry: UserToolRegistry
+    let linking: PersonLinking
 
     func tools(for context: AgentTurnContext, on actorSystem: ClusterSystem) async throws -> TurnTools {
         let objectCatalog = try await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog
@@ -700,6 +706,7 @@ struct TurnToolSources: Sendable {
             agents: try await agentProfiles.profiles().filter { $0.availability == .enabled }.map {
                 Role($0.id)
             },
+            linking: linking,
             includeConversationTools: context.agentID.role.rawValue != "user-tool"
         )
         // Hail's files and agent messaging, for the agents granted them.
