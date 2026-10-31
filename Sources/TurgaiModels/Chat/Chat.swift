@@ -248,10 +248,13 @@ public enum ConversationPhase: String, Codable, Sendable {
 
 public struct ChatEvent: Codable, Equatable, Sendable {
     public enum Payload: Equatable, Sendable {
+        /// The conversation is open. `guest` is the token of the guest the client is, when no one
+        /// signed in: sent back as the `turgai_guest` cookie, it's the same guest next time.
         case ready(
             conversationID: ConversationID,
             botID: BotID,
-            status: ConversationStatus
+            status: ConversationStatus,
+            guest: String?
         )
         case history(
             conversationID: ConversationID,
@@ -338,7 +341,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
     public var type: ChatEventKind { payload.type }
 
     private enum CodingKeys: String, CodingKey {
-        case type, conversationID, botID, turnID
+        case type, conversationID, botID, turnID, guest
         case status, phase, activity, message, messages, error
         case request, requestID, answer
         case turns, step
@@ -353,7 +356,8 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             payload = .ready(
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
                 botID: try values.decode(BotID.self, forKey: .botID),
-                status: try values.decode(ConversationStatus.self, forKey: .status)
+                status: try values.decode(ConversationStatus.self, forKey: .status),
+                guest: try values.decodeIfPresent(String.self, forKey: .guest)
             )
         case .history:
             payload = .history(
@@ -437,10 +441,11 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         try values.encode(type, forKey: .type)
 
         switch payload {
-        case .ready(let conversationID, let botID, let status):
+        case .ready(let conversationID, let botID, let status, let guest):
             try values.encode(conversationID, forKey: .conversationID)
             try values.encode(botID, forKey: .botID)
             try values.encode(status, forKey: .status)
+            try values.encodeIfPresent(guest, forKey: .guest)
         case .history(let conversationID, let messages):
             try values.encode(conversationID, forKey: .conversationID)
             try values.encode(messages, forKey: .messages)

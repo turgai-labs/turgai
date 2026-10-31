@@ -37,8 +37,10 @@ extension TurgaiMainWebApp {
         // What the signed-in account may read, listed on its behalf in its chat with a bot: the
         // default one, or `botID`'s.
         api.get("objects") { request, _ in
-            let owner = await chatOwner(from: request, auth: dependencies.auth)
-            guard case .account = owner,
+            guard let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: dependencies.auth)
+            else { return publicAPIUnauthorizedResponse() }
+            let owner = ChatOwner.account(account.id)
+            guard
                 let conversation = try await chatConversation(
                     owner: owner, conversationID: nil, botID: request.uri.queryParameters["botID"].map(String.init),
                     profiles: dependencies.agentProfiles)
@@ -51,8 +53,10 @@ extension TurgaiMainWebApp {
         // Shares one of the signed-in account's objects with everyone, or takes that back: only
         // one who may change it does.
         api.post("objects/:id/share") { request, context in
-            let owner = await chatOwner(from: request, auth: dependencies.auth)
-            guard case .account = owner,
+            guard let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: dependencies.auth)
+            else { return publicAPIUnauthorizedResponse() }
+            let owner = ChatOwner.account(account.id)
+            guard
                 let conversation = try await chatConversation(
                     owner: owner, conversationID: nil, botID: nil, profiles: dependencies.agentProfiles),
                 let id = context.parameters.get("id")
@@ -108,7 +112,7 @@ extension TurgaiMainWebApp {
             return .upgrade([:])
         } onUpgrade: { inbound, outbound, context in
             let query = context.request.uri.queryParameters
-            let owner = await chatOwner(from: context.request, auth: dependencies.auth)
+            let owner = try await chatOwner(from: context.request, auth: dependencies.auth)
             guard
                 let conversation = try await chatConversation(
                     owner: owner,
@@ -188,7 +192,8 @@ extension TurgaiMainWebApp {
                         payload: .ready(
                             conversationID: conversation.publicID,
                             botID: .init(rawValue: conversation.profile.id),
-                            status: publicConversationStatus(status)
+                            status: publicConversationStatus(status),
+                            guest: { if case .guest(_, let token) = owner { token } else { nil } }()
                         ))
                 )
                 try await writer.write(
@@ -507,14 +512,17 @@ extension TurgaiMainWebApp {
                 )
             }
             do {
+                let owner = try await chatOwner(from: request, auth: dependencies.auth)
                 let event = try await send(
                     input: input,
                     text: text,
                     conversation: conversation,
-                    as: conversation.person(for: await chatOwner(from: request, auth: dependencies.auth)),
+                    as: conversation.person(for: owner),
                     bridge: dependencies.webChatBridge
                 )
-                return try publicAPIResponse(event)
+                var response = try publicAPIResponse(event)
+                if case .guest(_, let token) = owner { response.setCookie(TurgaiWebSupport.guestCookie(token)) }
+                return response
             } catch PublicAPIChatError.runtimeUnavailable {
                 return publicAPIErrorResponse(
                     status: .serviceUnavailable,
@@ -538,11 +546,11 @@ private struct APIConversation: Sendable {
     let publicID: TurgaiModels.ConversationID
 
     /// Who writes in it for `owner`: the signed-in account's person, the same in each of its
-    /// chats, or else a guest, new each time no one signed in comes.
+    /// chats, or the guest the client is.
     func person(for owner: ChatOwner) -> TurgaiDomain.UserID {
         switch owner {
         case .account(let id): .account(id)
-        case .anonymous: .guest(UUID())
+        case .guest(let guest, _): guest
         }
     }
 
@@ -620,14 +628,21 @@ extension LinkedPerson {
 
 private enum ChatOwner: Sendable {
     case account(UUID)
-    case anonymous
+    /// A guest no one signed in as, by the token they come back with.
+    case guest(TurgaiDomain.UserID, token: String)
 }
 
-private func chatOwner(from request: Request, auth: TurgaiAuth) async -> ChatOwner {
-    guard let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth) else {
-        return .anonymous
+/// Who a request is from: its signed-in account, or the guest its cookie says, or else a new
+/// guest, whose token the answer gives back.
+private func chatOwner(from request: Request, auth: TurgaiAuth) async throws -> ChatOwner {
+    if let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth) {
+        return .account(account.id)
     }
-    return .account(account.id)
+    if let token = request.cookies[TurgaiWebSupport.guestCookieName]?.value, let guest = await auth.guest(from: token) {
+        return .guest(guest, token: token)
+    }
+    let (guest, token) = try await auth.newGuest()
+    return .guest(guest, token: token)
 }
 
 private func chatConversation(

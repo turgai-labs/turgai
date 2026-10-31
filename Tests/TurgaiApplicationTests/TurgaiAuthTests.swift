@@ -88,6 +88,27 @@ struct TurgaiAuthTests {
         #expect(authenticatedMember.username == "member")
     }
 
+    @Test("a guest's token says who they are, and nothing else passes as one")
+    func guestTokens() async throws {
+        let auth = try await TurgaiAuth(accounts: .test, sessionSecret: .test)
+        let (guest, token) = try await auth.newGuest()
+
+        #expect(guest.isGuest)
+        #expect(await auth.guest(from: token) == guest)
+        #expect(await auth.guest(from: token + "x") == nil)
+        #expect(await auth.guest(from: "a.b.c") == nil)
+
+        // Another Turgai's signature doesn't count here.
+        let other = try await TurgaiAuth(accounts: .test, sessionSecret: .test)
+        #expect(await other.guest(from: token) == nil)
+
+        // A session isn't a guest, and a guest isn't a session.
+        _ = try await auth.register(username: "member", password: "correct horse battery staple")
+        let session = try await auth.signIn(username: "member", password: "correct horse battery staple")
+        #expect(await auth.guest(from: session.token) == nil)
+        await #expect(throws: TurgaiAuthError.invalidSession) { try await auth.authenticate(token) }
+    }
+
     @Test("bad credentials and invalid setup challenges are rejected")
     func rejectsInvalidCredentials() async throws {
         let auth = try await TurgaiAuth(accounts: .test, sessionSecret: .test)

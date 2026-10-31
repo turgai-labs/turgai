@@ -1,6 +1,7 @@
 import Crypto
 import HummingbirdBcrypt
 import NIOPosix
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -241,28 +242,15 @@ public actor TurgaiAuth {
             issuedAt: Int(now.timeIntervalSince1970),
             expiresAt: Int(expiresAt.timeIntervalSince1970)
         )
-        let payload = try JSONEncoder().encode(claims)
-        let payloadPart = Self.base64URL(payload)
-        let headerPart = Self.base64URL(Data("{\"alg\":\"HS256\",\"typ\":\"JWT\"}".utf8))
-        let input = "\(headerPart).\(payloadPart)"
-        let signature = HMAC<SHA256>.authenticationCode(for: Data(input.utf8), using: secret)
-        return TurgaiSession(
-            token: "\(input).\(Self.base64URL(Data(signature)))", username: username, expiresAt: expiresAt)
+        return TurgaiSession(token: try signed(claims), username: username, expiresAt: expiresAt)
     }
 
     public func authenticate(_ token: String, now: Date = Date()) async throws -> Account {
-        let parts = token.split(separator: ".")
-        guard parts.count == 3,
-            let payload = Self.decodeBase64URL(String(parts[1])),
+        guard let payload = verified(token),
             let claims = try? JSONDecoder().decode(Claims.self, from: payload),
             claims.issuer == "turgai",
-            claims.expiresAt > Int(now.timeIntervalSince1970),
-            let signatureData = Self.decodeBase64URL(String(parts[2]))
+            claims.expiresAt > Int(now.timeIntervalSince1970)
         else { throw TurgaiAuthError.invalidSession }
-
-        let input = "\(parts[0]).\(parts[1])"
-        let expected = HMAC<SHA256>.authenticationCode(for: Data(input.utf8), using: secret)
-        guard constantTimeEquals(Data(expected), signatureData) else { throw TurgaiAuthError.invalidSession }
         guard let accountID = UUID(uuidString: claims.sub),
             let account = try await accounts.withID(accountID),
             account.status != .disabled
@@ -270,6 +258,52 @@ public actor TurgaiAuth {
             throw TurgaiAuthError.invalidSession
         }
         return account.account
+    }
+
+    /// A new guest, and the token that says they're them from now on: it never runs out, since it
+    /// is who they are.
+    public func newGuest() throws -> (guest: UserID, token: String) {
+        let guest = UserID.guest(UUID())
+        return (guest, try signed(GuestClaims(sub: guest.key, issuer: Self.guestIssuer)))
+    }
+
+    /// The guest `token` was signed for: none when it's not a guest's, or Turgai didn't sign it.
+    public func guest(from token: String) -> UserID? {
+        guard let payload = verified(token),
+            let claims = try? JSONDecoder().decode(GuestClaims.self, from: payload),
+            claims.issuer == Self.guestIssuer,
+            let guest = try? UserID(key: claims.sub),
+            guest.isGuest
+        else { return nil }
+        return guest
+    }
+
+    /// What a guest's token says: who they are, and that it's a guest's, never a session's.
+    private struct GuestClaims: Codable, Sendable {
+        let sub: String
+        let issuer: String
+    }
+
+    private static let guestIssuer = "turgai-guest"
+
+    /// `claims`, signed with the secret, as a JWT.
+    private func signed(_ claims: some Encodable) throws -> String {
+        let payloadPart = Self.base64URL(try JSONEncoder().encode(claims))
+        let headerPart = Self.base64URL(Data("{\"alg\":\"HS256\",\"typ\":\"JWT\"}".utf8))
+        let input = "\(headerPart).\(payloadPart)"
+        let signature = HMAC<SHA256>.authenticationCode(for: Data(input.utf8), using: secret)
+        return "\(input).\(Self.base64URL(Data(signature)))"
+    }
+
+    /// The claims `token` carries, when it's signed with the secret.
+    private func verified(_ token: String) -> Data? {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3,
+            let payload = Self.decodeBase64URL(String(parts[1])),
+            let signature = Self.decodeBase64URL(String(parts[2]))
+        else { return nil }
+        let expected = HMAC<SHA256>.authenticationCode(for: Data("\(parts[0]).\(parts[1])".utf8), using: secret)
+        return constantTimeEquals(Data(expected), signature) ? payload : nil
     }
 
     /// A new, approved account for `username`, its password hashed: refused when either isn't

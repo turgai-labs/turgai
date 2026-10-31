@@ -17,19 +17,10 @@ import TurgaiTelegram
 #endif
 
 enum TurgaiWebSupport {
-    enum PublicChatVisitor: Sendable {
-        case existing(id: String)
-        case new(id: String)
-
-        var id: String {
-            switch self {
-            case .existing(let id), .new(let id): id
-            }
-        }
-    }
     static let sessionCookieName = "turgai_auth"
     static let bootstrapChallengeCookieName = "turgai_bootstrap"
-    static let publicChatCookieName = "turgai_public_chat"
+    /// The cookie a guest no one signed in as comes back with.
+    static let guestCookieName = "turgai_guest"
 
     static func modelCatalog(
         for profiles: [TurgaiAgentProfile]
@@ -260,24 +251,16 @@ enum TurgaiWebSupport {
         )
     }
 
-    static func publicChatCookie(_ visitorID: String) -> Cookie {
+    /// The guest `token` is, for a year from each time they come.
+    static func guestCookie(_ token: String) -> Cookie {
         Cookie(
-            name: publicChatCookieName,
-            value: visitorID,
+            name: guestCookieName,
+            value: token,
             maxAge: 31_536_000,
-            path: "/chat",
+            path: "/",
             httpOnly: true,
-            sameSite: .lax
+            sameSite: .strict
         )
-    }
-
-    static func publicChatVisitorID(from request: Request) -> PublicChatVisitor {
-        if let value = request.cookies[publicChatCookieName]?.value,
-            UUID(uuidString: value) != nil
-        {
-            return .existing(id: value)
-        }
-        return .new(id: UUID().uuidString)
     }
 
     static func redirect(to location: String, settingCookie cookie: Cookie? = nil) -> Response {
