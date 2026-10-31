@@ -2,6 +2,7 @@ import Distributed
 import DistributedCluster
 import EventSourcing
 import TurgaiCalls
+import TurgaiPeople
 import TurgaiDomain
 import VirtualActors
 
@@ -23,6 +24,8 @@ public distributed actor Space {
     public typealias Dependency = SpaceID
 
     public var state: SpaceState
+    /// One change of its state at a time: each decides from the state the one before left.
+    private let changes = AsyncSemaphore(value: 1)
 
     public let snapshotting: Snapshotting<SpaceEvent, SpaceState> = .every(
         numberOfEvents: 50,
@@ -56,36 +59,41 @@ public distributed actor Space {
     /// The scope of a chain `person` starts here for `asker`, settled as it starts: what's allowed
     /// `asker` once is in it, and spent.
     public distributed func opening(scopeOf person: UserID, for asker: Asker) async throws -> CallScope {
-        let (scope, spent) = state.opening(scopeOf: person, for: asker)
-        for event in spent { try await emit(event: event) }
-        return scope
+        try await changing {
+            let (scope, spent) = state.opening(scopeOf: person, for: asker)
+            for event in spent { try await emit(event: event) }
+            return scope
+        }
     }
 
     /// `person` taking part, as someone writing in it does: a member, unless they're in it already.
     public distributed func admit(_ person: UserID) async throws {
-        if let joined = state.admitting(person) { try await emit(event: joined) }
+        try await changing { if let joined = state.admitting(person) { try await emit(event: joined) } }
     }
 
     /// Who its admins are now, as its platform says: they decide for it.
     public distributed func setAdmins(_ admins: Set<UserID>) async throws {
-        for event in state.having(admins: admins) { try await emit(event: event) }
+        try await changing { for event in state.having(admins: admins) { try await emit(event: event) } }
     }
 
     /// The role `person` has in it, as its platform says.
     public distributed func setRole(_ role: SpaceRole, of person: UserID) async throws {
-        if let event = state.setting(role, of: person) { try await emit(event: event) }
+        try await changing { if let event = state.setting(role, of: person) { try await emit(event: event) } }
     }
 
     /// Whoever this call is on behalf of needing exactly `request`, which their scope didn't allow:
     /// it waits for its admins. The request it opens, when it opens one.
     public distributed func needed(_ request: ExactRequest) async throws -> AccessRequest? {
         guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .actor(id)) }
-        var opened: AccessRequest?
-        for event in state.requesting(request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID())) {
-            try await emit(event: event)
-            if case .asked(let asked, _) = event { opened = asked }
+        return try await changing {
+            var opened: AccessRequest?
+            for event in state.requesting(request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID()))
+            {
+                try await emit(event: event)
+                if case .asked(let asked, _) = event { opened = asked }
+            }
+            return opened
         }
-        return opened
     }
 
     /// `person`'s answer to the request `id`, as the link they answered through says: only an
@@ -93,10 +101,67 @@ public distributed actor Space {
     public distributed func answer(_ id: AccessRequestID, _ answer: AccessAnswer, by person: UserID) async throws
         -> AccessRequest?
     {
-        guard let open = state.requests[id] else { return nil }
-        let events = state.answering(id, answer, by: state.scope(of: person))
-        for event in events { try await emit(event: event) }
-        return events.isEmpty ? nil : open
+        try await changing {
+            guard let open = state.requests[id] else { return nil }
+            let events = state.answering(id, answer, by: state.scope(of: person))
+            for event in events { try await emit(event: event) }
+            return events.isEmpty ? nil : open
+        }
+    }
+
+    /// It made, called `name`, with `person` its first admin, who's told they're in it.
+    public distributed func make(named name: SpaceName, by person: UserID) async throws {
+        try await changing { for event in try state.making(named: name, by: person) { try await emit(event: event) } }
+        try await User.resolve(on: actorSystem, userID: person).joined(state.id)
+    }
+
+    /// It called `name` from now on, as its admin `person` asks.
+    public distributed func rename(to name: SpaceName, by person: UserID) async throws {
+        try await changing { for event in try state.renaming(to: name, by: person) { try await emit(event: event) } }
+    }
+
+    /// `invite` open, as its admin made it.
+    public distributed func invite(_ invite: SpaceInvite) async throws {
+        try await changing { for event in try state.inviting(invite) { try await emit(event: event) } }
+    }
+
+    /// The invite `id` taken back, as its admin `person` asks.
+    public distributed func takeBack(_ id: SpaceInviteID, by person: UserID) async throws {
+        try await changing { for event in try state.takingBack(id, by: person) { try await emit(event: event) } }
+    }
+
+    /// `person` joining with the invite whose token hashes to `hash`: they're told they're in it.
+    public distributed func join(with hash: SpaceInviteHash, as person: UserID) async throws {
+        try await changing {
+            for event in try state.joining(with: hash, as: person, at: Date()) { try await emit(event: event) }
+        }
+        try await User.resolve(on: actorSystem, userID: person).joined(state.id)
+    }
+
+    /// `person` leaving it: they're told they're not in it any more.
+    public distributed func leave(_ person: UserID) async throws {
+        try await changing { for event in try state.leaving(person) { try await emit(event: event) } }
+        try await User.resolve(on: actorSystem, userID: person).left(state.id)
+    }
+
+    /// It as `person`'s list shows it: none when it has no name, or they're not in it.
+    public distributed func listing(for person: UserID) -> SpaceListing? {
+        guard let name = state.name, let role = state.role(of: person) else { return nil }
+        return SpaceListing(id: state.id, name: name, role: role)
+    }
+
+    /// The invites that still work, as its admin `person` sees them.
+    public distributed func openInvites(for person: UserID) throws -> [SpaceInvite] {
+        guard state.role(of: person) == .admin else { throw SpaceRefusal.onlyAdmins }
+        return state.openInvites(at: Date())
+    }
+
+    /// Makes `change` to its state once no other change is being made: it reads the state, decides
+    /// and emits, calling nothing that could call back.
+    private func changing<Result>(_ change: () async throws -> Result) async rethrows -> Result {
+        await changes.wait()
+        defer { changes.signal() }
+        return try await change()
     }
 
     /// What waits for its admins to answer.

@@ -9,6 +9,7 @@ import TurgaiDomain
 import TurgaiModels
 import TurgaiObjects
 import TurgaiPeople
+import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -35,6 +36,7 @@ extension TurgaiMainWebApp {
         }
         registerConversations(on: api.group("conversations"), dependencies: dependencies)
         registerLinks(on: api.group("me/links"), dependencies: dependencies)
+        registerSpaces(on: api.group("spaces"), dependencies: dependencies)
         registerMessages(on: api.group("conversations/:id/messages"), dependencies: dependencies)
         // What the signed-in account may read, listed on its behalf in its chat with a bot: the
         // default one, or `botID`'s.
@@ -445,6 +447,118 @@ extension TurgaiMainWebApp {
         }
     }
 
+    /// The signed-in person's spaces: their list, making one, renaming it, leaving it, inviting
+    /// someone, the invites that work, taking one back, and joining with one.
+    private func registerSpaces(
+        on spaces: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        let auth = dependencies.auth
+        let bridge = dependencies.webChatBridge
+
+        /// What `request`'s person asks of spaces, refused when no one signed in or the runtime
+        /// isn't running, and said back as the API says it.
+        @Sendable func answering(
+            _ request: Request, _ answer: (TurgaiDomain.UserID, Spaces) async throws -> Response
+        ) async throws -> Response {
+            guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
+            do {
+                return try await answer(person, try await bridge.spaces())
+            } catch let refusal as SpaceRefusal {
+                return spaceRefused(refusal)
+            } catch TurgaiWebChatBridgeError.runtimeUnavailable {
+                return publicAPIErrorResponse(
+                    status: .serviceUnavailable, code: "runtime_unavailable", message: "Turgai isn't running yet.")
+            }
+        }
+
+        spaces.get { request, _ in
+            try await answering(request) { person, spaces in
+                try publicAPIResponse(try await spaces.list(for: person).map(SpaceSummary.init))
+            }
+        }
+
+        spaces.post { request, context in
+            try await answering(request) { person, spaces in
+                guard let input = try? await JSONDecoder().decode(MakeSpaceRequest.self, from: request, context: context),
+                    let name = SpaceName(input.name)
+                else { return nameRequired() }
+                return try publicAPIResponse(
+                    SpaceSummary(try await spaces.make(named: name, by: person)), status: .created)
+            }
+        }
+
+        spaces.patch(":space") { request, context in
+            try await answering(request) { person, spaces in
+                guard let space = spaceID(in: context) else { return noSuchSpace() }
+                guard let input = try? await JSONDecoder().decode(RenameSpaceRequest.self, from: request, context: context),
+                    let name = SpaceName(input.name)
+                else { return nameRequired() }
+                return try publicAPIResponse(SpaceSummary(try await spaces.rename(space, to: name, by: person)))
+            }
+        }
+
+        spaces.delete(":space/me") { request, context in
+            try await answering(request) { person, spaces in
+                guard let space = spaceID(in: context) else { return noSuchSpace() }
+                try await spaces.leave(space, as: person)
+                return Response(status: .noContent)
+            }
+        }
+
+        spaces.post(":space/invites") { request, context in
+            try await answering(request) { person, spaces in
+                guard let space = spaceID(in: context) else { return noSuchSpace() }
+                let input = try? await JSONDecoder().decode(MakeInviteRequest.self, from: request, context: context)
+                let lifetime: SpaceInviteLifetime
+                switch input?.validForDays {
+                case nil: lifetime = .untilUsed
+                case let days? where days >= 1:
+                    lifetime = .until(Date().addingTimeInterval(TimeInterval(days) * 86_400))
+                case _?:
+                    return publicAPIErrorResponse(
+                        status: .badRequest, code: "invalid_days", message: "An invite works for a day or more.")
+                }
+                let (invite, token) = try await spaces.invite(to: space, by: person, for: lifetime)
+                return try publicAPIResponse(
+                    SpaceInviteOffer(
+                        id: invite.id.rawValue.uuidString, token: token.rawValue,
+                        link: "turgai://join/\(space.rawValue.uuidString)/\(token.rawValue)",
+                        expiresAt: invite.expiresAt),
+                    status: .created)
+            }
+        }
+
+        spaces.get(":space/invites") { request, context in
+            try await answering(request) { person, spaces in
+                guard let space = spaceID(in: context) else { return noSuchSpace() }
+                return try publicAPIResponse(
+                    try await spaces.invites(to: space, for: person).map {
+                        SpaceInviteListing(id: $0.id.rawValue.uuidString, expiresAt: $0.expiresAt)
+                    })
+            }
+        }
+
+        spaces.delete(":space/invites/:invite") { request, context in
+            try await answering(request) { person, spaces in
+                guard let space = spaceID(in: context),
+                    let invite = context.parameters.get("invite").flatMap(UUID.init(uuidString:))
+                else { return noSuchSpace() }
+                try await spaces.takeBack(SpaceInviteID(rawValue: invite), to: space, by: person)
+                return Response(status: .noContent)
+            }
+        }
+
+        spaces.post(":space/join") { request, context in
+            try await answering(request) { person, spaces in
+                guard let space = spaceID(in: context),
+                    let input = try? await JSONDecoder().decode(JoinSpaceRequest.self, from: request, context: context)
+                else { return spaceRefused(.inviteDoesNotWork) }
+                return try publicAPIResponse(
+                    SpaceSummary(try await spaces.join(space, with: SpaceInviteToken(input.token), as: person)))
+            }
+        }
+    }
+
     /// A conversation's messages, through the API: reading them, and sending one.
     private func registerMessages(
         on messages: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
@@ -610,6 +724,51 @@ private func apiConversation(
 /// The person a request is from: its signed-in account's.
 private func signedInPerson(from request: Request, auth: TurgaiAuth) async -> TurgaiDomain.UserID? {
     await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth).map { .account($0.id) }
+}
+
+/// The space a path names.
+private func spaceID(in context: BasicWebSocketRequestContext) -> SpaceID? {
+    context.parameters.get("space").flatMap(UUID.init(uuidString:)).map(SpaceID.init(rawValue:))
+}
+
+private func noSuchSpace() -> Response {
+    publicAPIErrorResponse(status: .notFound, code: "no_such_space", message: "No space like that.")
+}
+
+private func nameRequired() -> Response {
+    publicAPIErrorResponse(
+        status: .badRequest, code: "invalid_name",
+        message: "A space's name is some words, at most \(SpaceName.maximumLength) letters.")
+}
+
+/// What a space refused, as the API says it.
+private func spaceRefused(_ refusal: SpaceRefusal) -> Response {
+    let (status, code): (HTTPResponse.Status, String) =
+        switch refusal {
+        case .alreadyMade: (.conflict, "already_made")
+        case .guestsStayOut: (.forbidden, "guests_stay_out")
+        case .onlyAdmins: (.forbidden, "only_admins")
+        case .notInIt: (.notFound, "not_in_it")
+        case .lastAdmin: (.conflict, "last_admin")
+        case .inviteDoesNotWork: (.conflict, "invite_does_not_work")
+        case .aConversations: (.conflict, "a_conversations")
+        }
+    return publicAPIErrorResponse(status: status, code: code, message: refusal.description)
+}
+
+extension SpaceSummary {
+    fileprivate init(_ listing: SpaceListing) {
+        self.init(
+            id: listing.id.rawValue.uuidString, name: listing.name.rawValue,
+            role: listing.role == .admin ? .admin : .member)
+    }
+}
+
+extension SpaceInvite {
+    /// When it stops working: none when it works until it's used.
+    fileprivate var expiresAt: Date? {
+        if case .until(let end) = lifetime { end } else { nil }
+    }
 }
 
 /// The answer to a request that needs a person, and has none.

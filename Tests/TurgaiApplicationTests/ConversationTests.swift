@@ -148,6 +148,18 @@ struct ConversationTests {
         #expect(recovered == [conversationID])
     }
 
+    /// A person holds the spaces they're in, the first joined first, as each space tells them.
+    @Test
+    func aPersonHoldsTheirSpaces() {
+        let family = SpaceID()
+        let work = SpaceID()
+        var record = UserRecord(userID: .ann)
+        for event in [UserEvent.joinedSpace(family), .joinedSpace(work), .joinedSpace(family), .leftSpace(family)] {
+            record.apply(event)
+        }
+        #expect(record.spaces == [work])
+    }
+
     /// A new person remembers what they say; a guest, whom no one signed in as, doesn't.
     @Test
     func aGuestRemembersNothing() {

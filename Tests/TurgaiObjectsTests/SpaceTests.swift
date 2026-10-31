@@ -139,4 +139,89 @@ struct SpaceTests {
             refused.requesting(forecast, by: bob, as: .person, id: again)
                 == [.asked(AccessRequest(id: again, request: forecast, by: bob, standing: .waiting), by: .person)])
     }
+
+    /// A space someone made: called what they named it, with them its first admin. A guest makes
+    /// none, and one is made once.
+    @Test func aSpaceIsMadeOnceByWhoeverNamesIt() throws {
+        let family = SpaceName("  Family ")!
+        var space = SpaceState(id: SpaceID())
+        #expect(throws: SpaceRefusal.guestsStayOut) { try space.making(named: family, by: .guest(UUID())) }
+
+        space = space.applying(try space.making(named: family, by: .ann))
+        #expect(space.name?.rawValue == "Family")
+        #expect(space.role(of: .ann) == .admin)
+        #expect(throws: SpaceRefusal.alreadyMade) { try space.making(named: family, by: .bob) }
+
+        #expect(throws: SpaceRefusal.onlyAdmins) { try space.renaming(to: SpaceName("Home")!, by: .bob) }
+        #expect(try space.renaming(to: family, by: .ann).isEmpty)
+        #expect(SpaceName("   ") == nil)
+        #expect(SpaceName(String(repeating: "a", count: SpaceName.maximumLength + 1)) == nil)
+    }
+
+    /// An invite lets one person in, once, while it works; one already in leaves it for another.
+    @Test func anInviteLetsOnePersonInOnce() throws {
+        var space = SpaceState(id: SpaceID())
+        space = space.applying(try space.making(named: SpaceName("Family")!, by: .ann))
+        let token = SpaceInviteToken.new()
+        let invite = SpaceInvite(hash: token.hash, by: .ann, lifetime: .untilUsed)
+        #expect(throws: SpaceRefusal.onlyAdmins) {
+            try space.inviting(SpaceInvite(hash: token.hash, by: .bob, lifetime: .untilUsed))
+        }
+        space = space.applying(try space.inviting(invite))
+
+        #expect(try space.joining(with: token.hash, as: .ann, at: Date()).isEmpty)
+        space = space.applying(try space.joining(with: token.hash, as: .bob, at: Date()))
+        #expect(space.role(of: .bob) == .member)
+        #expect(throws: SpaceRefusal.inviteDoesNotWork) { try space.joining(with: token.hash, as: .dad, at: Date()) }
+        #expect(throws: SpaceRefusal.guestsStayOut) {
+            try space.joining(with: token.hash, as: .guest(UUID()), at: Date())
+        }
+        #expect(throws: SpaceRefusal.inviteDoesNotWork) {
+            try space.joining(with: SpaceInviteToken("made up").hash, as: .dad, at: Date())
+        }
+    }
+
+    /// An invite stops working when its time is up, or its admin takes it back.
+    @Test func anInviteEnds() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        var space = SpaceState(id: SpaceID())
+        space = space.applying(try space.making(named: SpaceName("Family")!, by: .ann))
+        let short = SpaceInviteToken.new()
+        let kept = SpaceInviteToken.new()
+        let ending = SpaceInvite(hash: short.hash, by: .ann, lifetime: .until(now.addingTimeInterval(60)))
+        let lasting = SpaceInvite(hash: kept.hash, by: .ann, lifetime: .untilUsed)
+        space = space.applying(try space.inviting(ending) + space.inviting(lasting))
+
+        #expect(space.openInvites(at: now.addingTimeInterval(61)) == [lasting])
+        #expect(throws: SpaceRefusal.inviteDoesNotWork) {
+            try space.joining(with: short.hash, as: .bob, at: now.addingTimeInterval(61))
+        }
+        #expect(throws: SpaceRefusal.onlyAdmins) { try space.takingBack(lasting.id, by: .bob) }
+        space = space.applying(try space.takingBack(lasting.id, by: .ann))
+        #expect(throws: SpaceRefusal.inviteDoesNotWork) { try space.joining(with: kept.hash, as: .bob, at: now) }
+    }
+
+    /// A conversation's own space takes no invites.
+    @Test func aConversationsSpaceTakesNoInvites() {
+        var space = SpaceState(id: SpaceID())
+        space = space.applying(space.having(admins: [.ann]))
+        #expect(throws: SpaceRefusal.aConversations) {
+            try space.inviting(SpaceInvite(hash: SpaceInviteToken.new().hash, by: .ann, lifetime: .untilUsed))
+        }
+    }
+
+    /// Anyone in it may leave, but its last admin, and no one leaves a space they're not in.
+    @Test func theLastAdminStays() throws {
+        var space = SpaceState(id: SpaceID())
+        space = space.applying(try space.making(named: SpaceName("Family")!, by: .ann))
+        space = space.applying([.joined(.bob, as: .member)])
+
+        #expect(throws: SpaceRefusal.lastAdmin) { try space.leaving(.ann) }
+        #expect(throws: SpaceRefusal.notInIt) { try space.leaving(.dad) }
+        space = space.applying(try space.leaving(.bob))
+        #expect(space.role(of: .bob) == nil)
+        space = space.applying([.joined(.dad, as: .admin)])
+        space = space.applying(try space.leaving(.ann))
+        #expect(space.role(of: .ann) == nil)
+    }
 }

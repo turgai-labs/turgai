@@ -1,6 +1,5 @@
 import Testing
-
-@testable import TurgaiApplication
+import TurgaiDomain
 
 @Suite("Async semaphore")
 struct AsyncSemaphoreTests {

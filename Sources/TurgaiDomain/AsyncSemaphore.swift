@@ -2,7 +2,7 @@ import Synchronization
 
 /// Lets `value` holders in at once; whoever waits beyond them goes in as one leaves, first come,
 /// first served.
-final class AsyncSemaphore: Sendable {
+public final class AsyncSemaphore: Sendable {
     private struct State {
         var value: Int
         var waiting: [CheckedContinuation<Void, Never>] = []
@@ -10,12 +10,12 @@ final class AsyncSemaphore: Sendable {
 
     private let state: Mutex<State>
 
-    init(value: Int) {
+    public init(value: Int) {
         state = Mutex(State(value: value))
     }
 
     /// Takes one of its places, waiting for one to be left when none is free.
-    func wait() async {
+    public func wait() async {
         let taken = state.withLock { state in
             guard state.value > 0 else { return false }
             state.value -= 1
@@ -36,7 +36,7 @@ final class AsyncSemaphore: Sendable {
     }
 
     /// Leaves a place: straight to the first waiting, when someone waits.
-    func signal() {
+    public func signal() {
         let next = state.withLock { state -> CheckedContinuation<Void, Never>? in
             guard !state.waiting.isEmpty else {
                 state.value += 1

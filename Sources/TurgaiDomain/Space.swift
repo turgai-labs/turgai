@@ -33,6 +33,69 @@ public struct SpaceID: Hashable, Codable, Sendable {
     }
 }
 
+/// What a space is called, as the people who made it named it: some words, at most 80 letters.
+public struct SpaceName: Hashable, Codable, Sendable, CustomStringConvertible {
+    public static let maximumLength = 80
+
+    public let rawValue: String
+
+    /// The name `written`, without the space around it: none when there's nothing, or too much.
+    public init?(_ written: String) {
+        let name = written.trimmed()
+        guard !name.isEmpty, name.count <= Self.maximumLength else { return nil }
+        self.rawValue = name
+    }
+
+    public var description: String { rawValue }
+}
+
+public struct SpaceInviteID: Hashable, Codable, Sendable {
+    public let rawValue: UUID
+
+    public init(rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+/// An invite's token as a space keeps it: only its hash, so nothing kept lets anyone in.
+public struct SpaceInviteHash: Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+}
+
+/// How long an invite works, as whoever made it chose: until it's used, or until a time.
+public enum SpaceInviteLifetime: Hashable, Codable, Sendable {
+    case untilUsed
+    case until(Date)
+}
+
+/// An open invite to a space: one person's way in, once.
+public struct SpaceInvite: Hashable, Codable, Sendable {
+    public let id: SpaceInviteID
+    public let hash: SpaceInviteHash
+    /// The admin who made it.
+    public let by: UserID
+    public let lifetime: SpaceInviteLifetime
+
+    public init(id: SpaceInviteID = SpaceInviteID(), hash: SpaceInviteHash, by: UserID, lifetime: SpaceInviteLifetime) {
+        self.id = id
+        self.hash = hash
+        self.by = by
+        self.lifetime = lifetime
+    }
+
+    /// Whether it still works at `now`.
+    public func works(at now: Date) -> Bool {
+        switch lifetime {
+        case .untilUsed: true
+        case .until(let end): now < end
+        }
+    }
+}
+
 /// Who a call is on behalf of, and what they may do: the person who started its chain, in the
 /// space they came in through, with the role they have there and the exact requests it shares
 /// with them, as the space settles them when the chain starts. Everything in the chain has them.

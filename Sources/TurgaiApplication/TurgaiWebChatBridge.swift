@@ -4,6 +4,7 @@ import Hail
 import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
+import TurgaiSpaces
 
 public struct WebSessionID: Hashable, Sendable, Codable, Identifiable {
     public let rawValue: UUID
@@ -52,6 +53,14 @@ public actor TurgaiWebChatBridge {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
         return try await runtime.conversations.all()
+    }
+
+    /// What a person does with spaces, once the runtime runs.
+    public func spaces() throws -> Spaces {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return Spaces(actorSystem: runtime.actorSystem)
     }
 
     /// Every Telegram channel there is, in the order they were made.
