@@ -3,6 +3,7 @@ import DistributedCluster
 import Hail
 import TurgaiDomain
 import TurgaiMemory
+import TurgaiPeople
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

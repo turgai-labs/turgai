@@ -3,10 +3,13 @@ import DistributedCluster
 import DurableWorkflows
 import EventSourcing
 import Hail
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiHail
 import TurgaiMemory
 import TurgaiObjects
+import TurgaiPeople
+import TurgaiSpaces
 import VirtualActors
 
 #if canImport(FoundationEssentials)

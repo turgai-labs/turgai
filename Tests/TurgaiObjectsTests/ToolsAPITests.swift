@@ -7,6 +7,8 @@ import Testing
 import TurgaiDomain
 
 @testable import TurgaiObjects
+import TurgaiCalls
+import TurgaiSpaces
 
 /// What an echo is given.
 @Describable

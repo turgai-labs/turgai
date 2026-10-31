@@ -3,6 +3,7 @@ import DurableWorkflows
 import Hail
 import Synchronization
 import TurgaiDomain
+import TurgaiPeople
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

@@ -54,16 +54,6 @@ public enum UserIDError: Error, Equatable, Sendable {
     case notAPerson(String)
 }
 
-/// The domain view of a Turgai user. Provider-specific profile data belongs in
-/// a channel adapter or a separate profile projection.
-public struct User: Hashable, Codable, Sendable {
-    public let id: UserID
-
-    public init(id: UserID) {
-        self.id = id
-    }
-}
-
 /// What one way in shows for another to enter, to say they're the same human: six letters and
 /// digits that can't be mistaken for each other, written `K7Q-4P2`.
 public struct LinkCode: Hashable, Codable, Sendable, CustomStringConvertible {

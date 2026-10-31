@@ -2,6 +2,7 @@ import Testing
 import TurgaiDomain
 
 @testable import TurgaiObjects
+import TurgaiCalls
 
 @Suite("Who may read and write an object")
 struct AccessTests {

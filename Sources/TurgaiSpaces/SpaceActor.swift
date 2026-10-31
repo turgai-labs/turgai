@@ -1,6 +1,7 @@
 import Distributed
 import DistributedCluster
 import EventSourcing
+import TurgaiCalls
 import TurgaiDomain
 import VirtualActors
 
@@ -78,7 +79,7 @@ public distributed actor Space {
     /// Whoever this call is on behalf of needing exactly `request`, which their scope didn't allow:
     /// it waits for its admins. The request it opens, when it opens one.
     public distributed func needed(_ request: ExactRequest) async throws -> AccessRequest? {
-        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .actor(id, type: nil)) }
+        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .actor(id)) }
         var opened: AccessRequest?
         for event in state.requesting(request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID())) {
             try await emit(event: event)

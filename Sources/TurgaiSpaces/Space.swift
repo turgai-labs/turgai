@@ -1,3 +1,4 @@
+import TurgaiCalls
 import TurgaiDomain
 
 /// What happened in a space: to its members, and to what's asked of its admins.
@@ -13,13 +14,6 @@ public enum SpaceEvent: Hashable, Codable, Sendable {
     case answered(AccessRequestID, AccessAnswer, by: UserID)
     /// What was allowed once ran.
     case spent(AccessRequestID)
-}
-
-/// Who asked for what an admin then allows once: a person, themselves, or one object's own work,
-/// done for its maker. What's allowed once goes to exactly the one that asked.
-public enum Asker: Hashable, Codable, Sendable {
-    case person
-    case object(ObjectIdentity)
 }
 
 /// A space: the people in it, each with their role; who may run each exact request it decides,

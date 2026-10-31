@@ -1,6 +1,7 @@
 import DiscoverableActors
 import Distributed
 import DistributedCluster
+import TurgaiCalls
 import VirtualActors
 
 /// Which object something is, as the system knows it, and as models and people are shown it: the
@@ -29,6 +30,24 @@ public enum ObjectID: Hashable, Codable, Sendable, CustomStringConvertible, Comp
     /// In the order they're written in, as they're listed.
     public static func < (lhs: ObjectID, rhs: ObjectID) -> Bool {
         lhs.description < rhs.description
+    }
+}
+
+extension ObjectID {
+    /// The object the actor a call reached is.
+    public init(_ actor: CallActor) {
+        switch actor {
+        case .virtual(let id): self = .virtual(id)
+        case .actor(let id): self = .actor(id, type: nil)
+        }
+    }
+
+    /// The actor it is, as a call reaches it.
+    public var callActor: CallActor {
+        switch self {
+        case .virtual(let id): .virtual(id)
+        case .actor(let id, _): .actor(id)
+        }
     }
 }
 

@@ -4,7 +4,9 @@ import Logging
 import ServiceLifecycle
 import TurgaiApplication
 import TurgaiObjects
+import TurgaiPeople
 import TurgaiPersistence
+import TurgaiSpaces
 import TurgaiWeb
 
 #if canImport(FoundationEssentials)

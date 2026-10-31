@@ -4,9 +4,11 @@ import Hummingbird
 import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiModels
 import TurgaiObjects
+import TurgaiPeople
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

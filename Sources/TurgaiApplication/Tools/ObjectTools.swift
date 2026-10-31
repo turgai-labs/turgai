@@ -2,6 +2,7 @@ import AnyLanguageModel
 import DiscoverableActors
 import DistributedCluster
 import Hail
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
 import Yams
@@ -429,7 +430,7 @@ public actor ObjectSession {
     /// whoever the turn is for, in the space they came in through. Only one who may change it does.
     func share(_ handle: ObjectID, with audience: SharingAudience, _ level: SharingLevel) async throws -> CallReturn {
         let object = try await dynamicObject(handle)
-        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: handle) }
+        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: handle.callActor) }
         do {
             try await object.share(with: audience.audience(in: chain.scope.space), level.access)
         } catch let refused as NotAllowed {

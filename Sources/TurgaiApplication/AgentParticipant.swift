@@ -1,10 +1,12 @@
 import Distributed
 import DistributedCluster
 import Hail
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiHail
 import TurgaiMemory
 import TurgaiObjects
+import TurgaiPeople
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

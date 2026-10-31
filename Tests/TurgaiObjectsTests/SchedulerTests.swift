@@ -7,6 +7,7 @@ import TurgaiDomain
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+import TurgaiCalls
 
 /// A chat's schedules, by the names they're given in it: listed there, and changed by whoever made
 /// each, or the chat's admins.

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TurgaiApplication
 import TurgaiDomain
+import TurgaiPeople
 
 @Suite("Linking persons")
 struct PersonLinkingTests {

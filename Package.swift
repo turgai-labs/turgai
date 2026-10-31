@@ -113,6 +113,38 @@ let package = Package(
         .target(name: "TurgaiModels"),
         .target(name: "TurgaiDomain"),
         .target(
+            name: "TurgaiCalls",
+            dependencies: [
+                "TurgaiDomain",
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+            ]
+        ),
+        .target(
+            name: "TurgaiPeople",
+            dependencies: [
+                "TurgaiDomain",
+                "TurgaiMemory",
+                "TurgaiPersistence",
+                .product(name: "SQLiteNIO", package: "sqlite-nio"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+            ]
+        ),
+        .target(
+            name: "TurgaiSpaces",
+            dependencies: [
+                "TurgaiCalls",
+                "TurgaiDomain",
+                "TurgaiPersistence",
+                .product(name: "SQLiteNIO", package: "sqlite-nio"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+            ]
+        ),
+        .target(
             name: "TurgaiBrand",
             resources: [
                 .copy("Resources/Public")
@@ -121,6 +153,8 @@ let package = Package(
         .target(
             name: "TurgaiWeb",
             dependencies: [
+                "TurgaiCalls",
+                "TurgaiPeople",
                 "TurgaiBrand",
                 "TurgaiApplication",
                 "TurgaiModels",
@@ -152,7 +186,9 @@ let package = Package(
         .target(
             name: "TurgaiObjects",
             dependencies: [
+                "TurgaiCalls",
                 "TurgaiDomain",
+                "TurgaiSpaces",
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
@@ -180,6 +216,8 @@ let package = Package(
         .executableTarget(
             name: "TurgaiModelEval",
             dependencies: [
+                "TurgaiCalls",
+                "TurgaiSpaces",
                 "TurgaiApplication",
                 "TurgaiHail",
                 "TurgaiPersistence",
@@ -211,10 +249,13 @@ let package = Package(
             name: "TurgaiApplication",
             dependencies: [
                 .product(name: "SQLiteNIO", package: "sqlite-nio"),
+                "TurgaiCalls",
                 "TurgaiDomain",
                 "TurgaiMemory",
                 "TurgaiHail",
                 "TurgaiObjects",
+                "TurgaiPeople",
+                "TurgaiSpaces",
                 "TurgaiPersistence",
                 "TurgaiTelegram",
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
@@ -246,6 +287,9 @@ let package = Package(
         .target(
             name: "TurgaiServer",
             dependencies: [
+                "TurgaiCalls",
+                "TurgaiPeople",
+                "TurgaiSpaces",
                 "TurgaiApplication",
                 "TurgaiHail",
                 "TurgaiTelegram",
@@ -324,11 +368,15 @@ let package = Package(
         ),
         .testTarget(
             name: "TurgaiApplicationTests",
-            dependencies: ["TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiWeb"]
+            dependencies: [
+                "TurgaiCalls", "TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiPeople", "TurgaiWeb",
+            ]
         ),
         .testTarget(
             name: "TurgaiObjectsTests",
             dependencies: [
+                "TurgaiCalls",
+                "TurgaiSpaces",
                 "TurgaiObjects",
                 .product(name: "Doppel", package: "doppel"),
                 "TurgaiApplication",

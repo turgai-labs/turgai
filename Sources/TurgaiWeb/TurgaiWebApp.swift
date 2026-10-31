@@ -7,6 +7,7 @@ import ServiceLifecycle
 import TurgaiApplication
 import TurgaiDomain
 import TurgaiHail
+import TurgaiPeople
 import TurgaiPersistence
 import TurgaiTelegram
 

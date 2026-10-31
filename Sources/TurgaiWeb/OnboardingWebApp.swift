@@ -2,6 +2,7 @@ import Hummingbird
 import HummingbirdWebSocket
 import ServiceLifecycle
 import TurgaiApplication
+import TurgaiPeople
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

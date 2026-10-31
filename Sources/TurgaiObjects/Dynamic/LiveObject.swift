@@ -1,5 +1,6 @@
 import DiscoverableActors
 import Foundation
+import TurgaiCalls
 import TurgaiDomain
 
 // A dynamic object's domain, with no actor in it: what happens to an object (its events), what it
@@ -130,7 +131,7 @@ public enum DynamicObjectState: Codable, Sendable {
     {
         switch self {
         case .unmade:
-            let holder = chain.actors.last.flatMap { DynamicObject.identity(of: $0) == nil ? nil : $0 }
+            let holder = chain.actors.last.map(ObjectID.init).flatMap { DynamicObject.identity(of: $0) == nil ? nil : $0 }
             return .adopted(type, code, starts: starts, by: chain.scope, in: chain.place, heldBy: holder)
         case .live(let object):
             try object.changeable(by: chain)
@@ -196,7 +197,7 @@ public struct LiveObject: Codable, Sendable {
         self.fields = fields
         self.maker = maker
         self.madeIn = madeIn
-        self.access = holder.map(Access.init(heldBy:)) ?? Access(madeBy: maker)
+        self.access = holder.map { Access(heldBy: $0.callActor) } ?? Access(madeBy: maker)
     }
 
     /// The object after `event`, which keeps living.

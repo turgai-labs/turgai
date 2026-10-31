@@ -6,6 +6,7 @@ import Hail
 import VirtualActors
 
 @testable import TurgaiApplication
+import TurgaiCalls
 
 /// A cluster node for a test, set up as Turgai runs one, journaled to `store`, and joined to
 /// `other` when one is given. A node that hosts virtual actors has a `VirtualNode`; `installing`

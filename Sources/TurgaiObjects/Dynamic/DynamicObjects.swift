@@ -2,7 +2,9 @@ import DiscoverableActors
 import Distributed
 import DistributedCluster
 import EventSourcing
+import TurgaiCalls
 import TurgaiDomain
+import TurgaiSpaces
 import VirtualActors
 
 /// The types and the objects made by name, the way an Erlang node holds its modules and a
@@ -259,8 +261,8 @@ public distributed actor DynamicObjects {
             let made = try await self.object(entry.identity)
             // As their space settles their scope now.
             let maker = try await Space.resolve(on: actorSystem, id: entry.maker.space).opening(
-                scopeOf: entry.maker.person, for: .object(entry.identity))
-            try await CallChain.$current.withValue(.own(entry.identity, for: maker, in: entry.place)) {
+                scopeOf: entry.maker.person, for: .actor(DynamicObject.callActor(for: entry.identity)))
+            try await CallChain.$current.withValue(.own(DynamicObject.callActor(for: entry.identity), for: maker, in: entry.place)) {
                 try await made.start()
             }
             actorSystem.log.info("Started made object", metadata: ["object": "\(entry.identity)"])

@@ -2,7 +2,9 @@ import DiscoverableActors
 import DistributedCluster
 import DurableWorkflows
 import Foundation
+import TurgaiCalls
 import TurgaiDomain
+import TurgaiSpaces
 
 /// When something's due: every so many minutes, every day at a time, or on days of the week at a
 /// time, in an IANA time zone. An object's property of this type is due as it says: each time,
@@ -184,7 +186,7 @@ public struct ObjectScheduleActivities {
     public func fire(input: ObjectFiring, context: ActivityContext) async throws -> DurableVoid {
         let space = try await Space.resolve(on: context.system, id: input.space)
         let scope = try await space.scope(of: input.maker)
-        try await CallChain.$current.withValue(.own(input.object, for: scope, in: nil)) {
+        try await CallChain.$current.withValue(.own(DynamicObject.callActor(for: input.object), for: scope, in: nil)) {
             try await DynamicObject.resolve(on: context.system, identity: input.object).fired(input.property)
         }
         return DurableVoid()

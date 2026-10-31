@@ -5,7 +5,9 @@ import DurableWorkflows
 import EventSourcing
 import Foundation
 import ScopedEffect
+import TurgaiCalls
 import TurgaiDomain
+import TurgaiSpaces
 import VirtualActors
 
 /// An object that runs Swift a model wrote, its ``Script``, the way an Erlang process runs a
@@ -85,6 +87,11 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     }
 
     /// Its virtual actor's id: its identity, as a made object.
+    /// The actor the made object `identity` is, as calls reach it: the same across restarts.
+    static func callActor(for identity: ObjectIdentity) -> CallActor {
+        .virtual(actorID(for: identity))
+    }
+
     static func actorID(for identity: ObjectIdentity) -> VirtualActorID {
         VirtualActorID(rawValue: actorIDPrefix + identity.rawValue)
     }
@@ -153,7 +160,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         let chain = try caller()
         var starts = try await ScriptInstance.starts(code, as: own)
         // What its code makes as it starts is made from it, so it holds what it makes.
-        try await CallChain.$current.withValue(try chain.entering(objectID)) {
+        try await CallChain.$current.withValue(try chain.entering(objectID.callActor)) {
             for (field, value) in starts where held[field] == nil {
                 starts[field] = try await Self.making(value, on: actorSystem)
             }
@@ -174,7 +181,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         guard reached.insert(own).inserted, case .live(let live) = state else { return reached }
         if live.type == type { try await adopt(type, code: code) }
         // It passes the code on to what it holds itself: only it may change what its code made.
-        let chain = try caller().entering(objectID)
+        let chain = try caller().entering(objectID.callActor)
         for value in try state.live.fields.values {
             for held in ObjectReference.all(in: value) {
                 guard case .actor(let reference, _) = held,
@@ -322,7 +329,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     /// The chain the call it's handling came through: every call is on someone's behalf.
     private func caller() throws -> CallChain {
-        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: objectID) }
+        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: objectID.callActor) }
         return chain
     }
 
@@ -428,7 +435,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         do {
             instance = try await running()
             // Its code handles the message in the chain the message came in, entered.
-            reply = try await CallChain.$current.withValue(try CallChain.entering(objectID)) {
+            reply = try await CallChain.$current.withValue(try CallChain.entering(objectID.callActor)) {
                 try await instance.handle(action, arguments: arguments)
             }
             after = try await instance.fields()
@@ -526,7 +533,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             do {
                 // A task's starter doesn't wait on it: its calls start a chain of their own, on
                 // behalf of whoever made it.
-                let chain = try await ownChain().entering(objectID)
+                let chain = try await ownChain().entering(objectID.callActor)
                 let system = actorSystem
                 let announced = try await CallChain.$current.withValue(chain) {
                     do {
@@ -738,13 +745,13 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     private func makersScope() async throws -> CallScope {
         let maker = try state.live.maker
         return try await Space.resolve(on: actorSystem, id: maker.space).opening(
-            scopeOf: maker.person, for: .object(own))
+            scopeOf: maker.person, for: .actor(Self.callActor(for: own)))
     }
 
     /// The chain of what it does itself, its tasks and the events it follows: on behalf of its
     /// maker, in the conversation it was made in.
     private func ownChain() async throws -> CallChain {
-        CallChain.own(own, for: try await makersScope(), in: try state.live.madeIn)
+        CallChain.own(Self.callActor(for: own), for: try await makersScope(), in: try state.live.madeIn)
     }
 
     /// Delivers the events of the object `field` holds that the code has a method for, named like
@@ -752,7 +759,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// there yet, should be.
     private func follow(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
         // Following is its own doing, as its tasks are: on behalf of whoever made it.
-        guard let chain = try? await ownChain().entering(objectID) else {
+        guard let chain = try? await ownChain().entering(objectID.callActor) else {
             return false
         }
         return await CallChain.$current.withValue(chain) {

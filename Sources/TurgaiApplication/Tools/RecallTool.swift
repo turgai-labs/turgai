@@ -3,6 +3,7 @@ import DistributedCluster
 import Hail
 import TurgaiDomain
 import TurgaiMemory
+import TurgaiPeople
 
 /// Recalls what's remembered about the person the agent talks with: what it learned from earlier
 /// conversations, most important first.

@@ -6,6 +6,7 @@ import TurgaiDomain
 import TurgaiObjects
 
 @testable import TurgaiApplication
+import TurgaiCalls
 
 /// The tools every node has, as object code meets them: Swift written from the tools' own types.
 struct NodeToolsTests {

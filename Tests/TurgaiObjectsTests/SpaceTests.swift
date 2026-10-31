@@ -1,10 +1,12 @@
 import Foundation
 import Testing
+import TurgaiCalls
 import TurgaiDomain
+import TurgaiSpaces
 
 @testable import TurgaiObjects
 
-/// A group: who's in it, and who may run exactly what, which it settles into each scope as the
+/// A space: who's in it, and who may run exactly what, which it settles into each scope as the
 /// scope opens; its admins answer what's asked of them.
 struct SpaceTests {
     private let family = SpaceID()
@@ -97,7 +99,7 @@ struct SpaceTests {
     /// doesn't give it to Bob's turn, nor Bob's turn to the object.
     @Test func onceGoesToExactlyTheOneThatAsked() {
         let id = AccessRequestID(UUID())
-        let clock = Asker.object(ObjectIdentity(rawValue: "clock"))
+        let clock = Asker.actor(DynamicObject.callActor(for: ObjectIdentity(rawValue: "clock")))
         let once =
             annDecidesForBob
             .applying(.asked(AccessRequest(id: id, request: forecast, by: bob, standing: .waiting), by: clock))

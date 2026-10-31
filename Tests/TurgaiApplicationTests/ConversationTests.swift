@@ -4,6 +4,7 @@ import TurgaiDomain
 import TurgaiMemory
 
 @testable import TurgaiApplication
+import TurgaiPeople
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

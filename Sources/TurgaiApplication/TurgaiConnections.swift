@@ -4,6 +4,7 @@ import Hail
 import ServiceLifecycle
 import TurgaiDomain
 import TurgaiMemory
+import TurgaiPeople
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

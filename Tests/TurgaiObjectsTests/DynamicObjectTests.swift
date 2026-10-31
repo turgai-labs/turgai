@@ -11,6 +11,7 @@ import struct AnyLanguageModel.GeneratedContent
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+import TurgaiCalls
 
 @Suite(.serialized, .asAPerson)
 struct DynamicObjectTests {
@@ -753,7 +754,7 @@ struct DynamicObjectTests {
                     await #expect(throws: NotAllowed(.read)) { _ = try await made.maker }
                 }
                 // Read as Drinks: made on Ann's behalf, and Drinks' alone.
-                let drinks = ObjectID.virtual(DynamicObject.actorID(for: drinksID))
+                let drinks = DynamicObject.callActor(for: drinksID)
                 try await CallChain.$current.withValue(try CallChain.start(ann, in: nil).entering(drinks)) {
                     let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
                     let made = try await DynamicObject.resolve(on: node, identity: tea)

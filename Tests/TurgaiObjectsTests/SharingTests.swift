@@ -8,6 +8,7 @@ import struct AnyLanguageModel.GeneratedContent
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+import TurgaiCalls
 
 /// An object is shared through share_object, with the chat the turn came in through, by whoever may
 /// change it: anyone else is refused, as any change is.

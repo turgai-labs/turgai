@@ -11,11 +11,14 @@ import SQLiteEventStore
 import SQLiteNIO
 import ServiceLifecycle
 import TurgaiApplication
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiHail
 import TurgaiMemory
 import TurgaiObjects
+import TurgaiPeople
 import TurgaiPersistence
+import TurgaiSpaces
 import TurgaiTelegram
 import TurgaiWeb
 import VirtualActors

@@ -1,6 +1,7 @@
 import DistributedCluster
 import TurgaiDomain
 import TurgaiObjects
+import TurgaiPeople
 
 public struct TurgaiChannelRuntimeDependencies: Sendable {
     public let secrets: ChannelSecretStore

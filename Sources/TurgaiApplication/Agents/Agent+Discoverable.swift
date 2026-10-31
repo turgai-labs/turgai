@@ -2,6 +2,7 @@ import DiscoverableActors
 import DistributedCluster
 import Foundation
 import Hail
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
 import VirtualActors
@@ -61,7 +62,7 @@ extension Agent: @retroactive DiscoverableActor {
             try _DiscoverySupport.validate(arguments, allowedKeys: ["request"])
             let request = try _DiscoverySupport.argument(String.self, "request", in: arguments, actorSystem: actorSystem)
             // A call that came from its own answer: it can't answer it until it has answered.
-            if CallChain.current?.contains(Self.objectID(of: agentID)) == true {
+            if CallChain.current?.contains(Self.objectID(of: agentID).callActor) == true {
                 throw AgentAskError.askedByItself(agentID.role)
             }
             do {
@@ -133,7 +134,7 @@ extension Agent {
     public static func answering<Value: Sendable>(
         as id: AgentID, _ body: () async throws -> Value
     ) async throws -> Value {
-        try await CallChain.$current.withValue(try CallChain.entering(objectID(of: id))) {
+        try await CallChain.$current.withValue(try CallChain.entering(objectID(of: id).callActor)) {
             try await body()
         }
     }
