@@ -65,10 +65,7 @@ extension TurgaiMainWebApp {
                     owner: owner, conversationID: nil, botID: nil, profiles: dependencies.agentProfiles),
                 let id = context.parameters.get("id")
             else { return publicAPIUnauthorizedResponse() }
-            guard
-                let sharing = try? await JSONDecoder().decode(
-                    ObjectSharingRequest.self, from: request, context: context)
-            else { return Response(status: .badRequest) }
+            let sharing = try await body(ObjectSharingRequest.self, of: request, context: context)
             let level: AccessLevel? =
                 switch sharing.everyone {
                 case .read: .read
@@ -337,20 +334,7 @@ extension TurgaiMainWebApp {
 
 
         conversations.post { request, context in
-            let input: TurgaiModels.CreateConversationRequest
-            do {
-                input = try await JSONDecoder().decode(
-                    TurgaiModels.CreateConversationRequest.self,
-                    from: request,
-                    context: context
-                )
-            } catch {
-                return publicAPIErrorResponse(
-                    status: .badRequest,
-                    code: "invalid_request",
-                    message: "The conversation request is invalid."
-                )
-            }
+            let input = try await body(TurgaiModels.CreateConversationRequest.self, of: request, context: context)
 
             let profile: TurgaiAgentProfile?
             if let botID = input.botID {
@@ -420,10 +404,8 @@ extension TurgaiMainWebApp {
 
         links.post { request, context in
             guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
-            guard
-                let input = try? await JSONDecoder().decode(EnterLinkCodeRequest.self, from: request, context: context),
-                let code = LinkCode(input.code)
-            else {
+            let input = try await body(EnterLinkCodeRequest.self, of: request, context: context)
+            guard let code = LinkCode(input.code) else {
                 return publicAPIErrorResponse(
                     status: .badRequest, code: "not_a_code", message: PersonLinkingError.codeDoesNotWork.description)
             }
@@ -479,9 +461,8 @@ extension TurgaiMainWebApp {
 
         spaces.post { request, context in
             try await answering(request) { person, spaces in
-                guard let input = try? await JSONDecoder().decode(MakeSpaceRequest.self, from: request, context: context),
-                    let name = SpaceName(input.name)
-                else { return nameRequired() }
+                let input = try await body(MakeSpaceRequest.self, of: request, context: context)
+                guard let name = SpaceName(input.name) else { return nameRequired() }
                 return try publicAPIResponse(
                     SpaceSummary(try await spaces.make(named: name, by: person)), status: .created)
             }
@@ -490,9 +471,8 @@ extension TurgaiMainWebApp {
         spaces.patch(":space") { request, context in
             try await answering(request) { person, spaces in
                 guard let space = spaceID(in: context) else { return noSuchSpace() }
-                guard let input = try? await JSONDecoder().decode(RenameSpaceRequest.self, from: request, context: context),
-                    let name = SpaceName(input.name)
-                else { return nameRequired() }
+                let input = try await body(RenameSpaceRequest.self, of: request, context: context)
+                guard let name = SpaceName(input.name) else { return nameRequired() }
                 return try publicAPIResponse(SpaceSummary(try await spaces.rename(space, to: name, by: person)))
             }
         }
@@ -508,9 +488,9 @@ extension TurgaiMainWebApp {
         spaces.post(":space/invites") { request, context in
             try await answering(request) { person, spaces in
                 guard let space = spaceID(in: context) else { return noSuchSpace() }
-                let input = try? await JSONDecoder().decode(MakeInviteRequest.self, from: request, context: context)
+                let input = try await body(MakeInviteRequest.self, of: request, context: context)
                 let lifetime: SpaceInviteLifetime
-                switch input?.validForDays {
+                switch input.validForDays {
                 case nil: lifetime = .untilUsed
                 case let days? where days >= 1:
                     lifetime = .until(Date().addingTimeInterval(TimeInterval(days) * 86_400))
@@ -550,9 +530,8 @@ extension TurgaiMainWebApp {
 
         spaces.post(":space/join") { request, context in
             try await answering(request) { person, spaces in
-                guard let space = spaceID(in: context),
-                    let input = try? await JSONDecoder().decode(JoinSpaceRequest.self, from: request, context: context)
-                else { return spaceRefused(.inviteDoesNotWork) }
+                guard let space = spaceID(in: context) else { return noSuchSpace() }
+                let input = try await body(JoinSpaceRequest.self, of: request, context: context)
                 return try publicAPIResponse(
                     SpaceSummary(try await spaces.join(space, with: SpaceInviteToken(input.token), as: person)))
             }
@@ -605,20 +584,7 @@ extension TurgaiMainWebApp {
                     message: "The conversation does not exist."
                 )
             }
-            let input: TurgaiModels.SendMessageRequest
-            do {
-                input = try await JSONDecoder().decode(
-                    TurgaiModels.SendMessageRequest.self,
-                    from: request,
-                    context: context
-                )
-            } catch {
-                return publicAPIErrorResponse(
-                    status: .badRequest,
-                    code: "invalid_request",
-                    message: "The message request is invalid."
-                )
-            }
+            let input = try await body(TurgaiModels.SendMessageRequest.self, of: request, context: context)
             let text = input.text.trimmed()
             guard !text.isEmpty else {
                 return publicAPIErrorResponse(
@@ -919,6 +885,47 @@ private func publicAPIErrorResponse(
         TurgaiModels.ChatError(code: code, message: message),
         status: status
     )) ?? Response(status: status)
+}
+
+/// A request's body the API can't read: answered with 400, and what's wrong with it.
+private struct UnreadableBody: HTTPResponseError {
+    let reason: String
+
+    var status: HTTPResponse.Status { .badRequest }
+
+    init(_ error: any Error) {
+        func path(_ context: DecodingError.Context) -> String {
+            context.codingPath.map(\.stringValue).joined(separator: ".")
+        }
+        reason =
+            switch error {
+            case DecodingError.keyNotFound(let key, let context):
+                "\((context.codingPath + [key]).map(\.stringValue).joined(separator: ".")) is missing."
+            case DecodingError.valueNotFound(_, let context) where !context.codingPath.isEmpty:
+                "\(path(context)) is missing."
+            case DecodingError.typeMismatch(_, let context) where !context.codingPath.isEmpty:
+                "\(path(context)) isn't the kind of value it takes."
+            case DecodingError.dataCorrupted(let context) where !context.codingPath.isEmpty:
+                "\(path(context)) can't be read."
+            default:
+                "The body isn't the JSON this takes."
+            }
+    }
+
+    func response(from request: Request, context: some RequestContext) throws -> Response {
+        publicAPIErrorResponse(status: status, code: "invalid_request", message: reason)
+    }
+}
+
+/// `request`'s body, as `Body`: when it isn't one, the API answers with 400 and why.
+private func body<Body: Decodable>(
+    _: Body.Type, of request: Request, context: some RequestContext
+) async throws -> Body {
+    do {
+        return try await JSONDecoder().decode(Body.self, from: request, context: context)
+    } catch {
+        throw UnreadableBody(error)
+    }
 }
 
 private func publicConversationStatus(
