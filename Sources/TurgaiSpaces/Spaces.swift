@@ -1,6 +1,5 @@
 import DistributedCluster
 import TurgaiDomain
-import TurgaiPeople
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -25,15 +24,10 @@ public struct Spaces: Sendable {
         return try await listing(of: space, for: person)
     }
 
-    /// The spaces `person` is in, the first joined first.
+    /// The named spaces `person` is in, the first joined first, as the space directory has them.
     public func list(for person: UserID) async throws -> [SpaceListing] {
-        var listings: [SpaceListing] = []
-        for id in try await User.resolve(on: actorSystem, userID: person).spaces() {
-            if let listing = try await Space.resolve(on: actorSystem, id: id).listing(for: person) {
-                listings.append(listing)
-            }
-        }
-        return listings
+        try await actorSystem.singleton.proxy(SpaceDirectory.self, name: SpaceDirectory.singletonName)
+            .spaces(of: person)
     }
 
     /// The space `id` called `name` from now on, as its admin `person` asks.

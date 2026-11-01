@@ -137,7 +137,6 @@ let package = Package(
             dependencies: [
                 "TurgaiCalls",
                 "TurgaiDomain",
-                "TurgaiPeople",
                 "TurgaiPersistence",
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "SQLiteNIO", package: "sqlite-nio"),

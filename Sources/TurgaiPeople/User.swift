@@ -19,25 +19,17 @@ import VirtualActors
 public struct UserRecord: Codable, Sendable, Equatable {
     public let userID: UserID
     public private(set) var memory: Memory
-    /// The spaces they're in, the first joined first, as each space tells them.
-    public private(set) var spaces: [SpaceID]
 
-    /// What a new person has: nothing remembered, and remembering on, unless they're a guest; and
-    /// no spaces.
+    /// What a new person has: nothing remembered, and remembering on, unless they're a guest.
     public init(userID: UserID) {
         self.userID = userID
         self.memory = Memory(remembering: userID.isGuest ? .off : .on)
-        self.spaces = []
     }
 
     public mutating func apply(_ event: UserEvent) {
         switch event {
         case .memory(let event):
             memory.apply(event)
-        case .joinedSpace(let space):
-            if !spaces.contains(space) { spaces.append(space) }
-        case .leftSpace(let space):
-            spaces.removeAll { $0 == space }
         }
     }
 }
@@ -59,13 +51,9 @@ public enum ExtractionOutcome: Codable, Sendable, Equatable {
     case alreadyHandled
 }
 
-/// Events in one person's journal: what they remember, and the spaces they're in.
+/// Events in one person's journal: what they remember.
 public enum UserEvent: Codable, Sendable, Equatable {
     case memory(MemoryEvent)
-    /// They're in the space now.
-    case joinedSpace(SpaceID)
-    /// They left the space.
-    case leftSpace(SpaceID)
 }
 
 /// A durable user aggregate. The actor is deliberately provider-neutral: a
@@ -230,23 +218,6 @@ public distributed actor User {
     public distributed func setRemembering(_ remembering: Remembering) async throws {
         guard state.memory.remembering != remembering else { return }
         try await emit(event: .memory(.rememberingChanged(remembering)))
-    }
-
-    /// The spaces they're in, the first joined first.
-    public distributed func spaces() -> [SpaceID] {
-        state.spaces
-    }
-
-    /// The space told them they're in it now.
-    public distributed func joined(_ space: SpaceID) async throws {
-        guard !state.spaces.contains(space) else { return }
-        try await emit(event: .joinedSpace(space))
-    }
-
-    /// The space told them they've left it.
-    public distributed func left(_ space: SpaceID) async throws {
-        guard state.spaces.contains(space) else { return }
-        try await emit(event: .leftSpace(space))
     }
 
     public distributed func memoryGeneration() -> MemoryGeneration {

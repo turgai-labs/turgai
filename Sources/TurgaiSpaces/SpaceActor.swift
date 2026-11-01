@@ -2,7 +2,6 @@ import Distributed
 import DistributedCluster
 import EventSourcing
 import TurgaiCalls
-import TurgaiPeople
 import TurgaiDomain
 import VirtualActors
 
@@ -32,6 +31,9 @@ public distributed actor Space {
         retention: .keepLast(2)
     )
 
+    /// Every space's events, which the space directory is kept from.
+    public let tagging: Tagging<SpaceEvent> = .always(.space)
+
     public init(actorSystem: ClusterSystem, dependency id: SpaceID) async throws {
         self.actorSystem = actorSystem
         self.state = SpaceState(id: id)
@@ -44,6 +46,14 @@ public distributed actor Space {
 
     public static func persistenceID(for id: SpaceID) -> String {
         "turgai-space-\(id.rawValue.uuidString)"
+    }
+
+    /// The space whose journal is `persistenceID`: the inverse of `persistenceID(for:)`.
+    public static func space(persistedAs persistenceID: PersistenceID) throws(SpaceDirectoryError) -> SpaceID {
+        guard persistenceID.hasPrefix("turgai-space-"),
+            let id = UUID(uuidString: String(persistenceID.dropFirst("turgai-space-".count)))
+        else { throw .notASpace(persistenceID) }
+        return SpaceID(rawValue: id)
     }
 
     /// The space `id`, wherever and whenever it runs.
@@ -109,10 +119,9 @@ public distributed actor Space {
         }
     }
 
-    /// It made, called `name`, with `person` its first admin, who's told they're in it.
+    /// It made, called `name`, with `person` its first admin.
     public distributed func make(named name: SpaceName, by person: UserID) async throws {
         try await changing { for event in try state.making(named: name, by: person) { try await emit(event: event) } }
-        try await User.resolve(on: actorSystem, userID: person).joined(state.id)
     }
 
     /// It called `name` from now on, as its admin `person` asks.
@@ -130,18 +139,16 @@ public distributed actor Space {
         try await changing { for event in try state.takingBack(id, by: person) { try await emit(event: event) } }
     }
 
-    /// `person` joining with the invite whose token hashes to `hash`: they're told they're in it.
+    /// `person` joining with the invite whose token hashes to `hash`.
     public distributed func join(with hash: SpaceInviteHash, as person: UserID) async throws {
         try await changing {
             for event in try state.joining(with: hash, as: person, at: Date()) { try await emit(event: event) }
         }
-        try await User.resolve(on: actorSystem, userID: person).joined(state.id)
     }
 
-    /// `person` leaving it: they're told they're not in it any more.
+    /// `person` leaving it.
     public distributed func leave(_ person: UserID) async throws {
         try await changing { for event in try state.leaving(person) { try await emit(event: event) } }
-        try await User.resolve(on: actorSystem, userID: person).left(state.id)
     }
 
     /// It as `person`'s list shows it: none when it has no name, or they're not in it.

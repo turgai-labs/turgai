@@ -1107,18 +1107,40 @@ private func withDynamicNode<Result>(
 
 /// Events kept in memory, standing in for the file journal.
 actor MemoryEventStore: EventStore {
-    private var events: [String: [Data]] = [:]
+    /// An event as kept: its offset is its place in `journal`, counting from 1.
+    private struct Kept {
+        let id: String
+        let sequenceNumber: Int64
+        let tags: Set<EventTag>
+        let data: Data
+    }
 
-    func persistEvent<Event: Codable & Sendable>(_ event: Event, id: String, sequenceNumber: Int64) throws {
-        events[id, default: []].append(try JSONEncoder().encode(event))
+    private var journal: [Kept] = []
+
+    func persistEvent<Event: Codable & Sendable>(
+        _ event: Event, id: String, sequenceNumber: Int64, tags: Set<EventTag>
+    ) throws {
+        journal.append(Kept(id: id, sequenceNumber: sequenceNumber, tags: tags, data: try JSONEncoder().encode(event)))
     }
 
     func eventStream<Event: Codable & Sendable>(id: String, fromSequenceNumber: Int64) throws -> EventStream<Event> {
-        let stored = Array((events[id] ?? []).enumerated().dropFirst(Int(fromSequenceNumber - 1)))
-        let envelopes = try stored.map { offset, data in
-            EventEnvelope(
-                persistenceID: id, sequenceNumber: Int64(offset + 1),
-                event: try JSONDecoder().decode(Event.self, from: data))
+        try envelopes { kept, _ in kept.id == id && kept.sequenceNumber >= fromSequenceNumber }
+    }
+
+    func currentEventsByTag<Event: Codable & Sendable>(_ tag: EventTag, after offset: Offset) throws
+        -> EventStream<Event>
+    {
+        try envelopes { kept, keptAt in kept.tags.contains(tag) && keptAt > offset }
+    }
+
+    /// The events kept so far that `included` takes, each decoded as `Event`.
+    private func envelopes<Event: Codable & Sendable>(_ included: (Kept, Offset) -> Bool) throws -> EventStream<Event> {
+        let envelopes = try journal.enumerated().compactMap { index, kept -> EventEnvelope<Event>? in
+            let offset = Offset(Int64(index + 1))
+            guard included(kept, offset) else { return nil }
+            return EventEnvelope(
+                persistenceID: kept.id, sequenceNumber: kept.sequenceNumber, offset: offset,
+                event: try JSONDecoder().decode(Event.self, from: kept.data))
         }
         return AsyncThrowingStream { continuation in
             for envelope in envelopes { continuation.yield(envelope) }

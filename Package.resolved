@@ -1,5 +1,5 @@
 {
-  "originHash" : "e7f35f2e9e9bc63b3d89e4a0cbf8e10c7d21c48b3e9eaacdae36d7b5ee538480",
+  "originHash" : "b4666eed5f164beff5f8bf7aa74c66ecdebb0fd7f673f0705fee7ebdc299aac1",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -34,7 +34,7 @@
       "location" : "https://github.com/akbashev/cluster-event-sourcing.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "68d432e3d251b381266d9b8bce2d867a1d4fb90c"
+        "revision" : "a6845cfa9ea36bf4f5f21c7c72e466c466e7f388"
       }
     },
     {
@@ -178,7 +178,7 @@
       "location" : "https://github.com/akbashev/postgres-event-store.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "8b0933858e2e64760984c2dfe040d9905469de35"
+        "revision" : "4ae0b95326dce77238c01ad610b3f873274463b1"
       }
     },
     {
@@ -196,7 +196,7 @@
       "location" : "https://github.com/turgai-labs/sqlite-event-store.git",
       "state" : {
         "branch" : "main",
-        "revision" : "738f99747017e0f2670ac561576aa1a961e48011"
+        "revision" : "42b5cc90930aaa8bde755aff6d46b4eec035ff69"
       }
     },
     {

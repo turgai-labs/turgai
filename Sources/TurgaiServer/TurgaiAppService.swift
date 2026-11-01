@@ -71,6 +71,8 @@ struct TurgaiAppService: Service, Sendable {
     private let linking: PersonLinking
     /// Turgai's own space, which the dashboard is used in.
     private let turgaiSpace: SpaceID
+    /// Where the space directory is kept: the spaces each person is in.
+    private let spaceDirectory: SpaceDirectoryStorage
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let objectCatalogSource: TurgaiObjectCatalogSource
     private let webChatBridge: TurgaiWebChatBridge
@@ -91,6 +93,7 @@ struct TurgaiAppService: Service, Sendable {
         channels: ChannelStorage,
         linking: PersonLinking,
         turgaiSpace: SpaceID,
+        spaceDirectory: SpaceDirectoryStorage,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
         webChatBridge: TurgaiWebChatBridge,
@@ -109,6 +112,7 @@ struct TurgaiAppService: Service, Sendable {
         self.channels = channels
         self.linking = linking
         self.turgaiSpace = turgaiSpace
+        self.spaceDirectory = spaceDirectory
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
         self.webChatBridge = webChatBridge
@@ -241,6 +245,11 @@ struct TurgaiAppService: Service, Sendable {
             }
 
             try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
+            // The space directory, one in the cluster, run here, beside the journal it reads.
+            let spaceDirectory = spaceDirectory
+            _ = try await system.singleton.host(SpaceDirectory.self, name: SpaceDirectory.singletonName) {
+                SpaceDirectory(actorSystem: $0, storage: spaceDirectory, journal: eventStore)
+            }
             // The shared production dependency facade for tool effects. The
             // generic parameter is only a carrier; the stored virtual-actor
             // actions serve every effect type.
