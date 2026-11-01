@@ -426,6 +426,27 @@ struct TelegramTests {
             ) == nil)
     }
 
+    /// `/link` does nothing while linking is set aside: no code is made in a chat, and none
+    /// entered there links anyone.
+    @Test
+    func botIgnoresLink() {
+        func event(_ text: String) -> TelegramInboundEvent? {
+            TelegramBot.event(
+                for: TelegramUpdate(
+                    updateID: 1,
+                    message: TelegramMessage(
+                        messageID: 1, from: TelegramUser(id: 7, firstName: "Ann"),
+                        chat: TelegramChat(id: 42, type: "group"), date: 100, text: text)),
+                conversationChannel: ChannelID("telegram"),
+                messageID: MessageID(),
+                turnID: TurnID()
+            )
+        }
+
+        #expect(event("/link") == nil)
+        #expect(event("/link K7Q-4P2") == nil)
+    }
+
     @Test
     func botKeepsPhotoFileIDOpaqueWithoutDownloadingIt() async throws {
         let update = TelegramUpdate(

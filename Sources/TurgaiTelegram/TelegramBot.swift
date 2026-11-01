@@ -125,8 +125,8 @@ public actor TelegramConnection {
                         Send me a message to get started. Use /reset to clear this conversation, \
                         /memory to inspect saved memory, /context for runtime diagnostics, /diagnose to \
                         exercise every tool and report their health, /reminders to list one-shot reminders, \
-                        /tasks to list recurring tasks, /objects to see your objects, /link to link this \
-                        Telegram with your Turgai account, or /forget to clear saved memory.
+                        /tasks to list recurring tasks, /objects to see your objects, or /forget to clear \
+                        saved memory.
                         """
                 )
             } catch {
@@ -443,14 +443,8 @@ public actor TelegramBot {
                 )
             )
         case .link:
-            return .command(
-                .link(
-                    LinkAsk(argument(in: text)),
-                    conversationID: conversationID,
-                    participantID: participantID,
-                    userID: userID
-                )
-            )
+            // Linking is set aside for now: a code said in a group links whoever enters it.
+            return nil
         case .pauseTask:
             return .command(
                 .pauseTask(
