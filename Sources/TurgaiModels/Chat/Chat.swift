@@ -104,10 +104,22 @@ public struct Bot: Codable, Equatable, Sendable, Identifiable {
 public struct Conversation: Codable, Equatable, Sendable, Identifiable {
     public let id: ConversationID
     public let botID: BotID
+    /// Its title, or else the first line of the first thing said in it: none until either.
+    public let title: String?
 
-    public init(id: ConversationID, botID: BotID) {
+    public init(id: ConversationID, botID: BotID, title: String? = nil) {
         self.id = id
         self.botID = botID
+        self.title = title
+    }
+}
+
+/// What to call a conversation.
+public struct TitleConversationRequest: Codable, Equatable, Sendable {
+    public let title: String
+
+    public init(title: String) {
+        self.title = title
     }
 }
 

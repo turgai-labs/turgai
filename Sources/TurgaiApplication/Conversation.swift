@@ -93,7 +93,8 @@ private enum PublishEvent: Sendable {
             self = .userMessage(pending)
         case .inbox(.turnStarted(let pending)):
             self = .turnStarted(pending)
-        case .started, .joined, .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyQueued,
+        case .started, .joined, .left, .titled, .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered,
+            .replyQueued,
             .replyDelivered, .reset, .noted, .unnoted:
             return nil
         }
@@ -320,6 +321,17 @@ public distributed actor Conversation {
         retention: .keepLast(2)
     )
 
+    /// What the conversation directory is kept from: how it started, who's in it, what it's called,
+    /// and each time something's said in it.
+    public let tagging = Tagging<ConversationEvent> { event in
+        switch event {
+        case .started, .joined, .left, .titled, .inbox(.queued), .inbox(.turnStarted), .replyQueued: [.conversation]
+        case .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyDelivered, .reset, .noted,
+            .unnoted:
+            []
+        }
+    }
+
     private let conversationID: ConversationID
     private let agentDirectoryID: AgentDirectoryID
     /// Its agents while it's active: one for each role a turn asked for.
@@ -441,6 +453,17 @@ public distributed actor Conversation {
         let space = try await Space.resolve(on: actorSystem, id: id)
         try await space.setAdmins(admins)
         try await space.admit(person)
+    }
+
+    /// `person` leaving it: it's off their list, and they no longer read it. Refused unless
+    /// they're one of its people.
+    public distributed func leave(_ person: TurgaiDomain.UserID) async throws {
+        try await changing { for event in try state.leaving(person) { try await emit(event: event) } }
+    }
+
+    /// It called `title`, as `person`, one of its people, titles it.
+    public distributed func title(_ title: ConversationTitle, by person: TurgaiDomain.UserID) async throws {
+        try await changing { for event in try state.titling(title, by: person) { try await emit(event: event) } }
     }
 
     /// `person` one of its people, as its platform says someone writing in its chat is: in its

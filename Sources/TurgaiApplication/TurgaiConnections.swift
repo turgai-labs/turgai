@@ -217,7 +217,6 @@ public actor TurgaiConnections: Service {
 
     private let actorSystem: ClusterSystem
     private let agentProfiles: TurgaiAgentProfileStore
-    private let conversations: ConversationStorage
     private let linking: PersonLinking
     private let connectionStream: AsyncStream<Connection>
     private let connectionContinuation: AsyncStream<Connection>.Continuation
@@ -226,12 +225,10 @@ public actor TurgaiConnections: Service {
     public init(
         actorSystem: ClusterSystem,
         agentProfiles: TurgaiAgentProfileStore,
-        conversations: ConversationStorage,
         linking: PersonLinking
     ) {
         self.actorSystem = actorSystem
         self.agentProfiles = agentProfiles
-        self.conversations = conversations
         self.linking = linking
         (self.connectionStream, self.connectionContinuation) =
             AsyncStream<Connection>.makeStream()
@@ -274,7 +271,6 @@ public actor TurgaiConnections: Service {
             actorSystem: actorSystem,
             inbound: inbound,
             agentProfiles: agentProfiles,
-            conversations: conversations,
             linking: linking,
             source: source
         )
@@ -395,8 +391,6 @@ actor LiveSession {
     private let inbound: AsyncChannel<ConversationInputDelivery>
     private let outputContinuation: OutputStream.Continuation
     private let agentProfiles: TurgaiAgentProfileStore
-    /// The conversations there are, which a conversation joins with its first message.
-    private let conversationStorage: ConversationStorage
     /// Who's the same human as whom, which `/link` says.
     private let linking: PersonLinking
     private let source: LiveSessionSource
@@ -410,7 +404,6 @@ actor LiveSession {
         actorSystem: ClusterSystem,
         inbound: AsyncChannel<ConversationInputDelivery>,
         agentProfiles: TurgaiAgentProfileStore,
-        conversations: ConversationStorage,
         linking: PersonLinking,
         source: LiveSessionSource
     ) {
@@ -418,7 +411,6 @@ actor LiveSession {
         self.actorSystem = actorSystem
         self.inbound = inbound
         self.agentProfiles = agentProfiles
-        self.conversationStorage = conversations
         self.linking = linking
         self.source = source
         let (output, outputContinuation) = OutputStream.makeStream()
@@ -496,8 +488,6 @@ actor LiveSession {
                     conversationID: message.conversationID
                 )
                 try await self.admitIfTheChatSays(message.userID, to: conversation)
-                // A conversation is there from its first message.
-                try await conversationStorage.add(message.conversationID)
                 let memoryExtraction: MemoryExtractionConfiguration? =
                     if let agent = try await conversation.started()?.agent {
                         try await agentProfiles.memoryExtractionConfiguration(forProfileID: agent)

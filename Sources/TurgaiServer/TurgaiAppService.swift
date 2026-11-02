@@ -65,7 +65,6 @@ struct TurgaiAppService: Service, Sendable {
     private let agentCredentials: AgentCredentialStore
     private let requestLimits: RequestLimitStore
     private let channelSecrets: ChannelSecretStore
-    private let conversations: ConversationStorage
     private let channels: ChannelStorage
     /// Who's the same human as whom.
     private let linking: PersonLinking
@@ -75,6 +74,8 @@ struct TurgaiAppService: Service, Sendable {
     private let turgaiSpace: SpaceID
     /// Where the space directory is kept: the spaces each person is in.
     private let spaceDirectory: SpaceDirectoryStorage
+    /// Where the conversation directory is kept: the conversations each person is in.
+    private let conversationDirectory: ConversationDirectoryStorage
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let objectCatalogSource: TurgaiObjectCatalogSource
     private let webChatBridge: TurgaiWebChatBridge
@@ -91,12 +92,12 @@ struct TurgaiAppService: Service, Sendable {
         agentCredentials: AgentCredentialStore,
         requestLimits: RequestLimitStore,
         channelSecrets: ChannelSecretStore,
-        conversations: ConversationStorage,
         channels: ChannelStorage,
         linking: PersonLinking,
         auth: TurgaiAuth,
         turgaiSpace: SpaceID,
         spaceDirectory: SpaceDirectoryStorage,
+        conversationDirectory: ConversationDirectoryStorage,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
         webChatBridge: TurgaiWebChatBridge,
@@ -111,12 +112,12 @@ struct TurgaiAppService: Service, Sendable {
         self.agentCredentials = agentCredentials
         self.requestLimits = requestLimits
         self.channelSecrets = channelSecrets
-        self.conversations = conversations
         self.channels = channels
         self.linking = linking
         self.auth = auth
         self.turgaiSpace = turgaiSpace
         self.spaceDirectory = spaceDirectory
+        self.conversationDirectory = conversationDirectory
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
         self.webChatBridge = webChatBridge
@@ -220,7 +221,6 @@ struct TurgaiAppService: Service, Sendable {
                 secrets: channelSecrets,
                 telegramFiles: telegramFiles,
                 endpoints: endpointFactory,
-                conversations: conversations,
                 linking: linking
             )
 
@@ -249,10 +249,15 @@ struct TurgaiAppService: Service, Sendable {
             }
 
             try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
-            // The space directory, one in the cluster, run here, beside the journal it reads.
+            // The space and conversation directories, one of each in the cluster, run here, beside
+            // the journal they read.
             let spaceDirectory = spaceDirectory
             _ = try await system.singleton.host(SpaceDirectory.self, name: SpaceDirectory.singletonName) {
                 SpaceDirectory(actorSystem: $0, storage: spaceDirectory, journal: eventStore)
+            }
+            let conversationDirectory = conversationDirectory
+            _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
+                ConversationDirectory(actorSystem: $0, storage: conversationDirectory, journal: eventStore)
             }
             // The shared production dependency facade for tool effects. The
             // generic parameter is only a carrier; the stored virtual-actor
@@ -327,7 +332,6 @@ struct TurgaiAppService: Service, Sendable {
                     await webChatBridge.install(
                         connections,
                         objectCatalog: channelRuntime.objectCatalog,
-                        conversations: conversations,
                         channels: channels,
                         actorSystem: system,
                         turgaiSpace: turgaiSpace

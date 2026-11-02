@@ -242,10 +242,6 @@ public distributed actor SpaceDirectory: ClusterSingleton {
         try await storage.spaces(person)
     }
 
-    /// How long it waits to follow the spaces' events again after following them failed, as Akka
-    /// Projections restarts a failed projection.
-    static let restartAfter: Duration = .seconds(5)
-
     /// Follows the spaces' events while it's the cluster's directory: from where it read up to,
     /// and again from there whenever following them fails.
     public func activateSingleton() async {
@@ -259,17 +255,10 @@ public distributed actor SpaceDirectory: ClusterSingleton {
         let refreshInterval = refreshInterval
         let log = actorSystem.log
         following = Task {
-            while !Task.isCancelled {
-                do {
-                    try await projection.run(on: journal, refreshInterval: refreshInterval)
-                } catch is CancellationError {
-                    return
-                } catch {
-                    log.error(
-                        "The space directory failed to follow the spaces' events; it starts again shortly",
-                        metadata: ["error": .string(String(describing: error))])
-                    try? await Task.sleep(for: Self.restartAfter)
-                }
+            await projection.runRestarting(on: journal, refreshInterval: refreshInterval) { error in
+                log.error(
+                    "The space directory failed to follow the spaces' events; it starts again shortly",
+                    metadata: ["error": .string(String(describing: error))])
             }
         }
     }

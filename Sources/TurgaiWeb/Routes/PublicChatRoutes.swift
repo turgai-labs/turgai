@@ -288,10 +288,23 @@ extension TurgaiMainWebApp {
         }
     }
 
-    /// The API's conversations: starting one, and reading one of the person's own.
+    /// The API's conversations: the person's own, starting one, reading one, titling it, and
+    /// leaving it.
     private func registerConversations(
         on conversations: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
     ) {
+        // The person's conversations in Turgai's apps, the one something was last said in first.
+        conversations.get { request, _ in
+            guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
+            let listed = try await dependencies.webChatBridge.conversations(of: owner.person)
+            return try publicAPIResponse(
+                listed.filter { $0.id.channel == turgaiChannel }.map { listing in
+                    TurgaiModels.Conversation(
+                        id: .init(rawValue: listing.id.externalAddress.rawValue), botID: .init(rawValue: listing.agent),
+                        title: listing.title)
+                })
+        }
+
         // A new conversation, in a space the person is in, or Turgai's own, with them its first.
         conversations.post { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
@@ -338,6 +351,33 @@ extension TurgaiMainWebApp {
                     context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
             else { return conversationNotFound() }
             return try publicAPIResponse(conversation.info)
+        }
+
+        conversations.patch(":id") { request, context in
+            guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
+            guard
+                let conversation = try await apiConversation(
+                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
+            else { return conversationNotFound() }
+            let input = try await body(TurgaiModels.TitleConversationRequest.self, of: request, context: context)
+            guard let title = ConversationTitle(input.title) else {
+                return publicAPIErrorResponse(
+                    status: .badRequest, code: "invalid_title",
+                    message: "A conversation's title is some words, at most \(ConversationTitle.maximumLength) letters.")
+            }
+            try await dependencies.webChatBridge.title(conversation.domainID, title, by: owner.person)
+            return Response(status: .noContent)
+        }
+
+        // The person leaving it: it's off their list, and they no longer read it.
+        conversations.delete(":id/me") { request, context in
+            guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
+            guard
+                let conversation = try await apiConversation(
+                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
+            else { return conversationNotFound() }
+            try await dependencies.webChatBridge.leave(conversation.domainID, as: owner.person)
+            return Response(status: .noContent)
         }
     }
 

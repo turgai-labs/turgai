@@ -22,7 +22,6 @@ public actor TurgaiWebChatBridge {
     private struct Runtime {
         let connections: TurgaiConnections
         let objectCatalog: ObjectCatalog
-        let conversations: ConversationStorage
         let channels: ChannelStorage
         let actorSystem: ClusterSystem
         /// Turgai's own space.
@@ -36,7 +35,6 @@ public actor TurgaiWebChatBridge {
     public func install(
         _ connections: TurgaiConnections,
         objectCatalog: ObjectCatalog,
-        conversations: ConversationStorage,
         channels: ChannelStorage,
         actorSystem: ClusterSystem,
         turgaiSpace: SpaceID
@@ -44,7 +42,6 @@ public actor TurgaiWebChatBridge {
         self.runtime = Runtime(
             connections: connections,
             objectCatalog: objectCatalog,
-            conversations: conversations,
             channels: channels,
             actorSystem: actorSystem,
             turgaiSpace: turgaiSpace
@@ -98,7 +95,36 @@ public actor TurgaiWebChatBridge {
         }
         try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID)
             .start(in: space ?? runtime.turgaiSpace, agent: agent, by: person)
-        try await runtime.conversations.add(conversationID)
+    }
+
+    /// The conversations `person` is in, the one something was last said in first, as the
+    /// conversation directory has them: a moment behind the conversations.
+    public func conversations(of person: TurgaiDomain.UserID) async throws -> [ConversationListing] {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return try await runtime.actorSystem.singleton
+            .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+            .conversations(of: person)
+    }
+
+    /// `person` leaving the conversation `conversationID`: refused unless they're in it.
+    public func leave(_ conversationID: ConversationID, as person: TurgaiDomain.UserID) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID).leave(person)
+    }
+
+    /// The conversation `conversationID` called `title`, as `person` titles it: refused unless
+    /// they're in it.
+    public func title(
+        _ conversationID: ConversationID, _ title: ConversationTitle, by person: TurgaiDomain.UserID
+    ) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID).title(title, by: person)
     }
 
     /// How the conversation `conversationID` started, as `person` reads it: refused unless they're

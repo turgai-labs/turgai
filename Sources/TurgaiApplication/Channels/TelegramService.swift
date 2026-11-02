@@ -382,12 +382,13 @@ public actor TelegramService: Service {
             let channel = try await TelegramChannel.resolve(on: actorSystem, channelID: channelID)
             guard case .active(_, let state) = try await channel.currentState() else { return }
             // Its chats that were talked in before, so what they do by themselves reaches them.
-            let persisted = try await dependencies.conversations.all().filter { conversationID in
-                guard conversationID.channel == conversationChannel,
-                    let chatID = Int64(conversationID.externalAddress.rawValue)
-                else { return false }
-                return allowed.isEmpty || allowed.contains(chatID)
-            }
+            let persisted = try await actorSystem.singleton
+                .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+                .conversations(on: conversationChannel)
+                .filter { conversationID in
+                    guard let chatID = Int64(conversationID.externalAddress.rawValue) else { return false }
+                    return allowed.isEmpty || allowed.contains(chatID)
+                }
             let running = ChannelBot(
                 client: try TelegramAPIClient.live(token: bot.token),
                 allowedChatIDs: Set(allowed),

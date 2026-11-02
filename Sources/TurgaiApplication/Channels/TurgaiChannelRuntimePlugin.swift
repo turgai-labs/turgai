@@ -11,23 +11,19 @@ public struct TurgaiChannelRuntimeDependencies: Sendable {
     public let objectCatalog: ObjectCatalog
     /// The node's models, as agents' profiles name them.
     public let endpoints: AgentModelEndpointFactory
-    /// The conversations there are.
-    public let conversations: ConversationStorage
 
     fileprivate init(
         secrets: ChannelSecretStore,
         connections: TurgaiConnections,
         telegramFiles: TelegramFiles,
         objectCatalog: ObjectCatalog,
-        endpoints: AgentModelEndpointFactory,
-        conversations: ConversationStorage
+        endpoints: AgentModelEndpointFactory
     ) {
         self.secrets = secrets
         self.connections = connections
         self.telegramFiles = telegramFiles
         self.objectCatalog = objectCatalog
         self.endpoints = endpoints
-        self.conversations = conversations
     }
 }
 
@@ -53,7 +49,6 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
     private let secrets: ChannelSecretStore
     private let telegramFiles: TelegramFiles
     private let endpoints: AgentModelEndpointFactory
-    private let conversations: ConversationStorage
     private let linking: PersonLinking
     private var lifecycle: Lifecycle = .awaitingStart
 
@@ -62,14 +57,12 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
         secrets: ChannelSecretStore,
         telegramFiles: TelegramFiles,
         endpoints: AgentModelEndpointFactory,
-        conversations: ConversationStorage,
         linking: PersonLinking
     ) {
         self.agentProfiles = agentProfiles
         self.secrets = secrets
         self.telegramFiles = telegramFiles
         self.endpoints = endpoints
-        self.conversations = conversations
         self.linking = linking
     }
 
@@ -80,13 +73,11 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
                 connections: TurgaiConnections(
                     actorSystem: system,
                     agentProfiles: agentProfiles,
-                    conversations: conversations,
                     linking: linking
                 ),
                 telegramFiles: telegramFiles,
                 objectCatalog: await ObjectCatalog(actorSystem: system),
-                endpoints: endpoints,
-                conversations: conversations
+                endpoints: endpoints
             )
         )
     }

@@ -34,7 +34,7 @@
       "location" : "https://github.com/akbashev/cluster-event-sourcing.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "a6845cfa9ea36bf4f5f21c7c72e466c466e7f388"
+        "revision" : "63684c3c62881076865638c63419191811792e33"
       }
     },
     {
@@ -376,7 +376,7 @@
       "location" : "https://github.com/turgai-labs/swift-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "3c2ebf83529e618959804e89eca0805900e14df7"
+        "revision" : "5c3532fb12d185aae99c4927bd188a5c4c5bb6ea"
       }
     },
     {

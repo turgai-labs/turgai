@@ -530,6 +530,22 @@ public struct ConversationStart: Hashable, Codable, Sendable {
     }
 }
 
+/// What a conversation is called, as one of its people titles it.
+public struct ConversationTitle: Hashable, Codable, Sendable, CustomStringConvertible {
+    public static let maximumLength = 80
+
+    public let rawValue: String
+
+    /// The title `written`, without the space around it: none when there's nothing, or too much.
+    public init?(_ written: String) {
+        let title = written.trimmed()
+        guard !title.isEmpty, title.count <= Self.maximumLength else { return nil }
+        self.rawValue = title
+    }
+
+    public var description: String { rawValue }
+}
+
 /// Why a conversation didn't do what it was asked.
 public enum ConversationRefusal: Error, Equatable, Codable, Sendable, CustomStringConvertible {
     /// It hasn't started: nothing's in it yet.
@@ -553,6 +569,10 @@ public enum ConversationEvent: Codable, Sendable, Equatable {
     case started(ConversationStart)
     /// Someone is one of its people: they read it and write in it.
     case joined(UserID)
+    /// Someone left it: it's off their list, and they no longer read it.
+    case left(UserID)
+    /// One of its people titled it.
+    case titled(ConversationTitle)
     /// Its agent's inbox: a message waiting, or a turn starting or ending.
     case inbox(AgentInboxEvent)
     /// The turn answering `message` needed what its scope didn't allow, which its space's admins
@@ -709,6 +729,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public internal(set) var start: ConversationStart?
     /// The people in it: who reads it and writes in it.
     public internal(set) var people: Set<UserID> = []
+    /// What it's called, once one of its people titled it.
+    public internal(set) var title: ConversationTitle?
     /// Its agent's inbox.
     public internal(set) var inbox: AgentInbox
     /// The turns that wait for an answer from its space's admins, by what each asked for.
@@ -739,6 +761,12 @@ public struct ConversationState: Hashable, Codable, Sendable {
 
         case .joined(let person):
             people.insert(person)
+
+        case .left(let person):
+            people.remove(person)
+
+        case .titled(let title):
+            self.title = title
 
         case .awaiting(let id, let message):
             awaiting[id] = message
@@ -804,6 +832,20 @@ public struct ConversationState: Hashable, Codable, Sendable {
     /// `person` one of its people, as someone writing in its chat is: none for someone already in it.
     public func admitting(_ person: UserID) -> ConversationEvent? {
         people.contains(person) ? nil : .joined(person)
+    }
+
+    /// `person` leaving it: refused unless they're one of its people.
+    public func leaving(_ person: UserID) throws(ConversationRefusal) -> [ConversationEvent] {
+        _ = try reading(by: person)
+        return [.left(person)]
+    }
+
+    /// It called `title`, as `person`, one of its people, titles it: none when it's called that.
+    public func titling(_ title: ConversationTitle, by person: UserID) throws(ConversationRefusal)
+        -> [ConversationEvent]
+    {
+        _ = try reading(by: person)
+        return self.title == title ? [] : [.titled(title)]
     }
 
     /// How it started, as `person` reads it or writes in it: refused when it hasn't started, or
