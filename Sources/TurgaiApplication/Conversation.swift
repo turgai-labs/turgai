@@ -86,6 +86,8 @@ private struct ConversationLiveState: Sendable {
 private enum PublishEvent: Sendable {
     case userMessage(PendingConversationMessage)
     case turnStarted(PendingConversationMessage)
+    /// Said to others in it, with no turn.
+    case said(InboundMessage)
 
     init?(conversationEvent: ConversationEvent) {
         switch conversationEvent {
@@ -93,6 +95,8 @@ private enum PublishEvent: Sendable {
             self = .userMessage(pending)
         case .inbox(.turnStarted(let pending)):
             self = .turnStarted(pending)
+        case .said(let message):
+            self = .said(message)
         case .started, .joined, .left, .titled, .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered,
             .replyQueued,
             .replyDelivered, .reset, .noted, .unnoted:
@@ -325,7 +329,8 @@ public distributed actor Conversation {
     /// and each time something's said in it.
     public let tagging = Tagging<ConversationEvent> { event in
         switch event {
-        case .started, .joined, .left, .titled, .inbox(.queued), .inbox(.turnStarted), .replyQueued: [.conversation]
+        case .started, .joined, .left, .titled, .said, .inbox(.queued), .inbox(.turnStarted), .replyQueued:
+            [.conversation]
         case .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyDelivered, .reset, .noted,
             .unnoted:
             []
@@ -574,7 +579,16 @@ public distributed actor Conversation {
             throw ConversationActorError.conversationMismatch
         }
 
-        _ = try state.reading(by: message.userID)
+        guard try state.answers(message) else {
+            // Said to others in it: kept and shown to them, with no turn.
+            let said = try await changing {
+                let events = state.saying(message)
+                for event in events { try await emit(event: event) }
+                return !events.isEmpty
+            }
+            if said { await publish(.said(message)) }
+            return
+        }
         let agent = try agent()
         // A mark a restart left is taken off with the next message.
         await unnote()
@@ -1073,9 +1087,11 @@ public distributed actor Conversation {
     private func publish(_ event: PublishEvent) async {
         switch event {
         case .userMessage(let pending):
-            await publishUserMessageEcho(pending)
+            await publishUserMessageEcho(pending.message, answeredIn: pending.turnID)
+        case .said(let message):
+            await publishUserMessageEcho(message, answeredIn: nil)
         case .turnStarted(let pending):
-            await publishUserMessageEcho(pending)
+            await publishUserMessageEcho(pending.message, answeredIn: pending.turnID)
             try? await publishLive(
                 .reply(
                     .started(
@@ -1087,9 +1103,9 @@ public distributed actor Conversation {
         }
     }
 
-    private func publishUserMessageEcho(_ pending: PendingConversationMessage) async {
-        guard !echoedMessageIDs.contains(pending.message.id) else { return }
-        echoedMessageIDs.append(pending.message.id)
+    private func publishUserMessageEcho(_ message: InboundMessage, answeredIn turnID: TurgaiDomain.TurnID?) async {
+        guard !echoedMessageIDs.contains(message.id) else { return }
+        echoedMessageIDs.append(message.id)
         if echoedMessageIDs.count > 256 {
             echoedMessageIDs.removeFirst(echoedMessageIDs.count - 256)
         }
@@ -1097,10 +1113,11 @@ public distributed actor Conversation {
             .reply(
                 .userMessage(
                     conversationID: conversationID,
-                    turnID: pending.turnID,
-                    messageID: pending.message.id,
-                    text: pending.message.text,
-                    author: pending.message.userID
+                    turnID: turnID,
+                    messageID: message.id,
+                    text: message.text,
+                    author: message.userID,
+                    to: message.to
                 )
             )
         )

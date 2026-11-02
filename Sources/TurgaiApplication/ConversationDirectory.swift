@@ -53,6 +53,12 @@ public enum ConversationDirectoryChange: Hashable, Sendable {
     /// agent's.
     case said(ConversationID, firstLine: String?)
 
+    /// The first line `message` has, as long as a title can be.
+    private static func firstLine(of message: InboundMessage) -> String? {
+        message.text.split(whereSeparator: \.isNewline).lazy.map { String($0).trimmed() }.first { !$0.isEmpty }
+            .map { String($0.prefix(ConversationTitle.maximumLength)) }
+    }
+
     /// What `event`, the conversation `conversation`'s, changes: none for what the directory
     /// doesn't show.
     public init?(_ event: ConversationEvent, in conversation: ConversationID) {
@@ -62,9 +68,9 @@ public enum ConversationDirectoryChange: Hashable, Sendable {
         case .left(let participant): self = .left(conversation, participant)
         case .titled(let title): self = .titled(conversation, title)
         case .inbox(.queued(let pending)), .inbox(.turnStarted(let pending)):
-            let line = pending.message.text.split(whereSeparator: \.isNewline).lazy.map { String($0).trimmed() }
-                .first { !$0.isEmpty }
-            self = .said(conversation, firstLine: line.map { String($0.prefix(ConversationTitle.maximumLength)) })
+            self = .said(conversation, firstLine: Self.firstLine(of: pending.message))
+        case .said(let message):
+            self = .said(conversation, firstLine: Self.firstLine(of: message))
         case .replyQueued: self = .said(conversation, firstLine: nil)
         case .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyDelivered, .reset, .noted,
             .unnoted:

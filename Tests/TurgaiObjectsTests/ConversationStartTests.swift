@@ -63,6 +63,29 @@ struct ConversationStartTests {
         }
     }
 
+    /// A message said only to people in it starts no turn: it's kept, and they read it.
+    @Test func aMessageToPeopleStartsNoTurn() async throws {
+        try await withClusterSystem("said", store: MemoryEventStore(), hostsVirtualActors: true, people: []) { system in
+            let spaces = Spaces(actorSystem: system)
+            let family = try await spaces.make(named: SpaceName("Family")!, by: .ann)
+            let (_, token) = try await spaces.invite(to: family.id, by: .ann, for: .untilUsed)
+            _ = try await spaces.join(family.id, with: token, as: .bob)
+            let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init(UUID().uuidString))
+            let chat = try await Conversation.resolve(on: system, conversationID: id)
+            try await chat.start(in: family.id, agent: conversation, by: .ann)
+            try await chat.add(.person(.bob), by: .ann)
+
+            // This node runs no agent: a turn would fail to start.
+            try await chat.send(
+                InboundMessage(
+                    conversationID: id, participantID: ParticipantID(channel: id.channel, rawValue: UserID.ann.key),
+                    userID: .ann, text: "pasta tonight?", receivedAt: Date(), to: [.person(.bob)]),
+                turnID: TurnID(), configuration: Conversation.TurnConfiguration(memoryExtraction: nil))
+            #expect(try await chat.history(for: .bob).map(\.text) == ["pasta tonight?"])
+            #expect(try await chat.status(for: .bob) == .idle)
+        }
+    }
+
     /// A chat's first words make its space, named after it, with the admins its platform says,
     /// and start it there; whoever writes is in both, and it stays answered by the agent it
     /// started with.

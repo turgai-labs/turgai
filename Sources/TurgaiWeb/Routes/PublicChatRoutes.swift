@@ -227,6 +227,17 @@ extension TurgaiMainWebApp {
                                 )
                                 continue
                             }
+                            let to = command.to.compactMap(Participant.init)
+                            guard to.count == command.to.count else {
+                                try await writer.write(
+                                    publicAPIErrorEvent(
+                                        conversationID: conversation.publicID,
+                                        code: "invalid_participant",
+                                        message: "No person or bot has that id."
+                                    )
+                                )
+                                continue
+                            }
 
                             let receipt = ConversationInputReceipt()
                             await session.input.send(
@@ -238,7 +249,8 @@ extension TurgaiMainWebApp {
                                             participantID: participantID,
                                             userID: userID,
                                             text: messageText,
-                                            receivedAt: Date()
+                                            receivedAt: Date(),
+                                            to: Set(to)
                                         ),
                                         turnID: .init()
                                     ),
@@ -396,24 +408,16 @@ extension TurgaiMainWebApp {
                 let conversation = try await apiConversation(
                     context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
             else { return conversationNotFound() }
-            let input = try await body(AddParticipantRequest.self, of: request, context: context)
-            let participant: Participant
-            switch input.kind {
-            case .person:
-                guard let person = try? TurgaiDomain.UserID(key: input.id) else {
-                    return publicAPIErrorResponse(
-                        status: .badRequest, code: "invalid_participant", message: "No person has that id.")
-                }
-                participant = .person(person)
-            case .agent:
-                guard let profile = try await dependencies.agentProfiles.profile(id: input.id),
+            let input = try await body(ParticipantRef.self, of: request, context: context)
+            guard let participant = Participant(input) else { return noSuchParticipant() }
+            if case .agent(let agent) = participant {
+                guard let profile = try await dependencies.agentProfiles.profile(id: agent.rawValue),
                     profile.availability == .enabled
                 else {
                     return publicAPIErrorResponse(
                         status: .notFound, code: "bot_not_found",
                         message: "The requested bot does not exist or is disabled.")
                 }
-                participant = .agent(AgentProfileID(profile.id))
             }
             do {
                 try await dependencies.webChatBridge.add(participant, to: conversation.domainID, by: owner.person)
@@ -650,12 +654,16 @@ extension TurgaiMainWebApp {
                     message: "A message must contain text."
                 )
             }
+            let addressed = input.to.compactMap(Participant.init)
+            guard addressed.count == input.to.count else { return noSuchParticipant() }
+            let to = Set(addressed)
             do {
                 let event = try await send(
                     input: input,
                     text: text,
                     conversation: conversation,
                     as: owner.person,
+                    to: to,
                     bridge: dependencies.webChatBridge,
                     names: ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
                 )
@@ -720,6 +728,36 @@ private func conversationRefused(_ refusal: ConversationRefusal) -> Response {
     case .alreadyStarted: publicAPIErrorResponse(status: .conflict, code: "already_started", message: refusal.description)
     case .oneAgentForNow:
         publicAPIErrorResponse(status: .conflict, code: "one_agent_for_now", message: refusal.description)
+    case .addresseeNotInIt:
+        publicAPIErrorResponse(status: .badRequest, code: "addressee_not_in_it", message: refusal.description)
+    }
+}
+
+/// The answer for a participant the API can't name.
+private func noSuchParticipant() -> Response {
+    publicAPIErrorResponse(status: .badRequest, code: "invalid_participant", message: "No person or bot has that id.")
+}
+
+extension Participant {
+    /// The participant `reference` names: none when it names no person.
+    fileprivate init?(_ reference: ParticipantRef) {
+        switch reference.kind {
+        case .person:
+            guard let person = try? TurgaiDomain.UserID(key: reference.id) else { return nil }
+            self = .person(person)
+        case .agent:
+            self = .agent(AgentProfileID(reference.id))
+        }
+    }
+}
+
+extension ParticipantRef {
+    /// `participant` as the API refers to them.
+    fileprivate init(_ participant: Participant) {
+        switch participant {
+        case .person(let person): self.init(kind: .person, id: person.key)
+        case .agent(let agent): self.init(kind: .agent, id: agent.rawValue)
+        }
     }
 }
 
@@ -884,7 +922,8 @@ private func publicAPIMessages(
                 id: .init(rawValue: UUID(uuidString: value) ?? UUID()),
                 role: entry.role == .user ? .user : .assistant,
                 text: entry.text,
-                author: author
+                author: author,
+                to: entry.to.map(ParticipantRef.init)
             ))
     }
     return messages
@@ -896,7 +935,7 @@ private func author(
     of event: OutboundEvent, answeredBy agent: AgentProfileID, names: ParticipantNames
 ) async throws -> ParticipantSummary? {
     switch event {
-    case .reply(.userMessage(_, _, _, _, let person)): try await names.summary(of: .person(person))
+    case .reply(.userMessage(_, _, _, _, let person, _)): try await names.summary(of: .person(person))
     case .reply(.partial), .reply(.finished): try await names.summary(of: .agent(agent))
     default: nil
     }
@@ -1001,6 +1040,7 @@ private func send(
     text: String,
     conversation: APIConversation,
     as person: TurgaiDomain.UserID,
+    to: Set<Participant>,
     bridge: TurgaiWebChatBridge,
     names: ParticipantNames
 ) async throws -> TurgaiModels.ChatEvent {
@@ -1021,6 +1061,13 @@ private func send(
             await delivery.delivered()
             guard let event else { continue }
             if event.type == .turnCompleted || event.type == .turnFailed {
+                terminalEvent = event
+                break
+            }
+            // Taken with no turn to answer it: said only to people, it's done.
+            if case .reply(.userMessage(_, nil, let id, _, _, _)) = delivery.event,
+                id.rawValue == input.id.rawValue
+            {
                 terminalEvent = event
                 break
             }
@@ -1051,7 +1098,8 @@ private func send(
                     participantID: .init(channel: turgaiChannel, rawValue: person.key),
                     userID: person,
                     text: text,
-                    receivedAt: Date()
+                    receivedAt: Date(),
+                    to: to
                 ),
                 turnID: .init()
             ),
@@ -1121,7 +1169,7 @@ private actor HTMLChatSocketWriter {
     func write(_ event: OutboundEvent) async throws {
         // Another person's message is shown with their name.
         var author: ParticipantSummary?
-        if case .reply(.userMessage(_, _, _, _, let person)) = event, person != viewer {
+        if case .reply(.userMessage(_, _, _, _, let person, _)) = event, person != viewer {
             author = try await names.summary(of: .person(person))
         }
         guard let fragment = fragment(for: event, author: author) else { return }
@@ -1134,7 +1182,7 @@ private actor HTMLChatSocketWriter {
         switch event {
         case .reply(let reply):
             switch reply {
-            case .userMessage(_, _, let messageID, let text, _):
+            case .userMessage(_, _, let messageID, let text, _, _):
                 return ChatLiveFragment.accepted(
                     .init(id: .init(rawValue: messageID.rawValue), role: .user, text: text, author: author)
                 )
@@ -1342,16 +1390,17 @@ private struct PublicChatEvent: Sendable {
         author: ParticipantSummary?
     ) -> TurgaiModels.ChatEvent {
         switch reply {
-        case .userMessage(_, let turnID, let messageID, let text, _):
+        case .userMessage(_, let turnID, let messageID, let text, _, let to):
             return .init(
                 payload: .messageAccepted(
                     conversationID: publicConversationID,
-                    turnID: .init(rawValue: turnID.rawValue),
+                    turnID: turnID.map { .init(rawValue: $0.rawValue) },
                     message: .init(
                         id: .init(rawValue: messageID.rawValue),
                         role: .user,
                         text: text,
-                        author: author
+                        author: author,
+                        to: to.map(ParticipantRef.init)
                     )
                 )
             )

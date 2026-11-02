@@ -296,6 +296,8 @@ public struct InboundMessage: Hashable, Codable, Sendable {
     public let text: String
     public let attachments: [Attachment]
     public let receivedAt: Date
+    /// Who it's said to: none for no one in particular, which its agent answers.
+    public let to: Set<Participant>
 
     public init(
         id: MessageID = MessageID(),
@@ -306,7 +308,8 @@ public struct InboundMessage: Hashable, Codable, Sendable {
         author: MessageAuthor? = nil,
         text: String,
         attachments: [Attachment] = [],
-        receivedAt: Date
+        receivedAt: Date,
+        to: Set<Participant> = []
     ) {
         self.id = id
         self.channelMessageID = channelMessageID
@@ -317,6 +320,7 @@ public struct InboundMessage: Hashable, Codable, Sendable {
         self.text = text
         self.attachments = attachments
         self.receivedAt = receivedAt
+        self.to = to
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -330,6 +334,7 @@ public struct InboundMessage: Hashable, Codable, Sendable {
         try container.encode(text, forKey: .text)
         try container.encode(attachments, forKey: .attachments)
         try container.encode(receivedAt, forKey: .receivedAt)
+        try container.encode(to, forKey: .to)
     }
 }
 
@@ -579,6 +584,8 @@ public enum ConversationRefusal: Error, Equatable, Codable, Sendable, CustomStri
     case guestsStayOut
     /// It has its agent: for now, a conversation has one.
     case oneAgentForNow
+    /// Someone a message is said to isn't in it.
+    case addresseeNotInIt
 
     public var description: String {
         switch self {
@@ -587,6 +594,7 @@ public enum ConversationRefusal: Error, Equatable, Codable, Sendable, CustomStri
         case .notInIt: "You're not in this conversation."
         case .guestsStayOut: "A guest can't add anyone to a conversation, or be added to one."
         case .oneAgentForNow: "This conversation has its agent: for now, a conversation has one."
+        case .addresseeNotInIt: "Someone it's said to isn't in this conversation."
         }
     }
 }
@@ -600,6 +608,8 @@ public enum ConversationEvent: Codable, Sendable, Equatable {
     case left(Participant)
     /// One of its people titled it.
     case titled(ConversationTitle)
+    /// One of its people said something to others in it, which no agent answers.
+    case said(InboundMessage)
     /// Its agent's inbox: a message waiting, or a turn starting or ending.
     case inbox(AgentInboxEvent)
     /// The turn answering `message` needed what its scope didn't allow, which its space's admins
@@ -666,12 +676,18 @@ public struct ConversationHistoryEntry: Hashable, Codable, Sendable, Identifiabl
     /// Who said it: the person who wrote it, or the agent that answered; none for what no one said,
     /// such as a turn that failed.
     public let author: Participant?
+    /// Who it was said to: none for no one in particular.
+    public let to: Set<Participant>
 
-    public init(id: String, role: ConversationHistoryRole, text: String, author: Participant? = nil) {
+    public init(
+        id: String, role: ConversationHistoryRole, text: String, author: Participant? = nil,
+        to: Set<Participant> = []
+    ) {
         self.id = id
         self.role = role
         self.text = text
         self.author = author
+        self.to = to
     }
 }
 
@@ -799,6 +815,9 @@ public struct ConversationState: Hashable, Codable, Sendable {
         case .titled(let title):
             self.title = title
 
+        case .said(let message):
+            appendUserMessage(message)
+
         case .awaiting(let id, let message):
             awaiting[id] = message
 
@@ -893,6 +912,20 @@ public struct ConversationState: Hashable, Codable, Sendable {
         return [.joined(participant)]
     }
 
+    /// Whether its agent answers `message`, said by one of its people: when it's said to no one in
+    /// particular, or to its agent among others. Refused when it's said to someone not in it.
+    public func answers(_ message: InboundMessage) throws(ConversationRefusal) -> Bool {
+        _ = try reading(by: message.userID)
+        guard message.to.isSubset(of: participants) else { throw .addresseeNotInIt }
+        return message.to.isEmpty || message.to.contains { if case .agent = $0 { true } else { false } }
+    }
+
+    /// `message` said in it to the people it names, which no agent answers: none when it's been
+    /// said already.
+    public func saying(_ message: InboundMessage) -> [ConversationEvent] {
+        history.contains { $0.id == "message:\(message.id.rawValue.uuidString)" } ? [] : [.said(message)]
+    }
+
     /// `person` leaving it: refused unless they're one of its people. Its agent stays.
     public func leaving(_ person: UserID) throws(ConversationRefusal) -> [ConversationEvent] {
         _ = try reading(by: person)
@@ -930,7 +963,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
                 id: "message:\(message.id.rawValue.uuidString)",
                 role: .user,
                 text: message.text,
-                author: .person(message.userID)
+                author: .person(message.userID),
+                to: message.to
             )
         )
     }
@@ -975,12 +1009,14 @@ public enum ReplyPhase: String, Hashable, Codable, Sendable {
 }
 
 public enum ReplyEvent: Hashable, Codable, Sendable {
+    /// A person's message, as it's taken: with the turn that answers it, if one does.
     case userMessage(
         conversationID: ConversationID,
-        turnID: TurnID,
+        turnID: TurnID?,
         messageID: MessageID,
         text: String,
-        author: UserID
+        author: UserID,
+        to: Set<Participant>
     )
     case started(conversationID: ConversationID, turnID: TurnID)
     case phase(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)

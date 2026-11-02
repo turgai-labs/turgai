@@ -133,8 +133,9 @@ public struct ParticipantSummary: Codable, Hashable, Sendable {
     }
 }
 
-/// Someone to add to a conversation: a person in its space, by their id, or an agent, by its bot id.
-public struct AddParticipantRequest: Codable, Hashable, Sendable {
+/// Someone in a conversation, or to be: a person, by their id, or an agent, by its bot id. What adding
+/// one takes, and who a message is said to.
+public struct ParticipantRef: Codable, Hashable, Sendable {
     public let kind: ParticipantSummary.Kind
     public let id: String
 
@@ -164,12 +165,17 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
     public let text: String
     /// Who said it: the person who wrote it, or the agent that answered.
     public let author: ParticipantSummary?
+    /// Who it was said to: none for no one in particular.
+    public let to: [ParticipantRef]
 
-    public init(id: MessageID, role: MessageRole, text: String, author: ParticipantSummary? = nil) {
+    public init(
+        id: MessageID, role: MessageRole, text: String, author: ParticipantSummary? = nil, to: [ParticipantRef] = []
+    ) {
         self.id = id
         self.role = role
         self.text = text
         self.author = author
+        self.to = to
     }
 }
 
@@ -188,10 +194,24 @@ public struct CreateConversationRequest: Codable, Equatable, Sendable {
 public struct SendMessageRequest: Codable, Equatable, Sendable, Identifiable {
     public let id: MessageID
     public let text: String
+    /// Who it's said to: none for no one in particular, which the conversation's agent answers. Said
+    /// only to people, no agent answers it.
+    public let to: [ParticipantRef]
 
-    public init(id: MessageID, text: String) {
+    public init(id: MessageID, text: String, to: [ParticipantRef] = []) {
         self.id = id
         self.text = text
+        self.to = to
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, text, to }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(MessageID.self, forKey: .id)
+        text = try values.decode(String.self, forKey: .text)
+        // Said to no one in particular unless it says who.
+        to = try values.decodeIfPresent([ParticipantRef].self, forKey: .to) ?? []
     }
 }
 
@@ -232,7 +252,7 @@ public enum ChatCommand: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, id, text, answer
+        case type, id, text, to, answer
     }
 
     public init(from decoder: Decoder) throws {
@@ -242,7 +262,8 @@ public enum ChatCommand: Codable, Equatable, Sendable {
             self = .message(
                 SendMessageRequest(
                     id: try values.decode(MessageID.self, forKey: .id),
-                    text: try values.decode(String.self, forKey: .text)
+                    text: try values.decode(String.self, forKey: .text),
+                    to: try values.decodeIfPresent([ParticipantRef].self, forKey: .to) ?? []
                 ))
         case .answer:
             self = .answer(
@@ -259,6 +280,7 @@ public enum ChatCommand: Codable, Equatable, Sendable {
             try values.encode(Kind.message, forKey: .type)
             try values.encode(request.id, forKey: .id)
             try values.encode(request.text, forKey: .text)
+            try values.encode(request.to, forKey: .to)
         case .answer(let id, let answer):
             try values.encode(Kind.answer, forKey: .type)
             try values.encode(id, forKey: .id)

@@ -142,6 +142,33 @@ struct ConversationTests {
         #expect(record.history.map(\.author) == [.person(.ann), .agent(agent)])
     }
 
+    /// Who a message is said to decides who answers: its agent, when it's said to no one in
+    /// particular or to the agent too; no one, when it's said only to people, which is kept once.
+    /// Said to someone not in it, it's refused.
+    @Test
+    func whoAMessageIsSaidToDecidesWhoAnswers() throws {
+        var record = ConversationState(conversationID: conversationID)
+        let agent = AgentProfileID("conversation")
+        for event in try record.starting(in: SpaceID(), answeredBy: agent, by: .ann) { record.apply(event) }
+        for event in try record.adding(.person(.bob), by: .ann) { record.apply(event) }
+        func said(to people: Set<Participant>) -> InboundMessage {
+            InboundMessage(
+                conversationID: conversationID, participantID: ParticipantID("ann"), userID: .ann, text: "pasta?",
+                receivedAt: Date(timeIntervalSince1970: 1), to: people)
+        }
+
+        #expect(try record.answers(said(to: [])))
+        #expect(try record.answers(said(to: [.agent(agent), .person(.bob)])))
+        #expect(try !record.answers(said(to: [.person(.bob)])))
+        #expect(throws: ConversationRefusal.addresseeNotInIt) { try record.answers(said(to: [.person(.cat)])) }
+
+        let toBob = said(to: [.person(.bob)])
+        for event in record.saying(toBob) { record.apply(event) }
+        #expect(record.history.last?.author == .person(.ann))
+        #expect(record.history.last?.to == [.person(.bob)])
+        #expect(record.saying(toBob).isEmpty)
+    }
+
     @Test
     func failedConversationDoesNotAutomaticallyRetry() {
         var record = ConversationState(conversationID: conversationID)
