@@ -132,7 +132,7 @@ struct ChatFeature {
 
     private func apply(_ payload: ChatEvent.Payload, to state: inout State) {
         switch payload {
-        case .ready(_, let botID, let status, _):
+        case .ready(_, let botID, let status):
             state.connection = .connected(botID: botID)
             state.turn = status == .running ? Turn() : nil
         case .history(_, let messages):

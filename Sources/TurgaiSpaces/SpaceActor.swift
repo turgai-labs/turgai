@@ -86,6 +86,11 @@ public distributed actor Space {
         try await changing { for event in state.having(admins: admins) { try await emit(event: event) } }
     }
 
+    /// The accounts in it, each with its role, as Turgai's accounts say.
+    public distributed func setAccounts(_ accounts: [UserID: SpaceRole]) async throws {
+        try await changing { for event in state.having(accounts: accounts) { try await emit(event: event) } }
+    }
+
     /// The role `person` has in it, as its platform says.
     public distributed func setRole(_ role: SpaceRole, of person: UserID) async throws {
         try await changing { if let event = state.setting(role, of: person) { try await emit(event: event) } }

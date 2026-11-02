@@ -155,6 +155,20 @@ public struct SpaceState: Hashable, Codable, Sendable {
         return joining + changing
     }
 
+    /// The accounts in it becoming exactly `accounts`, each with its role, as Turgai's accounts
+    /// say: whoever isn't in it joins, each whose role differs has it changed, and an account
+    /// that's not among them leaves. Anyone who isn't an account stays as they are.
+    public func having(accounts: [UserID: SpaceRole]) -> [SpaceEvent] {
+        let joiningOrChanging = accounts.sorted { $0.key.key < $1.key.key }.compactMap { person, role in
+            setting(role, of: person)
+        }
+        let leaving = members.keys.filter { person in
+            if case .account = person { accounts[person] == nil } else { false }
+        }
+        .sorted { $0.key < $1.key }.map(SpaceEvent.left)
+        return joiningOrChanging + leaving
+    }
+
     /// `person` having `role`, as the space's platform says: joining with it, or changing to it.
     /// None when they already have it.
     public func setting(_ role: SpaceRole, of person: UserID) -> SpaceEvent? {

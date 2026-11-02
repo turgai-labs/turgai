@@ -25,6 +25,8 @@ public actor TurgaiWebChatBridge {
         let conversations: ConversationStorage
         let channels: ChannelStorage
         let actorSystem: ClusterSystem
+        /// Turgai's own space.
+        let turgaiSpace: SpaceID
     }
 
     private var runtime: Runtime?
@@ -36,15 +38,35 @@ public actor TurgaiWebChatBridge {
         objectCatalog: ObjectCatalog,
         conversations: ConversationStorage,
         channels: ChannelStorage,
-        actorSystem: ClusterSystem
+        actorSystem: ClusterSystem,
+        turgaiSpace: SpaceID
     ) {
         self.runtime = Runtime(
             connections: connections,
             objectCatalog: objectCatalog,
             conversations: conversations,
             channels: channels,
-            actorSystem: actorSystem
+            actorSystem: actorSystem,
+            turgaiSpace: turgaiSpace
         )
+    }
+
+    /// Turgai's own space following `accounts`: each that can sign in is in it, an administrator
+    /// as its admin. Before the runtime runs there's no space to tell: it's told every account as
+    /// it starts.
+    public func follow(_ accounts: [Account]) async throws {
+        guard let runtime else { return }
+        let inIt = accounts.filter { $0.status != .disabled }.map { account -> (TurgaiDomain.UserID, SpaceRole) in
+            (.account(account.id), account.role == .administrator ? .admin : .member)
+        }
+        try await Space.resolve(on: runtime.actorSystem, id: runtime.turgaiSpace)
+            .setAccounts(Dictionary(uniqueKeysWithValues: inIt))
+    }
+
+    /// `guest` in Turgai's own space, as a member: where their conversations are.
+    public func admit(guest: TurgaiDomain.UserID) async throws {
+        guard let runtime else { throw TurgaiWebChatBridgeError.runtimeUnavailable }
+        try await Space.resolve(on: runtime.actorSystem, id: runtime.turgaiSpace).admit(guest)
     }
 
     /// Every conversation there is, in the order they started.

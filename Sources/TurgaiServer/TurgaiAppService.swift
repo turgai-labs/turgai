@@ -30,16 +30,16 @@ import VirtualActors
 #endif
 
 actor TurgaiRuntimeSnapshotSource {
-    private var provider: (@Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot])?
+    private var provider: (@Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot])?
 
     func setProvider(
-        _ provider: @escaping @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot]
+        _ provider: @escaping @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot]
     ) {
         self.provider = provider
     }
 
-    /// What each running agent is doing, as whoever asks on behalf of `scope` may see it.
-    func snapshots(as viewer: Membership) async -> [TurgaiAgentRuntimeSnapshot] {
+    /// What each running agent is doing, as `viewer` may see it.
+    func snapshots(as viewer: TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot] {
         guard let provider else { return [] }
         return await provider(viewer)
     }
@@ -69,6 +69,8 @@ struct TurgaiAppService: Service, Sendable {
     private let channels: ChannelStorage
     /// Who's the same human as whom.
     private let linking: PersonLinking
+    /// The accounts, which Turgai's own space follows.
+    private let auth: TurgaiAuth
     /// Turgai's own space, which the dashboard is used in.
     private let turgaiSpace: SpaceID
     /// Where the space directory is kept: the spaces each person is in.
@@ -92,6 +94,7 @@ struct TurgaiAppService: Service, Sendable {
         conversations: ConversationStorage,
         channels: ChannelStorage,
         linking: PersonLinking,
+        auth: TurgaiAuth,
         turgaiSpace: SpaceID,
         spaceDirectory: SpaceDirectoryStorage,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
@@ -111,6 +114,7 @@ struct TurgaiAppService: Service, Sendable {
         self.conversations = conversations
         self.channels = channels
         self.linking = linking
+        self.auth = auth
         self.turgaiSpace = turgaiSpace
         self.spaceDirectory = spaceDirectory
         self.runtimeSnapshotSource = runtimeSnapshotSource
@@ -281,7 +285,7 @@ struct TurgaiAppService: Service, Sendable {
             let connections = channelRuntime.connections
             await objectCatalogSource.set(channelRuntime.objectCatalog)
             let turgaiSpace = turgaiSpace
-            let runtimeSnapshotProvider: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot] = {
+            let runtimeSnapshotProvider: @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot] = {
                 await Self.runtimeSnapshots(on: system, as: $0, in: turgaiSpace)
             }
             await runtimeSnapshotSource.setProvider(runtimeSnapshotProvider)
@@ -297,6 +301,7 @@ struct TurgaiAppService: Service, Sendable {
             let logger = system.log
             let websitePort = websitePort
             let webChatBridge = webChatBridge
+            let auth = auth
             // Each part starts on its own: none waits for another, so a slow or failing one holds
             // up nothing else, and messages are taken from the start.
             let parts = [
@@ -324,8 +329,12 @@ struct TurgaiAppService: Service, Sendable {
                         objectCatalog: channelRuntime.objectCatalog,
                         conversations: conversations,
                         channels: channels,
-                        actorSystem: system
+                        actorSystem: system,
+                        turgaiSpace: turgaiSpace
                     )
+                    // Every account, as Turgai's space starts following them: what changed while
+                    // it wasn't running too.
+                    try await webChatBridge.follow(try await auth.accounts())
                 },
             ]
             // Every channel's bot, run by the node while its channel is enabled.
@@ -600,13 +609,10 @@ extension TurgaiAppService {
     /// What each running profile agent is doing, for the dashboard, asked on behalf of `viewer`, as
     /// Turgai's own space settles their scope: none when it can't.
     static func runtimeSnapshots(
-        on system: ClusterSystem, as viewer: Membership, in turgaiSpace: SpaceID
+        on system: ClusterSystem, as viewer: TurgaiDomain.UserID, in turgaiSpace: SpaceID
     ) async -> [TurgaiAgentRuntimeSnapshot] {
-        guard let space = try? await Space.resolve(on: system, id: turgaiSpace),
-            (try? await space.setRole(viewer.role, of: viewer.person)) != nil,
-            // Viewing does nothing: it spends nothing that's allowed once.
-            let scope = try? await space.scope(of: viewer.person)
-        else { return [] }
+        // Viewing does nothing: it spends nothing that's allowed once.
+        guard let scope = try? await Space.resolve(on: system, id: turgaiSpace).scope(of: viewer) else { return [] }
         let entries = (try? await system.agentRuntime.allAgents()) ?? []
         return await CallChain.$current.withValue(.start(scope, in: nil)) { await snapshots(of: entries, on: system) }
     }

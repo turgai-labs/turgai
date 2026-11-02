@@ -34,6 +34,20 @@ extension TurgaiMainWebApp {
                 .map { TurgaiModels.Bot(id: .init(rawValue: $0.id), name: $0.name) }
             return try publicAPIResponse(bots)
         }
+        // Someone who doesn't sign in, coming in as a guest: one of Turgai's own space, with the
+        // cookie that says they're them from now on.
+        api.post("guests") { _, _ in
+            let (guest, token) = try await dependencies.auth.newGuest()
+            do {
+                try await dependencies.webChatBridge.admit(guest: guest)
+            } catch TurgaiWebChatBridgeError.runtimeUnavailable {
+                return publicAPIErrorResponse(
+                    status: .serviceUnavailable, code: "runtime_unavailable", message: "Turgai isn't running yet.")
+            }
+            var response = Response(status: .created)
+            response.setCookie(TurgaiWebSupport.guestCookie(token))
+            return response
+        }
         registerConversations(on: api.group("conversations"), dependencies: dependencies)
         registerLinks(on: api.group("me/links"), dependencies: dependencies)
         registerSpaces(on: api.group("spaces"), dependencies: dependencies)
@@ -90,7 +104,9 @@ extension TurgaiMainWebApp {
         on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
     ) {
         router.ws("/api/v1/chat") { request, _ in
-            guard dependencies.apiConfiguration.authorizes(request) else {
+            guard dependencies.apiConfiguration.authorizes(request),
+                await chatOwner(from: request, auth: dependencies.auth) != nil
+            else {
                 return .dontUpgrade
             }
             switch (request.uri.queryParameters["conversationID"], request.uri.queryParameters["botID"]) {
@@ -113,7 +129,10 @@ extension TurgaiMainWebApp {
             return .upgrade([:])
         } onUpgrade: { inbound, outbound, context in
             let query = context.request.uri.queryParameters
-            let owner = try await chatOwner(from: context.request, auth: dependencies.auth)
+            guard let owner = await chatOwner(from: context.request, auth: dependencies.auth) else {
+                try await outbound.close(.policyViolation, reason: "Sign in first")
+                return
+            }
             guard
                 let conversation = try await chatConversation(
                     owner: owner,
@@ -193,8 +212,7 @@ extension TurgaiMainWebApp {
                         payload: .ready(
                             conversationID: conversation.publicID,
                             botID: .init(rawValue: conversation.profile.id),
-                            status: publicConversationStatus(status),
-                            guest: { if case .guest(_, let token) = owner { token } else { nil } }()
+                            status: publicConversationStatus(status)
                         ))
                 )
                 try await writer.write(
@@ -593,8 +611,8 @@ extension TurgaiMainWebApp {
                     message: "A message must contain text."
                 )
             }
+            guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
             do {
-                let owner = try await chatOwner(from: request, auth: dependencies.auth)
                 let event = try await send(
                     input: input,
                     text: text,
@@ -759,17 +777,16 @@ private enum ChatOwner: Sendable {
     case guest(TurgaiDomain.UserID, token: String)
 }
 
-/// Who a request is from: its signed-in account, or the guest its cookie says, or else a new
-/// guest, whose token the answer gives back.
-private func chatOwner(from request: Request, auth: TurgaiAuth) async throws -> ChatOwner {
+/// Who a request is from: its signed-in account, or the guest its cookie says. None when it's
+/// neither: becoming a guest is asked for on its own.
+private func chatOwner(from request: Request, auth: TurgaiAuth) async -> ChatOwner? {
     if let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth) {
         return .account(account.id)
     }
     if let token = request.cookies[TurgaiWebSupport.guestCookieName]?.value, let guest = await auth.guest(from: token) {
         return .guest(guest, token: token)
     }
-    let (guest, token) = try await auth.newGuest()
-    return .guest(guest, token: token)
+    return nil
 }
 
 private func chatConversation(
@@ -918,7 +935,7 @@ private struct UnreadableBody: HTTPResponseError {
 }
 
 /// `request`'s body, as `Body`: when it isn't one, the API answers with 400 and why.
-private func body<Body: Decodable>(
+private func body<Body: Decodable & Sendable>(
     _: Body.Type, of request: Request, context: some RequestContext
 ) async throws -> Body {
     do {

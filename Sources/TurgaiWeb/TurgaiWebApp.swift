@@ -52,7 +52,7 @@ public struct TurgaiMainWebApp: Sendable {
     let agentCredentials: AgentCredentialStore
     let requestLimits: RequestLimitStore
     let channelSecrets: ChannelSecretStore
-    let runtimeSnapshots: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot]
+    let runtimeSnapshots: @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot]
     let webChatBridge: TurgaiWebChatBridge
     /// Who's the same human as whom.
     let linking: PersonLinking
@@ -65,7 +65,7 @@ public struct TurgaiMainWebApp: Sendable {
         agentCredentials: AgentCredentialStore,
         requestLimits: RequestLimitStore,
         channelSecrets: ChannelSecretStore,
-        runtimeSnapshots: @escaping @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot] = { _ in [] },
+        runtimeSnapshots: @escaping @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot] = { _ in [] },
         setup: TurgaiSetupStore,
         webChatBridge: TurgaiWebChatBridge,
         linking: PersonLinking,

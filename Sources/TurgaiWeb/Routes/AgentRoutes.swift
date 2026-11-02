@@ -95,7 +95,7 @@ extension TurgaiMainWebApp {
             }
             let profiles = try await agentProfiles.profiles()
             let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-            let runtime = await runtimeSnapshots(user.dashboardMembership).filter { $0.profileID == profile.id }
+            let runtime = await runtimeSnapshots(.account(user.id)).filter { $0.profileID == profile.id }
             let placement: AgentDetailPage.Placement =
                 try await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
             let draft = AgentDraft(profile, requestLimit: try await requestLimit(of: profile))
@@ -155,7 +155,7 @@ extension TurgaiMainWebApp {
                 if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
                 let profiles = try await agentProfiles.profiles()
                 let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-                let runtime = await runtimeSnapshots(user.dashboardMembership).filter {
+                let runtime = await runtimeSnapshots(.account(user.id)).filter {
                     $0.profileID == existingProfile.id
                 }
                 let placement: AgentDetailPage.Placement =
@@ -246,7 +246,7 @@ extension TurgaiMainWebApp {
             } catch {
                 let profiles = try await agentProfiles.profiles()
                 let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-                let runtime = await runtimeSnapshots(user.dashboardMembership).filter { $0.profileID == profile.id }
+                let runtime = await runtimeSnapshots(.account(user.id)).filter { $0.profileID == profile.id }
                 let placement: AgentDetailPage.Placement =
                     try await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
                 let draft = AgentDraft(profile, requestLimit: try await requestLimit(of: profile))

@@ -95,6 +95,36 @@ struct SpaceTests {
         #expect(!SpaceState(id: SpaceID()).scope(of: bob).allows(forecast))
     }
 
+    /// A guest in it doesn't have what's shared with all of it: anyone at all can come in as one.
+    @Test func whatsSharedWithEveryoneIsntAGuests() {
+        let guest = UserID.guest(UUID())
+        let id = AccessRequestID(UUID())
+        let shared =
+            annDecidesForBob
+            .applying(.joined(guest, as: .member))
+            .applying(.asked(AccessRequest(id: id, request: forecast, by: bob, standing: .waiting), by: .person))
+            .applying(.answered(id, .everyone, by: ann))
+        #expect(shared.scope(of: bob).allows(forecast))
+        #expect(!shared.scope(of: guest).allows(forecast))
+    }
+
+    /// Turgai's own space follows its accounts: each one listed is in it with its role, one that
+    /// isn't leaves, and whoever isn't an account stays.
+    @Test func turgaisSpaceFollowsItsAccounts() {
+        let promoted = UserID.account(UUID())
+        let disabled = UserID.account(UUID())
+        let registered = UserID.account(UUID())
+        let guest = UserID.guest(UUID())
+        var state = group([
+            .joined(promoted, as: .member), .joined(disabled, as: .member), .joined(guest, as: .member),
+            .joined(ann, as: .member),
+        ])
+        state = state.applying(state.having(accounts: [promoted: .admin, registered: .member]))
+        #expect(state.members == [promoted: .admin, registered: .member, guest: .member, ann: .member])
+        // The same accounts again change nothing.
+        #expect(state.having(accounts: [promoted: .admin, registered: .member]).isEmpty)
+    }
+
     /// What's allowed once goes to exactly the one that asked: an object's own work asking for Bob
     /// doesn't give it to Bob's turn, nor Bob's turn to the object.
     @Test func onceGoesToExactlyTheOneThatAsked() {

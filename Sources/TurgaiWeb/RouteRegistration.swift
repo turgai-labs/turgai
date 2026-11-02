@@ -26,7 +26,7 @@ struct TurgaiRouteDependencies: Sendable {
     let channelSecrets: ChannelSecretStore
     /// Turgai's directory, where its own database is.
     let directory: URL
-    let runtimeSnapshots: @Sendable (Membership) async -> [TurgaiAgentRuntimeSnapshot]
+    let runtimeSnapshots: @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot]
     let userToolRegistry: UserToolRegistry
     let webChatBridge: TurgaiWebChatBridge
     /// Who's the same human as whom.

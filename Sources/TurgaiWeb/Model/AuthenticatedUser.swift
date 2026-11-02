@@ -55,10 +55,4 @@ enum AuthenticatedUser: Identifiable, Sendable, Equatable {
         }
     }
 
-    /// The account in Turgai's own space, as the accounts say: an admin when it's an
-    /// administrator. Its space settles whom what the dashboard asks for is on behalf of.
-    var dashboardMembership: Membership {
-        Membership(.account(id), as: { if case .administrator = self { .admin } else { .member } }())
-    }
-
 }

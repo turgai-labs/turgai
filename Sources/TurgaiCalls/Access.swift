@@ -16,7 +16,8 @@ public enum AccessLevel: Int, Codable, Sendable, Comparable {
 public enum Audience: Hashable, Codable, Sendable {
     /// Anyone at all.
     case everyone
-    /// Anyone a call says is in the space.
+    /// Anyone a call says is in the space, but a guest: what's shared with a whole space isn't
+    /// shared with whoever came into it as one.
     case space(SpaceID)
     /// Only those a call says are the space's admins.
     case admins(of: SpaceID)
@@ -29,7 +30,7 @@ public enum Audience: Hashable, Codable, Sendable {
     func includes(_ scope: CallScope) -> Bool {
         switch self {
         case .everyone: true
-        case .space(let space): space == scope.space
+        case .space(let space): space == scope.space && !scope.person.isGuest
         case .admins(let space): space == scope.space && scope.role == .admin
         case .person(let person): person == scope.person
         case .actor: false

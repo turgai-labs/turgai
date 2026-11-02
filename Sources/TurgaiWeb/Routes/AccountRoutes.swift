@@ -95,21 +95,24 @@ extension TurgaiMainWebApp {
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             let credentials = CredentialsFormValues(form: form)
+            let session: TurgaiSession
             do {
                 _ = try await auth.register(username: credentials.username, password: credentials.password)
-                let session = try await auth.signIn(
+                session = try await auth.signIn(
                     username: credentials.username,
                     password: credentials.password
-                )
-                return TurgaiWebSupport.redirect(
-                    to: "/chat",
-                    settingCookie: TurgaiWebSupport.sessionCookie(session.token)
                 )
             } catch {
                 return HTMLResponse {
                     RegisterAccountPage(error: TurgaiWebSupport.registrationErrorMessage(error))
                 }.response(from: request, context: context)
             }
+            // The new account in Turgai's own space, as every account that can sign in is.
+            try await dependencies.webChatBridge.follow(try await auth.accounts())
+            return TurgaiWebSupport.redirect(
+                to: "/chat",
+                settingCookie: TurgaiWebSupport.sessionCookie(session.token)
+            )
         }
     }
 
@@ -172,6 +175,8 @@ extension TurgaiMainWebApp {
                 default:
                     throw TurgaiAuthError.invalidUsername
                 }
+                // Turgai's own space follows the accounts: asking again tells it again.
+                try await dependencies.webChatBridge.follow(try await auth.accounts())
                 return TurgaiWebSupport.redirect(to: "/accounts")
             } catch {
                 let accounts = try await auth.accounts().map(TurgaiWebSupport.accountSummary)

@@ -12,17 +12,6 @@ public enum SpaceRole: String, Hashable, Codable, Sendable {
     case admin
 }
 
-/// Someone in a space, with their role there, as the space's platform says.
-public struct Membership: Hashable, Codable, Sendable {
-    public let person: UserID
-    public let role: SpaceRole
-
-    public init(_ person: UserID, as role: SpaceRole) {
-        self.person = person
-        self.role = role
-    }
-}
-
 /// A space's own identity: minted when the space is made, and only ever given by whoever holds it,
 /// never worked out from anything else.
 public struct SpaceID: Hashable, Codable, Sendable {
