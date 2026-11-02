@@ -53,6 +53,11 @@ public struct Spaces: Sendable {
         return (invite, token)
     }
 
+    /// Who's in the space `id`, each with their role, as `person`, one of them, sees them.
+    public func people(in id: SpaceID, for person: UserID) async throws -> [UserID: SpaceRole] {
+        try await Space.resolve(on: actorSystem, id: id).people(for: person)
+    }
+
     /// The invites to the space `id` that still work, as its admin `person` sees them.
     public func invites(to id: SpaceID, for person: UserID) async throws -> [SpaceInvite] {
         try await Space.resolve(on: actorSystem, id: id).openInvites(for: person)

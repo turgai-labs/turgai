@@ -453,6 +453,13 @@ public distributed actor Conversation {
         try await space.admit(person)
     }
 
+    /// `participant` in it, as `adder`, one of its people, adds them: a person only when they're
+    /// in its space.
+    public distributed func add(_ participant: Participant, by adder: TurgaiDomain.UserID) async throws {
+        if case .person(let person) = participant { _ = try await space().scope(of: person) }
+        try await changing { for event in try state.adding(participant, by: adder) { try await emit(event: event) } }
+    }
+
     /// `person` leaving it: it's off their list, and they no longer read it. Refused unless
     /// they're one of its people.
     public distributed func leave(_ person: TurgaiDomain.UserID) async throws {

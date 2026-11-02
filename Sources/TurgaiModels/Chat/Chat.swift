@@ -114,6 +114,36 @@ public struct Conversation: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// Someone in a conversation, as the API names them: a person, by their id, or an agent, by its
+/// bot id; with what they're called.
+public struct ParticipantSummary: Codable, Hashable, Sendable {
+    public enum Kind: String, Codable, Hashable, Sendable {
+        case person
+        case agent
+    }
+
+    public let kind: Kind
+    public let id: String
+    public let name: String
+
+    public init(kind: Kind, id: String, name: String) {
+        self.kind = kind
+        self.id = id
+        self.name = name
+    }
+}
+
+/// Someone to add to a conversation: a person in its space, by their id, or an agent, by its bot id.
+public struct AddParticipantRequest: Codable, Hashable, Sendable {
+    public let kind: ParticipantSummary.Kind
+    public let id: String
+
+    public init(kind: ParticipantSummary.Kind, id: String) {
+        self.kind = kind
+        self.id = id
+    }
+}
+
 /// What to call a conversation.
 public struct TitleConversationRequest: Codable, Equatable, Sendable {
     public let title: String

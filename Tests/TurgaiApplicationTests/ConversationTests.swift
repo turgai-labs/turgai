@@ -109,6 +109,23 @@ struct ConversationTests {
         #expect(MemoryPresentation.actions(for: MemoryTree([]), remembering: .off).map(\.label) == ["Turn memory on"])
     }
 
+    /// Only its people add someone: a person, or an agent while it has none; never a guest, either
+    /// way. Adding someone in it already changes nothing.
+    @Test
+    func onlyItsPeopleAddSomeone() throws {
+        var record = ConversationState(conversationID: conversationID)
+        for event in try record.starting(in: SpaceID(), answeredBy: AgentProfileID("conversation"), by: .ann) {
+            record.apply(event)
+        }
+        #expect(throws: ConversationRefusal.notInIt) { try record.adding(.person(.cat), by: .bob) }
+        #expect(throws: ConversationRefusal.guestsStayOut) { try record.adding(.person(.guest(UUID())), by: .ann) }
+        #expect(throws: ConversationRefusal.oneAgentForNow) { try record.adding(.agent(AgentProfileID("chef")), by: .ann) }
+
+        for event in try record.adding(.person(.bob), by: .ann) { record.apply(event) }
+        #expect(record.people == [.ann, .bob])
+        #expect(try record.adding(.person(.bob), by: .ann).isEmpty)
+    }
+
     @Test
     func failedConversationDoesNotAutomaticallyRetry() {
         var record = ConversationState(conversationID: conversationID)

@@ -105,6 +105,13 @@ public struct SpaceState: Hashable, Codable, Sendable {
         members[person]
     }
 
+    /// Who's in it, each with their role, as `person`, one of them, sees them: guests aren't
+    /// among them. Refused when they're not in it.
+    public func people(for person: UserID) throws(SpaceRefusal) -> [UserID: SpaceRole] {
+        guard members[person] != nil else { throw .notInIt }
+        return members.filter { !$0.key.isGuest }
+    }
+
     /// The people who decide for the space.
     public var admins: Set<UserID> {
         Set(members.filter { $0.value == .admin }.keys)

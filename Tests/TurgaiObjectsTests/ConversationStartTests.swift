@@ -41,6 +41,28 @@ struct ConversationStartTests {
         }
     }
 
+    /// One of its people adds someone in its space, who then reads it; someone who isn't in the
+    /// space can't be added. Its space's people are seen by those in it.
+    @Test func someoneInItsSpaceIsAdded() async throws {
+        try await withClusterSystem("add", store: MemoryEventStore(), hostsVirtualActors: true, people: []) { system in
+            let spaces = Spaces(actorSystem: system)
+            let family = try await spaces.make(named: SpaceName("Family")!, by: .ann)
+            let (_, token) = try await spaces.invite(to: family.id, by: .ann, for: .untilUsed)
+            _ = try await spaces.join(family.id, with: token, as: .bob)
+            let chat = try await Conversation.resolve(
+                on: system,
+                conversationID: ConversationID(channel: ChannelID("turgai"), externalAddress: .init(UUID().uuidString)))
+            try await chat.start(in: family.id, agent: conversation, by: .ann)
+
+            await #expect(throws: SpaceRefusal.notInIt) { try await chat.add(.person(.cat), by: .ann) }
+            try await chat.add(.person(.bob), by: .ann)
+            #expect(
+                try await chat.reading(by: .bob).participants == [.agent(conversation), .person(.ann), .person(.bob)])
+            #expect(try await spaces.people(in: family.id, for: .bob) == [.ann: .admin, .bob: .member])
+            await #expect(throws: SpaceRefusal.notInIt) { try await spaces.people(in: family.id, for: .cat) }
+        }
+    }
+
     /// A chat's first words make its space, named after it, with the admins its platform says,
     /// and start it there; whoever writes is in both, and it stays answered by the agent it
     /// started with.

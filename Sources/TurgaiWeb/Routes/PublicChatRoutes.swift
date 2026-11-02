@@ -370,6 +370,57 @@ extension TurgaiMainWebApp {
             return Response(status: .noContent)
         }
 
+        // Who's in it: its agent, and its people.
+        conversations.get(":id/participants") { request, context in
+            guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
+            guard
+                let conversation = try await apiConversation(
+                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
+            else { return conversationNotFound() }
+            let participants = Array(conversation.outline.participants)
+            let names = try await names(of: participants, auth: dependencies.auth, profiles: dependencies.agentProfiles)
+            return try publicAPIResponse(
+                participants.map { ParticipantSummary($0, name: names[$0] ?? "") }.sorted {
+                    ($0.kind == .agent ? 0 : 1, $0.name) < ($1.kind == .agent ? 0 : 1, $1.name)
+                })
+        }
+
+        // Someone added by one of its people: a person in its space, or an agent.
+        conversations.post(":id/participants") { request, context in
+            guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
+            guard
+                let conversation = try await apiConversation(
+                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
+            else { return conversationNotFound() }
+            let input = try await body(AddParticipantRequest.self, of: request, context: context)
+            let participant: Participant
+            switch input.kind {
+            case .person:
+                guard let person = try? TurgaiDomain.UserID(key: input.id) else {
+                    return publicAPIErrorResponse(
+                        status: .badRequest, code: "invalid_participant", message: "No person has that id.")
+                }
+                participant = .person(person)
+            case .agent:
+                guard let profile = try await dependencies.agentProfiles.profile(id: input.id),
+                    profile.availability == .enabled
+                else {
+                    return publicAPIErrorResponse(
+                        status: .notFound, code: "bot_not_found",
+                        message: "The requested bot does not exist or is disabled.")
+                }
+                participant = .agent(AgentProfileID(profile.id))
+            }
+            do {
+                try await dependencies.webChatBridge.add(participant, to: conversation.domainID, by: owner.person)
+            } catch let refusal as ConversationRefusal {
+                return conversationRefused(refusal)
+            } catch let refusal as SpaceRefusal {
+                return spaceRefused(refusal)
+            }
+            return Response(status: .noContent)
+        }
+
         // The person leaving it: it's off their list, and they no longer read it.
         conversations.delete(":id/me") { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
@@ -510,6 +561,22 @@ extension TurgaiMainWebApp {
             }
         }
 
+        spaces.get(":space/people") { request, context in
+            try await answering(request) { person, spaces in
+                guard let space = spaceID(in: context) else { return noSuchSpace() }
+                let people = try await spaces.people(in: space, for: person)
+                let names = try await names(
+                    of: people.keys.map(Participant.person), auth: auth, profiles: dependencies.agentProfiles)
+                return try publicAPIResponse(
+                    people.map { person, role in
+                        SpacePerson(
+                            id: person.key, name: names[.person(person)] ?? "",
+                            role: role == .admin ? .admin : .member)
+                    }
+                    .sorted { $0.name < $1.name })
+            }
+        }
+
         spaces.get(":space/invites") { request, context in
             try await answering(request) { person, spaces in
                 guard let space = spaceID(in: context) else { return noSuchSpace() }
@@ -637,6 +704,47 @@ private func apiConversation(
     }
     guard let agent = outline.agent else { return nil }
     return APIConversation(domainID: domainID, outline: outline, agent: agent)
+}
+
+/// What a conversation refused, as the API says it: one the person isn't in is one that isn't
+/// there.
+private func conversationRefused(_ refusal: ConversationRefusal) -> Response {
+    switch refusal {
+    case .notStarted, .notInIt: conversationNotFound()
+    case .guestsStayOut: publicAPIErrorResponse(status: .forbidden, code: "guests_stay_out", message: refusal.description)
+    case .alreadyStarted: publicAPIErrorResponse(status: .conflict, code: "already_started", message: refusal.description)
+    case .oneAgentForNow:
+        publicAPIErrorResponse(status: .conflict, code: "one_agent_for_now", message: refusal.description)
+    }
+}
+
+/// What each of `participants` is called, as the API shows them: an account by its username, an
+/// agent by its name, a Telegram person and a guest by what they are.
+private func names(
+    of participants: [Participant], auth: TurgaiAuth, profiles: TurgaiAgentProfileStore
+) async throws -> [Participant: String] {
+    let usernames = Dictionary(uniqueKeysWithValues: try await auth.accounts().map { ($0.id, $0.username) })
+    var names: [Participant: String] = [:]
+    for participant in participants {
+        names[participant] =
+            switch participant {
+            case .person(.account(let id)): usernames[id] ?? "Someone"
+            case .person(.telegram(let id)): "Telegram user \(id)"
+            case .person(.guest): "Guest"
+            case .agent(let agent): try await profiles.profile(id: agent.rawValue)?.name ?? agent.rawValue
+            }
+    }
+    return names
+}
+
+extension ParticipantSummary {
+    /// `participant` as the API names them, called `name`.
+    fileprivate init(_ participant: Participant, name: String) {
+        switch participant {
+        case .person(let person): self.init(kind: .person, id: person.key, name: name)
+        case .agent(let agent): self.init(kind: .agent, id: agent.rawValue, name: name)
+        }
+    }
 }
 
 /// The answer for a conversation the person can't read, or that isn't there.

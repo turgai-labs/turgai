@@ -108,6 +108,16 @@ public actor TurgaiWebChatBridge {
             .conversations(of: person)
     }
 
+    /// `participant` in the conversation `conversationID`, as `adder`, one of its people, adds them.
+    public func add(
+        _ participant: Participant, to conversationID: ConversationID, by adder: TurgaiDomain.UserID
+    ) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID).add(participant, by: adder)
+    }
+
     /// `person` leaving the conversation `conversationID`: refused unless they're in it.
     public func leave(_ conversationID: ConversationID, as person: TurgaiDomain.UserID) async throws {
         guard let runtime else {

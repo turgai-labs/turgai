@@ -575,12 +575,18 @@ public enum ConversationRefusal: Error, Equatable, Codable, Sendable, CustomStri
     case alreadyStarted
     /// They're not one of its people.
     case notInIt
+    /// A guest neither adds anyone to a conversation nor is added to one.
+    case guestsStayOut
+    /// It has its agent: for now, a conversation has one.
+    case oneAgentForNow
 
     public var description: String {
         switch self {
         case .notStarted: "This conversation hasn't started."
         case .alreadyStarted: "This conversation has started already."
         case .notInIt: "You're not in this conversation."
+        case .guestsStayOut: "A guest can't add anyone to a conversation, or be added to one."
+        case .oneAgentForNow: "This conversation has its agent: for now, a conversation has one."
         }
     }
 }
@@ -863,6 +869,20 @@ public struct ConversationState: Hashable, Codable, Sendable {
     /// `person` one of its people, as someone writing in its chat is: none for someone already in it.
     public func admitting(_ person: UserID) -> ConversationEvent? {
         participants.contains(.person(person)) ? nil : .joined(.person(person))
+    }
+
+    /// `participant` in it, as `adder`, one of its people, adds them: refused for a guest either
+    /// way, and for a second agent; none for someone in it already.
+    public func adding(_ participant: Participant, by adder: UserID) throws(ConversationRefusal) -> [ConversationEvent] {
+        _ = try reading(by: adder)
+        guard !participants.contains(participant) else { return [] }
+        switch participant {
+        case .person(let person):
+            guard !adder.isGuest, !person.isGuest else { throw .guestsStayOut }
+        case .agent:
+            guard agents.isEmpty else { throw .oneAgentForNow }
+        }
+        return [.joined(participant)]
     }
 
     /// `person` leaving it: refused unless they're one of its people. Its agent stays.

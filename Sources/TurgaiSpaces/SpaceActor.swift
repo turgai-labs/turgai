@@ -173,6 +173,12 @@ public distributed actor Space {
         return SpaceListing(id: state.id, name: name, role: role)
     }
 
+    /// Who's in it, each with their role, as `person`, one of them, sees them: guests aren't among
+    /// them.
+    public distributed func people(for person: UserID) throws -> [UserID: SpaceRole] {
+        try state.people(for: person)
+    }
+
     /// The invites that still work, as its admin `person` sees them.
     public distributed func openInvites(for person: UserID) throws -> [SpaceInvite] {
         guard state.role(of: person) == .admin else { throw SpaceRefusal.onlyAdmins }

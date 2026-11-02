@@ -22,6 +22,20 @@ public struct SpaceSummary: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// Someone in a space, as another of its people sees them: their id, what they're called, and their
+/// role.
+public struct SpacePerson: Codable, Hashable, Sendable, Identifiable {
+    public let id: String
+    public let name: String
+    public let role: SpaceSummary.Role
+
+    public init(id: String, name: String, role: SpaceSummary.Role) {
+        self.id = id
+        self.name = name
+        self.role = role
+    }
+}
+
 /// A new space, called `name`: the one who asks is its first admin.
 public struct MakeSpaceRequest: Codable, Hashable, Sendable {
     public let name: String
