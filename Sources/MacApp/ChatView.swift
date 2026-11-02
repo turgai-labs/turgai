@@ -14,7 +14,7 @@ struct ChatView: View {
     var body: some View {
         ScrollViewReader { reader in
             ScrollView {
-                MessageList(messages: state.messages, pending: state.pending, turn: state.turn)
+                MessageList(messages: state.messages, you: state.you, pending: state.pending, turn: state.turn)
             }
             // The messages run under the floating bars, softened at the edges.
             .safeAreaInset(edge: .top, spacing: 0) { header }
@@ -106,13 +106,28 @@ struct ChatView: View {
     }
 }
 
-/// A message: the user's on the right in coral, the bot's on the left in glass.
+/// A message: the user's own on the right in coral, someone else's on the left with their name,
+/// the bot's on the left in glass.
 private struct Bubble: View {
     let role: MessageRole
     let text: String
+    /// Who wrote it, when that's someone else.
+    var someoneElse: String? = nil
 
     var body: some View {
         switch role {
+        case .user where someoneElse != nil:
+            VStack(alignment: .leading, spacing: 4) {
+                Text(someoneElse ?? "").font(.caption.weight(.semibold)).foregroundStyle(Color.turgaiMuted)
+                Text(text)
+                    .textSelection(.enabled)
+                    .foregroundStyle(Color.turgaiInk)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            }
+            .frame(maxWidth: 520, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         case .user:
             Text(text)
                 .textSelection(.enabled)
@@ -196,13 +211,19 @@ private struct Composer: View {
 /// The conversation: what was said, what's sent but not yet taken, and the turn running now.
 private struct MessageList: View {
     let messages: [Message]
+    /// The id of the person this app is.
+    let you: String?
     let pending: [SendMessageRequest]
     let turn: ChatFeature.Turn?
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 12) {
             ForEach(messages) { (message: Message) in
-                Bubble(role: message.role, text: message.text).id(message.id)
+                Bubble(
+                    role: message.role, text: message.text,
+                    someoneElse: message.author.flatMap { $0.kind == .person && $0.id != you ? $0.name : nil }
+                )
+                .id(message.id)
             }
             ForEach(pending) { (request: SendMessageRequest) in
                 Bubble(role: .user, text: request.text).opacity(0.55).id(request.id)

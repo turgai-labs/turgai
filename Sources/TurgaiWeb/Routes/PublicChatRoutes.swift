@@ -119,11 +119,13 @@ extension TurgaiMainWebApp {
 
             let userID = owner.person
             let participantID = ParticipantID(channel: turgaiChannel, rawValue: userID.key)
+            let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
 
             do {
                 let writer = PublicChatSocketWriter(outbound: outbound)
-                let history = try await dependencies.webChatBridge.conversationHistory(
-                    of: conversation.domainID, for: userID)
+                let history = try await publicAPIMessages(
+                    try await dependencies.webChatBridge.conversationHistory(of: conversation.domainID, for: userID),
+                    names: names)
                 let status = try await dependencies.webChatBridge.conversationStatus(
                     of: conversation.domainID, for: userID)
 
@@ -131,10 +133,8 @@ extension TurgaiMainWebApp {
                 // Otherwise a live update can arrive first and then be erased
                 // by the history OOB replacement.
                 if query["format"] == "html" {
-                    let htmlWriter = HTMLChatSocketWriter(outbound: outbound)
-                    try await htmlWriter.write(
-                        ChatLiveFragment.history(history.map(publicAPIMessage))
-                    )
+                    let htmlWriter = HTMLChatSocketWriter(outbound: outbound, viewer: userID, names: names)
+                    try await htmlWriter.write(ChatLiveFragment.history(history.map { $0.shown(to: userID) }))
                     if case .running = status {
                         try await htmlWriter.write(ChatLiveFragment.started())
                     }
@@ -160,7 +160,8 @@ extension TurgaiMainWebApp {
                         session: session,
                         conversation: conversation,
                         participantID: participantID,
-                        userID: userID
+                        userID: userID,
+                        names: names
                     )
                     return
                 }
@@ -169,14 +170,15 @@ extension TurgaiMainWebApp {
                         payload: .ready(
                             conversationID: conversation.publicID,
                             botID: .init(rawValue: conversation.agent.rawValue),
-                            status: publicConversationStatus(status)
+                            status: publicConversationStatus(status),
+                            you: userID.key
                         ))
                 )
                 try await writer.write(
                     .init(
                         payload: .history(
                             conversationID: conversation.publicID,
-                            messages: history.map(publicAPIMessage)
+                            messages: history
                         ))
                 )
                 // The agent's turns, step by step; the chat works without them.
@@ -271,7 +273,8 @@ extension TurgaiMainWebApp {
                         for await delivery in session.output {
                             if let event = PublicChatEvent(
                                 event: delivery.event,
-                                publicConversationID: conversation.publicID
+                                publicConversationID: conversation.publicID,
+                                author: try await author(of: delivery.event, answeredBy: conversation.agent, names: names)
                             ).event {
                                 try await writer.write(event)
                             }
@@ -377,12 +380,13 @@ extension TurgaiMainWebApp {
                 let conversation = try await apiConversation(
                     context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
             else { return conversationNotFound() }
-            let participants = Array(conversation.outline.participants)
-            let names = try await names(of: participants, auth: dependencies.auth, profiles: dependencies.agentProfiles)
+            let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
+            var participants: [ParticipantSummary] = []
+            for participant in conversation.outline.participants {
+                participants.append(try await names.summary(of: participant))
+            }
             return try publicAPIResponse(
-                participants.map { ParticipantSummary($0, name: names[$0] ?? "") }.sorted {
-                    ($0.kind == .agent ? 0 : 1, $0.name) < ($1.kind == .agent ? 0 : 1, $1.name)
-                })
+                participants.sorted { ($0.kind == .agent ? 0 : 1, $0.name) < ($1.kind == .agent ? 0 : 1, $1.name) })
         }
 
         // Someone added by one of its people: a person in its space, or an agent.
@@ -564,16 +568,15 @@ extension TurgaiMainWebApp {
         spaces.get(":space/people") { request, context in
             try await answering(request) { person, spaces in
                 guard let space = spaceID(in: context) else { return noSuchSpace() }
-                let people = try await spaces.people(in: space, for: person)
-                let names = try await names(
-                    of: people.keys.map(Participant.person), auth: auth, profiles: dependencies.agentProfiles)
-                return try publicAPIResponse(
-                    people.map { person, role in
+                let names = ParticipantNames(auth: auth, profiles: dependencies.agentProfiles)
+                var people: [SpacePerson] = []
+                for (person, role) in try await spaces.people(in: space, for: person) {
+                    people.append(
                         SpacePerson(
-                            id: person.key, name: names[.person(person)] ?? "",
-                            role: role == .admin ? .admin : .member)
-                    }
-                    .sorted { $0.name < $1.name })
+                            id: person.key, name: try await names.name(of: .person(person)),
+                            role: role == .admin ? .admin : .member))
+                }
+                return try publicAPIResponse(people.sorted { $0.name < $1.name })
             }
         }
 
@@ -620,7 +623,8 @@ extension TurgaiMainWebApp {
             do {
                 let history = try await dependencies.webChatBridge.conversationHistory(
                     of: conversation.domainID, for: owner.person)
-                return try publicAPIResponse(history.map(publicAPIMessage))
+                let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
+                return try publicAPIResponse(try await publicAPIMessages(history, names: names))
             } catch {
                 return publicAPIErrorResponse(
                     status: .serviceUnavailable,
@@ -652,7 +656,8 @@ extension TurgaiMainWebApp {
                     text: text,
                     conversation: conversation,
                     as: owner.person,
-                    bridge: dependencies.webChatBridge
+                    bridge: dependencies.webChatBridge,
+                    names: ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
                 )
                 var response = try publicAPIResponse(event)
                 if case .guest(_, let token) = owner { response.setCookie(TurgaiWebSupport.guestCookie(token)) }
@@ -718,23 +723,46 @@ private func conversationRefused(_ refusal: ConversationRefusal) -> Response {
     }
 }
 
-/// What each of `participants` is called, as the API shows them: an account by its username, an
-/// agent by its name, a Telegram person and a guest by what they are.
-private func names(
-    of participants: [Participant], auth: TurgaiAuth, profiles: TurgaiAgentProfileStore
-) async throws -> [Participant: String] {
-    let usernames = Dictionary(uniqueKeysWithValues: try await auth.accounts().map { ($0.id, $0.username) })
-    var names: [Participant: String] = [:]
-    for participant in participants {
-        names[participant] =
+/// What participants are called, as the API shows them, each looked up once: an account by its
+/// username, an agent by its name, a Telegram person and a guest by what they are.
+private actor ParticipantNames {
+    private let auth: TurgaiAuth
+    private let profiles: TurgaiAgentProfileStore
+    private var known: [Participant: String] = [:]
+
+    init(auth: TurgaiAuth, profiles: TurgaiAgentProfileStore) {
+        self.auth = auth
+        self.profiles = profiles
+    }
+
+    /// `participant` as the API names them.
+    func summary(of participant: Participant) async throws -> ParticipantSummary {
+        ParticipantSummary(participant, name: try await name(of: participant))
+    }
+
+    func name(of participant: Participant) async throws -> String {
+        if let name = known[participant] { return name }
+        let name =
             switch participant {
-            case .person(.account(let id)): usernames[id] ?? "Someone"
+            case .person(.account(let id)): try await auth.accounts().first { $0.id == id }?.username ?? "Someone"
             case .person(.telegram(let id)): "Telegram user \(id)"
             case .person(.guest): "Guest"
             case .agent(let agent): try await profiles.profile(id: agent.rawValue)?.name ?? agent.rawValue
             }
+        known[participant] = name
+        return name
     }
-    return names
+}
+
+extension TurgaiModels.Message {
+    /// It as `viewer` is shown it in the web chat: with its author only when that's someone else,
+    /// a person.
+    fileprivate func shown(to viewer: TurgaiDomain.UserID) -> Self {
+        guard let author, author.kind == .person, author.id != viewer.key else {
+            return Self(id: id, role: role, text: text)
+        }
+        return self
+    }
 }
 
 extension ParticipantSummary {
@@ -843,13 +871,35 @@ private func chatOwner(from request: Request, auth: TurgaiAuth) async -> ChatOwn
     return nil
 }
 
-private func publicAPIMessage(_ entry: ConversationHistoryEntry) -> TurgaiModels.Message {
-    let value = entry.id.split(separator: ":").last.map(String.init) ?? entry.id
-    return .init(
-        id: .init(rawValue: UUID(uuidString: value) ?? UUID()),
-        role: entry.role == .user ? .user : .assistant,
-        text: entry.text
-    )
+/// `history`, as the API shows it, each message with its author.
+private func publicAPIMessages(
+    _ history: [ConversationHistoryEntry], names: ParticipantNames
+) async throws -> [TurgaiModels.Message] {
+    var messages: [TurgaiModels.Message] = []
+    for entry in history {
+        let value = entry.id.split(separator: ":").last.map(String.init) ?? entry.id
+        let author: ParticipantSummary? = if let author = entry.author { try await names.summary(of: author) } else { nil }
+        messages.append(
+            .init(
+                id: .init(rawValue: UUID(uuidString: value) ?? UUID()),
+                role: entry.role == .user ? .user : .assistant,
+                text: entry.text,
+                author: author
+            ))
+    }
+    return messages
+}
+
+/// Who said what `event` carries, as the API names them: a person's message's author, or the agent
+/// that answers for what it says; none for the rest.
+private func author(
+    of event: OutboundEvent, answeredBy agent: AgentProfileID, names: ParticipantNames
+) async throws -> ParticipantSummary? {
+    switch event {
+    case .reply(.userMessage(_, _, _, _, let person)): try await names.summary(of: .person(person))
+    case .reply(.partial), .reply(.finished): try await names.summary(of: .agent(agent))
+    default: nil
+    }
 }
 
 private func publicAPIResponse<T: Encodable>(
@@ -951,7 +1001,8 @@ private func send(
     text: String,
     conversation: APIConversation,
     as person: TurgaiDomain.UserID,
-    bridge: TurgaiWebChatBridge
+    bridge: TurgaiWebChatBridge,
+    names: ParticipantNames
 ) async throws -> TurgaiModels.ChatEvent {
     let session: TurgaiConnections.WebSession
     do {
@@ -964,7 +1015,8 @@ private func send(
         for await delivery in session.output {
             let event = PublicChatEvent(
                 event: delivery.event,
-                publicConversationID: conversation.publicID
+                publicConversationID: conversation.publicID,
+                author: try? await author(of: delivery.event, answeredBy: conversation.agent, names: names)
             ).event
             await delivery.delivered()
             guard let event else { continue }
@@ -1051,10 +1103,15 @@ private enum PublicChatSocketWriterError: Error {
 
 private actor HTMLChatSocketWriter {
     private let outbound: WebSocketOutboundWriter
+    /// Who the chat is shown to: their own messages are shown without their name.
+    private let viewer: TurgaiDomain.UserID
+    private let names: ParticipantNames
     private var activeTurns: Set<UUID> = []
 
-    init(outbound: WebSocketOutboundWriter) {
+    init(outbound: WebSocketOutboundWriter, viewer: TurgaiDomain.UserID, names: ParticipantNames) {
         self.outbound = outbound
+        self.viewer = viewer
+        self.names = names
     }
 
     func write(_ html: String) async throws {
@@ -1062,18 +1119,24 @@ private actor HTMLChatSocketWriter {
     }
 
     func write(_ event: OutboundEvent) async throws {
-        guard let fragment = fragment(for: event) else { return }
+        // Another person's message is shown with their name.
+        var author: ParticipantSummary?
+        if case .reply(.userMessage(_, _, _, _, let person)) = event, person != viewer {
+            author = try await names.summary(of: .person(person))
+        }
+        guard let fragment = fragment(for: event, author: author) else { return }
         try await write(fragment)
     }
 
-    /// The HTML for `event`, or `nil` for what the web chat doesn't show, such as a turn's steps.
-    private func fragment(for event: OutboundEvent) -> String? {
+    /// The HTML for `event`, its message said by `author` when that's shown, or `nil` for what the
+    /// web chat doesn't show, such as a turn's steps.
+    private func fragment(for event: OutboundEvent, author: ParticipantSummary?) -> String? {
         switch event {
         case .reply(let reply):
             switch reply {
-            case .userMessage(_, _, let messageID, let text):
+            case .userMessage(_, _, let messageID, let text, _):
                 return ChatLiveFragment.accepted(
-                    .init(id: .init(rawValue: messageID.rawValue), role: .user, text: text)
+                    .init(id: .init(rawValue: messageID.rawValue), role: .user, text: text, author: author)
                 )
             case .started:
                 return ChatLiveFragment.started()
@@ -1156,11 +1219,10 @@ private func runHTMLChatSocket(
     session: TurgaiConnections.WebSession,
     conversation: APIConversation,
     participantID: ParticipantID,
-    userID: TurgaiDomain.UserID
+    userID: TurgaiDomain.UserID,
+    names: ParticipantNames
 ) async throws {
-    let writer = HTMLChatSocketWriter(
-        outbound: outbound
-    )
+    let writer = HTMLChatSocketWriter(outbound: outbound, viewer: userID, names: names)
     // Ending the HTTP upgrade must end the session input: LiveSession.run()
     // only returns when input finishes, and TurgaiConnections removes the
     // conversation connection right after. Without this, every closed tab
@@ -1232,15 +1294,18 @@ private struct PublicChatEvent: Sendable {
     /// What the client is sent, or `nil` for what the API doesn't show.
     let event: TurgaiModels.ChatEvent?
 
+    /// `event` as the API sends it, its message said by `author`.
     init(
         event: OutboundEvent,
-        publicConversationID: TurgaiModels.ConversationID
+        publicConversationID: TurgaiModels.ConversationID,
+        author: ParticipantSummary?
     ) {
         switch event {
         case .reply(let reply):
             self.event = Self.replyEvent(
                 reply,
-                publicConversationID: publicConversationID
+                publicConversationID: publicConversationID,
+                author: author
             )
         case .notice(_, let turnID, let text),
             .noticeWithActions(_, let turnID, let text, _):
@@ -1273,10 +1338,11 @@ private struct PublicChatEvent: Sendable {
 
     private static func replyEvent(
         _ reply: ReplyEvent,
-        publicConversationID: TurgaiModels.ConversationID
+        publicConversationID: TurgaiModels.ConversationID,
+        author: ParticipantSummary?
     ) -> TurgaiModels.ChatEvent {
         switch reply {
-        case .userMessage(_, let turnID, let messageID, let text):
+        case .userMessage(_, let turnID, let messageID, let text, _):
             return .init(
                 payload: .messageAccepted(
                     conversationID: publicConversationID,
@@ -1284,7 +1350,8 @@ private struct PublicChatEvent: Sendable {
                     message: .init(
                         id: .init(rawValue: messageID.rawValue),
                         role: .user,
-                        text: text
+                        text: text,
+                        author: author
                     )
                 )
             )
@@ -1332,7 +1399,8 @@ private struct PublicChatEvent: Sendable {
                     message: .init(
                         id: .init(rawValue: turnID.rawValue),
                         role: .assistant,
-                        text: text
+                        text: text,
+                        author: author
                     )
                 )
             )
@@ -1344,7 +1412,8 @@ private struct PublicChatEvent: Sendable {
                     message: .init(
                         id: .init(rawValue: turnID.rawValue),
                         role: .assistant,
-                        text: text
+                        text: text,
+                        author: author
                     )
                 )
             )

@@ -250,7 +250,7 @@ enum TelegramDelivery {
         switch event {
         case .reply(let reply):
             switch reply {
-            case .userMessage(_, let turnID, _, _):
+            case .userMessage(_, let turnID, _, _, _):
                 turnID
             case .started(_, let turnID),
                 .phase(_, let turnID, _),

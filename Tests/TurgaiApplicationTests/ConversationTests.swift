@@ -126,6 +126,22 @@ struct ConversationTests {
         #expect(try record.adding(.person(.bob), by: .ann).isEmpty)
     }
 
+    /// What's said is kept with who said it: the person who wrote it, and the agent that answered.
+    @Test
+    func historyKeepsWhoSaidIt() throws {
+        var record = ConversationState(conversationID: conversationID)
+        let agent = AgentProfileID("conversation")
+        for event in try record.starting(in: SpaceID(), answeredBy: agent, by: .ann) { record.apply(event) }
+        let asked = PendingConversationMessage(
+            message: InboundMessage(
+                conversationID: conversationID, participantID: ParticipantID("ann"), userID: .ann,
+                text: "plan dinner", receivedAt: Date(timeIntervalSince1970: 1)),
+            turnID: TurnID(), agentRole: agent.rawValue)
+        record.apply(.inbox(.turnStarted(asked)))
+        record.apply(.replyQueued(PendingConversationReply(turnID: asked.turnID, reply: ConversationReply("pasta")!)))
+        #expect(record.history.map(\.author) == [.person(.ann), .agent(agent)])
+    }
+
     @Test
     func failedConversationDoesNotAutomaticallyRetry() {
         var record = ConversationState(conversationID: conversationID)

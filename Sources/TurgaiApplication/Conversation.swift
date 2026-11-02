@@ -1099,7 +1099,8 @@ public distributed actor Conversation {
                     conversationID: conversationID,
                     turnID: pending.turnID,
                     messageID: pending.message.id,
-                    text: pending.message.text
+                    text: pending.message.text,
+                    author: pending.message.userID
                 )
             )
         )

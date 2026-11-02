@@ -931,6 +931,17 @@ html[data-theme="dark"] .button-accent:hover {
     color: var(--chat-assistant-ink);
     --chat-background: var(--signal-blue);
 }
+.chat-message-other {
+    align-self: flex-start;
+    margin-right: auto;
+    color: var(--ink);
+    --chat-background: var(--signal-coral);
+}
+.chat-message-author {
+    margin-bottom: .15rem;
+    font-size: .8em;
+    font-weight: 600;
+}
 .chat-message-live-update::before { animation: none; }
 .chat-message-content.markdown-body {
     display: block;

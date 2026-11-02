@@ -663,11 +663,15 @@ public struct ConversationHistoryEntry: Hashable, Codable, Sendable, Identifiabl
     public let id: String
     public let role: ConversationHistoryRole
     public let text: String
+    /// Who said it: the person who wrote it, or the agent that answered; none for what no one said,
+    /// such as a turn that failed.
+    public let author: Participant?
 
-    public init(id: String, role: ConversationHistoryRole, text: String) {
+    public init(id: String, role: ConversationHistoryRole, text: String, author: Participant? = nil) {
         self.id = id
         self.role = role
         self.text = text
+        self.author = author
     }
 }
 
@@ -822,12 +826,16 @@ public struct ConversationState: Hashable, Codable, Sendable {
             if !pendingReplies.contains(pending) {
                 pendingReplies.append(pending)
             }
+            // Said by the agent whose turn it was.
+            let answering = inbox.activeMessage.flatMap { $0.turnID == pending.turnID ? $0.agentRole : nil }
+            let agent = answering.map(AgentProfileID.init) ?? agents.first
             inbox = inbox.answered(pending.turnID)
             appendHistory(
                 ConversationHistoryEntry(
                     id: "reply:\(pending.turnID.rawValue.uuidString)",
                     role: .assistant,
-                    text: pending.text
+                    text: pending.text,
+                    author: agent.map(Participant.agent)
                 )
             )
 
@@ -921,7 +929,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
             ConversationHistoryEntry(
                 id: "message:\(message.id.rawValue.uuidString)",
                 role: .user,
-                text: message.text
+                text: message.text,
+                author: .person(message.userID)
             )
         )
     }
@@ -970,7 +979,8 @@ public enum ReplyEvent: Hashable, Codable, Sendable {
         conversationID: ConversationID,
         turnID: TurnID,
         messageID: MessageID,
-        text: String
+        text: String,
+        author: UserID
     )
     case started(conversationID: ConversationID, turnID: TurnID)
     case phase(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)

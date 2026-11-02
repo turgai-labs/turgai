@@ -39,14 +39,25 @@ struct ChatLiveMessage: HTML, Sendable {
         let id =
             turnID.map { "turn-\($0.rawValue.uuidString)" }
             ?? "message-\(message.id.rawValue.uuidString)"
-        let role = message.role == .user ? "user" : "assistant"
         let liveUpdateClass = liveUpdate ? " chat-message-live-update" : ""
         div(
             .id(id),
-            .class("chat-message chat-message-\(role)\(liveUpdateClass)"),
+            .class("chat-message \(Self.kind(of: message))\(liveUpdateClass)"),
             .hx.swapOOB(.outerHTML)
         ) {
             ChatLiveMessageBody(message: message)
+        }
+    }
+}
+
+extension HTML {
+    /// The class of `message`'s bubble: the viewer's own on the right, someone else's on the left
+    /// with their name, the agent's on the left.
+    static func kind(of message: Message) -> String {
+        switch (message.role, message.author) {
+        case (.user, nil): "chat-message-user"
+        case (.user, _?): "chat-message-other"
+        case (.assistant, _): "chat-message-assistant"
         }
     }
 }
@@ -55,6 +66,9 @@ struct ChatLiveMessageBody: HTML, Sendable {
     let message: Message
 
     var body: some HTML {
+        if message.role == .user, let author = message.author {
+            div(.class("chat-message-author")) { author.name }
+        }
         div(.class("chat-message-content markdown-body")) {
             HTMLRaw(MarkdownRenderer.html(from: message.text))
         }
@@ -67,10 +81,9 @@ struct ChatLiveAppendedMessage: HTML, Sendable {
     var body: some HTML {
         div(.hx.swapOOB(.beforeEnd, "#chat-messages-content")) {
             let id = "message-\(message.id.rawValue.uuidString)"
-            let role = message.role == .user ? "user" : "assistant"
             div(
                 .id(id),
-                .class("chat-message chat-message-\(role)"),
+                .class("chat-message \(Self.kind(of: message))"),
                 .init(
                     name: "data-conversation-message-id",
                     value: message.id.rawValue.uuidString
@@ -92,17 +105,14 @@ struct ChatLiveHistoryMessage: HTML, Sendable {
     let message: Message
 
     var body: some HTML {
-        let role = message.role == .user ? "user" : "assistant"
         div(
-            .class("chat-message chat-message-\(role)"),
+            .class("chat-message \(Self.kind(of: message))"),
             .init(
                 name: "data-conversation-message-id",
                 value: message.id.rawValue.uuidString
             )
         ) {
-            div(.class("chat-message-content markdown-body")) {
-                HTMLRaw(MarkdownRenderer.html(from: message.text))
-            }
+            ChatLiveMessageBody(message: message)
         }
     }
 }

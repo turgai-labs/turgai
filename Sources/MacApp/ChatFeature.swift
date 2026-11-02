@@ -24,6 +24,8 @@ struct ChatFeature {
     @ObservableState
     struct State: Equatable {
         var connection = Connection.connecting
+        /// The id of the person this app is, as the conversation says: their own messages are theirs.
+        var you: String?
         var messages: [Message] = []
         /// Sent, but not yet accepted by the conversation.
         var pending: [SendMessageRequest] = []
@@ -132,8 +134,9 @@ struct ChatFeature {
 
     private func apply(_ payload: ChatEvent.Payload, to state: inout State) {
         switch payload {
-        case .ready(_, let botID, let status):
+        case .ready(_, let botID, let status, let you):
             state.connection = .connected(botID: botID)
+            state.you = you
             state.turn = status == .running ? Turn() : nil
         case .history(_, let messages):
             state.messages = messages

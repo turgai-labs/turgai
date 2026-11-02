@@ -162,11 +162,14 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
     public let id: MessageID
     public let role: MessageRole
     public let text: String
+    /// Who said it: the person who wrote it, or the agent that answered.
+    public let author: ParticipantSummary?
 
-    public init(id: MessageID, role: MessageRole, text: String) {
+    public init(id: MessageID, role: MessageRole, text: String, author: ParticipantSummary? = nil) {
         self.id = id
         self.role = role
         self.text = text
+        self.author = author
     }
 }
 
@@ -295,10 +298,12 @@ public enum ConversationPhase: String, Codable, Sendable {
 public struct ChatEvent: Codable, Equatable, Sendable {
     public enum Payload: Equatable, Sendable {
         /// The conversation is open.
+        /// The conversation is open, for `you`: the id of the person the client is.
         case ready(
             conversationID: ConversationID,
             botID: BotID,
-            status: ConversationStatus
+            status: ConversationStatus,
+            you: String
         )
         case history(
             conversationID: ConversationID,
@@ -385,7 +390,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
     public var type: ChatEventKind { payload.type }
 
     private enum CodingKeys: String, CodingKey {
-        case type, conversationID, botID, turnID
+        case type, conversationID, botID, turnID, you
         case status, phase, activity, message, messages, error
         case request, requestID, answer
         case turns, step
@@ -400,7 +405,8 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             payload = .ready(
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
                 botID: try values.decode(BotID.self, forKey: .botID),
-                status: try values.decode(ConversationStatus.self, forKey: .status)
+                status: try values.decode(ConversationStatus.self, forKey: .status),
+                you: try values.decode(String.self, forKey: .you)
             )
         case .history:
             payload = .history(
@@ -484,10 +490,11 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         try values.encode(type, forKey: .type)
 
         switch payload {
-        case .ready(let conversationID, let botID, let status):
+        case .ready(let conversationID, let botID, let status, let you):
             try values.encode(conversationID, forKey: .conversationID)
             try values.encode(botID, forKey: .botID)
             try values.encode(status, forKey: .status)
+            try values.encode(you, forKey: .you)
         case .history(let conversationID, let messages):
             try values.encode(conversationID, forKey: .conversationID)
             try values.encode(messages, forKey: .messages)
