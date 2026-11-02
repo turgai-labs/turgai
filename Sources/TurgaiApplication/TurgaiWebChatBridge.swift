@@ -51,30 +51,25 @@ public actor TurgaiWebChatBridge {
         )
     }
 
-    /// Turgai's own space following `accounts`: each that can sign in is in it, an administrator
-    /// as its admin. Before the runtime runs there's no space to tell: it's told every account as
-    /// it starts.
+    /// Turgai's own space following `accounts`: called Turgai, with each account that can sign in
+    /// in it, an administrator as its admin. Before the runtime runs there's no space to tell: it's
+    /// told every account as it starts.
     public func follow(_ accounts: [Account]) async throws {
         guard let runtime else { return }
         let inIt = accounts.filter { $0.status != .disabled }.map { account -> (TurgaiDomain.UserID, SpaceRole) in
             (.account(account.id), account.role == .administrator ? .admin : .member)
         }
         try await Space.resolve(on: runtime.actorSystem, id: runtime.turgaiSpace)
-            .setAccounts(Dictionary(uniqueKeysWithValues: inIt))
+            .follow(accounts: Dictionary(uniqueKeysWithValues: inIt), named: Self.turgaisName)
     }
+
+    /// What Turgai's own space is called.
+    private static let turgaisName = SpaceName("Turgai")!
 
     /// `guest` in Turgai's own space, as a member: where their conversations are.
     public func admit(guest: TurgaiDomain.UserID) async throws {
         guard let runtime else { throw TurgaiWebChatBridgeError.runtimeUnavailable }
         try await Space.resolve(on: runtime.actorSystem, id: runtime.turgaiSpace).admit(guest)
-    }
-
-    /// Every conversation there is, in the order they started.
-    public func conversationIDs() async throws -> [ConversationID] {
-        guard let runtime else {
-            throw TurgaiWebChatBridgeError.runtimeUnavailable
-        }
-        return try await runtime.conversations.all()
     }
 
     /// What a person does with spaces, once the runtime runs.
@@ -93,12 +88,29 @@ public actor TurgaiWebChatBridge {
         return try await runtime.channels.ids(TelegramProvider.providerID)
     }
 
-    /// Starts the conversation `conversationID`, unless it's started already.
-    public func startConversation(_ conversationID: ConversationID) async throws {
+    /// Starts the conversation `conversationID` in `space`, or else Turgai's own, answered by
+    /// `agent`, with `person` the first of its people: refused unless they're in that space.
+    public func startConversation(
+        _ conversationID: ConversationID, in space: SpaceID?, agent: String, by person: TurgaiDomain.UserID
+    ) async throws {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
+        try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID)
+            .start(in: space ?? runtime.turgaiSpace, agent: agent, by: person)
         try await runtime.conversations.add(conversationID)
+    }
+
+    /// How the conversation `conversationID` started, as `person` reads it: refused unless they're
+    /// one of its people.
+    public func conversation(
+        _ conversationID: ConversationID, readBy person: TurgaiDomain.UserID
+    ) async throws -> ConversationStart {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID)
+            .reading(by: person)
     }
 
     public func openSession(id: WebSessionID) async throws -> TurgaiConnections.WebSession {
@@ -168,68 +180,58 @@ public actor TurgaiWebChatBridge {
         try await runtime.channels.remove(id)
     }
 
+    /// What's been said in a conversation, as `person` reads it: refused unless they're in it.
     public func conversationHistory(
-        for conversationID: ConversationID,
-        role: TurgaiAgentRole
+        of conversationID: ConversationID, for person: TurgaiDomain.UserID
     ) async throws -> [ConversationHistoryEntry] {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        return try await runtime.connections.conversationHistory(
-            for: conversationID,
-            role: role
-        )
+        return try await runtime.connections.history(of: conversationID, for: person)
     }
 
-    /// The objects `person` may read, as they list them in a conversation: on their behalf, in its
-    /// space.
-    public func objects(
-        listedTo person: TurgaiDomain.UserID,
-        in conversationID: ConversationID,
-        role: TurgaiAgentRole
-    ) async throws -> [ObjectEntry] {
+    /// The objects `person` may read, as they list them in Turgai's own space: on their behalf.
+    public func objects(listedTo person: TurgaiDomain.UserID) async throws -> [ObjectEntry] {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        let scope = try await runtime.connections.scope(of: person, in: conversationID, role: role)
+        let scope = try await Space.resolve(on: runtime.actorSystem, id: runtime.turgaiSpace).scope(of: person)
         return try await CallChain.$current.withValue(.start(scope, in: nil)) { try await runtime.objectCatalog.entries() }
     }
 
     /// Shares the object made here as `identity` with everyone, as far as `level`, or takes their
-    /// access away, on behalf of `person` in a conversation: refused unless they may change it.
+    /// access away, on behalf of `person` in Turgai's own space: refused unless they may change it.
     public func share(
-        _ identity: ObjectIdentity, withEveryone level: AccessLevel?,
-        by person: TurgaiDomain.UserID, in conversationID: ConversationID, role: TurgaiAgentRole
+        _ identity: ObjectIdentity, withEveryone level: AccessLevel?, by person: TurgaiDomain.UserID
     ) async throws {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        let scope = try await runtime.connections.scope(of: person, in: conversationID, role: role)
+        let scope = try await Space.resolve(on: runtime.actorSystem, id: runtime.turgaiSpace).scope(of: person)
         let object = try await DynamicObject.resolve(on: runtime.actorSystem, identity: identity)
         try await CallChain.$current.withValue(.start(scope, in: nil)) { try await object.share(with: .everyone, level) }
     }
 
+    /// The agent's past turns in a conversation, step by step, as `person` asks for them.
     public func conversationTurns(
-        for conversationID: ConversationID,
-        role: TurgaiAgentRole,
-        askedBy person: TurgaiDomain.UserID
+        of conversationID: ConversationID, askedBy person: TurgaiDomain.UserID
     ) async throws -> [ConversationTurn] {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        return try await runtime.connections.conversationTurns(for: conversationID, role: role, askedBy: person)
+        return try await runtime.connections.turns(of: conversationID, askedBy: person)
     }
 
+    /// Whether a conversation's agent is answering, as `person` sees it: refused unless they're in it.
     public func conversationStatus(
-        for conversationID: ConversationID,
-        role: TurgaiAgentRole
+        of conversationID: ConversationID, for person: TurgaiDomain.UserID
     ) async throws -> ConversationStatus {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        return try await runtime.connections.conversationStatus(
-            for: conversationID,
-            role: role
+        return try await runtime.connections.status(
+            of: conversationID,
+            for: person
         )
     }
 }

@@ -27,7 +27,7 @@ struct TimersTests {
     func aChatsTimersAreListedThereAndCancelledByWhoeverSetThem() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem(
-            "timers-object", store: store, hostsVirtualActors: true,
+            "timers-object", store: store, hostsVirtualActors: true, people: [Self.ann, Self.bob],
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
             let timers = try await Timers.resolve(on: node)

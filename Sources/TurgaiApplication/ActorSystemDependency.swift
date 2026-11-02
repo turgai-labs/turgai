@@ -55,8 +55,7 @@ public struct ActorSystemDependency<Effect: ScopedEffect>: Sendable {
                     try await User.resolve(on: actorSystem, userID: userID)
                 },
                 notify: { conversationID, text in
-                    try await actorSystem.turgaiChannelRuntime.dependencies().connections
-                        .conversation(conversationID).notify(text)
+                    try await Conversation.resolve(on: actorSystem, conversationID: conversationID).notify(text)
                 },
                 ask: { conversationID, question in
                     try await models.ask(question, in: conversationID, on: actorSystem)

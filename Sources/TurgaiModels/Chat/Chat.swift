@@ -128,11 +128,15 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// A conversation to start: answered by `botID`, or the default bot, in the space `spaceID`, or
+/// Turgai's own.
 public struct CreateConversationRequest: Codable, Equatable, Sendable {
     public let botID: BotID?
+    public let spaceID: String?
 
-    public init(botID: BotID? = nil) {
+    public init(botID: BotID? = nil, spaceID: String? = nil) {
         self.botID = botID
+        self.spaceID = spaceID
     }
 }
 

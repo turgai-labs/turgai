@@ -31,8 +31,7 @@ public struct ChatTimer: Codable, Sendable, Equatable {
         self.then = then
         self.ownerID = ownerID
         self.conversationID = conversationID
-        self.participantID = ParticipantID(
-            channel: conversationID.channel, rawValue: conversationID.externalAddress.rawValue)
+        self.participantID = ParticipantID(channel: conversationID.channel, rawValue: ownerID.key)
         self.agentDirectoryID = agentDirectoryID
     }
 

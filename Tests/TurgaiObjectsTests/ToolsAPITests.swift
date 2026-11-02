@@ -62,7 +62,7 @@ struct ToolsAPITests {
         let api = echo
         let uses = Uses(interface: Uses.interface(of: [], tools: api.tools), objects: [:], lasting: [])
         try await withClusterSystem(
-            "tools", store: MemoryEventStore(), hostsVirtualActors: true,
+            "tools", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann],
             installing: { $0.plugins.install(plugin: ToolsAPIPlugin(api)) }
         ) { node in
             let objects = try await DynamicObjects.resolve(on: node)
@@ -108,7 +108,7 @@ struct ToolsAPITests {
             }
             """
         try await withClusterSystem(
-            "tools", store: MemoryEventStore(), hostsVirtualActors: true,
+            "tools", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann],
             installing: { $0.plugins.install(plugin: ToolsAPIPlugin(api)) }
         ) { node in
             let objects = try await DynamicObjects.resolve(on: node)
@@ -199,7 +199,7 @@ struct ToolsAPITests {
             }
             """
         try await withClusterSystem(
-            "tools", store: MemoryEventStore(), hostsVirtualActors: true,
+            "tools", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann],
             installing: { $0.plugins.install(plugin: ToolsAPIPlugin(here)) }
         ) { node in
             let objects = try await DynamicObjects.resolve(on: node)

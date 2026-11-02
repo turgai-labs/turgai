@@ -27,7 +27,7 @@ struct SchedulerTests {
     func aChatsSchedulesAreListedThereAndChangedByWhoeverMadeThem() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem(
-            "scheduler", store: store, hostsVirtualActors: true,
+            "scheduler", store: store, hostsVirtualActors: true, people: [Self.ann, Self.bob],
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
             let scheduler = try await Scheduler.resolve(on: node)

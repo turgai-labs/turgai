@@ -44,7 +44,7 @@ struct SharingTests {
     @Test(.timeLimit(.minutes(1)))
     func whoeverMayChangeItSharesItWithTheirChat() async throws {
         let store = MemoryEventStore()
-        try await withClusterSystem("sharing", store: store, hostsVirtualActors: true) { node in
+        try await withClusterSystem("sharing", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
             let objects = try await DynamicObjects.resolve(on: node)
             let id = try await self.as(ann) {
                 try await objects.create(name: "Tally", spec: .new(try Script(code: counter, type: "Counter")))
@@ -90,7 +90,7 @@ struct SharingTests {
                 name: Uses.module,
                 source: "actor Counter {\n    init(id: String)\n    func add() async throws -> Int\n}"),
             objects: [:], lasting: ["Counter"])
-        try await withClusterSystem("sharing", store: MemoryEventStore(), hostsVirtualActors: true) { node in
+        try await withClusterSystem("sharing", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann, bob]) { node in
             let objects = try await DynamicObjects.resolve(on: node)
             let drinksID = try await self.as(ann) {
                 _ = try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))

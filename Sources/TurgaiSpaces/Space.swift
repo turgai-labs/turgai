@@ -59,8 +59,6 @@ public enum SpaceRefusal: Error, Equatable, Codable, Sendable, CustomStringConve
     case lastAdmin
     /// No invite like it works: it was used, taken back, or ran out, or there never was one.
     case inviteDoesNotWork
-    /// It was made with a conversation, and is that conversation's: no one is invited into it.
-    case aConversations
 
     public var description: String {
         switch self {
@@ -70,7 +68,6 @@ public enum SpaceRefusal: Error, Equatable, Codable, Sendable, CustomStringConve
         case .notInIt: "You're not in this space."
         case .lastAdmin: "You're its last admin: make someone else an admin first."
         case .inviteDoesNotWork: "This invite doesn't work: it's been used, taken back, or has run out."
-        case .aConversations: "This space is a conversation's own: no one is invited into it."
         }
     }
 }
@@ -81,7 +78,7 @@ public enum SpaceRefusal: Error, Equatable, Codable, Sendable, CustomStringConve
 /// where the platform knows.
 public struct SpaceState: Hashable, Codable, Sendable {
     public let id: SpaceID
-    /// What it's called: none for one made with a conversation, which is that conversation's.
+    /// What it's called: none until it's made.
     public private(set) var name: SpaceName?
     public private(set) var members: [UserID: SpaceRole]
     /// The invites its admins made that aren't spent, by id.
@@ -114,9 +111,9 @@ public struct SpaceState: Hashable, Codable, Sendable {
     }
 
     /// Whom a call `person` makes here is on behalf of: them, in this space, with the role they
-    /// have in it now and the exact requests shared with them.
-    public func scope(of person: UserID) -> CallScope {
-        let role = role(of: person) ?? .member
+    /// have in it now and the exact requests shared with them. Refused when they're not in it.
+    public func scope(of person: UserID) throws(SpaceRefusal) -> CallScope {
+        guard let role = role(of: person) else { throw .notInIt }
         let asThem = CallScope(person, in: id, as: role, allowed: [])
         let shared = access.filter { $0.value.allows(asThem, .read) }.keys
         return CallScope(person, in: id, as: role, allowed: Set(shared))
@@ -125,8 +122,8 @@ public struct SpaceState: Hashable, Codable, Sendable {
     /// The scope of a chain `person` starts here for `asker`, as it opens: theirs, with what an
     /// admin allowed `asker` once besides, which opening it spends. What another asked for, even
     /// for them, it doesn't take.
-    public func opening(scopeOf person: UserID, for asker: Asker) -> (CallScope, [SpaceEvent]) {
-        let scope = scope(of: person)
+    public func opening(scopeOf person: UserID, for asker: Asker) throws(SpaceRefusal) -> (CallScope, [SpaceEvent]) {
+        let scope = try scope(of: person)
         let once = requests.values.filter {
             $0.by == person && askers[$0.id] == asker && $0.standing == .allowedOnce
         }
@@ -155,10 +152,11 @@ public struct SpaceState: Hashable, Codable, Sendable {
         return joining + changing
     }
 
-    /// The accounts in it becoming exactly `accounts`, each with its role, as Turgai's accounts
-    /// say: whoever isn't in it joins, each whose role differs has it changed, and an account
-    /// that's not among them leaves. Anyone who isn't an account stays as they are.
-    public func having(accounts: [UserID: SpaceRole]) -> [SpaceEvent] {
+    /// Turgai's own space as its accounts say it is: called `name`, and the accounts in it exactly
+    /// `accounts`, each with its role. Whoever isn't in it joins, each whose role differs has it
+    /// changed, and an account that's not among them leaves; anyone who isn't an account stays.
+    public func following(accounts: [UserID: SpaceRole], named name: SpaceName) -> [SpaceEvent] {
+        let naming: [SpaceEvent] = self.name == name ? [] : [.named(name)]
         let joiningOrChanging = accounts.sorted { $0.key.key < $1.key.key }.compactMap { person, role in
             setting(role, of: person)
         }
@@ -166,7 +164,7 @@ public struct SpaceState: Hashable, Codable, Sendable {
             if case .account = person { accounts[person] == nil } else { false }
         }
         .sorted { $0.key < $1.key }.map(SpaceEvent.left)
-        return joiningOrChanging + leaving
+        return naming + joiningOrChanging + leaving
     }
 
     /// `person` having `role`, as the space's platform says: joining with it, or changing to it.
@@ -177,6 +175,12 @@ public struct SpaceState: Hashable, Codable, Sendable {
         case role?: nil
         case _?: .roleChanged(person, to: role)
         }
+    }
+
+    /// It made by its platform, called `name`, with `admins` deciding for it, as the platform says.
+    public func making(named name: SpaceName, admins: Set<UserID>) throws(SpaceRefusal) -> [SpaceEvent] {
+        guard self.name == nil, members.isEmpty else { throw .alreadyMade }
+        return [.named(name)] + admins.sorted { $0.key < $1.key }.map { .joined($0, as: .admin) }
     }
 
     /// It made, called `name`, with `person` its first admin.
@@ -194,7 +198,6 @@ public struct SpaceState: Hashable, Codable, Sendable {
 
     /// `invite` open, as its admin made it.
     public func inviting(_ invite: SpaceInvite) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard name != nil else { throw .aConversations }
         guard members[invite.by] == .admin else { throw .onlyAdmins }
         return [.invited(invite)]
     }
@@ -243,9 +246,9 @@ public struct SpaceState: Hashable, Codable, Sendable {
     /// `asker` asking its admins, for `person`, to run exactly `request`, which their scope didn't
     /// allow: a new request, `id`, unless it's already asked for it or it's since been shared with them.
     public func requesting(_ request: ExactRequest, by person: UserID, as asker: Asker, id: AccessRequestID)
-        -> [SpaceEvent]
+        throws(SpaceRefusal) -> [SpaceEvent]
     {
-        guard self.request(for: request, by: person, as: asker) == nil, !scope(of: person).allows(request) else {
+        guard self.request(for: request, by: person, as: asker) == nil, try !scope(of: person).allows(request) else {
             return []
         }
         return [.asked(AccessRequest(id: id, request: request, by: person, standing: .waiting), by: asker)]

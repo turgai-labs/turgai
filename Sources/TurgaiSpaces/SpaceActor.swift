@@ -12,8 +12,8 @@ import VirtualActors
 #endif
 
 /// A space, in a journal of its own: the people in it, each with their role, who may run each
-/// exact request it decides, and what's asked of its admins until they answer: a conversation's,
-/// and Turgai's own. It settles each chain's scope as the chain starts.
+/// exact request it decides, and what's asked of its admins until they answer. It settles each
+/// chain's scope as the chain starts.
 @EventSourced
 @VirtualActor
 public distributed actor Space {
@@ -61,16 +61,17 @@ public distributed actor Space {
         try await actorSystem.virtualActors.getActor(identifiedBy: actorID(for: id), dependency: id)
     }
 
-    /// Whom a call `person` makes here is on behalf of, and what's shared with them.
-    public distributed func scope(of person: UserID) -> CallScope {
-        state.scope(of: person)
+    /// Whom a call `person` makes here is on behalf of, and what's shared with them: refused when
+    /// they're not in it.
+    public distributed func scope(of person: UserID) throws -> CallScope {
+        try state.scope(of: person)
     }
 
     /// The scope of a chain `person` starts here for `asker`, settled as it starts: what's allowed
     /// `asker` once is in it, and spent.
     public distributed func opening(scopeOf person: UserID, for asker: Asker) async throws -> CallScope {
         try await changing {
-            let (scope, spent) = state.opening(scopeOf: person, for: asker)
+            let (scope, spent) = try state.opening(scopeOf: person, for: asker)
             for event in spent { try await emit(event: event) }
             return scope
         }
@@ -86,9 +87,12 @@ public distributed actor Space {
         try await changing { for event in state.having(admins: admins) { try await emit(event: event) } }
     }
 
-    /// The accounts in it, each with its role, as Turgai's accounts say.
-    public distributed func setAccounts(_ accounts: [UserID: SpaceRole]) async throws {
-        try await changing { for event in state.having(accounts: accounts) { try await emit(event: event) } }
+    /// Turgai's own space as its accounts say it is: called `name`, with exactly `accounts` in it,
+    /// each with its role.
+    public distributed func follow(accounts: [UserID: SpaceRole], named name: SpaceName) async throws {
+        try await changing {
+            for event in state.following(accounts: accounts, named: name) { try await emit(event: event) }
+        }
     }
 
     /// The role `person` has in it, as its platform says.
@@ -102,7 +106,8 @@ public distributed actor Space {
         guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .actor(id)) }
         return try await changing {
             var opened: AccessRequest?
-            for event in state.requesting(request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID()))
+            for event in try state.requesting(
+                request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID()))
             {
                 try await emit(event: event)
                 if case .asked(let asked, _) = event { opened = asked }
@@ -117,11 +122,17 @@ public distributed actor Space {
         -> AccessRequest?
     {
         try await changing {
-            guard let open = state.requests[id] else { return nil }
-            let events = state.answering(id, answer, by: state.scope(of: person))
+            // An answer by someone who isn't in it doesn't count.
+            guard let open = state.requests[id], let scope = try? state.scope(of: person) else { return nil }
+            let events = state.answering(id, answer, by: scope)
             for event in events { try await emit(event: event) }
             return events.isEmpty ? nil : open
         }
+    }
+
+    /// It made by its platform, called `name`, with `admins` deciding for it.
+    public distributed func make(named name: SpaceName, admins: Set<UserID>) async throws {
+        try await changing { for event in try state.making(named: name, admins: admins) { try await emit(event: event) } }
     }
 
     /// It made, called `name`, with `person` its first admin.

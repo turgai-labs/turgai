@@ -27,7 +27,7 @@ struct AccessCheckTests {
     @Test(.timeLimit(.minutes(1)))
     func anObjectIsItsMakersUntilShared() async throws {
         let store = MemoryEventStore()
-        try await withClusterSystem("objects", store: store, hostsVirtualActors: true) { node in
+        try await withClusterSystem("objects", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
             let objects = try await DynamicObjects.resolve(on: node)
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
@@ -58,7 +58,7 @@ struct AccessCheckTests {
     @Test(.timeLimit(.minutes(1)))
     func aCallOnBehalfOfNoOneIsRefused() async throws {
         let store = MemoryEventStore()
-        try await withClusterSystem("objects", store: store, hostsVirtualActors: true) { node in
+        try await withClusterSystem("objects", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
             let objects = try await DynamicObjects.resolve(on: node)
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
@@ -76,7 +76,7 @@ struct AccessCheckTests {
     @Test(.timeLimit(.minutes(1)))
     func anothersObjectIsNotInTheWay() async throws {
         let store = MemoryEventStore()
-        try await withClusterSystem("objects", store: store, hostsVirtualActors: true) { node in
+        try await withClusterSystem("objects", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
             let objects = try await DynamicObjects.resolve(on: node)
             let annID = try await self.as(ann) {
                 try await objects.create(name: "Tally", spec: .new(try Script(code: counter, type: "Counter")))

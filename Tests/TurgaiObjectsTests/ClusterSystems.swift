@@ -7,16 +7,20 @@ import VirtualActors
 
 @testable import TurgaiApplication
 import TurgaiCalls
+import TurgaiDomain
+import TurgaiSpaces
 
 /// A cluster node for a test, set up as Turgai runs one, journaled to `store`, and joined to
 /// `other` when one is given. A node that hosts virtual actors has a `VirtualNode`; `installing`
-/// adds what else it runs, such as Hail's agents. All it makes lives while `body` runs, and the
-/// system shuts down after.
+/// adds what else it runs, such as Hail's agents. Whoever `people` are on behalf of is in their
+/// space, with their role, as a platform would say: the test's person, unless it names others. All
+/// it makes lives while `body` runs, and the system shuts down after.
 func withClusterSystem<Result>(
     _ name: String,
     store: MemoryEventStore,
     joining other: ClusterSystem? = nil,
     hostsVirtualActors: Bool,
+    people: [CallScope] = [AsAPerson.person],
     installing: @escaping @Sendable (inout ClusterSystemSettings) -> Void = { _ in },
     _ body: (ClusterSystem) async throws -> Result
 ) async throws -> Result {
@@ -30,6 +34,11 @@ func withClusterSystem<Result>(
         if let other {
             system.cluster.join(endpoint: other.cluster.endpoint)
             try await other.cluster.waitFor(system.cluster.node, .up, within: .seconds(10))
+        }
+        if hostsVirtualActors {
+            for scope in people {
+                try await Space.resolve(on: system, id: scope.space).setRole(scope.role, of: scope.person)
+            }
         }
         result = try await body(system)
     } catch {

@@ -43,8 +43,7 @@ public struct ChatSchedule: Codable, Sendable, Equatable {
         self.then = then
         self.ownerID = ownerID
         self.conversationID = conversationID
-        self.participantID = ParticipantID(
-            channel: conversationID.channel, rawValue: conversationID.externalAddress.rawValue)
+        self.participantID = ParticipantID(channel: conversationID.channel, rawValue: ownerID.key)
         self.agentDirectoryID = agentDirectoryID
     }
 
@@ -118,18 +117,13 @@ public struct ScheduleActivities {
 
 extension WhenDue {
     /// Does `then` in `conversation`, as the run `workflow` of something due there: says its
-    /// text, or asks the chat's agent, as a message from `owner`, which the agent that answers the
-    /// chat now answers.
+    /// text, or asks the chat's agent, as a message from `owner`.
     static func doing(
         _ then: WhenDue, in conversation: ConversationID, for owner: TurgaiDomain.UserID,
         as participant: ParticipantID, directory: AgentDirectoryID, run workflow: WorkflowID,
         agentProfiles: TurgaiAgentProfileStore, on system: ClusterSystem
     ) async throws {
-        let agentRole = try await TurgaiConnections.agentRole(
-            for: conversation, agentProfiles: agentProfiles, on: system)
-        let chat = try await Conversation.resolve(
-            on: system, conversationID: conversation, agentDirectoryID: directory, agentRole: agentRole,
-            memoryExtraction: nil)
+        let chat = try await Conversation.resolve(on: system, conversationID: conversation, agentDirectoryID: directory)
         switch then {
         case .say(let text):
             try await chat.notify(text)
@@ -140,7 +134,7 @@ extension WhenDue {
                 text: instruction, receivedAt: Date())
             try await chat.send(
                 message, turnID: TurgaiDomain.TurnID(rawValue: turgaiDeterministicUUID("turn:\(workflow.rawValue)")),
-                configuration: Conversation.TurnConfiguration(agentRole: agentRole, memoryExtraction: nil))
+                configuration: Conversation.TurnConfiguration(memoryExtraction: nil))
         }
     }
 }

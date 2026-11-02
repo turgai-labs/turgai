@@ -263,8 +263,12 @@ struct TelegramTests {
         #expect(received.count == 3)
         let participantID = TelegramBot.participantID(for: 7)
         let userID = UserID.telegram(7)
-        // A private chat's one person decides for it.
-        #expect(received[0] == .admins(conversationID: TelegramBot.conversationID(for: 42), [userID]))
+        // A private chat is called after its one person, who decides for it.
+        #expect(
+            received[0]
+                == .chat(
+                    conversationID: TelegramBot.conversationID(for: 42), named: SpaceName("John Appleseed")!,
+                    admins: [userID], by: userID))
         if case .message(let message, _) = received[1] {
             #expect(message.text == "hello Turgai")
             #expect(message.participantID == participantID)
@@ -280,7 +284,7 @@ struct TelegramTests {
         } else {
             Issue.record("Expected the first application input to be a message")
         }
-        #expect(received[2] == .reset(TelegramBot.conversationID(for: 42)))
+        #expect(received[2] == .reset(TelegramBot.conversationID(for: 42), by: userID))
 
         // The bot persists offsets after processing every update, including
         // updates that are filtered out before reaching a connection.
@@ -301,7 +305,7 @@ struct TelegramTests {
 
     @Test
     func aGroupsAdministratorsAreItsAdminsAndAskedForOnce() async throws {
-        let group = TelegramChat(id: 42, type: "group")
+        let group = TelegramChat(id: 42, type: "group", title: "Family")
         let ann = TelegramUser(id: 7, firstName: "Ann")
         let bob = TelegramUser(id: 8, firstName: "Bob")
         let updates = (1...2).map { index in
@@ -337,7 +341,11 @@ struct TelegramTests {
 
         let received = await consumer.value
         let annID = UserID.telegram(7)
-        #expect(received.first == .admins(conversationID: TelegramBot.conversationID(for: 42), [annID]))
+        #expect(
+            received.first
+                == .chat(
+                    conversationID: TelegramBot.conversationID(for: 42), named: SpaceName("Family")!, admins: [annID],
+                    by: .telegram(8)))
         #expect(received.dropFirst().allSatisfy { if case .message = $0 { true } else { false } })
         #expect(await recorder.administratorRequests == 1)
         await bot.stop()
@@ -495,8 +503,8 @@ struct TelegramTests {
                 let inbound = await connection.inbound
                 for await delivery in inbound {
                     await delivery.receipt.acknowledge()
-                    // Who decides for the chat comes first.
-                    if case .admins = delivery.input { continue }
+                    // What the chat is comes first.
+                    if case .chat = delivery.input { continue }
                     return delivery.input
                 }
             }

@@ -150,15 +150,6 @@ public struct ConversationID: Hashable, Codable, Sendable {
         "\(channel.rawValue):\(externalAddress.rawValue)"
     }
 
-    /// The participant a direct user↔bot conversation belongs to. Channels
-    /// address direct conversations by the participant's own identity, so the
-    /// external address is that participant.
-    public var participantID: ParticipantID {
-        ParticipantID(
-            channel: ChannelID(channel.providerName),
-            rawValue: externalAddress.rawValue
-        )
-    }
 }
 
 /// Stable event-store identity for a conversation.
@@ -428,7 +419,8 @@ public enum ConversationInput: Sendable, Equatable {
         turnID: TurnID
     )
     case connect(ConversationID)
-    case reset(ConversationID)
+    /// `by` emptying it.
+    case reset(ConversationID, by: UserID)
     /// Someone answered an access request of its space, as the link they answered through says.
     case answer(conversationID: ConversationID, AccessRequestID, AccessAnswer, by: UserID)
     case memory(
@@ -452,8 +444,9 @@ public enum ConversationInput: Sendable, Equatable {
         userID: UserID
     )
     case command(ConversationCommand)
-    /// Who the conversation's admins are now, as its platform says.
-    case admins(conversationID: ConversationID, Set<UserID>)
+    /// Its chat as its platform says it is, said by `by` writing in it: what it's called, and who
+    /// decides for it.
+    case chat(conversationID: ConversationID, named: SpaceName, admins: Set<UserID>, by: UserID)
 }
 
 public struct PendingConversationMessage: Hashable, Codable, Sendable {
@@ -525,9 +518,41 @@ public struct PendingConversationReply: Hashable, Codable, Sendable {
     }
 }
 
+/// How a conversation started: the space it's in, and the agent that answers it, from then on.
+public struct ConversationStart: Hashable, Codable, Sendable {
+    public let space: SpaceID
+    /// The profile of the agent that answers it.
+    public let agent: String
+
+    public init(in space: SpaceID, agent: String) {
+        self.space = space
+        self.agent = agent
+    }
+}
+
+/// Why a conversation didn't do what it was asked.
+public enum ConversationRefusal: Error, Equatable, Codable, Sendable, CustomStringConvertible {
+    /// It hasn't started: nothing's in it yet.
+    case notStarted
+    /// It started already, once and for all.
+    case alreadyStarted
+    /// They're not one of its people.
+    case notInIt
+
+    public var description: String {
+        switch self {
+        case .notStarted: "This conversation hasn't started."
+        case .alreadyStarted: "This conversation has started already."
+        case .notInIt: "You're not in this conversation."
+        }
+    }
+}
+
 public enum ConversationEvent: Codable, Sendable, Equatable {
-    /// It started, in `space`: the space it's in from then on.
-    case started(in: SpaceID)
+    /// It started, as `start` says: in its space, answered by its agent, from then on.
+    case started(ConversationStart)
+    /// Someone is one of its people: they read it and write in it.
+    case joined(UserID)
     /// Its agent's inbox: a message waiting, or a turn starting or ending.
     case inbox(AgentInboxEvent)
     /// The turn answering `message` needed what its scope didn't allow, which its space's admins
@@ -680,8 +705,10 @@ public enum AgentInboxEvent: Hashable, Codable, Sendable {
 
 public struct ConversationState: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
-    /// The space it's in, once it has started: it never changes.
-    public internal(set) var space: SpaceID?
+    /// How it started: none until it has. It never changes after.
+    public internal(set) var start: ConversationStart?
+    /// The people in it: who reads it and writes in it.
+    public internal(set) var people: Set<UserID> = []
     /// Its agent's inbox.
     public internal(set) var inbox: AgentInbox
     /// The turns that wait for an answer from its space's admins, by what each asked for.
@@ -707,8 +734,11 @@ public struct ConversationState: Hashable, Codable, Sendable {
 
     public mutating func apply(_ event: ConversationEvent) {
         switch event {
-        case .started(let space):
-            self.space = space
+        case .started(let start):
+            self.start = start
+
+        case .joined(let person):
+            people.insert(person)
 
         case .awaiting(let id, let message):
             awaiting[id] = message
@@ -760,6 +790,28 @@ public struct ConversationState: Hashable, Codable, Sendable {
         case .unnoted:
             noted = nil
         }
+    }
+
+    /// It started as `start`, with `person` the first of its people: refused when it has started
+    /// already.
+    public func starting(_ start: ConversationStart, by person: UserID) throws(ConversationRefusal)
+        -> [ConversationEvent]
+    {
+        guard self.start == nil else { throw .alreadyStarted }
+        return [.started(start), .joined(person)]
+    }
+
+    /// `person` one of its people, as someone writing in its chat is: none for someone already in it.
+    public func admitting(_ person: UserID) -> ConversationEvent? {
+        people.contains(person) ? nil : .joined(person)
+    }
+
+    /// How it started, as `person` reads it or writes in it: refused when it hasn't started, or
+    /// they're not one of its people.
+    public func reading(by person: UserID) throws(ConversationRefusal) -> ConversationStart {
+        guard let start else { throw .notStarted }
+        guard people.contains(person) else { throw .notInIt }
+        return start
     }
 
     public var requiresRecovery: Bool {

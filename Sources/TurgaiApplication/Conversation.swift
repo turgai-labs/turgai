@@ -93,7 +93,7 @@ private enum PublishEvent: Sendable {
             self = .userMessage(pending)
         case .inbox(.turnStarted(let pending)):
             self = .turnStarted(pending)
-        case .started, .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyQueued,
+        case .started, .joined, .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyQueued,
             .replyDelivered, .reset, .noted, .unnoted:
             return nil
         }
@@ -296,14 +296,9 @@ public distributed actor Conversation {
     /// the send boundary so a new turn cannot silently inherit a previous
     /// runtime choice.
     public struct TurnConfiguration: Codable, Sendable {
-        public let agentRole: String
         public let memoryExtraction: MemoryExtractionConfiguration?
 
-        public init(
-            agentRole: String,
-            memoryExtraction: MemoryExtractionConfiguration?
-        ) {
-            self.agentRole = agentRole
+        public init(memoryExtraction: MemoryExtractionConfiguration?) {
             self.memoryExtraction = memoryExtraction
         }
     }
@@ -311,20 +306,10 @@ public distributed actor Conversation {
     public struct Config: Codable, Sendable {
         public let conversationID: ConversationID
         public let agentDirectoryID: AgentDirectoryID
-        public let agentRole: String
-        /// Optional background memory extractor configuration.
-        public let memoryExtraction: MemoryExtractionConfiguration?
 
-        public init(
-            conversationID: ConversationID,
-            agentDirectoryID: AgentDirectoryID,
-            agentRole: String,
-            memoryExtraction: MemoryExtractionConfiguration?
-        ) {
+        public init(conversationID: ConversationID, agentDirectoryID: AgentDirectoryID) {
             self.conversationID = conversationID
             self.agentDirectoryID = agentDirectoryID
-            self.memoryExtraction = memoryExtraction
-            self.agentRole = agentRole
         }
     }
 
@@ -337,8 +322,6 @@ public distributed actor Conversation {
 
     private let conversationID: ConversationID
     private let agentDirectoryID: AgentDirectoryID
-    /// The role its agent has, unless a turn asks for another.
-    private let agentRole: String
     /// Its agents while it's active: one for each role a turn asked for.
     private var participants: [String: AgentParticipant] = [:]
     private var turnConfigurations: [TurgaiDomain.TurnID: TurnConfiguration] = [:]
@@ -362,8 +345,6 @@ public distributed actor Conversation {
         self.state = ConversationState(
             conversationID: dependency.conversationID
         )
-        self.agentRole = dependency.agentRole
-        self.memoryExtractionConfiguration = dependency.memoryExtraction
         try await actorSystem.journal.register(
             actor: self,
             with: Self.persistenceID(for: dependency.conversationID)
@@ -379,21 +360,15 @@ public distributed actor Conversation {
         PersistenceID(conversationID: conversationID).rawValue
     }
 
+    /// The conversation `conversationID`, wherever and whenever it runs: started or not.
     public static func resolve(
         on actorSystem: ClusterSystem,
         conversationID: ConversationID,
-        agentDirectoryID: AgentDirectoryID,
-        agentRole: String,
-        memoryExtraction: MemoryExtractionConfiguration?
+        agentDirectoryID: AgentDirectoryID = "agent-directory"
     ) async throws -> Conversation {
         try await actorSystem.virtualActors.getActor(
             identifiedBy: actorID(for: conversationID),
-            dependency: Config(
-                conversationID: conversationID,
-                agentDirectoryID: agentDirectoryID,
-                agentRole: agentRole,
-                memoryExtraction: memoryExtraction
-            )
+            dependency: Config(conversationID: conversationID, agentDirectoryID: agentDirectoryID)
         )
     }
 
@@ -413,25 +388,78 @@ public distributed actor Conversation {
         state
     }
 
-    public distributed func history() -> [ConversationHistoryEntry] {
-        state.history
+    /// What's been said in it, as `person` reads it: refused unless they're one of its people.
+    public distributed func history(for person: TurgaiDomain.UserID) throws -> [ConversationHistoryEntry] {
+        _ = try state.reading(by: person)
+        return state.history
     }
 
-    public distributed func currentStatus() -> ConversationStatus {
-        state.inbox.status
+    /// Whether its agent is answering, as `person` sees it: refused unless they're one of its people.
+    public distributed func status(for person: TurgaiDomain.UserID) throws -> ConversationStatus {
+        _ = try state.reading(by: person)
+        return state.inbox.status
     }
 
-    /// Its space: who's in it, and what its admins allow. A new one is made with it when it starts,
-    /// and it's in that one from then on.
-    private func space() async throws -> Space {
-        if let space = state.space { return try await Space.resolve(on: actorSystem, id: space) }
-        let started = try await changing {
-            if let space = state.space { return space }
+    /// How it started: none until it has.
+    public distributed func started() -> ConversationStart? {
+        state.start
+    }
+
+    /// How it started, as `person` reads it: refused unless they're one of its people.
+    public distributed func reading(by person: TurgaiDomain.UserID) throws -> ConversationStart {
+        try state.reading(by: person)
+    }
+
+    /// It started in `space`, answered by `agent`, with `person`, who's in that space, the first of
+    /// its people: refused when it has started already, or they're not in the space.
+    public distributed func start(in space: SpaceID, agent: String, by person: TurgaiDomain.UserID) async throws {
+        _ = try await Space.resolve(on: actorSystem, id: space).scope(of: person)
+        try await changing {
+            for event in try state.starting(ConversationStart(in: space, agent: agent), by: person) {
+                try await emit(event: event)
+            }
+        }
+    }
+
+    /// Its chat as its platform says it is, said by `person` writing in it: called `name`, with
+    /// `admins` deciding for it. The first time, a space is made for it, named after it, and it
+    /// starts there, answered by `agent`; after that its space's admins become `admins`. `person`
+    /// is in both, as anyone writing in it is.
+    public distributed func followChat(
+        named name: SpaceName, admins: Set<TurgaiDomain.UserID>, agent: String, by person: TurgaiDomain.UserID
+    ) async throws {
+        let id = try await changing {
+            if let start = state.start { return start.space }
+            // Made before it starts in it: it's never in a space that isn't there.
             let space = SpaceID()
-            try await emit(event: .started(in: space))
+            try await Space.resolve(on: actorSystem, id: space).make(named: name, admins: admins)
+            for event in try state.starting(ConversationStart(in: space, agent: agent), by: person) {
+                try await emit(event: event)
+            }
             return space
         }
-        return try await Space.resolve(on: actorSystem, id: started)
+        let space = try await Space.resolve(on: actorSystem, id: id)
+        try await space.setAdmins(admins)
+        try await space.admit(person)
+    }
+
+    /// `person` one of its people, as its platform says someone writing in its chat is: in its
+    /// space, as a member, too.
+    public distributed func admit(_ person: TurgaiDomain.UserID) async throws {
+        try await space().admit(person)
+        try await changing { if let joined = state.admitting(person) { try await emit(event: joined) } }
+    }
+
+    /// Its space: who's in it, and what its admins allow. Refused until it has started.
+    private func space() async throws -> Space {
+        guard let start = state.start else { throw ConversationRefusal.notStarted }
+        return try await Space.resolve(on: actorSystem, id: start.space)
+    }
+
+    /// The profile of its agent: refused until it has started.
+    private func agent() throws -> String {
+        guard let start = state.start else { throw ConversationRefusal.notStarted }
+        return start.agent
     }
 
     /// Makes `change` to its state once no other change is being made: it reads the state, decides
@@ -444,7 +472,8 @@ public distributed actor Conversation {
 
     /// The agent's past turns, step by step, as `person` asks for them.
     public distributed func turns(askedBy person: TurgaiDomain.UserID) async throws -> [ConversationTurn] {
-        let participant = try await participant(for: agentRole)
+        _ = try state.reading(by: person)
+        let participant = try await participant(for: try agent())
         let scope = try await space().scope(of: person)
         return try await CallChain.$current.withValue(.start(scope, in: conversationID)) { try await participant.turns() }
     }
@@ -497,14 +526,11 @@ public distributed actor Conversation {
         try await dispatch(.answered(answered, answer, turnID: TurgaiDomain.TurnID(), at: Date()))
     }
 
-    /// Who its space's admins are now, as its platform says: they decide for it.
-    public distributed func setAdmins(_ admins: Set<TurgaiDomain.UserID>) async throws {
-        try await space().setAdmins(admins)
-    }
-
-    /// Whom a call `person` makes here is on behalf of, and what's shared with them.
+    /// Whom a call `person` makes here is on behalf of, and what's shared with them: refused
+    /// unless they're one of its people.
     public distributed func scope(of person: TurgaiDomain.UserID) async throws -> CallScope {
-        try await space().scope(of: person)
+        _ = try state.reading(by: person)
+        return try await space().scope(of: person)
     }
 
     public distributed func removeConnection(_ connection: ConversationConnection) async {
@@ -520,19 +546,12 @@ public distributed actor Conversation {
             throw ConversationActorError.conversationMismatch
         }
 
+        let agent = try state.reading(by: message.userID).agent
         // A mark a restart left is taken off with the next message.
         await unnote()
         memoryExtractionConfiguration = configuration.memoryExtraction
         turnConfigurations[turnID] = configuration
-        // Whoever writes takes part in its space.
-        try await space().admit(message.userID)
-        try await dispatch(
-            .receive(
-                message: message,
-                turnID: turnID,
-                agentRole: configuration.agentRole
-            )
-        )
+        try await dispatch(.receive(message: message, turnID: turnID, agentRole: agent))
         if !state.inbox.acceptedMessageIDs.contains(message.id) {
             turnConfigurations[turnID] = nil
         }
@@ -616,7 +635,9 @@ public distributed actor Conversation {
         throw ConversationActorError.deliveryFailed(failures.joined(separator: "; "))
     }
 
-    public distributed func reset() async throws {
+    /// Emptied by `person`: refused unless they're one of its people.
+    public distributed func reset(by person: TurgaiDomain.UserID) async throws {
+        _ = try state.reading(by: person)
         try await dispatch(.reset)
     }
 
@@ -624,6 +645,7 @@ public distributed actor Conversation {
     /// handled here rather than sent through the model, so it cannot create a
     /// turn or become a new memory observation.
     public distributed func showMemory(for userID: TurgaiDomain.UserID) async throws {
+        _ = try state.reading(by: userID)
         let user = try await User.resolve(on: actorSystem, userID: userID)
         let remembered = try await user.remembered()
         let remembering = try await user.currentRemembering()
@@ -639,6 +661,7 @@ public distributed actor Conversation {
 
     /// Forgets `userID`'s remembered fact `written`, by its id, then shows what's remembered.
     public distributed func forgetFact(_ written: String, for userID: TurgaiDomain.UserID) async throws {
+        _ = try state.reading(by: userID)
         guard let id = UUID(uuidString: written) else { throw NotAFact(written: written) }
         let user = try await User.resolve(on: actorSystem, userID: userID)
         _ = try await user.forgetFact(MemoryFactID(rawValue: id))
@@ -647,6 +670,7 @@ public distributed actor Conversation {
 
     /// Turns remembering what `userID` says on or off, then shows what's remembered.
     public distributed func setRemembering(_ remembering: Remembering, for userID: TurgaiDomain.UserID) async throws {
+        _ = try state.reading(by: userID)
         try await User.resolve(on: actorSystem, userID: userID).setRemembering(remembering)
         try await showMemory(for: userID)
     }
@@ -655,7 +679,8 @@ public distributed actor Conversation {
     /// snapshot is read from Hail's event-sourced agent in one operation, so
     /// token usage and lifecycle data describe one coherent state.
     public distributed func showContext(for person: TurgaiDomain.UserID) async throws {
-        let participant = try await participant(for: agentRole)
+        _ = try state.reading(by: person)
+        let participant = try await participant(for: try agent())
         let scope = try await space().scope(of: person)
         let snapshot = try await CallChain.$current.withValue(.start(scope, in: conversationID)) {
             try await participant.contextSnapshot()
@@ -687,6 +712,7 @@ public distributed actor Conversation {
     /// report. The text states the task; it carries no format contract —
     /// schemas, grammar, and validation errors enforce the contract.
     public distributed func showDiagnostics(for userID: TurgaiDomain.UserID) async throws {
+        _ = try state.reading(by: userID)
         await publish(
             .notice(
                 conversationID: conversationID,
@@ -697,16 +723,13 @@ public distributed actor Conversation {
         try await send(
             InboundMessage(
                 conversationID: conversationID,
-                participantID: conversationID.participantID,
+                participantID: ParticipantID(channel: conversationID.channel, rawValue: userID.key),
                 userID: userID,
                 text: Self.diagnosticsRequest,
                 receivedAt: Date()
             ),
             turnID: TurnID(rawValue: UUID()),
-            configuration: TurnConfiguration(
-                agentRole: agentRole,
-                memoryExtraction: memoryExtractionConfiguration
-            )
+            configuration: TurnConfiguration(memoryExtraction: memoryExtractionConfiguration)
         )
     }
 
@@ -714,6 +737,7 @@ public distributed actor Conversation {
     /// conversation or Hail transcript. Stale background extraction is
     /// rejected by the generation check in `User`.
     public distributed func forgetMemory(for userID: TurgaiDomain.UserID) async throws {
+        _ = try state.reading(by: userID)
         let user = try await User.resolve(on: actorSystem, userID: userID)
         let forgottenFactCount = try await user.forgetMemory()
         await publish(
@@ -792,6 +816,7 @@ public distributed actor Conversation {
     private func asking<Answer: Sendable>(
         _ person: TurgaiDomain.UserID, _ ask: @Sendable (ClusterSystem) async throws -> Answer
     ) async throws -> Answer {
+        _ = try state.reading(by: person)
         let scope = try await space().scope(of: person)
         let system = actorSystem
         return try await CallChain.$current.withValue(.start(scope, in: conversationID)) { try await ask(system) }

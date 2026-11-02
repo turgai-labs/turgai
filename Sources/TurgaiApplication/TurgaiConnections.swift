@@ -237,18 +237,6 @@ public actor TurgaiConnections: Service {
             AsyncStream<Connection>.makeStream()
     }
 
-    /// The conversation with `id`, started with the agent its chat is answered by if it isn't running.
-    public func conversation(_ id: ConversationID) async throws -> Conversation {
-        let agentRole = try await Self.agentRole(for: id, agentProfiles: agentProfiles, on: actorSystem)
-        return try await Conversation.resolve(
-            on: actorSystem,
-            conversationID: id,
-            agentDirectoryID: "agent-directory",
-            agentRole: agentRole,
-            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(forProfileID: agentRole)
-        )
-    }
-
     /// The agent that answers `conversationID`: as its Telegram bot's channel routes its chats, or,
     /// for any other chat, the default profile.
     static func agentRole(
@@ -306,72 +294,25 @@ public actor TurgaiConnections: Service {
         return WebSession(input: inbound, output: session.output)
     }
 
-    public func conversationHistory(
-        for conversationID: ConversationID,
-        role: TurgaiAgentRole
+    /// What's been said in a conversation, as `person` reads it: refused unless they're in it.
+    public func history(
+        of conversationID: ConversationID, for person: TurgaiDomain.UserID
     ) async throws -> [ConversationHistoryEntry] {
-        let conversation = try await Conversation.resolve(
-            on: actorSystem,
-            conversationID: conversationID,
-            agentDirectoryID: "agent-directory",
-            agentRole: role.rawValue,
-            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
-                forProfileID: role.rawValue
-            )
-        )
-        return try await conversation.history()
-    }
-
-    /// Whom a call `person` makes in a conversation is on behalf of.
-    public func scope(
-        of person: TurgaiDomain.UserID,
-        in conversationID: ConversationID,
-        role: TurgaiAgentRole
-    ) async throws -> CallScope {
-        let conversation = try await Conversation.resolve(
-            on: actorSystem,
-            conversationID: conversationID,
-            agentDirectoryID: "agent-directory",
-            agentRole: role.rawValue,
-            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
-                forProfileID: role.rawValue
-            )
-        )
-        return try await conversation.scope(of: person)
+        try await Conversation.resolve(on: actorSystem, conversationID: conversationID).history(for: person)
     }
 
     /// The agent's past turns in a conversation, step by step, as `person` asks for them.
-    public func conversationTurns(
-        for conversationID: ConversationID,
-        role: TurgaiAgentRole,
-        askedBy person: TurgaiDomain.UserID
+    public func turns(
+        of conversationID: ConversationID, askedBy person: TurgaiDomain.UserID
     ) async throws -> [ConversationTurn] {
-        let conversation = try await Conversation.resolve(
-            on: actorSystem,
-            conversationID: conversationID,
-            agentDirectoryID: "agent-directory",
-            agentRole: role.rawValue,
-            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
-                forProfileID: role.rawValue
-            )
-        )
-        return try await conversation.turns(askedBy: person)
+        try await Conversation.resolve(on: actorSystem, conversationID: conversationID).turns(askedBy: person)
     }
 
-    public func conversationStatus(
-        for conversationID: ConversationID,
-        role: TurgaiAgentRole
+    /// Whether a conversation's agent is answering, as `person` sees it: refused unless they're in it.
+    public func status(
+        of conversationID: ConversationID, for person: TurgaiDomain.UserID
     ) async throws -> ConversationStatus {
-        let conversation = try await Conversation.resolve(
-            on: actorSystem,
-            conversationID: conversationID,
-            agentDirectoryID: "agent-directory",
-            agentRole: role.rawValue,
-            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
-                forProfileID: role.rawValue
-            )
-        )
-        return try await conversation.currentStatus()
+        try await Conversation.resolve(on: actorSystem, conversationID: conversationID).status(for: person)
     }
 
     /// Stops accepting sessions. Existing session workers are cancelled by
@@ -527,11 +468,7 @@ actor LiveSession {
         switch input {
         case .connect(let conversationID):
             do {
-                let role = try await self.resolvedAgentRole(for: conversationID)
-                let conversation = try await self.resolveConversation(
-                    conversationID,
-                    agentRole: role
-                )
+                let conversation = try await self.resolveConversation(conversationID)
                 try await self.attach(
                     to: conversation,
                     conversationID: conversationID
@@ -553,31 +490,22 @@ actor LiveSession {
                 "Message for conversation",
                 metadata: ["conversation": "\(message.conversationID.stableKey)", "turn": "\(turnID.rawValue)"])
             do {
-                let agentRole = try await self.resolvedAgentRole(for: message.conversationID)
-                let conversation = try await self.resolveConversation(
-                    message.conversationID,
-                    agentRole: agentRole
-                )
+                let conversation = try await self.resolveConversation(message.conversationID)
                 try await self.attach(
                     to: conversation,
                     conversationID: message.conversationID
                 )
-                // A web chat is its signed-in owner's: they're its space's admin, as a private
-                // chat's one person is. A guest never is: what they ask for waits for an admin.
-                if case .web = source, case .account = message.userID {
-                    try await conversation.setAdmins([message.userID])
-                }
+                try await self.admitIfTheChatSays(message.userID, to: conversation)
                 // A conversation is there from its first message.
                 try await conversationStorage.add(message.conversationID)
+                let memoryExtraction: MemoryExtractionConfiguration? =
+                    if let agent = try await conversation.started()?.agent {
+                        try await agentProfiles.memoryExtractionConfiguration(forProfileID: agent)
+                    } else { nil }
                 try await conversation.send(
                     message,
                     turnID: turnID,
-                    configuration: Conversation.TurnConfiguration(
-                        agentRole: agentRole,
-                        memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
-                            forProfileID: agentRole
-                        )
-                    ),
+                    configuration: Conversation.TurnConfiguration(memoryExtraction: memoryExtraction)
                 )
                 actorSystem.log.debug(
                     "Message sent to conversation",
@@ -601,18 +529,15 @@ actor LiveSession {
                 return false
             }
 
-        case .reset(let conversationID):
+        case .reset(let conversationID, let person):
             do {
-                let role = try await resolvedAgentRole(for: conversationID)
-                let conversation = try await resolveConversation(
-                    conversationID,
-                    agentRole: role
-                )
+                let conversation = try await resolveConversation(conversationID)
                 try await attach(
                     to: conversation,
                     conversationID: conversationID
                 )
-                try await conversation.reset()
+                try await admitIfTheChatSays(person, to: conversation)
+                try await conversation.reset(by: person)
                 return true
             } catch {
                 await publish(
@@ -627,13 +552,17 @@ actor LiveSession {
                 return false
             }
 
-        case .admins(let conversationID, let admins):
+        case .chat(let conversationID, let name, let admins, let person):
             do {
-                let agentRole = try await self.resolvedAgentRole(for: conversationID)
-                let conversation = try await self.resolveConversation(conversationID, agentRole: agentRole)
-                try await conversation.setAdmins(admins)
+                let conversation = try await self.resolveConversation(conversationID)
+                let agent = try await TurgaiConnections.agentRole(
+                    for: conversationID, agentProfiles: agentProfiles, on: actorSystem)
+                try await conversation.followChat(named: name, admins: admins, agent: agent, by: person)
                 return true
             } catch {
+                actorSystem.log.warning(
+                    "A chat's conversation didn't follow it",
+                    metadata: ["conversation": "\(conversationID.stableKey)", "error": "\(error)"])
                 return false
             }
 
@@ -775,8 +704,7 @@ actor LiveSession {
             reply = "Couldn't link: \(error)"
         }
         do {
-            let role = try await resolvedAgentRole(for: conversationID)
-            let conversation = try await resolveConversation(conversationID, agentRole: role)
+            let conversation = try await resolveConversation(conversationID)
             try await attach(to: conversation, conversationID: conversationID)
             try await conversation.notify(reply)
             return true
@@ -801,15 +729,12 @@ actor LiveSession {
         userID: TurgaiDomain.UserID
     ) async -> Bool {
         do {
-            let role = try await self.resolvedAgentRole(for: conversationID)
-            let conversation = try await self.resolveConversation(
-                conversationID,
-                agentRole: role
-            )
+            let conversation = try await self.resolveConversation(conversationID)
             try await self.attach(
                 to: conversation,
                 conversationID: conversationID
             )
+            try await admitIfTheChatSays(userID, to: conversation)
 
             switch command {
             case .memory:
@@ -860,24 +785,8 @@ actor LiveSession {
         try? await conversationConnection.receive(event)
     }
 
-    private func resolveConversation(
-        _ conversationID: ConversationID,
-        agentRole: String
-    ) async throws -> Conversation {
-        try await Conversation.resolve(
-            on: actorSystem,
-            conversationID: conversationID,
-            agentDirectoryID: "agent-directory",
-            agentRole: agentRole,
-            memoryExtraction: try await agentProfiles.memoryExtractionConfiguration(
-                forProfileID: agentRole
-            )
-        )
-    }
-
-    /// The channel actor is the routing authority for channel sessions, which answer only their
-    /// own channel's chats. Web sessions use the configured application default.
-    private func resolvedAgentRole(for conversationID: ConversationID) async throws -> String {
+    /// The conversation `conversationID`: a channel session answers only its own channel's chats.
+    private func resolveConversation(_ conversationID: ConversationID) async throws -> Conversation {
         if case .channel(let channelID) = source {
             let expectedChannelID = ChannelID(
                 provider: TelegramProvider.providerID,
@@ -887,7 +796,14 @@ actor LiveSession {
                 throw LiveSessionRoutingError.channelIdentityMismatch
             }
         }
-        return try await TurgaiConnections.agentRole(for: conversationID, agentProfiles: agentProfiles, on: actorSystem)
+        return try await Conversation.resolve(on: actorSystem, conversationID: conversationID)
+    }
+
+    /// `person` one of `conversation`'s people when its chat says so: anyone writing in a channel's
+    /// chat is in it. In Turgai's own apps, no one is let in by writing.
+    private func admitIfTheChatSays(_ person: TurgaiDomain.UserID, to conversation: Conversation) async throws {
+        guard case .channel = source else { return }
+        try await conversation.admit(person)
     }
 
     private func attach(
