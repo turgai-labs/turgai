@@ -10,24 +10,15 @@ struct ChatPage: HTMLDocument, Sendable {
 
     let user: AuthenticatedUser?
     let profile: TurgaiAgentProfile
+    /// The conversation it shows, as the API calls it.
+    let conversationID: String
     let presentation: Presentation
 
-    init(user: AuthenticatedUser, profile: TurgaiAgentProfile) {
+    init(user: AuthenticatedUser, profile: TurgaiAgentProfile, conversationID: String, presentation: Presentation) {
         self.user = user
         self.profile = profile
-        self.presentation = .dashboard
-    }
-
-    init(user: AuthenticatedUser, profile: TurgaiAgentProfile, presentation: Presentation) {
-        self.user = user
-        self.profile = profile
+        self.conversationID = conversationID
         self.presentation = presentation
-    }
-
-    init(profile: TurgaiAgentProfile) {
-        self.user = nil
-        self.profile = profile
-        self.presentation = .publicChat
     }
 
     var title: String { "Turgai — Chat with \(profile.name)" }
@@ -51,7 +42,7 @@ struct ChatPage: HTMLDocument, Sendable {
         main(
             .class("app-page chat-app-page overlay-scroll-page"),
             .init(name: "hx-ext", value: "ws"),
-            .ws.connect("/api/v1/chat?botID=\(profile.id)&format=html")
+            .ws.connect("/api/v1/chat?conversationID=\(conversationID)&format=html")
         ) {
             PageShell(
                 kind: shellKind,

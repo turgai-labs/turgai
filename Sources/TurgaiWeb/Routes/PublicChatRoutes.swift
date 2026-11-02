@@ -18,7 +18,7 @@ import TurgaiSpaces
 #endif
 
 /// Where the conversations of Turgai's own apps are: each by the id it's given as it starts.
-private let turgaiChannel = ChannelID("turgai")
+let turgaiChannel = ChannelID("turgai")
 
 extension TurgaiMainWebApp {
     func registerPublicChatRoutes(

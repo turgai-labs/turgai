@@ -3,6 +3,7 @@ import Hummingbird
 import HummingbirdElementary
 import HummingbirdWebSocket
 import TurgaiApplication
+import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -16,27 +17,60 @@ extension TurgaiMainWebApp {
         registerAgents(on: router.group("agents"), dependencies: dependencies)
     }
 
-    /// Chatting with a bot: the default one, or one chosen.
+    /// Chatting with a bot: in the conversation the address names; without one, in the person's
+    /// latest, with the default bot or the one chosen, or a new one when they have none.
     private func registerChat(
         on chat: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
     ) {
         let auth = dependencies.auth
         let agentProfiles = dependencies.agentProfiles
-        chat.get { request, context in
-            guard let profile = try await agentProfiles.defaultProfile() else {
-                return TurgaiWebSupport.redirect(to: "/onboarding")
+        let bridge = dependencies.webChatBridge
+        /// The page of the conversation `request` names, as `user` reads it, with `presentation`;
+        /// without one, a redirect to `path` naming the conversation to show: their latest answered
+        /// by `bot`, or by any bot when none is chosen, or else a new one with `bot`, or the
+        /// default bot.
+        @Sendable func page(
+            _ request: Request, _ context: BasicWebSocketRequestContext, for user: AuthenticatedUser,
+            bot: TurgaiAgentProfile?, at path: String, as presentation: ChatPage.Presentation
+        ) async throws -> Response {
+            let person = TurgaiDomain.UserID.account(user.id)
+            guard let written = request.uri.queryParameters["conversation"].map(String.init) else {
+                let latest = try await bridge.conversations(of: person).first { listing in
+                    listing.id.channel == turgaiChannel && (bot == nil || listing.agent == bot?.id)
+                }
+                if let latest {
+                    return TurgaiWebSupport.redirect(to: "\(path)?conversation=\(latest.id.externalAddress.rawValue)")
+                }
+                let chosen = if let bot { bot } else { try await agentProfiles.defaultProfile() }
+                guard let profile = chosen else { return TurgaiWebSupport.redirect(to: "/onboarding") }
+                let started = TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(UUID().uuidString))
+                try await bridge.startConversation(started, in: nil, agent: profile.id, by: person)
+                return TurgaiWebSupport.redirect(to: "\(path)?conversation=\(started.externalAddress.rawValue)")
             }
+            guard let minted = UUID(uuidString: written) else { return TurgaiWebSupport.redirect(to: path) }
+            let conversation = TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(minted.uuidString))
+            let start: ConversationStart
+            do {
+                start = try await bridge.conversation(conversation, readBy: person)
+            } catch is ConversationRefusal {
+                return TurgaiWebSupport.redirect(to: path)
+            }
+            guard let profile = try await agentProfiles.profile(id: start.agent) else {
+                return TurgaiWebSupport.redirect(to: "/")
+            }
+            return HTMLResponse {
+                ChatPage(
+                    user: user, profile: profile, conversationID: minted.uuidString, presentation: presentation)
+            }.response(from: request, context: context)
+        }
+
+        chat.get { request, context in
             guard let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            let response = HTMLResponse {
-                ChatPage(
-                    user: TurgaiWebSupport.userInfo(from: account),
-                    profile: profile,
-                    presentation: .publicChat
-                )
-            }.response(from: request, context: context)
-            return response
+            return try await page(
+                request, context, for: TurgaiWebSupport.userInfo(from: account), bot: nil, at: "/chat",
+                as: .publicChat)
         }
 
         chat.get(":id") { request, context in
@@ -48,9 +82,7 @@ extension TurgaiMainWebApp {
             else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
-            return HTMLResponse {
-                ChatPage(user: user, profile: profile)
-            }.response(from: request, context: context)
+            return try await page(request, context, for: user, bot: profile, at: "/chat/\(id)", as: .dashboard)
         }
     }
 
