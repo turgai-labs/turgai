@@ -49,6 +49,28 @@ struct AskedAgentTests {
     }
 }
 
+extension AskedAgentTests {
+    /// An agent offered from two nodes is one object: each node checks in its own reference to it,
+    /// and code on either finds it by its name through that node's.
+    @Test(.timeLimit(.minutes(1)))
+    func anAgentOfferedFromTwoNodesIsOneObject() async throws {
+        try await withAgentNodes(StartedAgents()) { objects, sessionNode in
+            _ = try await Agent.offered([Role("planner")], on: objects)
+            _ = try await Agent.offered([Role("planner")], on: sessionNode)
+            for node in [objects, sessionNode] {
+                for _ in 0..<50 where await node.receptionist.lookup(.virtualObjects).count < 2 {
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                #expect(await node.receptionist.lookup(.virtualObjects).count == 2)
+
+                let found = try #require(try await ObjectNames.object(named: "planner", using: node))
+                #expect(found.object.id.virtualActorID.map { ObjectID.virtual($0) } == Agent.objectID(Role("planner")))
+                #expect(found.object.id.node == node.cluster.node)
+            }
+        }
+    }
+}
+
 /// The agents started, by role.
 private actor StartedAgents {
     private(set) var roles: [String] = []
