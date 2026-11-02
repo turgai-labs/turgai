@@ -412,24 +412,24 @@ public distributed actor Conversation {
         return state.inbox.status
     }
 
-    /// How it started: none until it has.
-    public distributed func started() -> ConversationStart? {
-        state.start
+    /// The agent that answers in it: none until it has started.
+    public distributed func answeringAgent() -> AgentProfileID? {
+        state.agents.first
     }
 
-    /// How it started, as `person` reads it: refused unless they're one of its people.
-    public distributed func reading(by person: TurgaiDomain.UserID) throws -> ConversationStart {
+    /// It as `person` reads it: refused unless they're one of its people.
+    public distributed func reading(by person: TurgaiDomain.UserID) throws -> ConversationOutline {
         try state.reading(by: person)
     }
 
     /// It started in `space`, answered by `agent`, with `person`, who's in that space, the first of
     /// its people: refused when it has started already, or they're not in the space.
-    public distributed func start(in space: SpaceID, agent: String, by person: TurgaiDomain.UserID) async throws {
+    public distributed func start(in space: SpaceID, agent: AgentProfileID, by person: TurgaiDomain.UserID)
+        async throws
+    {
         _ = try await Space.resolve(on: actorSystem, id: space).scope(of: person)
         try await changing {
-            for event in try state.starting(ConversationStart(in: space, agent: agent), by: person) {
-                try await emit(event: event)
-            }
+            for event in try state.starting(in: space, answeredBy: agent, by: person) { try await emit(event: event) }
         }
     }
 
@@ -438,16 +438,14 @@ public distributed actor Conversation {
     /// starts there, answered by `agent`; after that its space's admins become `admins`. `person`
     /// is in both, as anyone writing in it is.
     public distributed func followChat(
-        named name: SpaceName, admins: Set<TurgaiDomain.UserID>, agent: String, by person: TurgaiDomain.UserID
+        named name: SpaceName, admins: Set<TurgaiDomain.UserID>, agent: AgentProfileID, by person: TurgaiDomain.UserID
     ) async throws {
         let id = try await changing {
-            if let start = state.start { return start.space }
+            if let space = state.space { return space }
             // Made before it starts in it: it's never in a space that isn't there.
             let space = SpaceID()
             try await Space.resolve(on: actorSystem, id: space).make(named: name, admins: admins)
-            for event in try state.starting(ConversationStart(in: space, agent: agent), by: person) {
-                try await emit(event: event)
-            }
+            for event in try state.starting(in: space, answeredBy: agent, by: person) { try await emit(event: event) }
             return space
         }
         let space = try await Space.resolve(on: actorSystem, id: id)
@@ -475,14 +473,14 @@ public distributed actor Conversation {
 
     /// Its space: who's in it, and what its admins allow. Refused until it has started.
     private func space() async throws -> Space {
-        guard let start = state.start else { throw ConversationRefusal.notStarted }
-        return try await Space.resolve(on: actorSystem, id: start.space)
+        guard let space = state.space else { throw ConversationRefusal.notStarted }
+        return try await Space.resolve(on: actorSystem, id: space)
     }
 
-    /// The profile of its agent: refused until it has started.
+    /// The profile of the agent that answers in it: refused until it has started.
     private func agent() throws -> String {
-        guard let start = state.start else { throw ConversationRefusal.notStarted }
-        return start.agent
+        guard let agent = state.agents.first else { throw ConversationRefusal.notStarted }
+        return agent.rawValue
     }
 
     /// Makes `change` to its state once no other change is being made: it reads the state, decides
@@ -569,7 +567,8 @@ public distributed actor Conversation {
             throw ConversationActorError.conversationMismatch
         }
 
-        let agent = try state.reading(by: message.userID).agent
+        _ = try state.reading(by: message.userID)
+        let agent = try agent()
         // A mark a restart left is taken off with the next message.
         await unnote()
         memoryExtractionConfiguration = configuration.memoryExtraction

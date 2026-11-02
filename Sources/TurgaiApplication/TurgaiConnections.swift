@@ -489,8 +489,8 @@ actor LiveSession {
                 )
                 try await self.admitIfTheChatSays(message.userID, to: conversation)
                 let memoryExtraction: MemoryExtractionConfiguration? =
-                    if let agent = try await conversation.started()?.agent {
-                        try await agentProfiles.memoryExtractionConfiguration(forProfileID: agent)
+                    if let agent = try await conversation.answeringAgent() {
+                        try await agentProfiles.memoryExtractionConfiguration(forProfileID: agent.rawValue)
                     } else { nil }
                 try await conversation.send(
                     message,
@@ -547,7 +547,8 @@ actor LiveSession {
                 let conversation = try await self.resolveConversation(conversationID)
                 let agent = try await TurgaiConnections.agentRole(
                     for: conversationID, agentProfiles: agentProfiles, on: actorSystem)
-                try await conversation.followChat(named: name, admins: admins, agent: agent, by: person)
+                try await conversation.followChat(
+                    named: name, admins: admins, agent: AgentProfileID(agent), by: person)
                 return true
             } catch {
                 actorSystem.log.warning(

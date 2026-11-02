@@ -14,6 +14,8 @@ import TurgaiSpaces
 /// its first person is in, and a channel's chat in a space made for it, named after it.
 @Suite
 struct ConversationStartTests {
+    private let conversation = AgentProfileID("conversation")
+
     /// A conversation in Turgai's apps starts in a space whoever starts it is in, and only its
     /// people read it.
     @Test func anAppsConversationStartsInASpaceItsFirstPersonIsIn() async throws {
@@ -25,13 +27,15 @@ struct ConversationStartTests {
                 conversationID: ConversationID(channel: ChannelID("turgai"), externalAddress: .init(UUID().uuidString)))
             await #expect(throws: ConversationRefusal.notStarted) { try await chat.history(for: .ann) }
             await #expect(throws: SpaceRefusal.notInIt) {
-                try await chat.start(in: family.id, agent: "conversation", by: .bob)
+                try await chat.start(in: family.id, agent: conversation, by: .bob)
             }
 
-            try await chat.start(in: family.id, agent: "conversation", by: .ann)
-            #expect(try await chat.reading(by: .ann) == ConversationStart(in: family.id, agent: "conversation"))
+            try await chat.start(in: family.id, agent: conversation, by: .ann)
+            #expect(
+                try await chat.reading(by: .ann)
+                    == ConversationOutline(space: family.id, participants: [.agent(conversation), .person(.ann)]))
             await #expect(throws: ConversationRefusal.alreadyStarted) {
-                try await chat.start(in: family.id, agent: "other", by: .ann)
+                try await chat.start(in: family.id, agent: AgentProfileID("other"), by: .ann)
             }
             await #expect(throws: ConversationRefusal.notInIt) { try await chat.history(for: .bob) }
         }
@@ -44,12 +48,13 @@ struct ConversationStartTests {
         try await withClusterSystem("chat", store: MemoryEventStore(), hostsVirtualActors: true, people: []) { system in
             let chat = try await Conversation.resolve(
                 on: system, conversationID: ConversationID(channel: ChannelID("telegram"), externalAddress: .init("42")))
-            try await chat.followChat(named: SpaceName("Family")!, admins: [.ann], agent: "conversation", by: .bob)
-            try await chat.followChat(named: SpaceName("Family")!, admins: [.ann, .dad], agent: "other", by: .bob)
+            try await chat.followChat(named: SpaceName("Family")!, admins: [.ann], agent: conversation, by: .bob)
+            try await chat.followChat(
+                named: SpaceName("Family")!, admins: [.ann, .dad], agent: AgentProfileID("other"), by: .bob)
             try await chat.admit(.cat)
 
             let start = try await chat.reading(by: .bob)
-            #expect(start.agent == "conversation")
+            #expect(start.agent == conversation)
             #expect(try await chat.reading(by: .cat) == start)
             let space = try await Space.resolve(on: system, id: start.space)
             #expect(try await space.listing(for: .ann) == SpaceListing(id: start.space, name: SpaceName("Family")!, role: .admin))

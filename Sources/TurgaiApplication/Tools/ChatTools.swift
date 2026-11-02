@@ -163,7 +163,7 @@ public struct ChatModels: Sendable {
     /// What the model of the agent that answers `conversation` answers `question` with, asked on
     /// its own.
     func ask(_ question: String, in conversation: ConversationID, on system: ClusterSystem) async throws -> String {
-        guard let role = try await Conversation.resolve(on: system, conversationID: conversation).started()?.agent
+        guard let role = try await Conversation.resolve(on: system, conversationID: conversation).answeringAgent()?.rawValue
         else { throw ConversationRefusal.notStarted }
         guard let profile = try await agentProfiles.profile(id: role) else {
             throw TurgaiAgentProfileError.unknownProfile(role)

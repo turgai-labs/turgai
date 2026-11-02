@@ -29,12 +29,12 @@ public enum ConversationDirectoryError: Error, Equatable, Sendable {
 public struct ConversationListing: Hashable, Codable, Sendable {
     public let id: ConversationID
     public let space: SpaceID
-    /// The profile of the agent that answers it.
-    public let agent: String
+    /// The agent that answers in it.
+    public let agent: AgentProfileID
     /// Its title, or else the first line of the first thing said in it: none until either.
     public let title: String?
 
-    public init(id: ConversationID, space: SpaceID, agent: String, title: String?) {
+    public init(id: ConversationID, space: SpaceID, agent: AgentProfileID, title: String?) {
         self.id = id
         self.space = space
         self.agent = agent
@@ -45,9 +45,9 @@ public struct ConversationListing: Hashable, Codable, Sendable {
 /// What one of a conversation's events changes in the directory. Each leaves the directory as it
 /// is when it's kept a second time.
 public enum ConversationDirectoryChange: Hashable, Sendable {
-    case started(ConversationID, ConversationStart)
-    case joined(ConversationID, UserID)
-    case left(ConversationID, UserID)
+    case started(ConversationID, in: SpaceID)
+    case joined(ConversationID, Participant)
+    case left(ConversationID, Participant)
     case titled(ConversationID, ConversationTitle)
     /// Something was said in it: `firstLine` is the first line of a person's words, none for its
     /// agent's.
@@ -57,9 +57,9 @@ public enum ConversationDirectoryChange: Hashable, Sendable {
     /// doesn't show.
     public init?(_ event: ConversationEvent, in conversation: ConversationID) {
         switch event {
-        case .started(let start): self = .started(conversation, start)
-        case .joined(let person): self = .joined(conversation, person)
-        case .left(let person): self = .left(conversation, person)
+        case .started(let space): self = .started(conversation, in: space)
+        case .joined(let participant): self = .joined(conversation, participant)
+        case .left(let participant): self = .left(conversation, participant)
         case .titled(let title): self = .titled(conversation, title)
         case .inbox(.queued(let pending)), .inbox(.turnStarted(let pending)):
             let line = pending.message.text.split(whereSeparator: \.isNewline).lazy.map { String($0).trimmed() }
@@ -120,9 +120,9 @@ public struct ConversationDirectoryStorage: Sendable {
     }
 }
 
-/// The directory in Turgai's database: each conversation's start, title, first line and when
-/// something was last said in it, the offset of that event; each person in a conversation; and
-/// how far it's read. Each change is one write, and keeping it again changes nothing, so the
+/// The directory in Turgai's database: each conversation's space, agent, title, first line and
+/// when something was last said in it, the offset of that event; each person in a conversation;
+/// and how far it's read. Each change is one write, and keeping it again changes nothing, so the
 /// offset is kept after it.
 private struct ConversationDirectoryTables: Sendable {
     // Held, not only its connection: the connection stays open while the tables are used.
@@ -139,7 +139,7 @@ private struct ConversationDirectoryTables: Sendable {
                 conversation TEXT    NOT NULL PRIMARY KEY,
                 channel      TEXT    NOT NULL,
                 space        TEXT    NOT NULL,
-                agent        TEXT    NOT NULL,
+                agent        TEXT,
                 title        TEXT,
                 first_line   TEXT,
                 latest       INTEGER NOT NULL
@@ -169,7 +169,7 @@ private struct ConversationDirectoryTables: Sendable {
             SELECT conversation_listings.conversation, space, agent, COALESCE(title, first_line) AS called
             FROM conversation_people
             JOIN conversation_listings ON conversation_listings.conversation = conversation_people.conversation
-            WHERE person = ? ORDER BY latest DESC
+            WHERE person = ? AND agent IS NOT NULL ORDER BY latest DESC
             """,
             [.text(person.key)]
         ).map { row in
@@ -178,7 +178,8 @@ private struct ConversationDirectoryTables: Sendable {
                 let agent = row.column("agent")?.string
             else { throw ConversationDirectoryError.invalidEntry }
             return ConversationListing(
-                id: conversation, space: SpaceID(rawValue: space), agent: agent, title: row.column("called")?.string)
+                id: conversation, space: SpaceID(rawValue: space), agent: AgentProfileID(agent),
+                title: row.column("called")?.string)
         }
     }
 
@@ -201,24 +202,32 @@ private struct ConversationDirectoryTables: Sendable {
 
     func keep(_ change: ConversationDirectoryChange?, at offset: Offset) async throws {
         switch change {
-        case .started(let conversation, let start)?:
+        case .started(let conversation, let space)?:
             _ = try await connection.query(
                 """
-                INSERT INTO conversation_listings (conversation, channel, space, agent, latest) VALUES (?, ?, ?, ?, ?)
+                INSERT INTO conversation_listings (conversation, channel, space, latest) VALUES (?, ?, ?, ?)
                 ON CONFLICT (conversation) DO NOTHING
                 """,
                 [
                     .text(conversation.stableKey), .text(conversation.channel.rawValue),
-                    .text(start.space.rawValue.uuidString), .text(start.agent), .integer(Int(offset.rawValue)),
+                    .text(space.rawValue.uuidString), .integer(Int(offset.rawValue)),
                 ])
-        case .joined(let conversation, let person)?:
+        case .joined(let conversation, .person(let person))?:
             _ = try await connection.query(
                 "INSERT INTO conversation_people (person, conversation) VALUES (?, ?) ON CONFLICT DO NOTHING",
                 [.text(person.key), .text(conversation.stableKey)])
-        case .left(let conversation, let person)?:
+        case .joined(let conversation, .agent(let agent))?:
+            _ = try await connection.query(
+                "UPDATE conversation_listings SET agent = ? WHERE conversation = ?",
+                [.text(agent.rawValue), .text(conversation.stableKey)])
+        case .left(let conversation, .person(let person))?:
             _ = try await connection.query(
                 "DELETE FROM conversation_people WHERE person = ? AND conversation = ?",
                 [.text(person.key), .text(conversation.stableKey)])
+        case .left(let conversation, .agent(let agent))?:
+            _ = try await connection.query(
+                "UPDATE conversation_listings SET agent = NULL WHERE conversation = ? AND agent = ?",
+                [.text(conversation.stableKey), .text(agent.rawValue)])
         case .titled(let conversation, let title)?:
             _ = try await connection.query(
                 "UPDATE conversation_listings SET title = ? WHERE conversation = ?",
@@ -246,7 +255,8 @@ private struct ConversationDirectoryTables: Sendable {
 /// The directory of ``ConversationDirectoryStorage/test``.
 private actor MemoryConversationDirectory {
     private struct Listing {
-        let start: ConversationStart
+        let space: SpaceID
+        var agent: AgentProfileID?
         var title: ConversationTitle?
         var firstLine: String?
         var latest: Offset
@@ -259,10 +269,11 @@ private actor MemoryConversationDirectory {
     func conversations(of person: UserID) -> [ConversationListing] {
         (people[person] ?? []).compactMap { id in listings[id].map { (id, $0) } }
             .sorted { $0.1.latest > $1.1.latest }
-            .map { id, listing in
-                ConversationListing(
-                    id: id, space: listing.start.space, agent: listing.start.agent,
-                    title: listing.title?.rawValue ?? listing.firstLine)
+            .compactMap { id, listing in
+                listing.agent.map {
+                    ConversationListing(
+                        id: id, space: listing.space, agent: $0, title: listing.title?.rawValue ?? listing.firstLine)
+                }
             }
     }
 
@@ -272,12 +283,16 @@ private actor MemoryConversationDirectory {
 
     func keep(_ change: ConversationDirectoryChange?, at offset: Offset) {
         switch change {
-        case .started(let conversation, let start)?:
-            if listings[conversation] == nil { listings[conversation] = Listing(start: start, latest: offset) }
-        case .joined(let conversation, let person)?:
+        case .started(let conversation, let space)?:
+            if listings[conversation] == nil { listings[conversation] = Listing(space: space, latest: offset) }
+        case .joined(let conversation, .person(let person))?:
             people[person, default: []].insert(conversation)
-        case .left(let conversation, let person)?:
+        case .joined(let conversation, .agent(let agent))?:
+            listings[conversation]?.agent = agent
+        case .left(let conversation, .person(let person))?:
             people[person]?.remove(conversation)
+        case .left(let conversation, .agent(let agent))?:
+            if listings[conversation]?.agent == agent { listings[conversation]?.agent = nil }
         case .titled(let conversation, let title)?:
             listings[conversation]?.title = title
         case .said(let conversation, let firstLine)?:

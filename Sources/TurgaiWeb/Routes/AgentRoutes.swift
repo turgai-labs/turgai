@@ -36,7 +36,7 @@ extension TurgaiMainWebApp {
             let person = TurgaiDomain.UserID.account(user.id)
             guard let written = request.uri.queryParameters["conversation"].map(String.init) else {
                 let latest = try await bridge.conversations(of: person).first { listing in
-                    listing.id.channel == turgaiChannel && (bot == nil || listing.agent == bot?.id)
+                    listing.id.channel == turgaiChannel && (bot == nil || listing.agent.rawValue == bot?.id)
                 }
                 if let latest {
                     return TurgaiWebSupport.redirect(to: "\(path)?conversation=\(latest.id.externalAddress.rawValue)")
@@ -44,18 +44,18 @@ extension TurgaiMainWebApp {
                 let chosen = if let bot { bot } else { try await agentProfiles.defaultProfile() }
                 guard let profile = chosen else { return TurgaiWebSupport.redirect(to: "/onboarding") }
                 let started = TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(UUID().uuidString))
-                try await bridge.startConversation(started, in: nil, agent: profile.id, by: person)
+                try await bridge.startConversation(started, in: nil, agent: AgentProfileID(profile.id), by: person)
                 return TurgaiWebSupport.redirect(to: "\(path)?conversation=\(started.externalAddress.rawValue)")
             }
             guard let minted = UUID(uuidString: written) else { return TurgaiWebSupport.redirect(to: path) }
             let conversation = TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(minted.uuidString))
-            let start: ConversationStart
+            let outline: ConversationOutline
             do {
-                start = try await bridge.conversation(conversation, readBy: person)
+                outline = try await bridge.conversation(conversation, readBy: person)
             } catch is ConversationRefusal {
                 return TurgaiWebSupport.redirect(to: path)
             }
-            guard let profile = try await agentProfiles.profile(id: start.agent) else {
+            guard let agent = outline.agent, let profile = try await agentProfiles.profile(id: agent.rawValue) else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
             return HTMLResponse {

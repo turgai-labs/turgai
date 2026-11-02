@@ -27,7 +27,7 @@ struct ConversationDirectoryTests {
             func started(_ address: String) async throws -> (ConversationID, Conversation) {
                 let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init(address))
                 let conversation = try await Conversation.resolve(on: system, conversationID: id)
-                try await conversation.start(in: family.id, agent: "conversation", by: .ann)
+                try await conversation.start(in: family.id, agent: AgentProfileID("conversation"), by: .ann)
                 return (id, conversation)
             }
             let (dinnerID, dinner) = try await started("dinner")
@@ -35,13 +35,13 @@ struct ConversationDirectoryTests {
             try await trip.title(ConversationTitle("Trip")!, by: .ann)
 
             let annsList = Set([
-                ConversationListing(id: dinnerID, space: family.id, agent: "conversation", title: nil),
-                ConversationListing(id: tripID, space: family.id, agent: "conversation", title: "Trip"),
+                ConversationListing(id: dinnerID, space: family.id, agent: AgentProfileID("conversation"), title: nil),
+                ConversationListing(id: tripID, space: family.id, agent: AgentProfileID("conversation"), title: "Trip"),
             ])
             #expect(try await Set(list(of: .ann, on: system) { Set($0) == annsList }) == annsList)
 
             try await dinner.leave(.ann)
-            let afterLeaving = [ConversationListing(id: tripID, space: family.id, agent: "conversation", title: "Trip")]
+            let afterLeaving = [ConversationListing(id: tripID, space: family.id, agent: AgentProfileID("conversation"), title: "Trip")]
             #expect(try await list(of: .ann, on: system) { $0 == afterLeaving } == afterLeaving)
 
             let onTurgai = try await system.singleton
@@ -56,6 +56,7 @@ struct ConversationDirectoryTests {
     @Test func whatsSaidPutsAConversationFirst() async throws {
         let directory = ConversationDirectoryStorage.test
         let space = SpaceID()
+        let a = AgentProfileID("a")
         let dinner = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("dinner"))
         let trip = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("trip"))
         func said(_ text: String, in conversation: ConversationID) -> ConversationDirectoryChange? {
@@ -67,23 +68,23 @@ struct ConversationDirectoryTests {
                 in: conversation)
         }
         let changes: [ConversationDirectoryChange?] = [
-            .started(dinner, ConversationStart(in: space, agent: "a")), .joined(dinner, .ann),
-            .started(trip, ConversationStart(in: space, agent: "a")), .joined(trip, .ann),
+            .started(dinner, in: space), .joined(dinner, .agent(a)), .joined(dinner, .person(.ann)),
+            .started(trip, in: space), .joined(trip, .agent(a)), .joined(trip, .person(.ann)),
             said("\n  plan dinner  \nfor four", in: dinner), said("pasta?", in: dinner),
         ]
         for (index, change) in changes.enumerated() { try await directory.keep(change, Offset(Int64(index + 1))) }
         #expect(
             try await directory.conversations(.ann) == [
-                ConversationListing(id: dinner, space: space, agent: "a", title: "plan dinner"),
-                ConversationListing(id: trip, space: space, agent: "a", title: nil),
+                ConversationListing(id: dinner, space: space, agent: a, title: "plan dinner"),
+                ConversationListing(id: trip, space: space, agent: a, title: nil),
             ])
 
-        try await directory.keep(.said(trip, firstLine: nil), Offset(7))
-        try await directory.keep(.titled(dinner, ConversationTitle("Dinner")!), Offset(8))
+        try await directory.keep(.said(trip, firstLine: nil), Offset(9))
+        try await directory.keep(.titled(dinner, ConversationTitle("Dinner")!), Offset(10))
         #expect(
             try await directory.conversations(.ann) == [
-                ConversationListing(id: trip, space: space, agent: "a", title: nil),
-                ConversationListing(id: dinner, space: space, agent: "a", title: "Dinner"),
+                ConversationListing(id: trip, space: space, agent: a, title: nil),
+                ConversationListing(id: dinner, space: space, agent: a, title: "Dinner"),
             ])
     }
 

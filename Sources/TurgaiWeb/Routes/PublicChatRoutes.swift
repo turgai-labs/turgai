@@ -168,7 +168,7 @@ extension TurgaiMainWebApp {
                     .init(
                         payload: .ready(
                             conversationID: conversation.publicID,
-                            botID: .init(rawValue: conversation.start.agent),
+                            botID: .init(rawValue: conversation.agent.rawValue),
                             status: publicConversationStatus(status)
                         ))
                 )
@@ -300,7 +300,8 @@ extension TurgaiMainWebApp {
             return try publicAPIResponse(
                 listed.filter { $0.id.channel == turgaiChannel }.map { listing in
                     TurgaiModels.Conversation(
-                        id: .init(rawValue: listing.id.externalAddress.rawValue), botID: .init(rawValue: listing.agent),
+                        id: .init(rawValue: listing.id.externalAddress.rawValue),
+                        botID: .init(rawValue: listing.agent.rawValue),
                         title: listing.title)
                 })
         }
@@ -333,7 +334,7 @@ extension TurgaiMainWebApp {
                 channel: turgaiChannel, externalAddress: .init(UUID().uuidString))
             do {
                 try await dependencies.webChatBridge.startConversation(
-                    conversationID, in: space, agent: profile.id, by: owner.person)
+                    conversationID, in: space, agent: AgentProfileID(profile.id), by: owner.person)
             } catch let refusal as SpaceRefusal {
                 return spaceRefused(refusal)
             }
@@ -608,14 +609,16 @@ extension TurgaiMainWebApp {
 
 private struct APIConversation: Sendable {
     let domainID: TurgaiDomain.ConversationID
-    /// How it started: in its space, answered by its agent.
-    let start: ConversationStart
+    /// Its space, and who's in it.
+    let outline: ConversationOutline
+    /// The agent that answers in it.
+    let agent: AgentProfileID
 
     /// What the API calls it: the id it was given as it started.
     var publicID: TurgaiModels.ConversationID { .init(rawValue: domainID.externalAddress.rawValue) }
 
     var info: TurgaiModels.Conversation {
-        .init(id: publicID, botID: .init(rawValue: start.agent))
+        .init(id: publicID, botID: .init(rawValue: agent.rawValue))
     }
 }
 
@@ -626,11 +629,14 @@ private func apiConversation(
 ) async throws -> APIConversation? {
     guard let id, let minted = UUID(uuidString: id) else { return nil }
     let domainID = TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(minted.uuidString))
+    let outline: ConversationOutline
     do {
-        return APIConversation(domainID: domainID, start: try await bridge.conversation(domainID, readBy: person))
+        outline = try await bridge.conversation(domainID, readBy: person)
     } catch is ConversationRefusal {
         return nil
     }
+    guard let agent = outline.agent else { return nil }
+    return APIConversation(domainID: domainID, outline: outline, agent: agent)
 }
 
 /// The answer for a conversation the person can't read, or that isn't there.
