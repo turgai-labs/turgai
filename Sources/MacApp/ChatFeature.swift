@@ -171,6 +171,9 @@ struct ChatFeature {
             state.accessRequests.remove(id: id)
         case .notice(_, _, let error):
             state.error = error
+        case .conversationChanged, .conversationLeft:
+            // The person's other conversations: shown once there's a list of them.
+            break
         }
     }
 

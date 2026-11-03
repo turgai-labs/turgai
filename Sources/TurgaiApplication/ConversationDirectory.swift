@@ -42,6 +42,31 @@ public struct ConversationListing: Hashable, Codable, Sendable {
     }
 }
 
+/// What a person is told about their conversations as the directory follows them.
+public enum ConversationNotice: Hashable, Codable, Sendable {
+    /// One of their conversations, as it's listed now: something was said in it, it was titled,
+    /// or they joined it.
+    case changed(ConversationListing)
+    /// They're no longer in it.
+    case left(ConversationID)
+}
+
+/// Where a person's notices are told: one for each of their open connections.
+public distributed actor ConversationNoticeListener {
+    public typealias ActorSystem = ClusterSystem
+
+    private let onNotice: @Sendable (ConversationNotice) async -> Void
+
+    public init(actorSystem: ClusterSystem, onNotice: @escaping @Sendable (ConversationNotice) async -> Void) {
+        self.actorSystem = actorSystem
+        self.onNotice = onNotice
+    }
+
+    public distributed func receive(_ notice: ConversationNotice) async {
+        await onNotice(notice)
+    }
+}
+
 /// What one of a conversation's events changes in the directory. Each leaves the directory as it
 /// is when it's kept a second time.
 public enum ConversationDirectoryChange: Hashable, Sendable {
@@ -86,6 +111,10 @@ public struct ConversationDirectoryStorage: Sendable {
     public var conversations: @Sendable (UserID) async throws -> [ConversationListing]
     /// The conversations on a channel.
     public var onChannel: @Sendable (ChannelID) async throws -> [ConversationID]
+    /// A conversation as it's listed: none until it has its agent.
+    public var listing: @Sendable (ConversationID) async throws -> ConversationListing?
+    /// The people in a conversation.
+    public var people: @Sendable (ConversationID) async throws -> [UserID]
     /// Where it's read the conversations' events up to.
     public var offset: @Sendable () async throws -> Offset
     /// Keeps a change, kept at an offset, then that it's read up to it.
@@ -94,11 +123,15 @@ public struct ConversationDirectoryStorage: Sendable {
     public init(
         conversations: @escaping @Sendable (UserID) async throws -> [ConversationListing],
         onChannel: @escaping @Sendable (ChannelID) async throws -> [ConversationID],
+        listing: @escaping @Sendable (ConversationID) async throws -> ConversationListing?,
+        people: @escaping @Sendable (ConversationID) async throws -> [UserID],
         offset: @escaping @Sendable () async throws -> Offset,
         keep: @escaping @Sendable (ConversationDirectoryChange?, Offset) async throws -> Void
     ) {
         self.conversations = conversations
         self.onChannel = onChannel
+        self.listing = listing
+        self.people = people
         self.offset = offset
         self.keep = keep
     }
@@ -109,6 +142,8 @@ public struct ConversationDirectoryStorage: Sendable {
         return Self(
             conversations: { try await tables.conversations(of: $0) },
             onChannel: { try await tables.conversations(on: $0) },
+            listing: { try await tables.listing(of: $0) },
+            people: { try await tables.people(in: $0) },
             offset: { try await tables.offset() },
             keep: { try await tables.keep($0, at: $1) }
         )
@@ -120,6 +155,8 @@ public struct ConversationDirectoryStorage: Sendable {
         return Self(
             conversations: { await directory.conversations(of: $0) },
             onChannel: { await directory.conversations(on: $0) },
+            listing: { await directory.listing(of: $0) },
+            people: { await directory.people(in: $0) },
             offset: { await directory.offset },
             keep: { await directory.keep($0, at: $1) }
         )
@@ -196,6 +233,32 @@ private struct ConversationDirectoryTables: Sendable {
             guard let conversation = row.column("conversation")?.string.flatMap(ConversationID.init(stableKey:))
             else { throw ConversationDirectoryError.invalidEntry }
             return conversation
+        }
+    }
+
+    func listing(of conversation: ConversationID) async throws -> ConversationListing? {
+        try await connection.query(
+            """
+            SELECT space, agent, COALESCE(title, first_line) AS called FROM conversation_listings
+            WHERE conversation = ? AND agent IS NOT NULL
+            """,
+            [.text(conversation.stableKey)]
+        ).first.map { row in
+            guard let space = row.column("space")?.string.flatMap(UUID.init(uuidString:)),
+                let agent = row.column("agent")?.string
+            else { throw ConversationDirectoryError.invalidEntry }
+            return ConversationListing(
+                id: conversation, space: SpaceID(rawValue: space), agent: AgentProfileID(agent),
+                title: row.column("called")?.string)
+        }
+    }
+
+    func people(in conversation: ConversationID) async throws -> [UserID] {
+        try await connection.query(
+            "SELECT person FROM conversation_people WHERE conversation = ?", [.text(conversation.stableKey)]
+        ).map { row in
+            guard let person = row.column("person")?.string else { throw ConversationDirectoryError.invalidEntry }
+            return try UserID(key: person)
         }
     }
 
@@ -287,6 +350,16 @@ private actor MemoryConversationDirectory {
         listings.keys.filter { $0.channel == channel }
     }
 
+    func listing(of conversation: ConversationID) -> ConversationListing? {
+        guard let listing = listings[conversation], let agent = listing.agent else { return nil }
+        return ConversationListing(
+            id: conversation, space: listing.space, agent: agent, title: listing.title?.rawValue ?? listing.firstLine)
+    }
+
+    func people(in conversation: ConversationID) -> [UserID] {
+        people.filter { $0.value.contains(conversation) }.map(\.key)
+    }
+
     func keep(_ change: ConversationDirectoryChange?, at offset: Offset) {
         switch change {
         case .started(let conversation, let space)?:
@@ -325,6 +398,8 @@ public distributed actor ConversationDirectory: ClusterSingleton {
     private let refreshInterval: Duration
     /// The projection, while it's the cluster's directory.
     private var following: Task<Void, Never>?
+    /// Who's told about each person's conversations as they change.
+    private var listeners: [UserID: Set<ConversationNoticeListener>] = [:]
 
     /// A directory kept in `storage`, from the conversations' events in `journal`, read again
     /// every `refreshInterval` once it's caught up.
@@ -350,6 +425,44 @@ public distributed actor ConversationDirectory: ClusterSingleton {
         try await storage.onChannel(channel)
     }
 
+    /// `listener` told about `person`'s conversations as they change, from now on.
+    public distributed func follow(_ person: UserID, with listener: ConversationNoticeListener) {
+        listeners[person, default: []].insert(listener)
+    }
+
+    /// `listener` no longer told anything.
+    public distributed func unfollow(_ listener: ConversationNoticeListener) {
+        for person in listeners.keys { listeners[person]?.remove(listener) }
+        listeners = listeners.filter { !$0.value.isEmpty }
+    }
+
+    /// The people `change` touches told about it, now that it's kept: a listener that can't be
+    /// told is let go.
+    private func tell(about change: ConversationDirectoryChange?) async throws {
+        guard !listeners.isEmpty, let change else { return }
+        let notices: [(UserID, ConversationNotice)]
+        switch change {
+        case .joined(let conversation, .person(let person)):
+            notices = try await storage.listing(conversation).map { [(person, .changed($0))] } ?? []
+        case .joined(let conversation, .agent), .titled(let conversation, _), .said(let conversation, _):
+            guard let listing = try await storage.listing(conversation) else { return }
+            notices = try await storage.people(conversation).map { ($0, .changed(listing)) }
+        case .left(let conversation, .person(let person)):
+            notices = [(person, .left(conversation))]
+        case .started, .left(_, .agent):
+            notices = []
+        }
+        for (person, notice) in notices {
+            for listener in listeners[person] ?? [] {
+                do {
+                    try await listener.receive(notice)
+                } catch {
+                    unfollow(listener)
+                }
+            }
+        }
+    }
+
     /// Follows the conversations' events while it's the cluster's directory: from where it read up
     /// to, and again from there whenever following them fails.
     public func activateSingleton() async {
@@ -359,7 +472,9 @@ public distributed actor ConversationDirectory: ClusterSingleton {
             guard let conversation = ConversationPersistenceID(rawValue: envelope.persistenceID)?.conversationID else {
                 throw ConversationDirectoryError.notAConversation(envelope.persistenceID)
             }
-            try await storage.keep(ConversationDirectoryChange(envelope.event, in: conversation), envelope.offset)
+            let change = ConversationDirectoryChange(envelope.event, in: conversation)
+            try await storage.keep(change, envelope.offset)
+            try await self.whenLocal { try await $0.tell(about: change) }
         }
         let journal = journal
         let refreshInterval = refreshInterval

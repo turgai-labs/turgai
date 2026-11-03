@@ -51,6 +51,39 @@ struct ConversationDirectoryTests {
         }
     }
 
+    /// Someone following their conversations is told as they join one, as it changes, and as they
+    /// leave it.
+    @Test func aPersonIsToldAboutTheirConversations() async throws {
+        let store = MemoryEventStore()
+        try await withClusterSystem("notices", store: store, hostsVirtualActors: true, people: []) { system in
+            _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
+                ConversationDirectory(actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
+            }
+            let (notices, telling) = AsyncStream<ConversationNotice>.makeStream()
+            let listener = ConversationNoticeListener(actorSystem: system) { telling.yield($0) }
+            try await system.singleton.proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+                .follow(.ann, with: listener)
+
+            let family = try await Spaces(actorSystem: system).make(named: SpaceName("Family")!, by: .ann)
+            let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("dinner"))
+            let dinner = try await Conversation.resolve(on: system, conversationID: id)
+            try await dinner.start(in: family.id, agent: AgentProfileID("conversation"), by: .ann)
+            try await dinner.title(ConversationTitle("Dinner")!, by: .ann)
+            try await dinner.leave(.ann)
+
+            var told: [ConversationNotice] = []
+            for await notice in notices {
+                told.append(notice)
+                if case .left = notice { break }
+            }
+            let listed = ConversationListing(id: id, space: family.id, agent: AgentProfileID("conversation"), title: nil)
+            let titled = ConversationListing(id: id, space: family.id, agent: AgentProfileID("conversation"), title: "Dinner")
+            #expect(told.first == .changed(listed))
+            #expect(told.contains(.changed(titled)))
+            #expect(told.last == .left(id))
+        }
+    }
+
     /// Each thing said in a conversation puts it first on its people's lists, and the first line
     /// a person said there calls it, until it has a title.
     @Test func whatsSaidPutsAConversationFirst() async throws {

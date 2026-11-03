@@ -477,6 +477,11 @@ actor LiveSession {
                 return false
             }
 
+        case .detach(let conversationID):
+            guard let conversation = conversations.removeValue(forKey: conversationID) else { return true }
+            try? await conversation.removeConnection(conversationConnection)
+            return true
+
         case .message(let message, let turnID):
             actorSystem.log.debug(
                 "Message for conversation",

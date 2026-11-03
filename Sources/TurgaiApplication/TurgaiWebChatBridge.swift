@@ -118,6 +118,31 @@ public actor TurgaiWebChatBridge {
         try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID).add(participant, by: adder)
     }
 
+    /// Told about `person`'s conversations as they change, through `onNotice`, until `unfollow`:
+    /// the listener the directory tells.
+    public func followConversations(
+        of person: TurgaiDomain.UserID, onNotice: @escaping @Sendable (ConversationNotice) async -> Void
+    ) async throws -> ConversationNoticeListener {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let listener = ConversationNoticeListener(actorSystem: runtime.actorSystem, onNotice: onNotice)
+        try await runtime.actorSystem.singleton
+            .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+            .follow(person, with: listener)
+        return listener
+    }
+
+    /// `listener` no longer told anything.
+    public func unfollow(_ listener: ConversationNoticeListener) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await runtime.actorSystem.singleton
+            .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+            .unfollow(listener)
+    }
+
     /// `person` leaving the conversation `conversationID`: refused unless they're in it.
     public func leave(_ conversationID: ConversationID, as person: TurgaiDomain.UserID) async throws {
         guard let runtime else {

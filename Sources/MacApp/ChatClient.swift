@@ -2,7 +2,7 @@ import ComposableArchitecture
 import Foundation
 import TurgaiModels
 
-/// The conversation socket, `/api/v1/chat`.
+/// The app's one connection, `/api/v1/live`, showing one conversation at a time.
 @DependencyClient
 struct ChatClient: Sendable {
     /// Opens the signed-in account's latest conversation, or a new one with the default bot when
@@ -51,14 +51,18 @@ private actor ChatSocket {
         } catch {
             return AsyncThrowingStream { $0.finish(throwing: error) }
         }
-        var components = URLComponents(url: baseURL.appending(path: "api/v1/chat"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: baseURL.appending(path: "api/v1/live"), resolvingAgainstBaseURL: false)!
         components.scheme = baseURL.scheme == "https" ? "wss" : "ws"
-        components.queryItems = [URLQueryItem(name: "conversationID", value: conversation.rawValue)]
         var request = URLRequest(url: components.url!)
         request.setValue("\(LocalServer.sessionCookieName)=\(account.token)", forHTTPHeaderField: "Cookie")
         let task = session.webSocketTask(with: request)
         self.task = task
         task.resume()
+        do {
+            try await send(.open(conversationID: conversation))
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
 
         return AsyncThrowingStream { continuation in
             let receiving = Task {

@@ -42,7 +42,7 @@ struct ChatPage: HTMLDocument, Sendable {
         main(
             .class("app-page chat-app-page overlay-scroll-page"),
             .init(name: "hx-ext", value: "ws"),
-            .ws.connect("/api/v1/chat?conversationID=\(conversationID)&format=html")
+            .ws.connect("/api/v1/chat?conversationID=\(conversationID)")
         ) {
             PageShell(
                 kind: shellKind,

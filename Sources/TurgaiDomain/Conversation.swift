@@ -424,6 +424,8 @@ public enum ConversationInput: Sendable, Equatable {
         turnID: TurnID
     )
     case connect(ConversationID)
+    /// The session no longer shown what happens in it.
+    case detach(ConversationID)
     /// `by` emptying it.
     case reset(ConversationID, by: UserID)
     /// Someone answered an access request of its space, as the link they answered through says.
@@ -1030,6 +1032,19 @@ public enum ReplyEvent: Hashable, Codable, Sendable {
     case failed(conversationID: ConversationID, turnID: TurnID?, message: String)
 }
 
+extension ReplyEvent {
+    /// The conversation it happened in.
+    public var conversationID: ConversationID {
+        switch self {
+        case .userMessage(let conversation, _, _, _, _, _), .started(let conversation, _),
+            .phase(let conversation, _, _), .status(let conversation, _, _), .step(let conversation, _, _),
+            .partial(let conversation, _, _), .keepAlive(let conversation, _, _), .finished(let conversation, _, _),
+            .completed(let conversation, _), .failed(let conversation, _, _):
+            conversation
+        }
+    }
+}
+
 /// One past turn of the agent: the message that started it, what it did, and how it ended.
 public struct ConversationTurn: Hashable, Codable, Sendable {
     public enum Outcome: Hashable, Codable, Sendable {
@@ -1095,6 +1110,19 @@ public enum OutboundEvent: Hashable, Codable, Sendable {
     case noted(conversationID: ConversationID, NotedMessage)
     /// The mark on `message` is taken off.
     case unnoted(conversationID: ConversationID, NotedMessage)
+}
+
+extension OutboundEvent {
+    /// The conversation it's from.
+    public var conversationID: ConversationID {
+        switch self {
+        case .reply(let reply): reply.conversationID
+        case .asked(let conversation, _), .answered(let conversation, _, _, _), .notice(let conversation, _, _),
+            .noticeWithActions(let conversation, _, _, _), .reset(let conversation), .noted(let conversation, _),
+            .unnoted(let conversation, _):
+            conversation
+        }
+    }
 }
 
 public enum ConversationEffect: Hashable, Codable, Sendable {

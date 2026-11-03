@@ -242,22 +242,28 @@ public struct AccessRequest: Codable, Equatable, Sendable, Identifiable {
 
 /// What a client sends over the chat socket.
 public enum ChatCommand: Codable, Equatable, Sendable {
+    /// The conversation the connection shows from now on, instead of the one before: its history
+    /// and live turns come, and messages and answers go to it.
+    case open(conversationID: ConversationID)
     case message(SendMessageRequest)
     /// An admin's answer to an access request.
     case answer(id: UUID, answer: AccessAnswer)
 
     private enum Kind: String, Codable {
+        case open
         case message
         case answer
     }
 
     private enum CodingKeys: String, CodingKey {
-        case type, id, text, to, answer
+        case type, id, text, to, answer, conversationID
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         switch try values.decode(Kind.self, forKey: .type) {
+        case .open:
+            self = .open(conversationID: try values.decode(ConversationID.self, forKey: .conversationID))
         case .message:
             self = .message(
                 SendMessageRequest(
@@ -276,6 +282,9 @@ public enum ChatCommand: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .open(let conversationID):
+            try values.encode(Kind.open, forKey: .type)
+            try values.encode(conversationID, forKey: .conversationID)
         case .message(let request):
             try values.encode(Kind.message, forKey: .type)
             try values.encode(request.id, forKey: .id)
@@ -304,6 +313,8 @@ public enum ChatEventKind: String, Codable, Sendable {
     case notice
     case turns
     case turnStep = "turn.step"
+    case conversationChanged = "conversation.changed"
+    case conversationLeft = "conversation.left"
 }
 
 public enum ConversationStatus: String, Codable, Sendable {
@@ -382,6 +393,11 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case turns(conversationID: ConversationID, turns: [TurnRecord])
         /// One step of the turn running now.
         case turnStep(conversationID: ConversationID, turnID: TurnID, step: TurnStep)
+        /// One of the person's other conversations, as it's listed now: something was said in it,
+        /// it was titled, or they joined it.
+        case conversationChanged(conversation: Conversation)
+        /// The person is no longer in one of their conversations.
+        case conversationLeft(conversationID: ConversationID)
 
         public var type: ChatEventKind {
             switch self {
@@ -399,6 +415,8 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             case .notice: .notice
             case .turns: .turns
             case .turnStep: .turnStep
+            case .conversationChanged: .conversationChanged
+            case .conversationLeft: .conversationLeft
             }
         }
     }
@@ -415,7 +433,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case type, conversationID, botID, turnID, you
         case status, phase, activity, message, messages, error
         case request, requestID, answer
-        case turns, step
+        case turns, step, conversation
     }
 
     public init(from decoder: Decoder) throws {
@@ -498,6 +516,10 @@ public struct ChatEvent: Codable, Equatable, Sendable {
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
                 turns: try values.decode([TurnRecord].self, forKey: .turns)
             )
+        case .conversationChanged:
+            payload = .conversationChanged(conversation: try values.decode(Conversation.self, forKey: .conversation))
+        case .conversationLeft:
+            payload = .conversationLeft(conversationID: try values.decode(ConversationID.self, forKey: .conversationID))
         case .turnStep:
             payload = .turnStep(
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
@@ -562,6 +584,10 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             try values.encode(conversationID, forKey: .conversationID)
             try values.encode(turnID, forKey: .turnID)
             try values.encode(step, forKey: .step)
+        case .conversationChanged(let conversation):
+            try values.encode(conversation, forKey: .conversation)
+        case .conversationLeft(let conversationID):
+            try values.encode(conversationID, forKey: .conversationID)
         }
     }
 }

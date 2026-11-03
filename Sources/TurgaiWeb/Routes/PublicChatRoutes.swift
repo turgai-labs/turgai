@@ -82,10 +82,11 @@ extension TurgaiMainWebApp {
             return Response(status: .noContent)
         }
         registerChatSocket(on: router, dependencies: dependencies)
+        registerLiveSocket(on: router, dependencies: dependencies)
     }
 
-    /// The live chat, over a WebSocket. Not behind the API's middleware: a socket it refuses isn't
-    /// upgraded, rather than answered.
+    /// The web chat page's conversation, over a WebSocket, as HTML. Not behind the API's middleware:
+    /// a socket it refuses isn't upgraded, rather than answered.
     private func registerChatSocket(
         on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
     ) {
@@ -101,10 +102,10 @@ extension TurgaiMainWebApp {
             }
             return .upgrade([:])
         } onUpgrade: { inbound, outbound, context in
-            let query = context.request.uri.queryParameters
             guard let owner = await chatOwner(from: context.request, auth: dependencies.auth),
                 let conversation = try await apiConversation(
-                    query["conversationID"].map(String.init), readBy: owner.person, bridge: dependencies.webChatBridge)
+                    context.request.uri.queryParameters["conversationID"].map(String.init), readBy: owner.person,
+                    bridge: dependencies.webChatBridge)
             else {
                 try await outbound.close(.policyViolation, reason: "Conversation not found")
                 return
@@ -116,178 +117,160 @@ extension TurgaiMainWebApp {
                 try await outbound.close(.policyViolation, reason: "Chat runtime unavailable")
                 return
             }
-
             let userID = owner.person
-            let participantID = ParticipantID(channel: turgaiChannel, rawValue: userID.key)
             let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
-
             do {
-                let writer = PublicChatSocketWriter(outbound: outbound)
                 let history = try await publicAPIMessages(
                     try await dependencies.webChatBridge.conversationHistory(of: conversation.domainID, for: userID),
                     names: names)
                 let status = try await dependencies.webChatBridge.conversationStatus(
                     of: conversation.domainID, for: userID)
-
-                // Write the durable snapshot before attaching live delivery.
-                // Otherwise a live update can arrive first and then be erased
-                // by the history OOB replacement.
-                if query["format"] == "html" {
-                    let htmlWriter = HTMLChatSocketWriter(outbound: outbound, viewer: userID, names: names)
-                    try await htmlWriter.write(ChatLiveFragment.history(history.map { $0.shown(to: userID) }))
-                    if case .running = status {
-                        try await htmlWriter.write(ChatLiveFragment.started())
-                    }
+                // The durable snapshot before live delivery, which could otherwise come first and be
+                // replaced by it.
+                let writer = HTMLChatSocketWriter(outbound: outbound, viewer: userID, names: names)
+                try await writer.write(ChatLiveFragment.history(history.map { $0.shown(to: userID) }))
+                if case .running = status {
+                    try await writer.write(ChatLiveFragment.started())
                 }
-
-                let connectReceipt = ConversationInputReceipt()
-                await session.input.send(
-                    ConversationInputDelivery(
-                        input: .connect(conversation.domainID),
-                        receipt: connectReceipt
-                    )
-                )
-                guard await connectReceipt.wait() else {
+                guard try await open(conversation, on: session) else {
                     session.input.finish()
                     try await outbound.close(.policyViolation, reason: "Could not open conversation")
                     return
                 }
+                try await runHTMLChatSocket(
+                    inbound: inbound,
+                    outbound: outbound,
+                    session: session,
+                    conversation: conversation,
+                    participantID: ParticipantID(channel: turgaiChannel, rawValue: userID.key),
+                    userID: userID,
+                    names: names
+                )
+            } catch {
+                try? await outbound.close(.goingAway, reason: "Chat connection ended")
+            }
+            session.input.finish()
+        }
+    }
 
-                if query["format"] == "html" {
-                    try await runHTMLChatSocket(
-                        inbound: inbound,
-                        outbound: outbound,
-                        session: session,
-                        conversation: conversation,
-                        participantID: participantID,
-                        userID: userID,
-                        names: names
-                    )
-                    return
+    /// An app's one connection, over a WebSocket: the conversation it has open, with its history and
+    /// live turns, and notices about the person's other conversations. Not behind the API's
+    /// middleware: a socket it refuses isn't upgraded, rather than answered.
+    private func registerLiveSocket(
+        on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        router.ws("/api/v1/live") { request, _ in
+            guard dependencies.apiConfiguration.authorizes(request),
+                await chatOwner(from: request, auth: dependencies.auth) != nil
+            else {
+                return .dontUpgrade
+            }
+            return .upgrade([:])
+        } onUpgrade: { inbound, outbound, context in
+            guard let owner = await chatOwner(from: context.request, auth: dependencies.auth) else {
+                try await outbound.close(.policyViolation, reason: "Sign in first")
+                return
+            }
+            let bridge = dependencies.webChatBridge
+            let session: TurgaiConnections.WebSession
+            do {
+                session = try await bridge.openSession(id: WebSessionID())
+            } catch {
+                try await outbound.close(.policyViolation, reason: "Chat runtime unavailable")
+                return
+            }
+            let person = owner.person
+            let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
+            let writer = PublicChatSocketWriter(outbound: outbound)
+            let shown = ShownConversation()
+            do {
+                // Notices about the person's conversations, but the one it has open, whose own
+                // events it gets.
+                let listener = try await bridge.followConversations(of: person) { notice in
+                    let event: TurgaiModels.ChatEvent? =
+                        switch notice {
+                        case .changed(let listing) where listing.id.channel == turgaiChannel:
+                            .init(
+                                payload: .conversationChanged(
+                                    conversation: TurgaiModels.Conversation(
+                                        id: .init(rawValue: listing.id.externalAddress.rawValue),
+                                        botID: .init(rawValue: listing.agent.rawValue), title: listing.title)))
+                        case .left(let conversation) where conversation.channel == turgaiChannel:
+                            .init(payload: .conversationLeft(conversationID: .init(rawValue: conversation.externalAddress.rawValue)))
+                        case .changed, .left:
+                            nil
+                        }
+                    let about: TurgaiDomain.ConversationID =
+                        switch notice {
+                        case .changed(let listing): listing.id
+                        case .left(let conversation): conversation
+                        }
+                    guard let event, await shown.conversation?.domainID != about else { return }
+                    try? await writer.write(event)
                 }
-                try await writer.write(
-                    .init(
-                        payload: .ready(
-                            conversationID: conversation.publicID,
-                            botID: .init(rawValue: conversation.agent.rawValue),
-                            status: publicConversationStatus(status),
-                            you: userID.key
-                        ))
-                )
-                try await writer.write(
-                    .init(
-                        payload: .history(
-                            conversationID: conversation.publicID,
-                            messages: history
-                        ))
-                )
-                // The agent's turns, step by step; the chat works without them.
-                let turns =
-                    (try? await dependencies.webChatBridge.conversationTurns(
-                        of: conversation.domainID, askedBy: userID)) ?? []
-                try await writer.write(
-                    .init(payload: .turns(conversationID: conversation.publicID, turns: turns.map(TurnRecord.init)))
-                )
+                defer { Task { try? await bridge.unfollow(listener) } }
 
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask {
                         for try await input in inbound.messages(maxSize: 1_000_000) {
                             guard case .text(let text) = input,
                                 let data = text.data(using: .utf8),
-                                let chatCommand = try? JSONDecoder().decode(
-                                    TurgaiModels.ChatCommand.self,
-                                    from: data
-                                )
+                                let command = try? JSONDecoder().decode(TurgaiModels.ChatCommand.self, from: data)
                             else { continue }
-                            let command: TurgaiModels.SendMessageRequest
-                            switch chatCommand {
+                            switch command {
+                            case .open(let id):
+                                guard
+                                    let conversation = try await apiConversation(id.rawValue, readBy: person, bridge: bridge)
+                                else {
+                                    try await writer.write(
+                                        publicAPIErrorEvent(
+                                            conversationID: id, code: "conversation_not_found",
+                                            message: "The conversation does not exist."))
+                                    continue
+                                }
+                                if let before = await shown.conversation {
+                                    let detached = ConversationInputReceipt()
+                                    await session.input.send(
+                                        ConversationInputDelivery(input: .detach(before.domainID), receipt: detached))
+                                    _ = await detached.wait()
+                                }
+                                await shown.show(conversation)
+                                try await writeOpened(conversation, for: person, on: writer, names: names, bridge: bridge)
+                                guard try await open(conversation, on: session) else {
+                                    try await writer.write(
+                                        publicAPIErrorEvent(
+                                            conversationID: id, code: "conversation_unavailable",
+                                            message: "The conversation could not be opened."))
+                                    continue
+                                }
                             case .message(let request):
-                                command = request
+                                guard let conversation = await shown.conversation else { continue }
+                                try await say(request, in: conversation, as: person, on: session, writer: writer)
                             case .answer(let id, let answer):
+                                guard let conversation = await shown.conversation else { continue }
                                 let receipt = ConversationInputReceipt()
                                 await session.input.send(
                                     ConversationInputDelivery(
                                         input: .answer(
                                             conversationID: conversation.domainID, AccessRequestID(id), answer.domain,
-                                            by: userID),
-                                        receipt: receipt
-                                    )
-                                )
+                                            by: person),
+                                        receipt: receipt))
                                 _ = await receipt.wait()
-                                continue
                             }
-                            let messageText = command.text.trimmed()
-                            guard !messageText.isEmpty else {
-                                try await writer.write(
-                                    publicAPIErrorEvent(
-                                        conversationID: conversation.publicID,
-                                        code: "empty_message",
-                                        message: "A message must contain text."
-                                    )
-                                )
-                                continue
-                            }
-                            let to = command.to.compactMap(Participant.init)
-                            guard to.count == command.to.count else {
-                                try await writer.write(
-                                    publicAPIErrorEvent(
-                                        conversationID: conversation.publicID,
-                                        code: "invalid_participant",
-                                        message: "No person or bot has that id."
-                                    )
-                                )
-                                continue
-                            }
-
-                            let receipt = ConversationInputReceipt()
-                            await session.input.send(
-                                ConversationInputDelivery(
-                                    input: .message(
-                                        InboundMessage(
-                                            id: .init(rawValue: command.id.rawValue),
-                                            conversationID: conversation.domainID,
-                                            participantID: participantID,
-                                            userID: userID,
-                                            text: messageText,
-                                            receivedAt: Date(),
-                                            to: Set(to)
-                                        ),
-                                        turnID: .init()
-                                    ),
-                                    receipt: receipt
-                                )
-                            )
-                            guard await receipt.wait() else {
-                                try await writer.write(
-                                    publicAPIErrorEvent(
-                                        conversationID: conversation.publicID,
-                                        code: "message_rejected",
-                                        message: "The message could not be accepted."
-                                    )
-                                )
-                                continue
-                            }
-                            try await writer.write(
-                                .init(
-                                    payload: .messageAccepted(
-                                        conversationID: conversation.publicID,
-                                        turnID: nil,
-                                        message: .init(
-                                            id: command.id,
-                                            role: .user,
-                                            text: messageText
-                                        )
-                                    ))
-                            )
                         }
                     }
                     group.addTask {
                         for await delivery in session.output {
-                            if let event = PublicChatEvent(
-                                event: delivery.event,
-                                publicConversationID: conversation.publicID,
-                                author: try await author(of: delivery.event, answeredBy: conversation.agent, names: names)
-                            ).event {
+                            // Only the open conversation's: one closed may still be heard a moment.
+                            if let conversation = await shown.conversation,
+                                delivery.event.conversationID == conversation.domainID,
+                                let event = PublicChatEvent(
+                                    event: delivery.event,
+                                    publicConversationID: conversation.publicID,
+                                    author: try await author(
+                                        of: delivery.event, answeredBy: conversation.agent, names: names)
+                                ).event
+                            {
                                 try await writer.write(event)
                             }
                             await delivery.delivered()
@@ -717,6 +700,89 @@ private func apiConversation(
     }
     guard let agent = outline.agent else { return nil }
     return APIConversation(domainID: domainID, outline: outline, agent: agent)
+}
+
+/// The conversation an app's connection has open, if it has one.
+private actor ShownConversation {
+    private(set) var conversation: APIConversation?
+
+    func show(_ conversation: APIConversation) {
+        self.conversation = conversation
+    }
+}
+
+/// `session` attached to `conversation`, so its live events come: whether it was.
+private func open(_ conversation: APIConversation, on session: TurgaiConnections.WebSession) async throws -> Bool {
+    let receipt = ConversationInputReceipt()
+    await session.input.send(ConversationInputDelivery(input: .connect(conversation.domainID), receipt: receipt))
+    return await receipt.wait()
+}
+
+/// What an app's connection is sent as it opens `conversation` for `person`: that it's open, what's
+/// been said in it, and the agent's past turns.
+private func writeOpened(
+    _ conversation: APIConversation, for person: TurgaiDomain.UserID, on writer: PublicChatSocketWriter,
+    names: ParticipantNames, bridge: TurgaiWebChatBridge
+) async throws {
+    let history = try await publicAPIMessages(
+        try await bridge.conversationHistory(of: conversation.domainID, for: person), names: names)
+    let status = try await bridge.conversationStatus(of: conversation.domainID, for: person)
+    try await writer.write(
+        .init(
+            payload: .ready(
+                conversationID: conversation.publicID, botID: .init(rawValue: conversation.agent.rawValue),
+                status: publicConversationStatus(status), you: person.key)))
+    try await writer.write(.init(payload: .history(conversationID: conversation.publicID, messages: history)))
+    // The agent's turns, step by step; the chat works without them.
+    let turns = (try? await bridge.conversationTurns(of: conversation.domainID, askedBy: person)) ?? []
+    try await writer.write(
+        .init(payload: .turns(conversationID: conversation.publicID, turns: turns.map(TurnRecord.init))))
+}
+
+/// `request`, said by `person` in `conversation` through `session`: what's wrong with it, or that
+/// it was refused, written back.
+private func say(
+    _ request: TurgaiModels.SendMessageRequest, in conversation: APIConversation, as person: TurgaiDomain.UserID,
+    on session: TurgaiConnections.WebSession, writer: PublicChatSocketWriter
+) async throws {
+    let text = request.text.trimmed()
+    guard !text.isEmpty else {
+        try await writer.write(
+            publicAPIErrorEvent(
+                conversationID: conversation.publicID, code: "empty_message", message: "A message must contain text."))
+        return
+    }
+    let to = request.to.compactMap(Participant.init)
+    guard to.count == request.to.count else {
+        try await writer.write(
+            publicAPIErrorEvent(
+                conversationID: conversation.publicID, code: "invalid_participant",
+                message: "No person or bot has that id."))
+        return
+    }
+    let receipt = ConversationInputReceipt()
+    await session.input.send(
+        ConversationInputDelivery(
+            input: .message(
+                InboundMessage(
+                    id: .init(rawValue: request.id.rawValue),
+                    conversationID: conversation.domainID,
+                    participantID: ParticipantID(channel: turgaiChannel, rawValue: person.key),
+                    userID: person,
+                    text: text,
+                    receivedAt: Date(),
+                    to: Set(to)
+                ),
+                turnID: .init()
+            ),
+            receipt: receipt))
+    guard await receipt.wait() else {
+        try await writer.write(
+            publicAPIErrorEvent(
+                conversationID: conversation.publicID, code: "message_rejected",
+                message: "The message could not be accepted."))
+        return
+    }
 }
 
 /// What a conversation refused, as the API says it: one the person isn't in is one that isn't
