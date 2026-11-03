@@ -9,14 +9,15 @@ struct ChatView: View {
     /// What it's called.
     let title: String
     @Bindable var store: StoreOf<ChatFeature>
-    @Environment(\.openWindow) private var openWindow
 
     private var state: ChatFeature.State { store.state }
 
     var body: some View {
         ScrollViewReader { reader in
             ScrollView {
-                MessageList(messages: state.messages, you: state.you, pending: state.pending, turn: state.turn)
+                MessageList(
+                    messages: state.messages, you: state.you, turns: state.turns, pending: state.pending,
+                    turn: state.turn)
             }
             // The messages run under the floating bars, softened at the edges.
             .safeAreaInset(edge: .top, spacing: 0) { header }
@@ -54,17 +55,11 @@ struct ChatView: View {
         if case .connected = state.connection { true } else { false }
     }
 
-    /// A floating glass capsule: the mark, the name, and the connection, clicking which opens the
-    /// agent's turns; under it, who's in the conversation, and a button to add someone.
+    /// A floating glass capsule: the mark, the name, and the connection; under it, who's in the
+    /// conversation, and a button to add someone.
     private var header: some View {
         VStack(spacing: 6) {
-            Button {
-                openWindow(id: WindowID.turns)
-            } label: {
-                headerLabel
-            }
-            .buttonStyle(.plain)
-            .help("Show the agent's turns")
+            headerLabel
             HStack(spacing: 6) {
                 Text(state.participants.map(\.name).joined(separator: ", "))
                     .font(.caption)
@@ -175,7 +170,6 @@ private struct Bubble: View {
                 .padding(.vertical, 10)
                 .glassEffect(.regular, in: .rect(cornerRadius: 18))
                 .frame(maxWidth: 560, alignment: .leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -259,15 +253,18 @@ private struct MessageList: View {
     let messages: [Message]
     /// The id of the person this app is.
     let you: String?
+    /// The agent's turns: a reply's is the one with its id.
+    let turns: IdentifiedArrayOf<TurnRecord>
     let pending: [SendMessageRequest]
     let turn: ChatFeature.Turn?
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 12) {
             ForEach(messages) { (message: Message) in
-                Bubble(
-                    role: message.role, text: message.text,
-                    someoneElse: message.author.flatMap { $0.kind == .person && $0.id != you ? $0.name : nil }
+                MessageRow(
+                    message: message,
+                    someoneElse: message.author.flatMap { $0.kind == .person && $0.id != you ? $0.name : nil },
+                    turn: message.role == .assistant ? turns[id: TurnID(rawValue: message.id.rawValue)] : nil
                 )
                 .id(message.id)
             }
@@ -357,5 +354,31 @@ private struct AddPeopleSheet: View {
         }
         .padding(20)
         .frame(width: 320)
+    }
+}
+
+/// A message, and for a reply of the agent's, ⓘ beside it that shows the turn that made it.
+private struct MessageRow: View {
+    let message: Message
+    let someoneElse: String?
+    let turn: TurnRecord?
+    @State private var showsTurn = false
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            Bubble(role: message.role, text: message.text, someoneElse: someoneElse)
+            if let turn {
+                Button {
+                    showsTurn = true
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.turgaiMuted)
+                .help("What the agent did for this")
+                .popover(isPresented: $showsTurn, arrowEdge: .trailing) { TurnStepsView(turn: turn) }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: message.role == .assistant ? .leading : .trailing)
     }
 }

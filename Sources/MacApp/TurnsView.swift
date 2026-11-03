@@ -2,55 +2,37 @@ import ComposableArchitecture
 import SwiftUI
 import TurgaiModels
 
-/// The agent's turns, step by step: what each message made it do, live as it happens.
-struct TurnsView: View {
-    let store: StoreOf<ChatFeature>
-
-    var body: some View {
-        Group {
-            if store.turns.isEmpty {
-                ContentUnavailableView(
-                    "No turns yet", systemImage: "list.bullet.rectangle",
-                    description: Text("Send a message, and what the agent does shows up here."))
-            } else {
-                List(store.turns.reversed()) { turn in
-                    TurnRow(turn: turn)
-                }
-                .listStyle(.inset)
-            }
-        }
-        .frame(minWidth: 420, minHeight: 360)
-    }
-}
-
-private struct TurnRow: View {
+/// One of the agent's turns, step by step: what the message it answered made it do, and how it
+/// ended. Shown from the reply it made.
+struct TurnStepsView: View {
     let turn: TurnRecord
 
     var body: some View {
-        DisclosureGroup {
-            VStack(alignment: .leading, spacing: 10) {
-                if turn.steps.isEmpty {
-                    Text("No tool calls").font(.callout).foregroundStyle(.secondary)
-                }
-                ForEach(Array(turn.steps.enumerated()), id: \.offset) { _, step in
-                    StepRow(step: step, startedAt: turn.startedAt)
-                }
-                if case .replied(let text, _) = turn.outcome {
-                    Text(text).font(.callout).textSelection(.enabled)
-                }
-                if case .failed(let reason, _) = turn.outcome {
-                    Text(reason).font(.callout).foregroundStyle(Color.turgaiAccent).textSelection(.enabled)
-                }
-            }
-            .padding(.vertical, 6)
-        } label: {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text(turn.message.isEmpty ? "Turn" : turn.message)
+                    .font(.headline)
                     .lineLimit(2)
                 Spacer()
                 Text(summary).font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    if turn.steps.isEmpty {
+                        Text("No tool calls").font(.callout).foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(turn.steps.enumerated()), id: \.offset) { _, step in
+                        StepRow(step: step, startedAt: turn.startedAt)
+                    }
+                    if case .failed(let reason, _) = turn.outcome {
+                        Text(reason).font(.callout).foregroundStyle(Color.turgaiAccent).textSelection(.enabled)
+                    }
+                }
+            }
         }
+        .padding(16)
+        .frame(width: 420)
+        .frame(maxHeight: 520)
     }
 
     private var summary: String {
