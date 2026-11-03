@@ -10,6 +10,12 @@ struct TurgaiServerClient: Sendable {
     var signIn: @Sendable (_ username: String, _ password: String) async throws -> Session
     /// Creates a chat account and signs in to it.
     var register: @Sendable (_ username: String, _ password: String) async throws -> Session
+    /// The spaces the account is in.
+    var spaces: @Sendable (Session) async throws -> [SpaceSummary]
+    /// The account's conversations, the one something was last said in first.
+    var conversations: @Sendable (Session) async throws -> [Conversation]
+    /// A new conversation, in the space `spaceID`, or Turgai's own, with the default bot.
+    var startConversation: @Sendable (Session, _ spaceID: String?) async throws -> Conversation
 }
 
 enum AccountError: Error, Equatable {
@@ -42,9 +48,32 @@ extension TurgaiServerClient: DependencyKey {
                 return try JSONDecoder().decode(TurgaiServerStatus.self, from: data)
             },
             signIn: { try await postCredentials($0, $1, to: baseURL.appending(path: "login")) },
-            register: { try await postCredentials($0, $1, to: baseURL.appending(path: "register")) }
+            register: { try await postCredentials($0, $1, to: baseURL.appending(path: "register")) },
+            spaces: { try await api("GET", "api/v1/spaces", as: $0) },
+            conversations: { try await api("GET", "api/v1/conversations", as: $0) },
+            startConversation: { session, space in
+                try await api("POST", "api/v1/conversations", body: CreateConversationRequest(spaceID: space), as: session)
+            }
         )
     }()
+}
+
+/// The API's answer to `method` on `path`, asked as `account`: refused unless it succeeded.
+private func api<Answer: Decodable>(
+    _ method: String, _ path: String, body: (some Encodable)? = Optional<String>.none, as account: Session
+) async throws -> Answer {
+    var request = URLRequest(url: LocalServer.baseURL.appending(path: path))
+    request.httpMethod = method
+    request.setValue("\(LocalServer.sessionCookieName)=\(account.token)", forHTTPHeaderField: "Cookie")
+    if let body {
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+    }
+    let (data, response) = try await URLSession.shared.data(for: request)
+    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        throw URLError(.badServerResponse)
+    }
+    return try JSONDecoder().decode(Answer.self, from: data)
 }
 
 /// Posts the web app's credentials form and returns the session its redirect sets.

@@ -11,7 +11,7 @@ struct RootView: View {
             ColorField()
             switch screen {
             case .chat(let session):
-                ChatView(session: session, store: store.scope(state: \.chat, action: \.chat))
+                MainWindow(session: session, store: store)
                     .transition(.opacity)
             case .card(let card):
                 self.card(card)

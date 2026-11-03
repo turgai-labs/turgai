@@ -2,7 +2,8 @@ import ComposableArchitecture
 import Foundation
 import TurgaiModels
 
-/// One conversation over the chat socket: history, live turns, and sending.
+/// The open conversation, over the app's one connection: its history, live turns, and sending; and
+/// what the connection says about the person's other conversations, passed on.
 @Reducer
 struct ChatFeature {
     enum Connection: Equatable, Sendable {
@@ -24,6 +25,8 @@ struct ChatFeature {
     @ObservableState
     struct State: Equatable {
         var connection = Connection.connecting
+        /// The conversation it shows: none until the window opens one.
+        var conversationID: ConversationID?
         /// The id of the person this app is, as the conversation says: their own messages are theirs.
         var you: String?
         var messages: [Message] = []
@@ -41,12 +44,21 @@ struct ChatFeature {
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         case connect(Session)
+        /// Show `id` instead of the conversation shown before.
+        case open(ConversationID)
         case disconnect
         case received(ChatEvent)
         case closed(why: String)
         case sendTapped
         case sendFailed(SendMessageRequest)
         case accessAnswered(AccessRequest.ID, AccessAnswer)
+        case delegate(Delegate)
+
+        /// What the connection says about the person's other conversations, for the window.
+        enum Delegate: Equatable {
+            case conversationChanged(Conversation)
+            case conversationLeft(ConversationID)
+        }
     }
 
     private enum CancelID { case socket }
@@ -60,15 +72,18 @@ struct ChatFeature {
         BindingReducer()
         Reduce { state, action in
             switch action {
-            case .binding:
+            case .binding, .delegate:
                 return .none
 
             case .connect(let session):
                 state.connection = .connecting
-                return .run { send in
+                return .run { [shown = state.conversationID] send in
                     let why: String
                     do {
-                        for try await event in await chat.connect(session) {
+                        let events = await chat.connect(session)
+                        // A connection made again shows what was shown before.
+                        if let shown { try await chat.send(.open(conversationID: shown)) }
+                        for try await event in events {
                             await send(.received(event))
                         }
                         why = "The server closed the connection."
@@ -96,9 +111,25 @@ struct ChatFeature {
                 state.accessRequests = []
                 return .none
 
+            case .open(let id):
+                guard id != state.conversationID else { return .none }
+                state = State(connection: state.connection, conversationID: id)
+                return .run { _ in try? await chat.send(.open(conversationID: id)) }
+
             case .received(let event):
-                apply(event.payload, to: &state)
-                return .none
+                switch event.payload {
+                case .conversationChanged(let conversation):
+                    return .send(.delegate(.conversationChanged(conversation)))
+                case .conversationLeft(let id):
+                    return .send(.delegate(.conversationLeft(id)))
+                default:
+                    // Only the shown conversation's: one shown before may still be heard a moment.
+                    guard event.conversationID == nil || event.conversationID == state.conversationID else {
+                        return .none
+                    }
+                    apply(event.payload, to: &state)
+                    return .none
+                }
 
             case .sendTapped:
                 let text = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -172,7 +203,7 @@ struct ChatFeature {
         case .notice(_, _, let error):
             state.error = error
         case .conversationChanged, .conversationLeft:
-            // The person's other conversations: shown once there's a list of them.
+            // Passed on to the window before this.
             break
         }
     }
@@ -180,5 +211,22 @@ struct ChatFeature {
     private func append(_ message: Message, to state: inout State) {
         guard !state.messages.contains(where: { $0.id == message.id }) else { return }
         state.messages.append(message)
+    }
+}
+
+extension ChatEvent {
+    /// The conversation it's about, when it's about one.
+    var conversationID: ConversationID? {
+        switch payload {
+        case .ready(let id, _, _, _), .history(let id, _), .messageAccepted(let id, _, _), .turnStarted(let id, _),
+            .turnPhase(let id, _, _), .turnStatus(let id, _, _), .turnPartial(let id, _, _),
+            .turnCompleted(let id, _, _), .accessRequested(let id, _), .accessAnswered(let id, _, _),
+            .turns(let id, _), .turnStep(let id, _, _), .conversationLeft(let id), .turnFailed(let id, _, _):
+            id
+        case .notice(let id, _, _):
+            id
+        case .conversationChanged(let conversation):
+            conversation.id
+        }
     }
 }

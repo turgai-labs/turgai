@@ -180,7 +180,9 @@ struct ChatFeatureTests {
     func sentMessageIsPendingUntilAccepted() async {
         let sent = LockIsolated<[ChatCommand]>([])
         let store = TestStore(
-            initialState: ChatFeature.State(connection: .connected(botID: BotID(rawValue: "turgai")), draft: " hi ")
+            initialState: ChatFeature.State(
+                connection: .connected(botID: BotID(rawValue: "turgai")), conversationID: ConversationID(rawValue: "c"),
+                draft: " hi ")
         ) {
             ChatFeature()
         } withDependencies: {
@@ -211,14 +213,15 @@ struct ChatFeatureTests {
     @Test
     func anAccessRequestIsAskedOnceAndAnswered() async {
         let sent = LockIsolated<[ChatCommand]>([])
+        let conversation = ConversationID(rawValue: "c")
         let store = TestStore(
-            initialState: ChatFeature.State(connection: .connected(botID: BotID(rawValue: "turgai")))
+            initialState: ChatFeature.State(
+                connection: .connected(botID: BotID(rawValue: "turgai")), conversationID: conversation)
         ) {
             ChatFeature()
         } withDependencies: {
             $0.chat.send = { command in sent.withValue { $0.append(command) } }
         }
-        let conversation = ConversationID(rawValue: "c")
         let forecast = AccessRequest(id: UUID(1), request: "GET https://api.open-meteo.com/v1/forecast")
         let search = AccessRequest(id: UUID(2), request: "GET https://html.duckduckgo.com/html/?q=tea")
 

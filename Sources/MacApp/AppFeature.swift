@@ -69,6 +69,7 @@ struct AppFeature {
         var connection = Connection.checking
         var account = Account.unknown
         var login = LoginForm()
+        var sidebar = SidebarFeature.State()
         var chat = ChatFeature.State()
     }
 
@@ -84,6 +85,7 @@ struct AppFeature {
         case submitFinished(Result<Session, AccountError>)
         /// The session reached its expiry date.
         case sessionExpired(Session)
+        case sidebar(SidebarFeature.Action)
         case chat(ChatFeature.Action)
     }
 
@@ -97,12 +99,23 @@ struct AppFeature {
 
     var body: some ReducerOf<Self> {
         BindingReducer()
+        Scope(state: \.sidebar, action: \.sidebar) {
+            SidebarFeature()
+        }
         Scope(state: \.chat, action: \.chat) {
             ChatFeature()
         }
         Reduce { state, action in
             switch action {
-            case .binding, .chat:
+            // The sidebar says what the chat shows; the chat's connection says how the sidebar changes.
+            case .sidebar(.delegate(.open(let id))):
+                return .send(.chat(.open(id)))
+            case .chat(.delegate(.conversationChanged(let conversation))):
+                return .send(.sidebar(.conversationChanged(conversation)))
+            case .chat(.delegate(.conversationLeft(let id))):
+                return .send(.sidebar(.conversationLeft(id)))
+
+            case .binding, .sidebar, .chat:
                 return .none
 
             case .appeared:
@@ -191,6 +204,7 @@ struct AppFeature {
                 guard state.account == .signedIn(session) else { return .none }
                 state.account = .signedOut
                 state.login = LoginForm(notice: .sessionEnded)
+                state.sidebar = SidebarFeature.State()
                 return .merge(
                     .send(.chat(.disconnect)),
                     .run { _ in sessions.clear() }

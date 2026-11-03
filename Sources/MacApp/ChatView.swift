@@ -3,9 +3,11 @@ import ComposableArchitecture
 import SwiftUI
 import TurgaiModels
 
-/// The conversation with the default bot.
+/// The open conversation.
 struct ChatView: View {
     let session: Session
+    /// What it's called.
+    let title: String
     @Bindable var store: StoreOf<ChatFeature>
     @Environment(\.openWindow) private var openWindow
 
@@ -64,8 +66,9 @@ struct ChatView: View {
                 .scaledToFit()
                 .frame(width: 22, height: 22)
                 .foregroundStyle(Color.turgaiAccent)
-            Text("Turgai")
+            Text(title)
                 .font(.system(size: 18, weight: .heavy))
+                .lineLimit(1)
                 .foregroundStyle(Color.turgaiInk)
             Circle()
                 .fill(connectionColor)

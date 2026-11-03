@@ -106,11 +106,14 @@ public struct Conversation: Codable, Equatable, Sendable, Identifiable {
     public let botID: BotID
     /// Its title, or else the first line of the first thing said in it: none until either.
     public let title: String?
+    /// The space it's in.
+    public let spaceID: String
 
-    public init(id: ConversationID, botID: BotID, title: String? = nil) {
+    public init(id: ConversationID, botID: BotID, title: String? = nil, spaceID: String) {
         self.id = id
         self.botID = botID
         self.title = title
+        self.spaceID = spaceID
     }
 }
 

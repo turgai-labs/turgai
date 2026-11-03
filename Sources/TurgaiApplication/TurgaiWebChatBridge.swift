@@ -86,15 +86,19 @@ public actor TurgaiWebChatBridge {
     }
 
     /// Starts the conversation `conversationID` in `space`, or else Turgai's own, answered by
-    /// `agent`, with `person` the first of its people: refused unless they're in that space.
+    /// `agent`, with `person` the first of its people: the space it started in. Refused unless
+    /// they're in that space.
+    @discardableResult
     public func startConversation(
         _ conversationID: ConversationID, in space: SpaceID?, agent: AgentProfileID, by person: TurgaiDomain.UserID
-    ) async throws {
+    ) async throws -> SpaceID {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
+        let startedIn = space ?? runtime.turgaiSpace
         try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID)
-            .start(in: space ?? runtime.turgaiSpace, agent: agent, by: person)
+            .start(in: startedIn, agent: agent, by: person)
+        return startedIn
     }
 
     /// The conversations `person` is in, the one something was last said in first, as the

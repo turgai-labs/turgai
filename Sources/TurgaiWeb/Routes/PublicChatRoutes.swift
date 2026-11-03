@@ -194,7 +194,8 @@ extension TurgaiMainWebApp {
                                 payload: .conversationChanged(
                                     conversation: TurgaiModels.Conversation(
                                         id: .init(rawValue: listing.id.externalAddress.rawValue),
-                                        botID: .init(rawValue: listing.agent.rawValue), title: listing.title)))
+                                        botID: .init(rawValue: listing.agent.rawValue), title: listing.title,
+                                        spaceID: listing.space.rawValue.uuidString)))
                         case .left(let conversation) where conversation.channel == turgaiChannel:
                             .init(payload: .conversationLeft(conversationID: .init(rawValue: conversation.externalAddress.rawValue)))
                         case .changed, .left:
@@ -300,7 +301,7 @@ extension TurgaiMainWebApp {
                     TurgaiModels.Conversation(
                         id: .init(rawValue: listing.id.externalAddress.rawValue),
                         botID: .init(rawValue: listing.agent.rawValue),
-                        title: listing.title)
+                        title: listing.title, spaceID: listing.space.rawValue.uuidString)
                 })
         }
 
@@ -330,15 +331,17 @@ extension TurgaiMainWebApp {
             }
             let conversationID = TurgaiDomain.ConversationID(
                 channel: turgaiChannel, externalAddress: .init(UUID().uuidString))
+            let startedIn: SpaceID
             do {
-                try await dependencies.webChatBridge.startConversation(
+                startedIn = try await dependencies.webChatBridge.startConversation(
                     conversationID, in: space, agent: AgentProfileID(profile.id), by: owner.person)
             } catch let refusal as SpaceRefusal {
                 return spaceRefused(refusal)
             }
             return try publicAPIResponse(
                 TurgaiModels.Conversation(
-                    id: .init(rawValue: conversationID.externalAddress.rawValue), botID: .init(rawValue: profile.id)),
+                    id: .init(rawValue: conversationID.externalAddress.rawValue), botID: .init(rawValue: profile.id),
+                    spaceID: startedIn.rawValue.uuidString),
                 status: .created
             )
         }
@@ -681,7 +684,7 @@ private struct APIConversation: Sendable {
     var publicID: TurgaiModels.ConversationID { .init(rawValue: domainID.externalAddress.rawValue) }
 
     var info: TurgaiModels.Conversation {
-        .init(id: publicID, botID: .init(rawValue: agent.rawValue))
+        .init(id: publicID, botID: .init(rawValue: agent.rawValue), spaceID: outline.space.rawValue.uuidString)
     }
 }
 
