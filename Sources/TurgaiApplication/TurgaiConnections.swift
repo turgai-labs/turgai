@@ -493,6 +493,10 @@ actor LiveSession {
                     conversationID: message.conversationID
                 )
                 try await self.admitIfTheChatSays(message.userID, to: conversation)
+                // Whoever it's said to is in the chat too, as its platform says.
+                for case .person(let person) in message.to {
+                    try await self.admitIfTheChatSays(person, to: conversation)
+                }
                 let memoryExtraction: MemoryExtractionConfiguration? =
                     if let agent = try await conversation.answeringAgent() {
                         try await agentProfiles.memoryExtractionConfiguration(forProfileID: agent.rawValue)

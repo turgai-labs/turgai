@@ -115,6 +115,40 @@ public struct TelegramDocument: Codable, Equatable, Sendable {
     }
 }
 
+/// A part of a message's text Telegram marks, such as a mention: by username, or of someone with
+/// none, who it names.
+public struct TelegramEntity: Codable, Equatable, Sendable {
+    public let type: String
+    /// Where it starts, and how long it is, in UTF-16 code units, as Telegram counts them.
+    public let offset: Int
+    public let length: Int
+    /// Who a `text_mention` names.
+    public let user: TelegramUser?
+
+    public init(type: String, offset: Int, length: Int, user: TelegramUser? = nil) {
+        self.type = type
+        self.offset = offset
+        self.length = length
+        self.user = user
+    }
+}
+
+/// The message another replies to, as far as who wrote it.
+public struct TelegramRepliedMessage: Codable, Equatable, Sendable {
+    public let messageID: Int64
+    public let from: TelegramUser?
+
+    public init(messageID: Int64, from: TelegramUser?) {
+        self.messageID = messageID
+        self.from = from
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case messageID = "message_id"
+        case from
+    }
+}
+
 public struct TelegramMessage: Codable, Equatable, Sendable {
     public let messageID: Int64
     public let from: TelegramUser?
@@ -124,6 +158,12 @@ public struct TelegramMessage: Codable, Equatable, Sendable {
     public let caption: String?
     public let photo: [TelegramPhotoSize]?
     public let document: TelegramDocument?
+    /// What its text marks, such as mentions.
+    public let entities: [TelegramEntity]?
+    /// What its caption marks, when it has a caption instead of text.
+    public let captionEntities: [TelegramEntity]?
+    /// The message it replies to.
+    public let replyToMessage: TelegramRepliedMessage?
 
     public init(
         messageID: Int64,
@@ -133,7 +173,10 @@ public struct TelegramMessage: Codable, Equatable, Sendable {
         text: String?,
         caption: String? = nil,
         photo: [TelegramPhotoSize]? = nil,
-        document: TelegramDocument? = nil
+        document: TelegramDocument? = nil,
+        entities: [TelegramEntity]? = nil,
+        captionEntities: [TelegramEntity]? = nil,
+        replyToMessage: TelegramRepliedMessage? = nil
     ) {
         self.messageID = messageID
         self.from = from
@@ -143,6 +186,9 @@ public struct TelegramMessage: Codable, Equatable, Sendable {
         self.caption = caption
         self.photo = photo
         self.document = document
+        self.entities = entities
+        self.captionEntities = captionEntities
+        self.replyToMessage = replyToMessage
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -154,6 +200,9 @@ public struct TelegramMessage: Codable, Equatable, Sendable {
         case caption
         case photo
         case document
+        case entities
+        case captionEntities = "caption_entities"
+        case replyToMessage = "reply_to_message"
     }
 }
 

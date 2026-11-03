@@ -241,6 +241,11 @@ public actor TelegramBot {
     private var connectionsSubscribed = false
     /// When each chat was last said, with its admins: it's said again after a while.
     private var chatsSaid: [Int64: ContinuousClock.Instant] = [:]
+    /// The bot itself, once Telegram has said: mentions and replies to it are to its agent.
+    private var me: TelegramUser?
+    /// Who each username is, in each chat, as people have written there since it started: a
+    /// mention says only the username.
+    private var usernames: [Int64: [String: Int64]] = [:]
     private static let chatKeptFor: Duration = .seconds(600)
     private var runTask: Task<Void, any Error>?
 
@@ -348,12 +353,55 @@ public actor TelegramBot {
         )
     }
 
+    /// Who `message` is said to, as its mentions and the message it replies to say: no one in
+    /// particular when it's to `bot`, which speaks for its chat's agent, or names no one; the
+    /// people it names otherwise. A username it can't tell is no one in particular.
+    static func addressees(of message: TelegramMessage, bot: TelegramUser?, usernames: [String: Int64])
+        -> Set<Participant>
+    {
+        var toBot = false
+        var people: Set<UserID> = []
+        /// `user`, as one the message is said to: before the bot knows itself, any bot is taken
+        /// to be it.
+        func said(to user: TelegramUser) {
+            if user.id == bot?.id || (bot == nil && user.isBot) {
+                toBot = true
+            } else if !user.isBot {
+                people.insert(.telegram(user.id))
+            }
+        }
+        if let replied = message.replyToMessage?.from { said(to: replied) }
+        let written = Array((message.text ?? message.caption ?? "").utf16)
+        for entity in (message.text != nil ? message.entities : message.captionEntities) ?? [] {
+            switch entity.type {
+            case "text_mention":
+                if let user = entity.user { said(to: user) }
+            case "mention":
+                guard entity.offset >= 0, entity.length > 1, entity.offset + entity.length <= written.count else {
+                    continue
+                }
+                let name = String(decoding: written[(entity.offset + 1)..<(entity.offset + entity.length)], as: UTF16.self)
+                    .lowercased()
+                if name == bot?.username?.lowercased() {
+                    toBot = true
+                } else if let id = usernames[name] {
+                    people.insert(.telegram(id))
+                }
+            default:
+                continue
+            }
+        }
+        return toBot ? [] : Set(people.map(Participant.person))
+    }
+
     public static func event(
         for update: TelegramUpdate,
         conversationChannel: ChannelID,
         messageID: MessageID,
         turnID: TurnID,
-        attachments: [Attachment] = []
+        attachments: [Attachment] = [],
+        bot: TelegramUser? = nil,
+        usernames: [String: Int64] = [:]
     ) -> TelegramInboundEvent? {
         let callbackQuery = update.callbackQuery
         guard let message = update.message ?? callbackQuery?.message,
@@ -524,7 +572,8 @@ public actor TelegramBot {
                     author: author,
                     text: text,
                     attachments: attachments,
-                    receivedAt: Date(timeIntervalSince1970: TimeInterval(message.date))
+                    receivedAt: Date(timeIntervalSince1970: TimeInterval(message.date)),
+                    to: callbackQuery == nil ? addressees(of: message, bot: bot, usernames: usernames) : []
                 ),
                 telegramMessageID: message.messageID,
                 turnID: turnID,
@@ -553,13 +602,20 @@ public actor TelegramBot {
             try? await client.answerCallbackQuery(callbackQuery.id)
             if handled { return true }
         }
+        if me == nil { me = try? await client.me() }
+        // Who's called what here, from whoever writes and whoever is replied to.
+        for user in [update.message?.from, update.message?.replyToMessage?.from].compactMap({ $0 }) {
+            if let username = user.username, !user.isBot { usernames[chatID, default: [:]][username.lowercased()] = user.id }
+        }
         guard
             let event = Self.event(
                 for: update,
                 conversationChannel: conversationChannel,
                 messageID: ids.0,
                 turnID: ids.1,
-                attachments: attachments(for: update.message)
+                attachments: attachments(for: update.message),
+                bot: me,
+                usernames: usernames[chatID] ?? [:]
             )
         else { return true }
         let connection = connection(for: event.conversationID)

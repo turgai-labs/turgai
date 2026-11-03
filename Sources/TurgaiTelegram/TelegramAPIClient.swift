@@ -198,6 +198,11 @@ public struct TelegramAPIClient: Sendable {
     public func validateToken() async throws {
         _ = try await getMe()
     }
+
+    /// The bot itself, as Telegram knows it: its id and username.
+    public func me() async throws -> TelegramUser {
+        try await getMe()
+    }
 }
 
 /// A single-consumer stream of Telegram updates.

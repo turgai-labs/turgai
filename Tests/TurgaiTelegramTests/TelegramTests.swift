@@ -19,6 +19,48 @@ struct TelegramTests {
         #expect(TelegramAPIClient.contentType(nil, ofFileAt: "documents/file_2") == nil)
     }
 
+    /// Who a message is said to, as Telegram marks it: the bot, by a mention or a reply to it, is
+    /// no one in particular, which its agent answers; a person, replied to or mentioned by name or
+    /// by a username someone wrote under, is that person; a username no one wrote under is no one.
+    @Test
+    func aMessageIsSaidToWhoItMentionsOrRepliesTo() {
+        let bot = TelegramUser(id: 1, isBot: true, firstName: "Turgai", username: "TurgaiBot")
+        let ann = TelegramUser(id: 7, firstName: "Ann", username: "ann")
+        let bob = TelegramUser(id: 8, firstName: "Bob", username: "bob")
+        let group = TelegramChat(id: -100, type: "supergroup", title: "Family")
+        func to(_ text: String, entities: [TelegramEntity]? = nil, replyingTo replied: TelegramUser? = nil)
+            -> Set<Participant>?
+        {
+            let update = TelegramUpdate(
+                updateID: 1,
+                message: TelegramMessage(
+                    messageID: 2, from: ann, chat: group, date: 100, text: text, entities: entities,
+                    replyToMessage: replied.map { TelegramRepliedMessage(messageID: 1, from: $0) }))
+            guard
+                case .message(let message, _, _, _) = TelegramBot.event(
+                    for: update, conversationChannel: ChannelID("telegram"), messageID: MessageID(), turnID: TurnID(),
+                    bot: bot, usernames: ["bob": bob.id])
+            else { return nil }
+            return message.to
+        }
+
+        #expect(to("what's for dinner?") == [])
+        #expect(to("sure", replyingTo: bot) == [])
+        #expect(to("@TurgaiBot what's for dinner?", entities: [TelegramEntity(type: "mention", offset: 0, length: 10)]) == [])
+        #expect(to("pasta?", replyingTo: bob) == [.person(.telegram(bob.id))])
+        #expect(to("@bob pasta?", entities: [TelegramEntity(type: "mention", offset: 0, length: 4)]) == [.person(.telegram(bob.id))])
+        #expect(
+            to("Bob, pasta?", entities: [TelegramEntity(type: "text_mention", offset: 0, length: 3, user: bob)])
+                == [.person(.telegram(bob.id))])
+        #expect(to("@cat pasta?", entities: [TelegramEntity(type: "mention", offset: 0, length: 4)]) == [])
+        #expect(
+            to(
+                "@TurgaiBot ask @bob",
+                entities: [
+                    TelegramEntity(type: "mention", offset: 0, length: 10), TelegramEntity(type: "mention", offset: 15, length: 4),
+                ]) == [])
+    }
+
     @Test
     func anAnswerButtonIsItsTappersAnswer() {
         let asker = TelegramUser(id: 7, firstName: "Kid")
