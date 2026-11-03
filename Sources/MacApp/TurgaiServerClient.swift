@@ -16,6 +16,12 @@ struct TurgaiServerClient: Sendable {
     var conversations: @Sendable (Session) async throws -> [Conversation]
     /// A new conversation, in the space `spaceID`, or Turgai's own, with the default bot.
     var startConversation: @Sendable (Session, _ spaceID: String?) async throws -> Conversation
+    /// Who's in a conversation: its agent and its people.
+    var participants: @Sendable (Session, ConversationID) async throws -> [ParticipantSummary]
+    /// Someone added to a conversation by the account's person.
+    var addParticipant: @Sendable (Session, ConversationID, ParticipantRef) async throws -> Void
+    /// Who's in a space, as the account's person sees them.
+    var people: @Sendable (Session, _ spaceID: String) async throws -> [SpacePerson]
 }
 
 enum AccountError: Error, Equatable {
@@ -53,7 +59,15 @@ extension TurgaiServerClient: DependencyKey {
             conversations: { try await api("GET", "api/v1/conversations", as: $0) },
             startConversation: { session, space in
                 try await api("POST", "api/v1/conversations", body: CreateConversationRequest(spaceID: space), as: session)
-            }
+            },
+            participants: { session, id in
+                try await api("GET", "api/v1/conversations/\(id.rawValue)/participants", as: session)
+            },
+            addParticipant: { session, id, participant in
+                _ = try await request(
+                    "POST", "api/v1/conversations/\(id.rawValue)/participants", body: participant, as: session)
+            },
+            people: { session, space in try await api("GET", "api/v1/spaces/\(space)/people", as: session) }
         )
     }()
 }
@@ -62,6 +76,13 @@ extension TurgaiServerClient: DependencyKey {
 private func api<Answer: Decodable>(
     _ method: String, _ path: String, body: (some Encodable)? = Optional<String>.none, as account: Session
 ) async throws -> Answer {
+    try JSONDecoder().decode(Answer.self, from: try await request(method, path, body: body, as: account))
+}
+
+/// What the API answers to `method` on `path`, asked as `account`: refused unless it succeeded.
+private func request(
+    _ method: String, _ path: String, body: (some Encodable)? = Optional<String>.none, as account: Session
+) async throws -> Data {
     var request = URLRequest(url: LocalServer.baseURL.appending(path: path))
     request.httpMethod = method
     request.setValue("\(LocalServer.sessionCookieName)=\(account.token)", forHTTPHeaderField: "Cookie")
@@ -73,7 +94,7 @@ private func api<Answer: Decodable>(
     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
         throw URLError(.badServerResponse)
     }
-    return try JSONDecoder().decode(Answer.self, from: data)
+    return data
 }
 
 /// Posts the web app's credentials form and returns the session its redirect sets.

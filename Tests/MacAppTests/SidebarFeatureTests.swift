@@ -104,8 +104,9 @@ struct ChatOpeningTests {
             $0.chat.send = { command in sent.withValue { $0.append(command) } }
         }
 
-        await store.send(.open(trip)) {
+        await store.send(.open(trip, inSpace: "turgai")) {
             $0.conversationID = trip
+            $0.spaceID = "turgai"
             $0.messages = []
         }
         #expect(sent.value == [.open(conversationID: trip)])
@@ -116,5 +117,45 @@ struct ChatOpeningTests {
         let changed = Conversation(id: dinner, botID: BotID(rawValue: "conversation"), spaceID: "turgai")
         await store.send(.received(ChatEvent(payload: .conversationChanged(conversation: changed))))
         await store.receive(\.delegate, .conversationChanged(changed))
+    }
+}
+
+@MainActor
+struct MentionTests {
+    /// What `@` picks is who the message is said to, while its name is still in the message.
+    @Test
+    func aMentionSaysTheMessageToThem() async {
+        let sent = LockIsolated<[ChatCommand]>([])
+        let bob = ParticipantSummary(kind: .person, id: "account-bob", name: "bob")
+        let cat = ParticipantSummary(kind: .person, id: "account-cat", name: "cat")
+        let store = TestStore(
+            initialState: ChatFeature.State(
+                connection: .connected(botID: BotID(rawValue: "conversation")),
+                conversationID: ConversationID(rawValue: "dinner"))
+        ) {
+            ChatFeature()
+        } withDependencies: {
+            $0.chat.send = { command in sent.withValue { $0.append(command) } }
+            $0.uuid = .incrementing
+        }
+
+        await store.send(.mentioned(bob)) {
+            $0.draft = "@bob "
+            $0.to = [bob]
+        }
+        await store.send(.mentioned(cat)) {
+            $0.draft = "@bob @cat "
+            $0.to = [bob, cat]
+        }
+        // Cat's name typed away: the message isn't said to her.
+        await store.send(.binding(.set(\.draft, "@bob pasta?"))) { $0.draft = "@bob pasta?" }
+        let request = SendMessageRequest(
+            id: MessageID(rawValue: UUID(0)), text: "@bob pasta?", to: [ParticipantRef(kind: .person, id: "account-bob")])
+        await store.send(.sendTapped) {
+            $0.draft = ""
+            $0.to = []
+            $0.pending = [request]
+        }
+        #expect(sent.value == [.message(request)])
     }
 }

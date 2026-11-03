@@ -109,7 +109,7 @@ struct AppFeature {
             switch action {
             // The sidebar says what the chat shows; the chat's connection says how the sidebar changes.
             case .sidebar(.delegate(.open(let id))):
-                return .send(.chat(.open(id)))
+                return .send(.chat(.open(id, inSpace: state.sidebar.conversations[id: id]?.spaceID ?? "")))
             case .chat(.delegate(.conversationChanged(let conversation))):
                 return .send(.sidebar(.conversationChanged(conversation)))
             case .chat(.delegate(.conversationLeft(let id))):

@@ -25,8 +25,18 @@ struct ChatFeature {
     @ObservableState
     struct State: Equatable {
         var connection = Connection.connecting
+        /// Who it's for, once it connects.
+        var session: Session?
         /// The conversation it shows: none until the window opens one.
         var conversationID: ConversationID?
+        /// The space it's in.
+        var spaceID: String?
+        /// Who's in it: its agent and its people.
+        var participants: [ParticipantSummary] = []
+        /// The people in its space who aren't in it, while one is being picked to add: none otherwise.
+        var addable: [SpacePerson]?
+        /// Who the draft is said to, as `@` picked them: none for no one in particular.
+        var to: [ParticipantSummary] = []
         /// The id of the person this app is, as the conversation says: their own messages are theirs.
         var you: String?
         var messages: [Message] = []
@@ -44,8 +54,16 @@ struct ChatFeature {
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         case connect(Session)
-        /// Show `id` instead of the conversation shown before.
-        case open(ConversationID)
+        /// Show `id`, in the space `spaceID`, instead of the conversation shown before.
+        case open(ConversationID, inSpace: String)
+        case participantsLoaded([ParticipantSummary])
+        case addPeopleTapped
+        case addableLoaded([SpacePerson])
+        case addTapped(SpacePerson)
+        case addFailed
+        case addingDismissed
+        /// `@` picked `participant`: the draft is said to them.
+        case mentioned(ParticipantSummary)
         case disconnect
         case received(ChatEvent)
         case closed(why: String)
@@ -64,6 +82,7 @@ struct ChatFeature {
     private enum CancelID { case socket }
 
     @Dependency(\.chat) var chat
+    @Dependency(\.server) var server
     @Dependency(\.continuousClock) var clock
     @Dependency(\.date.now) var now
     @Dependency(\.uuid) var uuid
@@ -77,6 +96,7 @@ struct ChatFeature {
 
             case .connect(let session):
                 state.connection = .connecting
+                state.session = session
                 return .run { [shown = state.conversationID] send in
                     let why: String
                     do {
@@ -111,10 +131,57 @@ struct ChatFeature {
                 state.accessRequests = []
                 return .none
 
-            case .open(let id):
+            case .open(let id, let space):
                 guard id != state.conversationID else { return .none }
-                state = State(connection: state.connection, conversationID: id)
-                return .run { _ in try? await chat.send(.open(conversationID: id)) }
+                state = State(connection: state.connection, session: state.session, conversationID: id, spaceID: space)
+                return .merge(
+                    .run { _ in try? await chat.send(.open(conversationID: id)) },
+                    loadParticipants(of: id, as: state.session)
+                )
+
+            case .participantsLoaded(let participants):
+                state.participants = participants
+                return .none
+
+            case .addPeopleTapped:
+                guard let session = state.session, let space = state.spaceID else { return .none }
+                return .run { send in
+                    if let people = try? await server.people(session, space) { await send(.addableLoaded(people)) }
+                }
+
+            case .addableLoaded(let people):
+                let inIt = Set(state.participants.filter { $0.kind == .person }.map(\.id))
+                state.addable = people.filter { !inIt.contains($0.id) }
+                return .none
+
+            case .addTapped(let person):
+                state.addable = nil
+                guard let session = state.session, let id = state.conversationID else { return .none }
+                return .run { send in
+                    do {
+                        try await server.addParticipant(session, id, ParticipantRef(kind: .person, id: person.id))
+                    } catch {
+                        await send(.addFailed)
+                        return
+                    }
+                    if let participants = try? await server.participants(session, id) {
+                        await send(.participantsLoaded(participants))
+                    }
+                }
+
+            case .addFailed:
+                state.error = ChatError(code: "add_failed", message: "They couldn't be added. Try again.")
+                return .none
+
+            case .addingDismissed:
+                state.addable = nil
+                return .none
+
+            case .mentioned(let participant):
+                if !state.draft.isEmpty, !state.draft.hasSuffix(" ") { state.draft += " " }
+                state.draft += "@\(participant.name) "
+                if !state.to.contains(participant) { state.to.append(participant) }
+                return .none
 
             case .received(let event):
                 switch event.payload {
@@ -134,9 +201,13 @@ struct ChatFeature {
             case .sendTapped:
                 let text = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty, case .connected = state.connection else { return .none }
+                // Said to whoever `@` picked whose name is still in it.
+                let to = state.to.filter { text.contains("@\($0.name)") }
+                    .map { ParticipantRef(kind: $0.kind, id: $0.id) }
                 // The client-generated ID lets the conversation reject a duplicated delivery.
-                let request = SendMessageRequest(id: MessageID(rawValue: uuid()), text: text)
+                let request = SendMessageRequest(id: MessageID(rawValue: uuid()), text: text, to: to)
                 state.draft = ""
+                state.to = []
                 state.error = nil
                 state.pending.append(request)
                 return .run { send in
@@ -159,6 +230,16 @@ struct ChatFeature {
                 if state.draft.isEmpty { state.draft = request.text }
                 state.error = ChatError(code: "send_failed", message: "That message didn't go through. Try again.")
                 return .none
+            }
+        }
+    }
+
+    /// Who's in the conversation `id`, read for `session`'s person.
+    private func loadParticipants(of id: ConversationID, as session: Session?) -> Effect<Action> {
+        guard let session else { return .none }
+        return .run { send in
+            if let participants = try? await server.participants(session, id) {
+                await send(.participantsLoaded(participants))
             }
         }
     }

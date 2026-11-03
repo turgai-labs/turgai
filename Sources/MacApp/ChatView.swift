@@ -21,7 +21,11 @@ struct ChatView: View {
             // The messages run under the floating bars, softened at the edges.
             .safeAreaInset(edge: .top, spacing: 0) { header }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                BottomBar(error: state.error, draft: $store.draft, isConnected: isConnected) {
+                BottomBar(
+                    error: state.error, draft: $store.draft, isConnected: isConnected,
+                    mentionable: state.participants.filter { $0.id != state.you },
+                    mention: { store.send(.mentioned($0)) }
+                ) {
                     store.send(.sendTapped)
                 }
             }
@@ -37,22 +41,45 @@ struct ChatView: View {
             })
         .task(id: session) { store.send(.connect(session)) }
         .onDisappear { store.send(.disconnect) }
+        .sheet(
+            isPresented: Binding(get: { state.addable != nil }, set: { if !$0 { store.send(.addingDismissed) } })
+        ) {
+            AddPeopleSheet(people: state.addable ?? [], add: { store.send(.addTapped($0)) }) {
+                store.send(.addingDismissed)
+            }
+        }
     }
 
     private var isConnected: Bool {
         if case .connected = state.connection { true } else { false }
     }
 
-    /// A floating glass capsule: the mark, the name, and the connection. Clicking it opens
-    /// the agent's turns.
+    /// A floating glass capsule: the mark, the name, and the connection, clicking which opens the
+    /// agent's turns; under it, who's in the conversation, and a button to add someone.
     private var header: some View {
-        Button {
-            openWindow(id: WindowID.turns)
-        } label: {
-            headerLabel
+        VStack(spacing: 6) {
+            Button {
+                openWindow(id: WindowID.turns)
+            } label: {
+                headerLabel
+            }
+            .buttonStyle(.plain)
+            .help("Show the agent's turns")
+            HStack(spacing: 6) {
+                Text(state.participants.map(\.name).joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(Color.turgaiMuted)
+                    .lineLimit(1)
+                Button {
+                    store.send(.addPeopleTapped)
+                } label: {
+                    Image(systemName: "person.badge.plus")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.turgaiAccent)
+                .help("Add someone from this space")
+            }
         }
-        .buttonStyle(.plain)
-        .help("Show the agent's turns")
         .frame(maxWidth: .infinity)
         // Clear of the window's traffic lights under the hidden title bar.
         .padding(.top, 36)
@@ -184,11 +211,27 @@ private struct TurnView: View {
 private struct Composer: View {
     @Binding var draft: String
     let isConnected: Bool
+    /// Who `@` offers: the conversation's agent and its other people.
+    let mentionable: [ParticipantSummary]
+    let mention: (ParticipantSummary) -> Void
     let send: () -> Void
 
     var body: some View {
         GlassEffectContainer(spacing: 12) {
             HStack(alignment: .bottom, spacing: 12) {
+                Menu {
+                    ForEach(mentionable, id: \.id) { (participant: ParticipantSummary) in
+                        Button(participant.name) { mention(participant) }
+                    }
+                } label: {
+                    Image(systemName: "at").font(.system(size: 16, weight: .bold)).frame(width: 28, height: 28)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .menuIndicator(.hidden)
+                .help("Say it to someone")
+                .disabled(mentionable.isEmpty)
                 TextField("Message Turgai", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...8)
@@ -245,6 +288,8 @@ private struct BottomBar: View {
     let error: ChatError?
     @Binding var draft: String
     let isConnected: Bool
+    let mentionable: [ParticipantSummary]
+    let mention: (ParticipantSummary) -> Void
     let send: () -> Void
 
     var body: some View {
@@ -257,7 +302,7 @@ private struct BottomBar: View {
                     .padding(.vertical, 8)
                     .glassEffect(.regular, in: .capsule)
             }
-            Composer(draft: $draft, isConnected: isConnected, send: send)
+            Composer(draft: $draft, isConnected: isConnected, mentionable: mentionable, mention: mention, send: send)
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
@@ -284,5 +329,33 @@ private struct AccessRequestAlert: ViewModifier {
             .onChange(of: request?.id) { _, id in
                 if id != nil { NSApplication.shared.activate() }
             }
+    }
+}
+
+/// The people in the conversation's space who aren't in it: picking one adds them.
+private struct AddPeopleSheet: View {
+    let people: [SpacePerson]
+    let add: (SpacePerson) -> Void
+    let done: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add someone").font(.headline)
+            if people.isEmpty {
+                Text("Everyone in this space is in this conversation.")
+                    .foregroundStyle(Color.turgaiMuted)
+            } else {
+                List(people) { (person: SpacePerson) in
+                    Button(person.name) { add(person) }.buttonStyle(.plain)
+                }
+                .frame(minHeight: 160)
+            }
+            HStack {
+                Spacer()
+                Button("Done", action: done).keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 320)
     }
 }
