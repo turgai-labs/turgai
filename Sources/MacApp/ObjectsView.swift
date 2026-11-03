@@ -2,7 +2,7 @@ import ComposableArchitecture
 import SwiftUI
 import TurgaiModels
 
-/// The machine's objects, live: they appear and leave as they check in with the
+/// The objects the person may see, live: they appear and leave as they check in with the
 /// cluster and stop.
 struct ObjectsView: View {
     let store: StoreOf<ObjectsFeature>
@@ -24,8 +24,7 @@ struct ObjectsView: View {
                 .animation(.smooth, value: rows)
             }
         }
-        .frame(minWidth: 340, minHeight: 320)
-        .background(Color.turgaiCanvas)
+        .scrollContentBackground(.hidden)
         .task { store.send(.appeared) }
         .alert(
             store.refusal ?? "",

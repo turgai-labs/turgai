@@ -3,6 +3,8 @@ import SwiftUI
 
 struct RootView: View {
     @Bindable var store: StoreOf<AppFeature>
+    /// The live objects, for the window's objects panel.
+    let objects: ObjectsClient
 
     var body: some View {
         // One background, and one card on it whose content changes, so a new screen reshapes
@@ -11,7 +13,7 @@ struct RootView: View {
             ColorField()
             switch screen {
             case .chat(let session):
-                MainWindow(session: session, store: store)
+                MainWindow(session: session, store: store, objects: objects)
                     .transition(.opacity)
             case .card(let card):
                 self.card(card)

@@ -3,7 +3,7 @@ import ComposableArchitecture
 import SwiftUI
 
 /// The Mac app: a skylark in the menu bar that runs all of Turgai in this process,
-/// with windows for the chat and the live list of objects. The app bundle and its
+/// with a window for the person's conversations and the live objects beside them. The app bundle and its
 /// `@main` entry point live in `Clients/Mac`.
 public struct TurgaiScenes: Scene {
     @State private var runtime = Runtime()
@@ -22,15 +22,10 @@ public struct TurgaiScenes: Scene {
         }
 
         Window("Turgai", id: WindowID.chat) {
-            RootView(store: app)
+            RootView(store: app, objects: runtime.objects)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 960, height: 720)
-
-        Window("Objects", id: WindowID.objects) {
-            ObjectsWindow(objects: runtime.objects)
-        }
-        .defaultSize(width: 420, height: 560)
 
         Window("Turns", id: WindowID.turns) {
             TurnsView(store: app.scope(state: \.chat, action: \.chat))
@@ -41,25 +36,7 @@ public struct TurgaiScenes: Scene {
 
 enum WindowID {
     static let chat = "chat"
-    static let objects = "objects"
     static let turns = "turns"
-}
-
-private struct ObjectsWindow: View {
-    @State private var store: StoreOf<ObjectsFeature>
-
-    init(objects: ObjectsClient) {
-        _store = State(
-            initialValue: Store(initialState: ObjectsFeature.State()) {
-                ObjectsFeature()
-            } withDependencies: {
-                $0.objects = objects
-            })
-    }
-
-    var body: some View {
-        ObjectsView(store: store)
-    }
 }
 
 private struct MenuContent: View {
@@ -71,8 +48,6 @@ private struct MenuContent: View {
         Divider()
         Button("Open Chat") { open(WindowID.chat) }
             .keyboardShortcut("o")
-        Button("Objects") { open(WindowID.objects) }
-            .keyboardShortcut("l")
         Divider()
         Button("Quit Turgai") { runtime.quit() }
             .keyboardShortcut("q")

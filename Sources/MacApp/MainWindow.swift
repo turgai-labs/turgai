@@ -2,11 +2,24 @@ import ComposableArchitecture
 import SwiftUI
 import TurgaiModels
 
-/// The main window, once someone is signed in: their conversations on the left, by space, and the
-/// one open beside them.
+/// The main window, once someone is signed in: their conversations on the left, by space, the one
+/// open beside them, and, when asked for, every object they may see in a glass panel on the right.
 struct MainWindow: View {
     let session: Session
     @Bindable var store: StoreOf<AppFeature>
+    @State private var objects: StoreOf<ObjectsFeature>
+    @State private var showsObjects = false
+
+    init(session: Session, store: StoreOf<AppFeature>, objects: ObjectsClient) {
+        self.session = session
+        self.store = store
+        _objects = State(
+            initialValue: Store(initialState: ObjectsFeature.State()) {
+                ObjectsFeature()
+            } withDependencies: {
+                $0.objects = objects
+            })
+    }
 
     var body: some View {
         NavigationSplitView {
@@ -14,6 +27,30 @@ struct MainWindow: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 360)
         } detail: {
             ChatView(session: session, title: title, store: store.scope(state: \.chat, action: \.chat))
+                .overlay(alignment: .trailing) {
+                    if showsObjects {
+                        ObjectsView(store: objects)
+                            .frame(width: 320)
+                            .padding(.vertical, 8)
+                            .glassEffect(.regular, in: .rect(cornerRadius: 20))
+                            .padding(.top, 80)
+                            .padding([.bottom, .trailing], 16)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        withAnimation(.smooth) { showsObjects.toggle() }
+                    } label: {
+                        Image(systemName: "sidebar.right").frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .help(showsObjects ? "Hide objects" : "Show objects")
+                    // Level with the conversation's name, clear of the window's edge.
+                    .padding(.top, 36)
+                    .padding(.trailing, 16)
+                }
         }
         .task(id: session) { store.send(.sidebar(.appeared(session))) }
     }
