@@ -122,7 +122,31 @@ struct ChatOpeningTests {
 
 @MainActor
 struct MentionTests {
-    /// What `@` picks is who the message is said to, while its name is still in the message.
+    /// Typing `@` suggests the participants, but you, whose name starts with what follows it.
+    @Test
+    func typingAtSuggestsWhoItCouldBe() {
+        var state = ChatFeature.State(
+            participants: [
+                ParticipantSummary(kind: .person, id: "account-ann", name: "ann"),
+                ParticipantSummary(kind: .person, id: "account-bob", name: "Bob"),
+                ParticipantSummary(kind: .person, id: "account-bea", name: "bea"),
+                ParticipantSummary(kind: .agent, id: "conversation", name: "Turgai"),
+            ],
+            you: "account-ann")
+
+        state.draft = "pasta? @"
+        #expect(state.suggestions.map(\.id) == ["account-bob", "account-bea", "conversation"])
+        state.draft = "pasta? @b"
+        #expect(state.suggestions.map(\.id) == ["account-bob", "account-bea"])
+        state.draft = "pasta? @bo"
+        #expect(state.suggestions.map(\.id) == ["account-bob"])
+        state.draft = "pasta? @Bob "
+        #expect(state.suggestions.isEmpty)
+        state.draft = "ann@bob"
+        #expect(state.suggestions.isEmpty)
+    }
+
+    /// A suggestion picked is who the message is said to, while its name is still in the message.
     @Test
     func aMentionSaysTheMessageToThem() async {
         let sent = LockIsolated<[ChatCommand]>([])
@@ -139,15 +163,17 @@ struct MentionTests {
             $0.uuid = .incrementing
         }
 
+        await store.send(.binding(.set(\.draft, "@b"))) { $0.draft = "@b" }
         await store.send(.mentioned(bob)) {
             $0.draft = "@bob "
             $0.to = [bob]
         }
+        await store.send(.binding(.set(\.draft, "@bob @"))) { $0.draft = "@bob @" }
         await store.send(.mentioned(cat)) {
             $0.draft = "@bob @cat "
             $0.to = [bob, cat]
         }
-        // Cat's name typed away: the message isn't said to her.
+        // Cat's name typed away: the message isn't said to them.
         await store.send(.binding(.set(\.draft, "@bob pasta?"))) { $0.draft = "@bob pasta?" }
         let request = SendMessageRequest(
             id: MessageID(rawValue: UUID(0)), text: "@bob pasta?", to: [ParticipantRef(kind: .person, id: "account-bob")])

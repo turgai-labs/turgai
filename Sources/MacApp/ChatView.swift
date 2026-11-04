@@ -23,8 +23,7 @@ struct ChatView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 BottomBar(
                     error: state.error, draft: $store.draft, isConnected: isConnected,
-                    mentionable: state.participants.filter { $0.id != state.you },
-                    mention: { store.send(.mentioned($0)) }
+                    suggestions: state.suggestions, mention: { store.send(.mentioned($0)) }
                 ) {
                     store.send(.sendTapped)
                 }
@@ -191,37 +190,46 @@ private struct TurnView: View {
     }
 }
 
+/// The message field and its send button; above them, while an `@` is typed, who it could be.
 private struct Composer: View {
     @Binding var draft: String
     let isConnected: Bool
-    /// Who `@` offers: the conversation's agent and its other people.
-    let mentionable: [ParticipantSummary]
+    /// Who the `@` being typed could be.
+    let suggestions: [ParticipantSummary]
     let mention: (ParticipantSummary) -> Void
     let send: () -> Void
+    /// The suggestion Return or Tab picks, moved by ↑ and ↓.
+    @State private var highlighted = 0
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !suggestions.isEmpty {
+                Suggestions(suggestions: suggestions, highlighted: highlighted, pick: mention)
+            }
+            field
+        }
+        .onChange(of: suggestions) { highlighted = 0 }
+    }
+
+    private var field: some View {
         GlassEffectContainer(spacing: 12) {
             HStack(alignment: .bottom, spacing: 12) {
-                Menu {
-                    ForEach(mentionable, id: \.id) { (participant: ParticipantSummary) in
-                        Button(participant.name) { mention(participant) }
-                    }
-                } label: {
-                    Image(systemName: "at").font(.system(size: 16, weight: .bold)).frame(width: 28, height: 28)
-                }
-                .menuStyle(.button)
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .menuIndicator(.hidden)
-                .help("Say it to someone")
-                .disabled(mentionable.isEmpty)
                 TextField("Message Turgai", text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...8)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .glassEffect(.regular, in: .rect(cornerRadius: 22))
-                    .onSubmit(send)
+                    .onSubmit {
+                        if let picked { mention(picked) } else { send() }
+                    }
+                    .onKeyPress(.downArrow) { move(by: 1) }
+                    .onKeyPress(.upArrow) { move(by: -1) }
+                    .onKeyPress(.tab) {
+                        guard let picked else { return .ignored }
+                        mention(picked)
+                        return .handled
+                    }
                 Button(action: send) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 16, weight: .bold))
@@ -233,6 +241,60 @@ private struct Composer: View {
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(!isConnected || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+        }
+    }
+
+    /// The suggestion Return or Tab would pick: none when there are none.
+    private var picked: ParticipantSummary? {
+        suggestions.isEmpty ? nil : suggestions[min(highlighted, suggestions.count - 1)]
+    }
+
+    private func move(by step: Int) -> KeyPress.Result {
+        guard !suggestions.isEmpty else { return .ignored }
+        highlighted = (highlighted + step + suggestions.count) % suggestions.count
+        return .handled
+    }
+}
+
+/// Who the `@` being typed could be, the one Return picks marked: a click picks any.
+private struct Suggestions: View {
+    let suggestions: [ParticipantSummary]
+    let highlighted: Int
+    let pick: (ParticipantSummary) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, participant in
+                Button {
+                    pick(participant)
+                } label: {
+                    HStack(spacing: 8) {
+                        icon(of: participant)
+                            .frame(width: 16, height: 16)
+                            .foregroundStyle(Color.turgaiAccent)
+                        Text(participant.name).foregroundStyle(Color.turgaiInk)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        index == highlighted ? Color.turgaiAccent.opacity(0.15) : .clear, in: .rect(cornerRadius: 10)
+                    )
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .frame(maxWidth: 280)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+    }
+
+    @ViewBuilder
+    private func icon(of participant: ParticipantSummary) -> some View {
+        switch participant.kind {
+        case .agent: Image.skylark.resizable().scaledToFit()
+        case .person: Image(systemName: "person.fill")
         }
     }
 }
@@ -274,7 +336,7 @@ private struct BottomBar: View {
     let error: ChatError?
     @Binding var draft: String
     let isConnected: Bool
-    let mentionable: [ParticipantSummary]
+    let suggestions: [ParticipantSummary]
     let mention: (ParticipantSummary) -> Void
     let send: () -> Void
 
@@ -288,7 +350,7 @@ private struct BottomBar: View {
                     .padding(.vertical, 8)
                     .glassEffect(.regular, in: .capsule)
             }
-            Composer(draft: $draft, isConnected: isConnected, mentionable: mentionable, mention: mention, send: send)
+            Composer(draft: $draft, isConnected: isConnected, suggestions: suggestions, mention: mention, send: send)
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)

@@ -35,7 +35,7 @@ struct ChatFeature {
         var participants: [ParticipantSummary] = []
         /// The people in its space who aren't in it, while one is being picked to add: none otherwise.
         var addable: [SpacePerson]?
-        /// Who the draft is said to, as `@` picked them: none for no one in particular.
+        /// Who the draft is said to, as picked from `@`'s suggestions: none for no one in particular.
         var to: [ParticipantSummary] = []
         /// The id of the person this app is, as the conversation says: their own messages are theirs.
         var you: String?
@@ -49,6 +49,22 @@ struct ChatFeature {
         var error: ChatError?
         /// The agent's turns, step by step: the past ones, then each new one as it runs.
         var turns: IdentifiedArrayOf<TurnRecord> = []
+
+        /// Who the `@` being typed could be: the participants, but you, whose name starts with
+        /// what's typed after it.
+        var suggestions: [ParticipantSummary] {
+            guard let typed = typedMention?.dropFirst().lowercased() else { return [] }
+            return participants.filter { $0.id != you && $0.name.lowercased().hasPrefix(typed) }
+        }
+
+        /// The `@` the draft ends in, with what's typed after it: none when it doesn't end in one.
+        fileprivate var typedMention: Substring? {
+            guard let at = draft.lastIndex(of: "@"),
+                at == draft.startIndex || draft[draft.index(before: at)].isWhitespace
+            else { return nil }
+            let typed = draft[at...]
+            return typed.contains(where: \.isNewline) ? nil : typed
+        }
     }
 
     enum Action: BindableAction {
@@ -62,7 +78,7 @@ struct ChatFeature {
         case addTapped(SpacePerson)
         case addFailed
         case addingDismissed
-        /// `@` picked `participant`: the draft is said to them.
+        /// `participant` was picked from `@`'s suggestions: the draft is said to them.
         case mentioned(ParticipantSummary)
         case disconnect
         case received(ChatEvent)
@@ -178,7 +194,8 @@ struct ChatFeature {
                 return .none
 
             case .mentioned(let participant):
-                if !state.draft.isEmpty, !state.draft.hasSuffix(" ") { state.draft += " " }
+                // What's typed after `@` becomes their name.
+                if let typed = state.typedMention { state.draft.removeSubrange(typed.startIndex...) }
                 state.draft += "@\(participant.name) "
                 if !state.to.contains(participant) { state.to.append(participant) }
                 return .none
