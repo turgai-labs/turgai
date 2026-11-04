@@ -19,8 +19,7 @@ struct ChatView: View {
                     messages: state.messages, you: state.you, turns: state.turns, pending: state.pending,
                     turn: state.turn)
             }
-            // The messages run under the floating bars, softened at the edges.
-            .safeAreaInset(edge: .top, spacing: 0) { header }
+            // The messages run under the floating composer, softened at the edge.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 BottomBar(
                     error: state.error, draft: $store.draft, isConnected: isConnected,
@@ -35,7 +34,17 @@ struct ChatView: View {
             .onChange(of: state.turn) { scrollToEnd(reader) }
         }
         .background(Color.turgaiCanvas)
-        .ignoresSafeArea(.container, edges: .top)
+        .toolbar {
+            ToolbarItem(placement: .principal) { header }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    store.send(.addPeopleTapped)
+                } label: {
+                    Label("Add someone", systemImage: "person.badge.plus")
+                }
+                .help("Add someone from this space")
+            }
+        }
         .modifier(
             AccessRequestAlert(request: state.accessRequests.first) { request, answer in
                 store.send(.accessAnswered(request.id, answer))
@@ -55,51 +64,31 @@ struct ChatView: View {
         if case .connected = state.connection { true } else { false }
     }
 
-    /// A floating glass capsule: the mark, the name, and the connection; under it, who's in the
-    /// conversation, and a button to add someone.
+    /// The toolbar's middle: the mark, the name, and the connection; under them, who's in the
+    /// conversation.
     private var header: some View {
-        VStack(spacing: 6) {
-            headerLabel
+        VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text(state.participants.map(\.name).joined(separator: ", "))
-                    .font(.caption)
-                    .foregroundStyle(Color.turgaiMuted)
+                Image.skylark
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 14, height: 14)
+                    .foregroundStyle(Color.turgaiAccent)
+                Text(title)
+                    .font(.headline)
                     .lineLimit(1)
-                Button {
-                    store.send(.addPeopleTapped)
-                } label: {
-                    Image(systemName: "person.badge.plus")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.turgaiAccent)
-                .help("Add someone from this space")
+                    .foregroundStyle(Color.turgaiInk)
+                Circle()
+                    .fill(connectionColor)
+                    .frame(width: 6, height: 6)
+                    .help(connectionHelp)
             }
-        }
-        .frame(maxWidth: .infinity)
-        // Clear of the window's traffic lights under the hidden title bar.
-        .padding(.top, 36)
-        .padding(.bottom, 8)
-    }
-
-    private var headerLabel: some View {
-        HStack(spacing: 10) {
-            Image.skylark
-                .resizable()
-                .scaledToFit()
-                .frame(width: 22, height: 22)
-                .foregroundStyle(Color.turgaiAccent)
-            Text(title)
-                .font(.system(size: 18, weight: .heavy))
+            Text(state.participants.map(\.name).joined(separator: ", "))
+                .font(.caption)
+                .foregroundStyle(Color.turgaiMuted)
                 .lineLimit(1)
-                .foregroundStyle(Color.turgaiInk)
-            Circle()
-                .fill(connectionColor)
-                .frame(width: 8, height: 8)
-                .help(connectionHelp)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .glassEffect(.regular.interactive(), in: .capsule)
+        .padding(.horizontal, 12)
     }
 
     private var connectionColor: Color {
