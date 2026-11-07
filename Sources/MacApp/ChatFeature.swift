@@ -52,6 +52,23 @@ struct ChatFeature {
 
         /// The suggestion ↑ or ↓ last marked: none until one does.
         var marked: ParticipantSummary?
+        /// The reply whose turn is shown beside it: none while none is.
+        var shownTurn: MessageID?
+
+        /// The messages, as the conversation shows them.
+        var shown: [ShownMessage] {
+            messages.map { message in
+                let turn = message.role == .assistant ? turns[id: TurnID(rawValue: message.id.rawValue)] : nil
+                return ShownMessage(
+                    message: message,
+                    someoneElse: message.author.flatMap { $0.kind == .person && $0.id != you ? $0.name : nil },
+                    turn: turn,
+                    showsTurn: turn != nil && shownTurn == message.id)
+            }
+        }
+
+        /// Someone in the space is being picked to add.
+        var isAddingPeople: Bool { addable != nil }
 
         /// Something's typed, and there's a connection to send it on.
         var canSend: Bool {
@@ -92,7 +109,11 @@ struct ChatFeature {
         case addableLoaded([SpacePerson])
         case addTapped(SpacePerson)
         case addFailed
-        case addingDismissed
+        /// The sheet to pick someone to add: `false` once it's closed.
+        case addingPresented(Bool)
+        /// ⓘ beside a reply: its turn is shown.
+        case turnTapped(MessageID)
+        case turnDismissed
         /// `participant` was picked from `@`'s suggestions: the draft is said to them.
         case mentioned(ParticipantSummary)
         /// Return in the message field: picks the suggestion marked while `@` suggests someone,
@@ -209,8 +230,16 @@ struct ChatFeature {
                 state.error = ChatError(code: "add_failed", message: "They couldn't be added. Try again.")
                 return .none
 
-            case .addingDismissed:
-                state.addable = nil
+            case .addingPresented(let presented):
+                if !presented { state.addable = nil }
+                return .none
+
+            case .turnTapped(let id):
+                state.shownTurn = id
+                return .none
+
+            case .turnDismissed:
+                state.shownTurn = nil
                 return .none
 
             case .mentioned(let participant):
@@ -350,6 +379,90 @@ struct ChatFeature {
         guard !state.messages.contains(where: { $0.id == message.id }) else { return }
         state.messages.append(message)
     }
+}
+
+/// A message, as the conversation shows it.
+struct ShownMessage: Equatable, Identifiable {
+    let message: Message
+    /// Who wrote it, when that's a person other than you.
+    let someoneElse: String?
+    /// The agent's turn that made it, when it's a reply of the agent's.
+    let turn: TurnRecord?
+    /// Its turn is shown beside it.
+    let showsTurn: Bool
+
+    var id: MessageID { message.id }
+}
+
+extension TurnRecord {
+    /// What it's shown under: the message it answered.
+    var heading: String { message.isEmpty ? "Turn" : message }
+
+    /// How many tools it called, and how it went: `2 calls · 4.2 s`.
+    var summary: String {
+        let steps = steps.filter { if case .toolCalled = $0.kind { true } else { false } }.count
+        let calls = steps == 1 ? "1 call" : "\(steps) calls"
+        switch outcome {
+        case .running: return "\(calls) · running"
+        case .replied(_, let at): return "\(calls) · \(duration(from: startedAt, to: at))"
+        case .failed(_, let at): return "\(calls) · failed after \(duration(from: startedAt, to: at))"
+        case .cancelled(let at): return "\(calls) · cancelled after \(duration(from: startedAt, to: at))"
+        case .interrupted(let at): return "\(calls) · interrupted after \(duration(from: startedAt, to: at))"
+        }
+    }
+
+    /// Why it failed, when it did.
+    var failure: String? {
+        if case .failed(let reason, _) = outcome { reason } else { nil }
+    }
+}
+
+extension TurnStep {
+    var title: String {
+        switch kind {
+        case .toolCalled(let name, _): name
+        case .toolFinished(let name, _, let failure?): "\(name) failed (\(failure))"
+        case .toolFinished(let name, _, nil): "\(name) answered"
+        case .noticed: "Turgai told the model"
+        }
+    }
+
+    /// What the tool was given, what it answered, or what the model was told.
+    var detail: String {
+        switch kind {
+        case .toolCalled(_, let arguments): arguments
+        case .toolFinished(_, let output, _): output
+        case .noticed(let words): words
+        }
+    }
+
+    /// The symbol it's shown with.
+    var symbol: String {
+        switch kind {
+        case .toolCalled: "arrow.right.circle"
+        case .toolFinished(_, _, .some): "exclamationmark.triangle"
+        case .toolFinished(_, _, nil): "checkmark.circle"
+        case .noticed: "info.circle"
+        }
+    }
+
+    /// A tool it called failed.
+    var failed: Bool {
+        if case .toolFinished(_, _, .some) = kind { true } else { false }
+    }
+
+    /// How long after its turn started it happened: `+850 ms`.
+    func offset(from start: Date) -> String {
+        "+\(duration(from: start, to: at))"
+    }
+}
+
+/// A short duration, such as `850 ms`, `4.2 s` or `3 min 5 s`.
+private func duration(from start: Date, to end: Date) -> String {
+    let seconds = max(end.timeIntervalSince(start), 0)
+    if seconds < 1 { return "\(Int(seconds * 1000)) ms" }
+    if seconds < 60 { return String(format: "%.1f s", seconds) }
+    return "\(Int(seconds) / 60) min \(Int(seconds) % 60) s"
 }
 
 extension ChatEvent {

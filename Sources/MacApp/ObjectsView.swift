@@ -5,15 +5,15 @@ import TurgaiModels
 /// The objects the person may see, live: they appear and leave as they check in with the
 /// cluster and stop.
 struct ObjectsView: View {
-    let store: StoreOf<ObjectsFeature>
+    @Bindable var store: StoreOf<ObjectsFeature>
 
     var body: some View {
         Group {
             switch store.listing {
             case .waiting:
-                placeholder("Waiting for Turgai", "Objects show up once the server has started.")
+                Placeholder(title: "Waiting for Turgai", message: "Objects show up once the server has started.")
             case .live(let rows) where rows.isEmpty:
-                placeholder("No objects yet", "Objects appear here as they join the cluster.")
+                Placeholder(title: "No objects yet", message: "Objects appear here as they join the cluster.")
             case .live(let rows):
                 List(rows) { row in
                     ObjectRowView(row: row)
@@ -26,13 +26,16 @@ struct ObjectsView: View {
         }
         .scrollContentBackground(.hidden)
         .task { store.send(.appeared) }
-        .alert(
-            store.refusal ?? "",
-            isPresented: Binding(get: { store.refusal != nil }, set: { if !$0 { store.send(.refusalDismissed) } })
-        ) {}
+        .alert(store.refusal ?? "", isPresented: $store.isRefused.sending(\.refusalPresented)) {}
     }
+}
 
-    private func placeholder(_ title: String, _ message: String) -> some View {
+/// What the panel says while there are no objects to list.
+private struct Placeholder: View {
+    let title: String
+    let message: String
+
+    var body: some View {
         ContentUnavailableView {
             Label {
                 Text(title)

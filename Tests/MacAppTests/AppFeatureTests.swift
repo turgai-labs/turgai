@@ -252,3 +252,47 @@ struct ChatFeatureTests {
         }
     }
 }
+
+@MainActor
+struct ShownMessageTests {
+    /// A person's message other than yours says who wrote it; an agent's reply has the turn that
+    /// made it, shown beside it once its ⓘ is tapped.
+    @Test
+    func aMessageShowsWhoWroteItAndTheTurnThatMadeIt() {
+        let ann = ParticipantSummary(kind: .person, id: "account-ann", name: "ann")
+        let bob = ParticipantSummary(kind: .person, id: "account-bob", name: "bob")
+        let reply = MessageID(rawValue: UUID(2))
+        let turn = TurnRecord(
+            id: TurnID(rawValue: reply.rawValue), message: "pasta?", startedAt: Date(timeIntervalSince1970: 0))
+        var state = ChatFeature.State(
+            you: "account-ann",
+            messages: [
+                Message(id: MessageID(rawValue: UUID(0)), role: .user, text: "pasta?", author: ann),
+                Message(id: MessageID(rawValue: UUID(1)), role: .user, text: "yes", author: bob),
+                Message(id: reply, role: .assistant, text: "Here's one."),
+            ],
+            turns: [turn])
+
+        #expect(state.shown.map(\.someoneElse) == [nil, "bob", nil])
+        #expect(state.shown.map(\.turn) == [nil, nil, turn])
+        #expect(state.shown.map(\.showsTurn) == [false, false, false])
+        state.shownTurn = reply
+        #expect(state.shown.map(\.showsTurn) == [false, false, true])
+    }
+}
+
+struct ScreenTests {
+    /// The chat once the server is ready and someone is signed in; a card before.
+    @Test
+    func theWindowShowsTheChatOnlyWhenReadyAndSignedIn() {
+        let session = Session(token: "t", expiresAt: Date(timeIntervalSince1970: 0))
+        var state = AppFeature.State(connection: .setupPending, account: .signedIn(session))
+        #expect(state.screen == .card(.waiting(.setupPending)))
+        state.connection = .ready
+        #expect(state.screen == .chat(session))
+        state.account = .unknown
+        #expect(state.screen == .card(.waiting(.checking)))
+        state.account = .signedOut
+        #expect(state.screen == .card(.login))
+    }
+}

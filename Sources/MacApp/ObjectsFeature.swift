@@ -110,6 +110,8 @@ struct ObjectsFeature {
         var listing = Listing.waiting
         /// Why sharing an object was refused, while it's shown.
         var refusal: String?
+
+        var isRefused: Bool { refusal != nil }
     }
 
     enum Action {
@@ -119,7 +121,8 @@ struct ObjectsFeature {
         /// Share an object made here with everyone, as far as asked, or take that back.
         case share(MadeObjectID, ObjectSharing)
         case shareRefused
-        case refusalDismissed
+        /// The refusal's alert: `false` once it's closed.
+        case refusalPresented(Bool)
     }
 
     @Dependency(\.objects) var objects
@@ -154,8 +157,8 @@ struct ObjectsFeature {
                 state.refusal = "Only someone who may change it can share it."
                 return .none
 
-            case .refusalDismissed:
-                state.refusal = nil
+            case .refusalPresented(let presented):
+                if !presented { state.refusal = nil }
                 return .none
             }
         }

@@ -55,6 +55,6 @@ struct ObjectsFeatureTests {
 
         await store.send(.share(MadeObjectID(rawValue: "tally"), .read))
         await store.receive(\.shareRefused) { $0.refusal = "Only someone who may change it can share it." }
-        await store.send(.refusalDismissed) { $0.refusal = nil }
+        await store.send(.refusalPresented(false)) { $0.refusal = nil }
     }
 }

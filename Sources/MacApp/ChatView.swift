@@ -13,19 +13,14 @@ struct ChatView: View {
     private var state: ChatFeature.State { store.state }
 
     var body: some View {
-        ScrollViewReader { reader in
-            ScrollView {
-                MessageList(
-                    messages: state.messages, you: state.you, turns: state.turns, pending: state.pending,
-                    turn: state.turn)
-            }
-            // The messages run under the floating composer, softened at the edge.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                BottomBar(store: store)
-            }
-            .onChange(of: state.messages.last?.id) { scrollToEnd(reader) }
-            .onChange(of: state.pending.last?.id) { scrollToEnd(reader) }
-            .onChange(of: state.turn) { scrollToEnd(reader) }
+        ScrollView {
+            MessageList(store: store)
+        }
+        // What's new keeps the end in view, and a short conversation sits at the bottom.
+        .defaultScrollAnchor(.bottom)
+        // The messages run under the floating composer, softened at the edge.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            BottomBar(store: store)
         }
         .background(Color.turgaiCanvas)
         .toolbar {
@@ -48,23 +43,9 @@ struct ChatView: View {
             })
         .task(id: session) { store.send(.connect(session)) }
         .onDisappear { store.send(.disconnect) }
-        .sheet(
-            isPresented: Binding(get: { state.addable != nil }, set: { if !$0 { store.send(.addingDismissed) } })
-        ) {
+        .sheet(isPresented: $store.isAddingPeople.sending(\.addingPresented)) {
             AddPeopleSheet(people: state.addable ?? [], add: { store.send(.addTapped($0)) }) {
-                store.send(.addingDismissed)
-            }
-        }
-    }
-
-    private func scrollToEnd(_ reader: ScrollViewProxy) {
-        withAnimation(.smooth) {
-            if state.turn != nil {
-                reader.scrollTo("turn", anchor: .bottom)
-            } else if let last = state.pending.last {
-                reader.scrollTo(last.id, anchor: .bottom)
-            } else if let last = state.messages.last {
-                reader.scrollTo(last.id, anchor: .bottom)
+                store.send(.addingPresented(false))
             }
         }
     }
@@ -288,29 +269,20 @@ private struct ParticipantIcon: View {
 
 /// The conversation: what was said, what's sent but not yet taken, and the turn running now.
 private struct MessageList: View {
-    let messages: [Message]
-    /// The id of the person this app is.
-    let you: String?
-    /// The agent's turns: a reply's is the one with its id.
-    let turns: IdentifiedArrayOf<TurnRecord>
-    let pending: [SendMessageRequest]
-    let turn: ChatFeature.Turn?
+    let store: StoreOf<ChatFeature>
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 12) {
-            ForEach(messages) { (message: Message) in
+            ForEach(store.shown) { (shown: ShownMessage) in
                 MessageRow(
-                    message: message,
-                    someoneElse: message.author.flatMap { $0.kind == .person && $0.id != you ? $0.name : nil },
-                    turn: message.role == .assistant ? turns[id: TurnID(rawValue: message.id.rawValue)] : nil
-                )
-                .id(message.id)
+                    shown: shown, showTurn: { store.send(.turnTapped(shown.id)) },
+                    dismissTurn: { store.send(.turnDismissed) })
             }
-            ForEach(pending) { (request: SendMessageRequest) in
-                Bubble(role: .user, text: request.text).opacity(0.55).id(request.id)
+            ForEach(store.pending) { (request: SendMessageRequest) in
+                Bubble(role: .user, text: request.text).opacity(0.55)
             }
-            if let turn {
-                TurnView(turn: turn).id("turn")
+            if let turn = store.turn {
+                TurnView(turn: turn)
             }
         }
         .padding(.horizontal, 24)
@@ -392,26 +364,28 @@ private struct AddPeopleSheet: View {
 
 /// A message, and for a reply of the agent's, ⓘ beside it that shows the turn that made it.
 private struct MessageRow: View {
-    let message: Message
-    let someoneElse: String?
-    let turn: TurnRecord?
-    @State private var showsTurn = false
+    let shown: ShownMessage
+    let showTurn: () -> Void
+    let dismissTurn: () -> Void
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
-            Bubble(role: message.role, text: message.text, someoneElse: someoneElse)
-            if let turn {
-                Button {
-                    showsTurn = true
-                } label: {
+            Bubble(role: shown.message.role, text: shown.message.text, someoneElse: shown.someoneElse)
+            if let turn = shown.turn {
+                Button(action: showTurn) {
                     Image(systemName: "info.circle")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(Color.turgaiMuted)
                 .help("What the agent did for this")
-                .popover(isPresented: $showsTurn, arrowEdge: .trailing) { TurnStepsView(turn: turn) }
+                // Only closing it changes it from here.
+                .popover(
+                    isPresented: Binding(get: { shown.showsTurn }, set: { _ in dismissTurn() }), arrowEdge: .trailing
+                ) {
+                    TurnStepsView(turn: turn)
+                }
             }
         }
-        .frame(maxWidth: .infinity, alignment: message.role == .assistant ? .leading : .trailing)
+        .frame(maxWidth: .infinity, alignment: shown.message.role == .assistant ? .leading : .trailing)
     }
 }

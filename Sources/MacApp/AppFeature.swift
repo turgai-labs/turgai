@@ -11,6 +11,25 @@ struct AppFeature {
         /// The server runs, but onboarding hasn't finished.
         case setupPending
         case ready
+
+        /// What the waiting card says first.
+        var title: String {
+            switch self {
+            case .checking: "Looking for Turgai"
+            case .unreachable: "Turgai is starting"
+            case .setupPending, .ready: "Almost there"
+            }
+        }
+
+        /// What the waiting card says next.
+        var message: String {
+            switch self {
+            case .checking: "One moment."
+            case .unreachable: "I'll open the chat as soon as it answers. If it stopped, the menu bar says why."
+            case .setupPending, .ready:
+                "Finish setting up in your browser: an account, a model, and storage. I'll open the chat when you're done."
+            }
+        }
     }
 
     enum Account: Equatable, Sendable {
@@ -41,6 +60,17 @@ struct AppFeature {
             /// The server refused a registration that passed the rules below.
             case usernameUnavailable
             case unavailable(String)
+
+            var text: String {
+                switch self {
+                case .sessionEnded: "Your session ended. Sign in again."
+                case .invalidCredentials: "That username and password didn't match."
+                case .invalidUsername: "Choose a username of 3 to 64 letters, numbers, dots, dashes, or underscores."
+                case .weakPassword: "Choose a password with at least 12 characters."
+                case .usernameUnavailable: "Turgai couldn't create that account. The username may be taken."
+                case .unavailable(let reason): "Turgai didn't answer (\(reason)). Try again in a moment."
+                }
+            }
         }
 
         var mode = Mode.signIn
@@ -48,6 +78,35 @@ struct AppFeature {
         var password = ""
         var progress = Progress.editing
         var notice: Notice?
+
+        /// What the form is called, and what its button says.
+        var title: String {
+            switch mode {
+            case .signIn: "Sign in"
+            case .register: "Create account"
+            }
+        }
+
+        /// The mode the form switches to.
+        var otherMode: Mode {
+            switch mode {
+            case .signIn: .register
+            case .register: .signIn
+            }
+        }
+
+        /// What the button that switches the mode says.
+        var switchPrompt: String {
+            switch mode {
+            case .signIn: "Create an account"
+            case .register: "I have an account"
+            }
+        }
+
+        var isSubmitting: Bool { progress == .submitting }
+
+        /// Both a username and a password are typed.
+        var isFilled: Bool { !username.isEmpty && !password.isEmpty }
 
         /// What the server would refuse in a registration, checked first so the message is precise.
         /// Mirrors `TurgaiAuth`'s rules; keep them in step.
@@ -64,6 +123,17 @@ struct AppFeature {
         }
     }
 
+    /// What the window shows: the chat, or a card before it.
+    enum Screen: Equatable {
+        case card(Card)
+        case chat(Session)
+    }
+
+    enum Card: Equatable {
+        case waiting(Connection)
+        case login
+    }
+
     @ObservableState
     struct State: Equatable {
         var connection = Connection.checking
@@ -71,9 +141,19 @@ struct AppFeature {
         var login = LoginForm()
         var sidebar = SidebarFeature.State()
         var chat = ChatFeature.State()
+        var objects = ObjectsFeature.State()
         /// The window's panels: the conversations on the left, the objects on the right.
         var showsSidebar = true
         var showsObjects = false
+
+        var screen: Screen {
+            switch (connection, account) {
+            case (.ready, .signedIn(let session)): .chat(session)
+            case (.ready, .signedOut): .card(.login)
+            case (.ready, .unknown): .card(.waiting(.checking))
+            case (let connection, _): .card(.waiting(connection))
+            }
+        }
     }
 
     enum Action: BindableAction {
@@ -90,6 +170,7 @@ struct AppFeature {
         case sessionExpired(Session)
         case sidebar(SidebarFeature.Action)
         case chat(ChatFeature.Action)
+        case objects(ObjectsFeature.Action)
         case sidebarToggled
         case objectsToggled
     }
@@ -110,6 +191,9 @@ struct AppFeature {
         Scope(state: \.chat, action: \.chat) {
             ChatFeature()
         }
+        Scope(state: \.objects, action: \.objects) {
+            ObjectsFeature()
+        }
         Reduce { state, action in
             switch action {
             // The sidebar says what the chat shows; the chat's connection says how the sidebar changes.
@@ -120,7 +204,7 @@ struct AppFeature {
             case .chat(.delegate(.conversationLeft(let id))):
                 return .send(.sidebar(.conversationLeft(id)))
 
-            case .binding, .sidebar, .chat:
+            case .binding, .sidebar, .chat, .objects:
                 return .none
 
             case .sidebarToggled:

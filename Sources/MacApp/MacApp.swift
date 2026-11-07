@@ -6,13 +6,21 @@ import SwiftUI
 /// with a window for the person's conversations and the live objects beside them. The app bundle and its
 /// `@main` entry point live in `Clients/Mac`.
 public struct TurgaiScenes: Scene {
-    @State private var runtime = Runtime()
-    /// The app's state: the window's sidebar, and its conversation on the one connection.
-    @State private var app = Store(initialState: AppFeature.State()) {
-        AppFeature()
-    }
+    @State private var runtime: Runtime
+    /// The app's state: the window's sidebar, its conversation on the one connection, and the
+    /// runtime's objects.
+    @State private var app: StoreOf<AppFeature>
 
-    public init() {}
+    public init() {
+        let runtime = Runtime()
+        _runtime = State(initialValue: runtime)
+        _app = State(
+            initialValue: Store(initialState: AppFeature.State()) {
+                AppFeature()
+            } withDependencies: {
+                $0.objects = runtime.objects
+            })
+    }
 
     public var body: some Scene {
         MenuBarExtra {
@@ -22,7 +30,7 @@ public struct TurgaiScenes: Scene {
         }
 
         Window("Turgai", id: WindowID.chat) {
-            RootView(store: app, objects: runtime.objects)
+            RootView(store: app)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 960, height: 720)

@@ -8,23 +8,11 @@ import TurgaiModels
 struct MainWindow: View {
     let session: Session
     @Bindable var store: StoreOf<AppFeature>
-    @State private var objects: StoreOf<ObjectsFeature>
 
     private static let sidebarWidth: CGFloat = 250
     private static let objectsWidth: CGFloat = 300
     /// Between a panel and the window's edge, and between a panel and the conversation.
     private static let gap: CGFloat = 10
-
-    init(session: Session, store: StoreOf<AppFeature>, objects: ObjectsClient) {
-        self.session = session
-        self.store = store
-        _objects = State(
-            initialValue: Store(initialState: ObjectsFeature.State()) {
-                ObjectsFeature()
-            } withDependencies: {
-                $0.objects = objects
-            })
-    }
 
     var body: some View {
         ZStack {
@@ -43,8 +31,10 @@ struct MainWindow: View {
                 }
                 Spacer(minLength: 0)
                 if store.showsObjects {
-                    FloatingPanel(width: Self.objectsWidth) { ObjectsView(store: objects) }
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                    FloatingPanel(width: Self.objectsWidth) {
+                        ObjectsView(store: store.scope(state: \.objects, action: \.objects))
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
             .padding(Self.gap)

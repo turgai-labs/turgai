@@ -3,50 +3,33 @@ import SwiftUI
 
 struct RootView: View {
     @Bindable var store: StoreOf<AppFeature>
-    /// The live objects, for the window's objects panel.
-    let objects: ObjectsClient
 
     var body: some View {
         // One background, and one card on it whose content changes, so a new screen reshapes
         // the card instead of tearing it down and building another.
         ZStack {
             ColorField()
-            switch screen {
+            switch store.screen {
             case .chat(let session):
-                MainWindow(session: session, store: store, objects: objects)
+                MainWindow(session: session, store: store)
                     .transition(.opacity)
             case .card(let card):
-                self.card(card)
+                CardView(card: card, store: store)
                     .transition(.opacity)
             }
         }
-        .animation(.smooth, value: screen)
+        .animation(.smooth, value: store.screen)
         .frame(minWidth: 640, minHeight: 480)
         .task { store.send(.appeared) }
     }
+}
 
-    /// What the window shows: the chat, or a card before it.
-    private enum Screen: Equatable {
-        case card(Card)
-        case chat(Session)
-    }
+/// The glass card for the screens before the chat.
+private struct CardView: View {
+    let card: AppFeature.Card
+    let store: StoreOf<AppFeature>
 
-    private enum Card: Equatable {
-        case waiting(AppFeature.Connection)
-        case login
-    }
-
-    private var screen: Screen {
-        switch (store.connection, store.account) {
-        case (.ready, .signedIn(let session)): .chat(session)
-        case (.ready, .signedOut): .card(.login)
-        case (.ready, .unknown): .card(.waiting(.checking))
-        case (let connection, _): .card(.waiting(connection))
-        }
-    }
-
-    /// The glass card for the screens before the chat.
-    private func card(_ card: Card) -> some View {
+    var body: some View {
         Group {
             switch card {
             case .waiting(let connection):
@@ -75,12 +58,12 @@ struct LoginView: View {
                 .scaledToFit()
                 .frame(width: 56, height: 56)
                 .foregroundStyle(Color.turgaiAccent)
-            Text(title)
+            Text(form.title)
                 .font(.system(size: 40, weight: .heavy))
                 .foregroundStyle(Color.turgaiInk)
                 .contentTransition(.opacity)
-            if let notice {
-                Text(notice)
+            if let notice = form.notice {
+                Text(notice.text)
                     .font(.callout)
                     .foregroundStyle(Color.turgaiAccent)
                     .fixedSize(horizontal: false, vertical: true)
@@ -91,45 +74,12 @@ struct LoginView: View {
                 store.send(.submitTapped)
             }
             LoginActions(
-                title: title, switchPrompt: switchPrompt, isSubmitting: form.progress == .submitting,
-                isFilled: !form.username.isEmpty && !form.password.isEmpty,
-                submit: { store.send(.submitTapped) }, switchMode: { store.send(.modeChanged(otherMode)) })
+                title: form.title, switchPrompt: form.switchPrompt, isSubmitting: form.isSubmitting,
+                isFilled: form.isFilled,
+                submit: { store.send(.submitTapped) }, switchMode: { store.send(.modeChanged(form.otherMode)) })
         }
         .frame(maxWidth: 360, alignment: .leading)
         .animation(.smooth, value: form.mode)
-    }
-
-    private var title: String {
-        switch form.mode {
-        case .signIn: "Sign in"
-        case .register: "Create account"
-        }
-    }
-
-    private var otherMode: AppFeature.LoginForm.Mode {
-        switch form.mode {
-        case .signIn: .register
-        case .register: .signIn
-        }
-    }
-
-    private var switchPrompt: String {
-        switch form.mode {
-        case .signIn: "Create an account"
-        case .register: "I have an account"
-        }
-    }
-
-    private var notice: String? {
-        switch form.notice {
-        case .sessionEnded: "Your session ended. Sign in again."
-        case .invalidCredentials: "That username and password didn't match."
-        case .invalidUsername: "Choose a username of 3 to 64 letters, numbers, dots, dashes, or underscores."
-        case .weakPassword: "Choose a password with at least 12 characters."
-        case .usernameUnavailable: "Turgai couldn't create that account. The username may be taken."
-        case .unavailable(let reason): "Turgai didn't answer (\(reason)). Try again in a moment."
-        case nil: nil
-        }
     }
 }
 
@@ -145,50 +95,30 @@ struct WaitingView: View {
                 .scaledToFit()
                 .frame(width: 56, height: 56)
                 .foregroundStyle(Color.turgaiAccent)
-            Text(title)
+            Text(connection.title)
                 .font(.system(size: 40, weight: .heavy))
                 .foregroundStyle(Color.turgaiInk)
                 .contentTransition(.opacity)
-            Text(message)
+            Text(connection.message)
                 .font(.title3)
                 .foregroundStyle(Color.turgaiMuted)
                 .fixedSize(horizontal: false, vertical: true)
                 .contentTransition(.opacity)
-            nextStep
-                .transition(.blurReplace)
+            Group {
+                switch connection {
+                case .checking, .unreachable:
+                    ProgressView()
+                        .controlSize(.small)
+                case .setupPending, .ready:
+                    Button("Open setup") { send(.openSetupTapped) }
+                        .buttonStyle(.glassProminent)
+                        .tint(.turgaiAccent)
+                        .controlSize(.large)
+                }
+            }
+            .transition(.blurReplace)
         }
         .frame(maxWidth: 420, alignment: .leading)
-    }
-
-    private var title: String {
-        switch connection {
-        case .checking: "Looking for Turgai"
-        case .unreachable: "Turgai is starting"
-        case .setupPending, .ready: "Almost there"
-        }
-    }
-
-    private var message: String {
-        switch connection {
-        case .checking: "One moment."
-        case .unreachable: "I'll open the chat as soon as it answers. If it stopped, the menu bar says why."
-        case .setupPending, .ready:
-            "Finish setting up in your browser: an account, a model, and storage. I'll open the chat when you're done."
-        }
-    }
-
-    @ViewBuilder
-    private var nextStep: some View {
-        switch connection {
-        case .checking, .unreachable:
-            ProgressView()
-                .controlSize(.small)
-        case .setupPending, .ready:
-            Button("Open setup") { send(.openSetupTapped) }
-                .buttonStyle(.glassProminent)
-                .tint(.turgaiAccent)
-                .controlSize(.large)
-        }
     }
 }
 
