@@ -24,6 +24,11 @@ struct SidebarFeature {
         var selected: ConversationID?
         /// What went wrong reading or starting conversations, when something did.
         var error: String?
+
+        /// What the open conversation is called.
+        var openTitle: String {
+            selected.flatMap { conversations[id: $0]?.title } ?? "New conversation"
+        }
     }
 
     enum Action {

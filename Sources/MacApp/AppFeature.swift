@@ -71,6 +71,9 @@ struct AppFeature {
         var login = LoginForm()
         var sidebar = SidebarFeature.State()
         var chat = ChatFeature.State()
+        /// The window's panels: the conversations on the left, the objects on the right.
+        var showsSidebar = true
+        var showsObjects = false
     }
 
     enum Action: BindableAction {
@@ -87,6 +90,8 @@ struct AppFeature {
         case sessionExpired(Session)
         case sidebar(SidebarFeature.Action)
         case chat(ChatFeature.Action)
+        case sidebarToggled
+        case objectsToggled
     }
 
     private enum CancelID { case expiry }
@@ -116,6 +121,14 @@ struct AppFeature {
                 return .send(.sidebar(.conversationLeft(id)))
 
             case .binding, .sidebar, .chat:
+                return .none
+
+            case .sidebarToggled:
+                state.showsSidebar.toggle()
+                return .none
+
+            case .objectsToggled:
+                state.showsObjects.toggle()
                 return .none
 
             case .appeared:

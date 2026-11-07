@@ -184,4 +184,44 @@ struct MentionTests {
         }
         #expect(sent.value == [.message(request)])
     }
+
+    /// ↑ and ↓ move the mark round the suggestions; Return picks the one marked while someone is
+    /// suggested, and sends otherwise.
+    @Test
+    func returnPicksTheMarkedSuggestionOrSends() async {
+        let sent = LockIsolated<[ChatCommand]>([])
+        let bob = ParticipantSummary(kind: .person, id: "account-bob", name: "bob")
+        let bea = ParticipantSummary(kind: .person, id: "account-bea", name: "bea")
+        let store = TestStore(
+            initialState: ChatFeature.State(
+                connection: .connected(botID: BotID(rawValue: "conversation")),
+                conversationID: ConversationID(rawValue: "dinner"), participants: [bob, bea])
+        ) {
+            ChatFeature()
+        } withDependencies: {
+            $0.chat.send = { command in sent.withValue { $0.append(command) } }
+            $0.uuid = .incrementing
+        }
+
+        await store.send(.binding(.set(\.draft, "@b"))) { $0.draft = "@b" }
+        #expect(store.state.picked == bob)
+        await store.send(.markMoved(by: 1)) { $0.marked = bea }
+        await store.send(.markMoved(by: 1)) { $0.marked = bob }
+        await store.send(.markMoved(by: -1)) { $0.marked = bea }
+        await store.send(.submitted) {
+            $0.draft = "@bea "
+            $0.to = [bea]
+            $0.marked = nil
+        }
+        #expect(sent.value.isEmpty)
+
+        let request = SendMessageRequest(
+            id: MessageID(rawValue: UUID(0)), text: "@bea", to: [ParticipantRef(kind: .person, id: "account-bea")])
+        await store.send(.submitted) {
+            $0.draft = ""
+            $0.to = []
+            $0.pending = [request]
+        }
+        #expect(sent.value == [.message(request)])
+    }
 }

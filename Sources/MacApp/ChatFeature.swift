@@ -50,6 +50,21 @@ struct ChatFeature {
         /// The agent's turns, step by step: the past ones, then each new one as it runs.
         var turns: IdentifiedArrayOf<TurnRecord> = []
 
+        /// The suggestion ↑ or ↓ last marked: none until one does.
+        var marked: ParticipantSummary?
+
+        /// Something's typed, and there's a connection to send it on.
+        var canSend: Bool {
+            guard case .connected = connection else { return false }
+            return !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
+        /// The suggestion Return or Tab picks: the one marked, while it's still suggested, or else
+        /// the first; none while `@` suggests no one.
+        var picked: ParticipantSummary? {
+            suggestions.first { $0 == marked } ?? suggestions.first
+        }
+
         /// Who the `@` being typed could be: the participants, but you, whose name starts with
         /// what's typed after it.
         var suggestions: [ParticipantSummary] {
@@ -80,6 +95,11 @@ struct ChatFeature {
         case addingDismissed
         /// `participant` was picked from `@`'s suggestions: the draft is said to them.
         case mentioned(ParticipantSummary)
+        /// Return in the message field: picks the suggestion marked while `@` suggests someone,
+        /// sends the draft otherwise.
+        case submitted
+        /// ↑ or ↓ while `@` suggests someone: the mark moves `step` suggestions, round the list.
+        case markMoved(by: Int)
         case disconnect
         case received(ChatEvent)
         case closed(why: String)
@@ -194,10 +214,18 @@ struct ChatFeature {
                 return .none
 
             case .mentioned(let participant):
-                // What's typed after `@` becomes their name.
-                if let typed = state.typedMention { state.draft.removeSubrange(typed.startIndex...) }
-                state.draft += "@\(participant.name) "
-                if !state.to.contains(participant) { state.to.append(participant) }
+                mention(participant, in: &state)
+                return .none
+
+            case .submitted:
+                guard let picked = state.picked else { return send(&state) }
+                mention(picked, in: &state)
+                return .none
+
+            case .markMoved(let step):
+                let suggestions = state.suggestions
+                guard let picked = state.picked, let at = suggestions.firstIndex(of: picked) else { return .none }
+                state.marked = suggestions[(at + step + suggestions.count) % suggestions.count]
                 return .none
 
             case .received(let event):
@@ -216,24 +244,7 @@ struct ChatFeature {
                 }
 
             case .sendTapped:
-                let text = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty, case .connected = state.connection else { return .none }
-                // Said to whoever `@` picked whose name is still in it.
-                let to = state.to.filter { text.contains("@\($0.name)") }
-                    .map { ParticipantRef(kind: $0.kind, id: $0.id) }
-                // The client-generated ID lets the conversation reject a duplicated delivery.
-                let request = SendMessageRequest(id: MessageID(rawValue: uuid()), text: text, to: to)
-                state.draft = ""
-                state.to = []
-                state.error = nil
-                state.pending.append(request)
-                return .run { send in
-                    do {
-                        try await chat.send(.message(request))
-                    } catch {
-                        await send(.sendFailed(request))
-                    }
-                }
+                return send(&state)
 
             case .accessAnswered(let id, let answer):
                 guard state.accessRequests.remove(id: id) != nil else { return .none }
@@ -247,6 +258,35 @@ struct ChatFeature {
                 if state.draft.isEmpty { state.draft = request.text }
                 state.error = ChatError(code: "send_failed", message: "That message didn't go through. Try again.")
                 return .none
+            }
+        }
+    }
+
+    /// What's typed after `@` becomes `participant`'s name, and the draft is said to them.
+    private func mention(_ participant: ParticipantSummary, in state: inout State) {
+        if let typed = state.typedMention { state.draft.removeSubrange(typed.startIndex...) }
+        state.draft += "@\(participant.name) "
+        if !state.to.contains(participant) { state.to.append(participant) }
+        state.marked = nil
+    }
+
+    /// The draft, sent to whoever was picked from `@`'s suggestions and whose name is still in it.
+    private func send(_ state: inout State) -> Effect<Action> {
+        guard state.canSend else { return .none }
+        let text = state.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let to = state.to.filter { text.contains("@\($0.name)") }
+            .map { ParticipantRef(kind: $0.kind, id: $0.id) }
+        // The client-generated ID lets the conversation reject a duplicated delivery.
+        let request = SendMessageRequest(id: MessageID(rawValue: uuid()), text: text, to: to)
+        state.draft = ""
+        state.to = []
+        state.error = nil
+        state.pending.append(request)
+        return .run { send in
+            do {
+                try await chat.send(.message(request))
+            } catch {
+                await send(.sendFailed(request))
             }
         }
     }

@@ -21,12 +21,7 @@ struct ChatView: View {
             }
             // The messages run under the floating composer, softened at the edge.
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                BottomBar(
-                    error: state.error, draft: $store.draft, isConnected: isConnected,
-                    suggestions: state.suggestions, mention: { store.send(.mentioned($0)) }
-                ) {
-                    store.send(.sendTapped)
-                }
+                BottomBar(store: store)
             }
             .onChange(of: state.messages.last?.id) { scrollToEnd(reader) }
             .onChange(of: state.pending.last?.id) { scrollToEnd(reader) }
@@ -34,7 +29,10 @@ struct ChatView: View {
         }
         .background(Color.turgaiCanvas)
         .toolbar {
-            ToolbarItem(placement: .principal) { header }
+            ToolbarItem(placement: .principal) {
+                ConversationHeader(
+                    title: title, participants: state.participants.map(\.name), connection: state.connection)
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     store.send(.addPeopleTapped)
@@ -59,13 +57,27 @@ struct ChatView: View {
         }
     }
 
-    private var isConnected: Bool {
-        if case .connected = state.connection { true } else { false }
+    private func scrollToEnd(_ reader: ScrollViewProxy) {
+        withAnimation(.smooth) {
+            if state.turn != nil {
+                reader.scrollTo("turn", anchor: .bottom)
+            } else if let last = state.pending.last {
+                reader.scrollTo(last.id, anchor: .bottom)
+            } else if let last = state.messages.last {
+                reader.scrollTo(last.id, anchor: .bottom)
+            }
+        }
     }
+}
 
-    /// The toolbar's middle: the mark, the name, and the connection; under them, who's in the
-    /// conversation.
-    private var header: some View {
+/// The toolbar's middle: the mark, the conversation's name, and the connection; under them, who's
+/// in the conversation.
+private struct ConversationHeader: View {
+    let title: String
+    let participants: [String]
+    let connection: ChatFeature.Connection
+
+    var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image.skylark
@@ -82,7 +94,7 @@ struct ChatView: View {
                     .frame(width: 6, height: 6)
                     .help(connectionHelp)
             }
-            Text(state.participants.map(\.name).joined(separator: ", "))
+            Text(participants.joined(separator: ", "))
                 .font(.caption)
                 .foregroundStyle(Color.turgaiMuted)
                 .lineLimit(1)
@@ -91,7 +103,7 @@ struct ChatView: View {
     }
 
     private var connectionColor: Color {
-        switch state.connection {
+        switch connection {
         case .connected: .signalBlue
         case .connecting: .signalYellow
         case .disconnected: .signalCoral
@@ -99,22 +111,10 @@ struct ChatView: View {
     }
 
     private var connectionHelp: String {
-        switch state.connection {
+        switch connection {
         case .connected: "Connected"
         case .connecting: "Connecting…"
         case .disconnected(let why): "Reconnecting… \(why)"
-        }
-    }
-
-    private func scrollToEnd(_ reader: ScrollViewProxy) {
-        withAnimation(.smooth) {
-            if state.turn != nil {
-                reader.scrollTo("turn", anchor: .bottom)
-            } else if let last = state.pending.last {
-                reader.scrollTo(last.id, anchor: .bottom)
-            } else if let last = state.messages.last {
-                reader.scrollTo(last.id, anchor: .bottom)
-            }
         }
     }
 }
@@ -192,66 +192,46 @@ private struct TurnView: View {
 
 /// The message field and its send button; above them, while an `@` is typed, who it could be.
 private struct Composer: View {
-    @Binding var draft: String
-    let isConnected: Bool
-    /// Who the `@` being typed could be.
-    let suggestions: [ParticipantSummary]
-    let mention: (ParticipantSummary) -> Void
-    let send: () -> Void
-    /// The suggestion Return or Tab picks, moved by ↑ and ↓.
-    @State private var highlighted = 0
+    @Bindable var store: StoreOf<ChatFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !suggestions.isEmpty {
-                Suggestions(suggestions: suggestions, highlighted: highlighted, pick: mention)
+            if !store.suggestions.isEmpty {
+                Suggestions(suggestions: store.suggestions, picked: store.picked) { store.send(.mentioned($0)) }
             }
-            field
-        }
-        .onChange(of: suggestions) { highlighted = 0 }
-    }
-
-    private var field: some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack(alignment: .bottom, spacing: 12) {
-                TextField("Message Turgai", text: $draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...8)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 22))
-                    .onSubmit {
-                        if let picked { mention(picked) } else { send() }
+            GlassEffectContainer(spacing: 12) {
+                HStack(alignment: .bottom, spacing: 12) {
+                    TextField("Message Turgai", text: $store.draft, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .lineLimit(1...8)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                        .onSubmit { store.send(.submitted) }
+                        // The keys are the suggestions' while there are some, the field's otherwise.
+                        .onKeyPress(.downArrow) { suggestionsKey(.markMoved(by: 1)) }
+                        .onKeyPress(.upArrow) { suggestionsKey(.markMoved(by: -1)) }
+                        .onKeyPress(.tab) { suggestionsKey(.submitted) }
+                    Button {
+                        store.send(.sendTapped)
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 16, weight: .bold))
+                            .frame(width: 28, height: 28)
                     }
-                    .onKeyPress(.downArrow) { move(by: 1) }
-                    .onKeyPress(.upArrow) { move(by: -1) }
-                    .onKeyPress(.tab) {
-                        guard let picked else { return .ignored }
-                        mention(picked)
-                        return .handled
-                    }
-                Button(action: send) {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 16, weight: .bold))
-                        .frame(width: 28, height: 28)
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.circle)
+                    .tint(.turgaiAccent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(!store.canSend)
                 }
-                .buttonStyle(.glassProminent)
-                .buttonBorderShape(.circle)
-                .tint(.turgaiAccent)
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(!isConnected || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }
 
-    /// The suggestion Return or Tab would pick: none when there are none.
-    private var picked: ParticipantSummary? {
-        suggestions.isEmpty ? nil : suggestions[min(highlighted, suggestions.count - 1)]
-    }
-
-    private func move(by step: Int) -> KeyPress.Result {
-        guard !suggestions.isEmpty else { return .ignored }
-        highlighted = (highlighted + step + suggestions.count) % suggestions.count
+    private func suggestionsKey(_ action: ChatFeature.Action) -> KeyPress.Result {
+        guard store.picked != nil else { return .ignored }
+        store.send(action)
         return .handled
     }
 }
@@ -259,26 +239,25 @@ private struct Composer: View {
 /// Who the `@` being typed could be, the one Return picks marked: a click picks any.
 private struct Suggestions: View {
     let suggestions: [ParticipantSummary]
-    let highlighted: Int
+    /// The one Return picks.
+    let picked: ParticipantSummary?
     let pick: (ParticipantSummary) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, participant in
+            ForEach(suggestions, id: \.id) { (participant: ParticipantSummary) in
                 Button {
                     pick(participant)
                 } label: {
                     HStack(spacing: 8) {
-                        icon(of: participant)
-                            .frame(width: 16, height: 16)
-                            .foregroundStyle(Color.turgaiAccent)
+                        ParticipantIcon(kind: participant.kind)
                         Text(participant.name).foregroundStyle(Color.turgaiInk)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(
-                        index == highlighted ? Color.turgaiAccent.opacity(0.15) : .clear, in: .rect(cornerRadius: 10)
+                        participant == picked ? Color.turgaiAccent.opacity(0.15) : .clear, in: .rect(cornerRadius: 10)
                     )
                     .contentShape(.rect)
                 }
@@ -289,13 +268,21 @@ private struct Suggestions: View {
         .frame(maxWidth: 280)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
+}
 
-    @ViewBuilder
-    private func icon(of participant: ParticipantSummary) -> some View {
-        switch participant.kind {
-        case .agent: Image.skylark.resizable().scaledToFit()
-        case .person: Image(systemName: "person.fill")
+/// The skylark for an agent, a figure for a person.
+private struct ParticipantIcon: View {
+    let kind: ParticipantSummary.Kind
+
+    var body: some View {
+        Group {
+            switch kind {
+            case .agent: Image.skylark.resizable().scaledToFit()
+            case .person: Image(systemName: "person.fill")
+            }
         }
+        .frame(width: 16, height: 16)
+        .foregroundStyle(Color.turgaiAccent)
     }
 }
 
@@ -333,16 +320,11 @@ private struct MessageList: View {
 
 /// The composer, and what went wrong above it if something did. Typing changes only this.
 private struct BottomBar: View {
-    let error: ChatError?
-    @Binding var draft: String
-    let isConnected: Bool
-    let suggestions: [ParticipantSummary]
-    let mention: (ParticipantSummary) -> Void
-    let send: () -> Void
+    let store: StoreOf<ChatFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let error {
+            if let error = store.error {
                 Text(error.message)
                     .font(.callout)
                     .foregroundStyle(Color.turgaiAccent)
@@ -350,7 +332,7 @@ private struct BottomBar: View {
                     .padding(.vertical, 8)
                     .glassEffect(.regular, in: .capsule)
             }
-            Composer(draft: $draft, isConnected: isConnected, suggestions: suggestions, mention: mention, send: send)
+            Composer(store: store)
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 20)
