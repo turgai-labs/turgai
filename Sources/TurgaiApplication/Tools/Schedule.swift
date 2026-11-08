@@ -134,7 +134,7 @@ extension WhenDue {
                 text: instruction, receivedAt: Date())
             try await chat.send(
                 message, turnID: TurgaiDomain.TurnID(rawValue: turgaiDeterministicUUID("turn:\(workflow.rawValue)")),
-                configuration: Conversation.TurnConfiguration(memoryExtraction: nil))
+                configuration: Conversation.TurnConfiguration(agentModel: nil))
         }
     }
 }

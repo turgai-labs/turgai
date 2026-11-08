@@ -301,10 +301,11 @@ public distributed actor Conversation {
     /// the send boundary so a new turn cannot silently inherit a previous
     /// runtime choice.
     public struct TurnConfiguration: Codable, Sendable {
-        public let memoryExtraction: MemoryExtractionConfiguration?
+        /// The answering agent's model, for the work after the turn.
+        public let agentModel: AgentModelSnapshot?
 
-        public init(memoryExtraction: MemoryExtractionConfiguration?) {
-            self.memoryExtraction = memoryExtraction
+        public init(agentModel: AgentModelSnapshot?) {
+            self.agentModel = agentModel
         }
     }
 
@@ -342,7 +343,7 @@ public distributed actor Conversation {
     /// Its agents while it's active: one for each role a turn asked for.
     private var participants: [String: AgentParticipant] = [:]
     private var turnConfigurations: [TurgaiDomain.TurnID: TurnConfiguration] = [:]
-    private var memoryExtractionConfiguration: MemoryExtractionConfiguration?
+    private var agentModel: AgentModelSnapshot?
     private var connections: Set<ConversationConnection> = []
     private var liveState = ConversationLiveState()
     /// Takes the noted message's mark off once it has shown long enough.
@@ -476,6 +477,16 @@ public distributed actor Conversation {
         try await changing { for event in try state.titling(title, by: person) { try await emit(event: event) } }
     }
 
+    /// Whether it has no title yet.
+    public distributed func untitled() -> Bool {
+        state.title == nil
+    }
+
+    /// Its agent naming it `title`, unless it has a title by now.
+    public distributed func name(_ title: ConversationTitle) async throws {
+        try await changing { for event in state.naming(title) { try await emit(event: event) } }
+    }
+
     /// `person` one of its people, as its platform says someone writing in its chat is: in its
     /// space, as a member, too.
     public distributed func admit(_ person: TurgaiDomain.UserID) async throws {
@@ -592,7 +603,7 @@ public distributed actor Conversation {
         let agent = try agent()
         // A mark a restart left is taken off with the next message.
         await unnote()
-        memoryExtractionConfiguration = configuration.memoryExtraction
+        agentModel = configuration.agentModel
         turnConfigurations[turnID] = configuration
         try await dispatch(.receive(message: message, turnID: turnID, agentRole: agent))
         if !state.inbox.acceptedMessageIDs.contains(message.id) {
@@ -772,7 +783,7 @@ public distributed actor Conversation {
                 receivedAt: Date()
             ),
             turnID: TurnID(rawValue: UUID()),
-            configuration: TurnConfiguration(memoryExtraction: memoryExtractionConfiguration)
+            configuration: TurnConfiguration(agentModel: agentModel)
         )
     }
 
@@ -958,7 +969,7 @@ public distributed actor Conversation {
             let scope = try await space().opening(scopeOf: request.message.userID, for: .person)
             try await participant(for: request.agentRole).answer(
                 request, as: scope,
-                memoryExtraction: turnConfiguration?.memoryExtraction ?? memoryExtractionConfiguration)
+                agentModel: turnConfiguration?.agentModel ?? agentModel)
         } catch {
             actorSystem.log.error(
                 "Could not resolve agent for conversation turn",

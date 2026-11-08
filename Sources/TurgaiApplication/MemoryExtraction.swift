@@ -159,36 +159,6 @@ public enum MemoryExtractionService {
     }
 }
 
-extension MemoryExtractionService {
-    public enum EndpointError: Error, Equatable, Sendable {
-        /// Memory names no model to extract with.
-        case notConfigured
-    }
-
-    /// The model a pass extracts with, as `configuration` names it, from the node's `endpoints`.
-    static func endpoint(
-        for configuration: MemoryExtractionConfiguration, from endpoints: AgentModelEndpointFactory
-    ) async throws -> any ModelEndpoint {
-        guard case .configured(let provider, let ollamaKeepAlive) = configuration.provider else {
-            throw EndpointError.notConfigured
-        }
-        let reasoning: ReasoningEffortSelection? =
-            switch configuration.model.provider {
-            case .ollama, .gemini:
-                .init(effort: .none, encoding: .disabled)
-            default:
-                nil
-            }
-        return try await endpoints.endpoint(
-            model: configuration.model,
-            configuration: provider,
-            temperature: 0.2,
-            ollamaKeepAlive: ollamaKeepAlive,
-            reasoning: reasoning
-        )
-    }
-}
-
 /// One memory pass: once its author has been quiet for a while, what they said is extracted, tried
 /// again after each failure, a while longer each time.
 enum MemoryPass {

@@ -497,14 +497,14 @@ actor LiveSession {
                 for case .person(let person) in message.to {
                     try await self.admitIfTheChatSays(person, to: conversation)
                 }
-                let memoryExtraction: MemoryExtractionConfiguration? =
+                let agentModel: AgentModelSnapshot? =
                     if let agent = try await conversation.answeringAgent() {
-                        try await agentProfiles.memoryExtractionConfiguration(forProfileID: agent.rawValue)
+                        try await agentProfiles.agentModelSnapshot(forProfileID: agent.rawValue)
                     } else { nil }
                 try await conversation.send(
                     message,
                     turnID: turnID,
-                    configuration: Conversation.TurnConfiguration(memoryExtraction: memoryExtraction)
+                    configuration: Conversation.TurnConfiguration(agentModel: agentModel)
                 )
                 actorSystem.log.debug(
                     "Message sent to conversation",

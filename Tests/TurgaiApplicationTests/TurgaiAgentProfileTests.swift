@@ -77,12 +77,12 @@ struct TurgaiAgentProfileTests {
         )
 
         #expect(
-            MemoryExtractionConfiguration(profile: ollama).provider
+            AgentModelSnapshot(profile: ollama).provider
                 == .configured(ollama.providerConfiguration, ollamaKeepAlive: "10m"))
         #expect(
-            MemoryExtractionConfiguration(profile: cloud).provider
+            AgentModelSnapshot(profile: cloud).provider
                 == .configured(cloud.providerConfiguration, ollamaKeepAlive: nil))
-        #expect(!MemoryExtractionConfiguration(model: cloud.model, provider: .disabled).isEnabled)
+        #expect(!AgentModelSnapshot(model: cloud.model, provider: .disabled).isEnabled)
     }
 
     @Test("takes the on-device model's context window from the model")

@@ -35,6 +35,8 @@ public distributed actor AgentParticipant {
     private var followedTurn: FollowedTurn?
     /// The pass that extracts what was said once its author has been quiet, while it waits or runs.
     private var rememberingPass: Task<Void, Never>?
+    /// The request naming the conversation, while one runs.
+    private var namingPass: Task<Void, Never>?
 
     init(
         in conversation: Conversation, conversationID: ConversationID, role: String, actorSystem: ClusterSystem
@@ -48,7 +50,7 @@ public distributed actor AgentParticipant {
     /// Runs the turn that answers `request`, on behalf of `turnScope`: the agent's reply, or why
     /// there's none, goes back to the conversation. A turn it was running is cancelled first.
     distributed func answer(
-        _ request: ConversationTurnRequest, as turnScope: CallScope, memoryExtraction: MemoryExtractionConfiguration?
+        _ request: ConversationTurnRequest, as turnScope: CallScope, agentModel: AgentModelSnapshot?
     ) {
         running?.task.cancel()
         let peer = self.peer
@@ -91,7 +93,8 @@ public distributed actor AgentParticipant {
                         "conversation": "\(conversationKey)", "turn": "\(turn)", "took": "\(ContinuousClock.now - started)",
                     ])
                 await participant.whenLocal {
-                    await $0.remember(request, answered: response.reply.text, with: memoryExtraction)
+                    await $0.remember(request, answered: response.reply.text, with: agentModel)
+                    $0.nameIfUntitled(after: request, answered: response.reply.text, with: agentModel)
                 }
                 return .reply(response.reply)
             }
@@ -213,7 +216,7 @@ public distributed actor AgentParticipant {
     /// said is extracted.
     private func remember(
         _ request: ConversationTurnRequest, answered response: String,
-        with configuration: MemoryExtractionConfiguration?
+        with configuration: AgentModelSnapshot?
     ) async {
         let text = request.message.text.trimmed()
         guard !text.isEmpty, let configuration, configuration.isEnabled,
@@ -245,7 +248,7 @@ public distributed actor AgentParticipant {
     /// pass waiting is cancelled, and this one waits instead. `message`, the last they said here, is
     /// marked when something was noted.
     private func extractOnceQuiet(
-        for user: User, after latest: MemorySourceID, with configuration: MemoryExtractionConfiguration,
+        for user: User, after latest: MemorySourceID, with configuration: AgentModelSnapshot,
         from endpoints: AgentModelEndpointFactory, noting message: NotedMessage
     ) {
         rememberingPass?.cancel()
@@ -257,7 +260,7 @@ public distributed actor AgentParticipant {
                     // Asked again: they may have stopped remembering while it waited.
                     guard try await user.currentRemembering() == .on else { return .alreadyHandled }
                     return try await MemoryExtractionService.extractAndCommit(
-                        endpoint: try await MemoryExtractionService.endpoint(for: configuration, from: endpoints),
+                        endpoint: try await configuration.endpoint(from: endpoints),
                         actorSystem: actorSystem,
                         user: user,
                         expectedLatestSourceID: latest
@@ -277,6 +280,32 @@ public distributed actor AgentParticipant {
     /// Whether it waits to extract what was said, or extracts it now.
     var isRemembering: Bool {
         rememberingPass != nil
+    }
+
+    /// Names the conversation from `request` and its answer, when it has no title yet: one request
+    /// to its agent's model, while the conversation goes on. One that fails leaves it for the next
+    /// turn.
+    private func nameIfUntitled(
+        after request: ConversationTurnRequest, answered response: String, with model: AgentModelSnapshot?
+    ) {
+        guard namingPass == nil, let model, model.isEnabled, let conversation else { return }
+        let actorSystem = self.actorSystem
+        namingPass = Task {
+            do {
+                if try await conversation.untitled(),
+                    let endpoints = try await actorSystem.installedTurgaiChannelRuntime?.dependencies().endpoints
+                {
+                    let name = try await ConversationNamingService.name(
+                        endpoint: try await model.endpoint(from: endpoints), said: request.message.text,
+                        answered: response)
+                    if let title = ConversationTitle(name.title) { try await conversation.name(title) }
+                }
+            } catch {
+                actorSystem.log.warning(
+                    "Could not name the conversation", metadata: ["error": .string(String(describing: error))])
+            }
+            namingPass = nil
+        }
     }
 
     static func modelFailure(for error: any Error) -> ConversationFailure {

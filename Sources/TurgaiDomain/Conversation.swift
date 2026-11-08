@@ -558,7 +558,7 @@ public struct ConversationOutline: Hashable, Codable, Sendable {
     }
 }
 
-/// What a conversation is called, as one of its people titles it.
+/// What a conversation is called, as one of its people titles it or its agent names it.
 public struct ConversationTitle: Hashable, Codable, Sendable, CustomStringConvertible {
     public static let maximumLength = 80
 
@@ -608,7 +608,7 @@ public enum ConversationEvent: Codable, Sendable, Equatable {
     case joined(Participant)
     /// Someone left it: it's off their list, and they no longer read it.
     case left(Participant)
-    /// One of its people titled it.
+    /// It's called that now: one of its people titled it, or its agent named it.
     case titled(ConversationTitle)
     /// One of its people said something to others in it, which no agent answers.
     case said(InboundMessage)
@@ -940,6 +940,12 @@ public struct ConversationState: Hashable, Codable, Sendable {
     {
         _ = try reading(by: person)
         return self.title == title ? [] : [.titled(title)]
+    }
+
+    /// Its agent naming it `title`: only while it has none, so a title one of its people gave it
+    /// stays.
+    public func naming(_ title: ConversationTitle) -> [ConversationEvent] {
+        self.title == nil ? [.titled(title)] : []
     }
 
     /// It as `person` reads it or writes in it: refused when it hasn't started, or they're not one

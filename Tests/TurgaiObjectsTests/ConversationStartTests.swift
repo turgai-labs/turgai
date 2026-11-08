@@ -80,7 +80,7 @@ struct ConversationStartTests {
                 InboundMessage(
                     conversationID: id, participantID: ParticipantID(channel: id.channel, rawValue: UserID.ann.key),
                     userID: .ann, text: "pasta tonight?", receivedAt: Date(), to: [.person(.bob)]),
-                turnID: TurnID(), configuration: Conversation.TurnConfiguration(memoryExtraction: nil))
+                turnID: TurnID(), configuration: Conversation.TurnConfiguration(agentModel: nil))
             #expect(try await chat.history(for: .bob).map(\.text) == ["pasta tonight?"])
             #expect(try await chat.status(for: .bob) == .idle)
         }

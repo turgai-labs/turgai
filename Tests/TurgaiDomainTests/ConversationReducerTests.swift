@@ -481,4 +481,13 @@ struct ConversationReducerTests {
         #expect(next.inbox.status == .running(turnID))
     }
 
+    /// Its agent names it only while it has no title: one its people gave it stays.
+    @Test
+    func itsAgentNamesItOnlyWhileUntitled() {
+        let untitled = ConversationState(conversationID: conversationID)
+        let dinner = ConversationTitle("Dinner")!
+        #expect(untitled.naming(dinner) == [.titled(dinner)])
+        let titled = untitled.applying([.titled(ConversationTitle("Plans")!)])
+        #expect(titled.naming(dinner).isEmpty)
+    }
 }
