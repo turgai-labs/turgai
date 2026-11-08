@@ -49,8 +49,8 @@ struct AppFeatureTests {
         #expect(cleared.value == 1)
     }
 
-    /// Who's signed in is read for the account button; Sign Out forgets them and the session,
-    /// and the expiry it was waiting for no longer signs anyone out.
+    /// Who's signed in is read for the account button; Sign Out on the profile forgets them and the
+    /// session, and the expiry it was waiting for no longer signs anyone out.
     @Test
     func signingOutForgetsTheAccount() async {
         let clock = TestClock()
@@ -67,12 +67,12 @@ struct AppFeatureTests {
         }
 
         await store.send(.sessionLoaded(session)) { $0.account = .signedIn(session) }
-        await store.send(.accountAppeared(session))
-        await store.receive(\.meLoaded) { $0.me = Me(id: "account-ada", name: "ada") }
-        #expect(store.state.accountInitial == "A")
-        await store.send(.signOutTapped) {
+        await store.send(.profile(.appeared(session))) { $0.profile.session = session }
+        await store.receive(\.profile.meLoaded) { $0.profile.me = Me(id: "account-ada", name: "ada") }
+        #expect(store.state.profile.initial == "A")
+        await store.send(.profile(.signOutTapped)) {
             $0.account = .signedOut
-            $0.me = nil
+            $0.profile = ProfileFeature.State()
         }
         await store.receive(\.chat.disconnect)
         await clock.advance(by: .seconds(60))

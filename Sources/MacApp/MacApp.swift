@@ -42,12 +42,20 @@ public struct TurgaiScenes: Scene {
         }
         .defaultSize(width: 380, height: 600)
 
+        Window("Profile", id: WindowID.profile) {
+            ProfileView(store: app.scope(state: \.profile, action: \.profile))
+                .frame(minWidth: 360, minHeight: 420)
+        }
+        .defaultSize(width: 420, height: 560)
+        // Someone else may be signed in by the next launch.
+        .restorationBehavior(.disabled)
     }
 }
 
 enum WindowID {
     static let chat = "chat"
     static let objects = "objects"
+    static let profile = "profile"
 }
 
 private struct MenuContent: View {

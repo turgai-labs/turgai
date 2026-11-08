@@ -158,6 +158,7 @@ let package = Package(
                 "TurgaiPeople",
                 "TurgaiBrand",
                 "TurgaiApplication",
+                "TurgaiMemory",
                 "TurgaiModels",
                 "TurgaiObjects",
                 "TurgaiHail",

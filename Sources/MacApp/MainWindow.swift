@@ -28,9 +28,7 @@ struct MainWindow: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { ObjectsButton() }
                 ToolbarItem(placement: .primaryAction) {
-                    AccountButton(initial: store.accountInitial, name: store.me?.name) {
-                        store.send(.signOutTapped)
-                    }
+                    AccountButton(initial: store.profile.initial, name: store.profile.me?.name)
                 }
                 // A stamp of its own, not on the toolbar's glass.
                 .sharedBackgroundVisibility(.hidden)
@@ -50,7 +48,7 @@ struct MainWindow: View {
         .modifier(SidebarDialogs(store: store.scope(state: \.sidebar, action: \.sidebar)))
         .task(id: session) {
             store.send(.sidebar(.appeared(session)))
-            store.send(.accountAppeared(session))
+            store.send(.profile(.appeared(session)))
         }
     }
 }
@@ -252,30 +250,26 @@ private struct HidePanelButton: View {
     }
 }
 
-/// Who's signed in, as their initial on a stamp of their messages' yellow: a menu with their name and
-/// Sign Out.
+/// Who's signed in, as their initial on a stamp of their messages' yellow: it opens their profile.
 private struct AccountButton: View {
     let initial: String
     /// Their name, once it's read.
     let name: String?
-    let signOut: () -> Void
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Menu {
-            if let name {
-                Text(name)
-                Divider()
-            }
-            Button("Sign Out", action: signOut)
+        Button {
+            openWindow(id: WindowID.profile)
         } label: {
             Text(initial)
                 .font(.system(size: 13, weight: .heavy))
                 .foregroundStyle(Color.inkOnSignal)
                 .frame(width: 28, height: 28)
                 .background(StampBackground(color: .bubbleYours, lean: Lean(degrees: 4)))
+                .contentShape(.rect)
         }
-        .menuIndicator(.hidden)
-        .help(name ?? "Account")
+        .buttonStyle(.plain)
+        .help(name ?? "Profile")
     }
 }
 

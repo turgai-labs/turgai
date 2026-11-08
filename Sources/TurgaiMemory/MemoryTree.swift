@@ -21,7 +21,7 @@ public struct MemoryTree: Hashable, Codable, Sendable {
 
         /// Its value as a line says it: the one value, or each different one with when it was
         /// learned, the earliest first.
-        var said: String? {
+        public var said: String? {
             var values: [MemoryFact] = []
             for fact in here.sorted(by: { $0.learned.at < $1.learned.at })
             where !values.contains(where: { $0.value.isSame(as: fact.value) }) {

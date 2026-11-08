@@ -3,7 +3,9 @@ import Foundation
 import Hail
 import TurgaiCalls
 import TurgaiDomain
+import TurgaiMemory
 import TurgaiObjects
+import TurgaiPeople
 import TurgaiSpaces
 
 public struct WebSessionID: Hashable, Sendable, Codable, Identifiable {
@@ -145,6 +147,22 @@ public actor TurgaiWebChatBridge {
         try await runtime.actorSystem.singleton
             .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
             .unfollow(listener)
+    }
+
+    /// What's remembered about `person`, as they see it.
+    public func remembered(about person: TurgaiDomain.UserID) async throws -> MemoryTree {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return try await User.resolve(on: runtime.actorSystem, userID: person).remembered()
+    }
+
+    /// Everything remembered about `person`, forgotten; their conversations stay.
+    public func forgetMemory(of person: TurgaiDomain.UserID) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        _ = try await User.resolve(on: runtime.actorSystem, userID: person).forgetMemory()
     }
 
     /// `person` leaving the conversation `conversationID`: refused unless they're in it.

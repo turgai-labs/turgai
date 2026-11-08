@@ -6,6 +6,7 @@ import NIOCore
 import TurgaiApplication
 import TurgaiCalls
 import TurgaiDomain
+import TurgaiMemory
 import TurgaiModels
 import TurgaiObjects
 import TurgaiPeople
@@ -55,6 +56,20 @@ extension TurgaiMainWebApp {
             }
             let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
             return try publicAPIResponse(Me(id: person.key, name: try await names.name(of: .person(person))))
+        }
+        // What's remembered about whoever's signed in; and all of it forgotten.
+        api.get("me/memory") { request, _ in
+            guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
+                return signInRequired()
+            }
+            return try publicAPIResponse(MemorySummary(try await dependencies.webChatBridge.remembered(about: person)))
+        }
+        api.delete("me/memory") { request, _ in
+            guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
+                return signInRequired()
+            }
+            try await dependencies.webChatBridge.forgetMemory(of: person)
+            return Response(status: .noContent)
         }
         registerConversations(on: api.group("conversations"), dependencies: dependencies)
         registerLinks(on: api.group("me/links"), dependencies: dependencies)
@@ -926,6 +941,19 @@ extension SpaceSummary {
         self.init(
             id: listing.id.rawValue.uuidString, name: listing.name.rawValue,
             role: listing.role == .admin ? .admin : .member)
+    }
+}
+
+extension MemorySummary {
+    /// `tree`, as the API gives it.
+    fileprivate init(_ tree: MemoryTree) {
+        self.init(nodes: tree.nodes.map(Node.init))
+    }
+}
+
+extension MemorySummary.Node {
+    fileprivate init(_ node: MemoryTree.Node) {
+        self.init(name: node.name.rawValue, said: node.said, children: node.children.map(Self.init))
     }
 }
 
