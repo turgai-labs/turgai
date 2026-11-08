@@ -27,14 +27,6 @@ struct ChatView: View {
                 ConversationHeader(
                     title: title, participants: state.participants.map(\.name), connection: state.connection)
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    store.send(.addPeopleTapped)
-                } label: {
-                    Label("Add someone", systemImage: "person.badge.plus")
-                }
-                .help(state.addingTitle)
-            }
         }
         .modifier(
             AccessRequestAlert(request: state.accessRequests.first) { request, answer in
@@ -42,14 +34,6 @@ struct ChatView: View {
             })
         .task(id: session) { store.send(.connect(session)) }
         .onDisappear { store.send(.disconnect) }
-        .sheet(isPresented: $store.isAddingPeople.sending(\.addingPresented)) {
-            AddPeopleSheet(
-                title: state.addingTitle, nobody: state.nobodyToAdd, people: state.addable ?? [],
-                add: { store.send(.addTapped($0)) }
-            ) {
-                store.send(.addingPresented(false))
-            }
-        }
     }
 }
 
@@ -184,8 +168,8 @@ private struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if !store.suggestions.isEmpty {
-                Suggestions(suggestions: store.suggestions, picked: store.picked) { store.send(.mentioned($0)) }
+            if !store.shownSuggestions.isEmpty {
+                Suggestions(suggestions: store.shownSuggestions) { store.send(.mentioned($0)) }
             }
             GlassEffectContainer(spacing: 12) {
                 HStack(alignment: .bottom, spacing: 12) {
@@ -224,28 +208,30 @@ private struct Composer: View {
     }
 }
 
-/// Who the `@` being typed could be, the one Return picks marked: a click picks any.
+/// Who the `@` being typed could be, the one Return picks marked, and who'd join the conversation
+/// by it: a click picks any.
 private struct Suggestions: View {
-    let suggestions: [ParticipantSummary]
-    /// The one Return picks.
-    let picked: ParticipantSummary?
+    let suggestions: [ShownSuggestion]
     let pick: (ParticipantSummary) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(suggestions, id: \.id) { (participant: ParticipantSummary) in
+            ForEach(suggestions) { (suggestion: ShownSuggestion) in
                 Button {
-                    pick(participant)
+                    pick(suggestion.participant)
                 } label: {
                     HStack(spacing: 8) {
-                        ParticipantIcon(kind: participant.kind)
-                        Text(participant.name).foregroundStyle(Color.turgaiInk)
+                        ParticipantIcon(kind: suggestion.participant.kind)
+                        Text(suggestion.participant.name).foregroundStyle(Color.turgaiInk)
+                        if suggestion.joins {
+                            Text("joins").font(.caption).foregroundStyle(Color.turgaiMuted)
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                     .background(
-                        participant == picked ? Color.turgaiAccent.opacity(0.15) : .clear, in: .rect(cornerRadius: 10)
+                        suggestion.isPicked ? Color.turgaiAccent.opacity(0.15) : .clear, in: .rect(cornerRadius: 10)
                     )
                     .contentShape(.rect)
                 }
@@ -343,38 +329,6 @@ private struct AccessRequestAlert: ViewModifier {
             .onChange(of: request?.id) { _, id in
                 if id != nil { NSApplication.shared.activate() }
             }
-    }
-}
-
-/// The people in the conversation's space who aren't in it: picking one adds them. It says which
-/// space, and when there's no one left to add.
-private struct AddPeopleSheet: View {
-    let title: String
-    /// What it says when there's no one left to add.
-    let nobody: String
-    let people: [SpacePerson]
-    let add: (SpacePerson) -> Void
-    let done: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.headline)
-            if people.isEmpty {
-                Text(nobody)
-                    .foregroundStyle(Color.turgaiMuted)
-            } else {
-                List(people) { (person: SpacePerson) in
-                    Button(person.name) { add(person) }.buttonStyle(.plain)
-                }
-                .frame(minHeight: 160)
-            }
-            HStack {
-                Spacer()
-                Button("Done", action: done).keyboardShortcut(.cancelAction)
-            }
-        }
-        .padding(20)
-        .frame(width: 320)
     }
 }
 

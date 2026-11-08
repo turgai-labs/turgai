@@ -276,8 +276,6 @@ struct ChatOpeningTests {
             $0.messages = []
         }
         #expect(sent.value == [.open(conversationID: trip)])
-        #expect(store.state.addingTitle == "Add someone from Turgai")
-        #expect(store.state.nobodyToAdd == "Everyone in Turgai is here already.")
 
         let late = Message(id: MessageID(), role: .user, text: "late")
         await store.send(.received(ChatEvent(payload: .messageAccepted(conversationID: dinner, turnID: nil, message: late))))
@@ -312,6 +310,57 @@ struct MentionTests {
         #expect(state.suggestions.isEmpty)
         state.draft = "ann@bob"
         #expect(state.suggestions.isEmpty)
+    }
+
+    /// `@` also suggests the people in the space who aren't in it, marked as joining by it; once a
+    /// message mentioning one is taken, who's in it is read again.
+    @Test
+    func mentioningSomeoneFromTheSpaceBringsThemIn() async {
+        let bob = ParticipantSummary(kind: .person, id: "account-bob", name: "bob")
+        let cat = ParticipantSummary(kind: .person, id: "account-cat", name: "cat")
+        let session = Session(token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
+        var state = ChatFeature.State(
+            connection: .connected(botID: BotID(rawValue: "conversation")), session: session,
+            conversationID: ConversationID(rawValue: "dinner"), participants: [bob], you: "account-ann")
+        state.spacePeople = [
+            SpacePerson(id: "account-ann", name: "ann", role: .admin),
+            SpacePerson(id: "account-bob", name: "bob", role: .member),
+            SpacePerson(id: "account-cat", name: "cat", role: .member),
+        ]
+        state.draft = "@"
+        #expect(state.suggestions == [bob, cat])
+        #expect(
+            state.shownSuggestions == [
+                ShownSuggestion(participant: bob, isPicked: true, joins: false),
+                ShownSuggestion(participant: cat, isPicked: false, joins: true),
+            ])
+
+        let store = TestStore(initialState: state) {
+            ChatFeature()
+        } withDependencies: {
+            $0.chat.send = { _ in }
+            $0.uuid = .incrementing
+            $0.server.participants = { _, _ in [bob, cat] }
+        }
+        await store.send(.mentioned(cat)) {
+            $0.draft = "@cat "
+            $0.to = [cat]
+        }
+        let request = SendMessageRequest(
+            id: MessageID(rawValue: UUID(0)), text: "@cat", to: [ParticipantRef(kind: .person, id: "account-cat")])
+        await store.send(.submitted) {
+            $0.draft = ""
+            $0.to = []
+            $0.pending = [request]
+        }
+        let taken = Message(id: request.id, role: .user, text: "@cat")
+        let accepted = ChatEvent(
+            payload: .messageAccepted(conversationID: ConversationID(rawValue: "dinner"), turnID: nil, message: taken))
+        await store.send(.received(accepted)) {
+            $0.pending = []
+            $0.messages = [taken]
+        }
+        await store.receive(\.participantsLoaded) { $0.participants = [bob, cat] }
     }
 
     /// A suggestion picked is who the message is said to, while its name is still in the message.

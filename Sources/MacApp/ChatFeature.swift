@@ -33,8 +33,8 @@ struct ChatFeature {
         var space: SpaceSummary?
         /// Who's in it: its agent and its people.
         var participants: [ParticipantSummary] = []
-        /// The people in its space who aren't in it, while one is being picked to add: none otherwise.
-        var addable: [SpacePerson]?
+        /// The people in its space: who `@` can bring in.
+        var spacePeople: [SpacePerson] = []
         /// Who the draft is said to, as picked from `@`'s suggestions: none for no one in particular.
         var to: [ParticipantSummary] = []
         /// The id of the person this app is, as the conversation says: their own messages are theirs.
@@ -67,17 +67,6 @@ struct ChatFeature {
             }
         }
 
-        /// Someone in the space is being picked to add.
-        var isAddingPeople: Bool { addable != nil }
-
-        /// What adding someone is called: from its space.
-        var addingTitle: String { space.map { "Add someone from \($0.name)" } ?? "Add someone" }
-
-        /// What adding someone says when everyone in its space is in it.
-        var nobodyToAdd: String {
-            space.map { "Everyone in \($0.name) is here already." } ?? "Everyone is here already."
-        }
-
         /// Something's typed, and there's a connection to send it on.
         var canSend: Bool {
             guard case .connected = connection else { return false }
@@ -90,11 +79,23 @@ struct ChatFeature {
             suggestions.first { $0 == marked } ?? suggestions.first
         }
 
-        /// Who the `@` being typed could be: the participants, but you, whose name starts with
-        /// what's typed after it.
+        /// Who the `@` being typed could be, whose name starts with what's typed after it: the
+        /// participants but you, then the people in its space who aren't in it, whom mentioning
+        /// brings in.
         var suggestions: [ParticipantSummary] {
             guard let typed = typedMention?.dropFirst().lowercased() else { return [] }
-            return participants.filter { $0.id != you && $0.name.lowercased().hasPrefix(typed) }
+            let inIt = Set(participants.map(\.id))
+            let outside = spacePeople.filter { !inIt.contains($0.id) && $0.id != you }
+                .map { ParticipantSummary(kind: .person, id: $0.id, name: $0.name) }
+            return (participants.filter { $0.id != you } + outside).filter { $0.name.lowercased().hasPrefix(typed) }
+        }
+
+        /// The suggestions as they're shown: the one Return picks marked, and who'd join by it.
+        var shownSuggestions: [ShownSuggestion] {
+            let inIt = Set(participants.map(\.id))
+            return suggestions.map {
+                ShownSuggestion(participant: $0, isPicked: $0 == picked, joins: !inIt.contains($0.id))
+            }
         }
 
         /// The `@` the draft ends in, with what's typed after it: none when it doesn't end in one.
@@ -113,12 +114,7 @@ struct ChatFeature {
         /// Show `id`, in `space`, instead of the conversation shown before.
         case open(ConversationID, in: SpaceSummary?)
         case participantsLoaded([ParticipantSummary])
-        case addPeopleTapped
-        case addableLoaded([SpacePerson])
-        case addTapped(SpacePerson)
-        case addFailed
-        /// The sheet to pick someone to add: `false` once it's closed.
-        case addingPresented(Bool)
+        case spacePeopleLoaded([SpacePerson])
         /// ⓘ beside a reply: its turn is shown.
         case turnTapped(MessageID)
         case turnDismissed
@@ -203,45 +199,16 @@ struct ChatFeature {
                 state = State(connection: state.connection, session: state.session, conversationID: id, space: space)
                 return .merge(
                     .run { _ in try? await chat.send(.open(conversationID: id)) },
-                    loadParticipants(of: id, as: state.session)
+                    loadParticipants(of: id, as: state.session),
+                    loadSpacePeople(of: space, as: state.session)
                 )
 
             case .participantsLoaded(let participants):
                 state.participants = participants
                 return .none
 
-            case .addPeopleTapped:
-                guard let session = state.session, let space = state.space else { return .none }
-                return .run { send in
-                    if let people = try? await server.people(session, space.id) { await send(.addableLoaded(people)) }
-                }
-
-            case .addableLoaded(let people):
-                let inIt = Set(state.participants.filter { $0.kind == .person }.map(\.id))
-                state.addable = people.filter { !inIt.contains($0.id) }
-                return .none
-
-            case .addTapped(let person):
-                state.addable = nil
-                guard let session = state.session, let id = state.conversationID else { return .none }
-                return .run { send in
-                    do {
-                        try await server.addParticipant(session, id, ParticipantRef(kind: .person, id: person.id))
-                    } catch {
-                        await send(.addFailed)
-                        return
-                    }
-                    if let participants = try? await server.participants(session, id) {
-                        await send(.participantsLoaded(participants))
-                    }
-                }
-
-            case .addFailed:
-                state.error = ChatError(code: "add_failed", message: "They couldn't be added. Try again.")
-                return .none
-
-            case .addingPresented(let presented):
-                if !presented { state.addable = nil }
+            case .spacePeopleLoaded(let people):
+                state.spacePeople = people
                 return .none
 
             case .turnTapped(let id):
@@ -282,8 +249,11 @@ struct ChatFeature {
                     guard event.conversationID == nil || event.conversationID == state.conversationID else {
                         return .none
                     }
+                    // A message of yours that brought someone in: who's in it is read again.
+                    let broughtIn = Self.bringsIn(event.payload, in: state)
                     apply(event.payload, to: &state)
-                    return .none
+                    guard broughtIn, let id = state.conversationID else { return .none }
+                    return loadParticipants(of: id, as: state.session)
                 }
 
             case .sendTapped:
@@ -331,6 +301,23 @@ struct ChatFeature {
             } catch {
                 await send(.sendFailed(request))
             }
+        }
+    }
+
+    /// Whether `payload` takes one of your pending messages that mentions someone not in it yet.
+    private static func bringsIn(_ payload: ChatEvent.Payload, in state: State) -> Bool {
+        guard case .messageAccepted(_, _, let message) = payload,
+            let request = state.pending.first(where: { $0.id == message.id })
+        else { return false }
+        let inIt = Set(state.participants.map(\.id))
+        return request.to.contains { $0.kind == .person && !inIt.contains($0.id) }
+    }
+
+    /// The people in `space`, read for `session`'s person.
+    private func loadSpacePeople(of space: SpaceSummary?, as session: Session?) -> Effect<Action> {
+        guard let session, let space else { return .none }
+        return .run { send in
+            if let people = try? await server.people(session, space.id) { await send(.spacePeopleLoaded(people)) }
         }
     }
 
@@ -406,6 +393,16 @@ struct ShownMessage: Equatable, Identifiable {
     let showsTurn: Bool
 
     var id: MessageID { message.id }
+}
+
+/// A suggestion for the `@` being typed, as it's shown: whether Return picks it, and whether
+/// mentioning them brings them into the conversation.
+struct ShownSuggestion: Equatable, Identifiable {
+    let participant: ParticipantSummary
+    let isPicked: Bool
+    let joins: Bool
+
+    var id: String { participant.id }
 }
 
 extension MessageID {

@@ -18,8 +18,6 @@ struct TurgaiServerClient: Sendable {
     var startConversation: @Sendable (Session, _ spaceID: String?) async throws -> Conversation
     /// Who's in a conversation: its agent and its people.
     var participants: @Sendable (Session, ConversationID) async throws -> [ParticipantSummary]
-    /// Someone added to a conversation by the account's person.
-    var addParticipant: @Sendable (Session, ConversationID, ParticipantRef) async throws -> Void
     /// Who's in a space, as the account's person sees them.
     var people: @Sendable (Session, _ spaceID: String) async throws -> [SpacePerson]
     /// A conversation called `title` from now on.
@@ -70,10 +68,6 @@ extension TurgaiServerClient: DependencyKey {
             },
             participants: { session, id in
                 try await api("GET", "api/v1/conversations/\(id.rawValue)/participants", as: session)
-            },
-            addParticipant: { session, id, participant in
-                _ = try await request(
-                    "POST", "api/v1/conversations/\(id.rawValue)/participants", body: participant, as: session)
             },
             people: { session, space in try await api("GET", "api/v1/spaces/\(space)/people", as: session) },
             titleConversation: { session, id, title in

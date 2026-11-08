@@ -493,9 +493,8 @@ actor LiveSession {
                     conversationID: message.conversationID
                 )
                 try await self.admitIfTheChatSays(message.userID, to: conversation)
-                // Whoever it's said to is in the chat too, as its platform says.
                 for case .person(let person) in message.to {
-                    try await self.admitIfTheChatSays(person, to: conversation)
+                    try await self.bringIn(person, mentionedBy: message.userID, to: conversation)
                 }
                 let agentModel: AgentModelSnapshot? =
                     if let agent = try await conversation.answeringAgent() {
@@ -804,6 +803,18 @@ actor LiveSession {
     private func admitIfTheChatSays(_ person: TurgaiDomain.UserID, to conversation: Conversation) async throws {
         guard case .channel = source else { return }
         try await conversation.admit(person)
+    }
+
+    /// `person`, whom `mentioner` says something to, in the conversation too: as the chat's platform
+    /// says, or, in Turgai's apps, added by whoever mentions them, as anyone in it may add someone
+    /// from its space.
+    private func bringIn(
+        _ person: TurgaiDomain.UserID, mentionedBy mentioner: TurgaiDomain.UserID, to conversation: Conversation
+    ) async throws {
+        switch source {
+        case .channel: try await conversation.admit(person)
+        case .web: try await conversation.add(.person(person), by: mentioner)
+        }
     }
 
     private func attach(
