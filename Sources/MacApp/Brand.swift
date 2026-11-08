@@ -10,6 +10,11 @@ extension Color {
     static let signalCoral = Color(light: 0xEF5B4D, dark: 0xFF8175)
     static let signalYellow = Color(light: 0xF4C542, dark: 0xF7D66B)
     static let signalBlue = Color(light: 0x2864E8, dark: 0x79A7FF)
+    /// Each signal's deep shade, for text on a tint of it: dark enough to read in the light theme,
+    /// the bright signal itself in the dark one.
+    static let signalCoralDeep = Color(light: 0xB8402F, dark: 0xFF8175)
+    static let signalYellowDeep = Color(light: 0x8C6A00, dark: 0xF7D66B)
+    static let signalBlueDeep = Color(light: 0x1747AD, dark: 0x79A7FF)
 
     /// A message's background, as the web's: its signal color, 78% of it over the surface.
     static let bubbleYours = Color(light: 0xF6D26C, dark: 0xC4AF5E)

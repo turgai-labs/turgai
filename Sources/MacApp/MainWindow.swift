@@ -371,7 +371,7 @@ private struct SpaceTile: View {
     }
 }
 
-/// A space's mark: its initial on a tile in its color.
+/// A space's mark: its initial in its color's deep shade, on a tint of it.
 private struct SpaceMark: View {
     let initial: String
     let hue: SidebarFeature.SpaceHue
@@ -381,7 +381,7 @@ private struct SpaceMark: View {
             .font(.system(size: 13, weight: .bold))
             .foregroundStyle(hue.ink)
             .frame(width: 30, height: 30)
-            .background(hue.color, in: .rect(cornerRadius: 8))
+            .background(hue.color.opacity(0.22), in: .rect(cornerRadius: 8))
             .contentShape(.rect)
     }
 }
@@ -396,11 +396,12 @@ extension SidebarFeature.SpaceHue {
         }
     }
 
-    /// The initial's color on it: ink on coral and yellow, white on blue.
+    /// The initial's color on a tint of it: its deep shade.
     fileprivate var ink: Color {
         switch self {
-        case .coral, .yellow: .inkOnSignal
-        case .blue: .white
+        case .coral: .signalCoralDeep
+        case .yellow: .signalYellowDeep
+        case .blue: .signalBlueDeep
         }
     }
 }
