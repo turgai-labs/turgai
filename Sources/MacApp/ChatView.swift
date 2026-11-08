@@ -22,7 +22,6 @@ struct ChatView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             BottomBar(store: store)
         }
-        .background(Color.turgaiCanvas)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 ConversationHeader(
@@ -67,7 +66,8 @@ private struct ConversationHeader: View {
                     .frame(width: 14, height: 14)
                     .foregroundStyle(Color.turgaiAccent)
                 Text(title)
-                    .font(.headline)
+                    .font(.system(size: 13, weight: .bold))
+                    .tracking(-0.3)
                     .lineLimit(1)
                     .foregroundStyle(Color.turgaiInk)
                 Circle()
@@ -100,44 +100,36 @@ private struct ConversationHeader: View {
     }
 }
 
-/// A message: the user's own on the right in coral, someone else's on the left with their name,
-/// the bot's on the left in glass.
+/// A message, as the web stamps them: yours on the right in yellow, the agent's on the left in blue,
+/// someone else's on the left in coral with their name. Its background leans by `tilt` degrees; its
+/// text doesn't.
 private struct Bubble: View {
     let role: MessageRole
     let text: String
+    let tilt: Double
     /// Who wrote it, when that's someone else.
     var someoneElse: String? = nil
 
     var body: some View {
         switch role {
         case .user where someoneElse != nil:
-            VStack(alignment: .leading, spacing: 4) {
-                Text(someoneElse ?? "").font(.caption.weight(.semibold)).foregroundStyle(Color.turgaiMuted)
-                Text(text)
-                    .textSelection(.enabled)
-                    .foregroundStyle(Color.turgaiInk)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(someoneElse ?? "").font(.caption.weight(.semibold))
+                Text(text).textSelection(.enabled)
             }
+            .modifier(Stamp(color: .bubbleSomeoneElse, ink: .inkOnSignal, tilt: tilt))
             .frame(maxWidth: 520, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         case .user:
             Text(text)
                 .textSelection(.enabled)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(Color.turgaiAccent, in: .rect(cornerRadius: 18))
+                .modifier(Stamp(color: .bubbleYours, ink: .inkOnSignal, tilt: tilt))
                 .frame(maxWidth: 520, alignment: .trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         case .assistant:
             Text(Self.markdown(text))
                 .textSelection(.enabled)
-                .foregroundStyle(Color.turgaiInk)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .glassEffect(.regular, in: .rect(cornerRadius: 18))
+                .modifier(Stamp(color: .bubbleAgent, ink: .white, tilt: tilt))
                 .frame(maxWidth: 560, alignment: .leading)
         }
     }
@@ -150,13 +142,30 @@ private struct Bubble: View {
     }
 }
 
+/// A bubble's look: `ink` on a nearly square block of `color` leaning `tilt` degrees.
+private struct Stamp: ViewModifier {
+    let color: Color
+    let ink: Color
+    let tilt: Double
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(ink)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background {
+                RoundedRectangle(cornerRadius: 3).fill(color).rotationEffect(.degrees(tilt))
+            }
+    }
+}
+
 /// The reply being typed, or what the bot is doing before it types.
 private struct TurnView: View {
     let turn: ChatFeature.Turn
 
     var body: some View {
         if let partial = turn.partial {
-            Bubble(role: .assistant, text: partial.text)
+            Bubble(role: .assistant, text: partial.text, tilt: partial.id.tilt)
         } else {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -267,19 +276,23 @@ private struct ParticipantIcon: View {
     }
 }
 
-/// The conversation: what was said, what's sent but not yet taken, and the turn running now.
+/// The conversation: what was said, what's sent but not yet taken, and the turn running now. A new
+/// message stamps in, as on the web, unless motion is reduced.
 private struct MessageList: View {
     let store: StoreOf<ChatFeature>
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 14) {
             ForEach(store.shown) { (shown: ShownMessage) in
                 MessageRow(
                     shown: shown, showTurn: { store.send(.turnTapped(shown.id)) },
-                    dismissTurn: { store.send(.turnDismissed) })
+                    dismissTurn: { store.send(.turnDismissed) }
+                )
+                .transition(.scale(scale: 0.78).combined(with: .opacity))
             }
             ForEach(store.pending) { (request: SendMessageRequest) in
-                Bubble(role: .user, text: request.text).opacity(0.55)
+                Bubble(role: .user, text: request.text, tilt: request.id.tilt).opacity(0.55)
             }
             if let turn = store.turn {
                 TurnView(turn: turn)
@@ -287,6 +300,7 @@ private struct MessageList: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 12)
+        .animation(reduceMotion ? nil : .spring(duration: 0.28, bounce: 0.45), value: store.shown.count)
     }
 }
 
@@ -370,7 +384,9 @@ private struct MessageRow: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
-            Bubble(role: shown.message.role, text: shown.message.text, someoneElse: shown.someoneElse)
+            Bubble(
+                role: shown.message.role, text: shown.message.text, tilt: shown.id.tilt,
+                someoneElse: shown.someoneElse)
             if let turn = shown.turn {
                 Button(action: showTurn) {
                     Image(systemName: "info.circle")

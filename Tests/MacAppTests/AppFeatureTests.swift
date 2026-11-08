@@ -176,6 +176,14 @@ struct RegistrationTests {
 
 @MainActor
 struct ChatFeatureTests {
+    /// A bubble leans as the web's does for the same message: between −2.4° and 2.4°.
+    @Test
+    func aBubbleLeansAsOnTheWeb() {
+        #expect(MessageID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!).tilt == 1.6)
+        #expect(MessageID(rawValue: UUID(uuidString: "E621E1F8-C36C-495A-93FC-0C247A3E6E5F")!).tilt == 1.9)
+        #expect((0..<200).map { _ in MessageID().tilt }.allSatisfy { (-2.4...2.4).contains($0) })
+    }
+
     @Test
     func sentMessageIsPendingUntilAccepted() async {
         let sent = LockIsolated<[ChatCommand]>([])

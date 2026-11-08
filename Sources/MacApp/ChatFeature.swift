@@ -394,6 +394,17 @@ struct ShownMessage: Equatable, Identifiable {
     var id: MessageID { message.id }
 }
 
+extension MessageID {
+    /// How far its bubble leans, in degrees, as the web works it out: between −2.4 and 2.4, the
+    /// same for the same message.
+    var tilt: Double {
+        let hash = rawValue.uuidString.utf16.reduce(Int32(0)) { hash, unit in
+            (hash &<< 5) &- hash &+ Int32(unit)
+        }
+        return Double(Int(hash.magnitude % 49) - 24) / 10
+    }
+}
+
 extension TurnRecord {
     /// What it's shown under: the message it answered.
     var heading: String { message.isEmpty ? "Turn" : message }

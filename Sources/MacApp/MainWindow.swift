@@ -16,7 +16,8 @@ struct MainWindow: View {
 
     var body: some View {
         ZStack {
-            // The conversation keeps clear of the panels; its background runs under them.
+            WorkingField()
+            // The conversation keeps clear of the panels; the field runs under them.
             ChatView(
                 session: session, title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
             )
