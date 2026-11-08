@@ -3,16 +3,14 @@ import SwiftUI
 import TurgaiModels
 
 /// The main window, once someone is signed in: Turgai's field behind everything, the open
-/// conversation over it, and two glass panels floating over both, each with the button that hides
-/// it: on the left one panel with the person's spaces on a rail and the shown space's
-/// conversations, on the right every object they may see. A hidden panel leaves a button where it
-/// was to show it again.
+/// conversation over it, and a glass panel floating on the left with the person's spaces on a rail
+/// and the shown space's conversations, with the button that hides it; hidden, it leaves a button
+/// where it was to show it again. The objects open in a window of their own, from the toolbar.
 struct MainWindow: View {
     let session: Session
     @Bindable var store: StoreOf<AppFeature>
 
     private static let sidebarWidth: CGFloat = 300
-    private static let objectsWidth: CGFloat = 300
     /// Between a panel and the window's edge, and between a panel and the conversation.
     private static let gap: CGFloat = 10
     /// How wide the button that shows a hidden panel is.
@@ -26,7 +24,10 @@ struct MainWindow: View {
                 session: session, title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
             )
             .safeAreaPadding(.leading, (store.showsSidebar ? Self.sidebarWidth : Self.showButtonWidth) + Self.gap)
-            .safeAreaPadding(.trailing, (store.showsObjects ? Self.objectsWidth : Self.showButtonWidth) + Self.gap)
+            .safeAreaPadding(.trailing, Self.gap)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) { ObjectsButton() }
+            }
             HStack(alignment: .top, spacing: 0) {
                 if store.showsSidebar {
                     GlassPanel(width: Self.sidebarWidth) {
@@ -41,18 +42,6 @@ struct MainWindow: View {
                     }
                 }
                 Spacer(minLength: 0)
-                if store.showsObjects {
-                    GlassPanel(width: Self.objectsWidth) {
-                        ObjectsPanel(store: store.scope(state: \.objects, action: \.objects)) {
-                            store.send(.objectsToggled, animation: .smooth)
-                        }
-                    }
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                } else {
-                    ShowPanelButton(systemImage: "sidebar.right", help: "Show objects") {
-                        store.send(.objectsToggled, animation: .smooth)
-                    }
-                }
             }
             .padding(Self.gap)
             // A hidden panel's button stays at the top, where its panel's header was.
@@ -145,15 +134,18 @@ private struct AddSpaceSheet: View {
     }
 }
 
-/// The View menu's items for the window's panels, with the shortcut the conversations panel had.
+/// The View menu's items: the conversations panel, with the shortcut it had, and the objects'
+/// window.
 struct PanelCommands: Commands {
     let store: StoreOf<AppFeature>
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .sidebar) {
             Button(store.sidebarCommand) { store.send(.sidebarToggled, animation: .smooth) }
                 .keyboardShortcut("s", modifiers: [.control, .command])
-            Button(store.objectsCommand) { store.send(.objectsToggled, animation: .smooth) }
+            Button("Objects") { openWindow(id: WindowID.objects) }
+                .keyboardShortcut("o", modifiers: [.option, .command])
         }
     }
 }
@@ -207,23 +199,17 @@ private struct HidePanelButton: View {
     }
 }
 
-/// The objects panel: its name and the button that hides it, over the objects.
-private struct ObjectsPanel: View {
-    let store: StoreOf<ObjectsFeature>
-    let hide: () -> Void
+/// Opens the objects' window.
+private struct ObjectsButton: View {
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Objects").font(.headline).foregroundStyle(Color.turgaiInk)
-                Spacer()
-                HidePanelButton(systemImage: "sidebar.right", help: "Hide objects", hide: hide)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
-            ObjectsView(store: store)
+        Button {
+            openWindow(id: WindowID.objects)
+        } label: {
+            Label("Objects", systemImage: "cube")
         }
+        .help("Objects")
     }
 }
 

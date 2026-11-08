@@ -142,14 +142,12 @@ struct AppFeature {
         var sidebar = SidebarFeature.State()
         var chat = ChatFeature.State()
         var objects = ObjectsFeature.State()
-        /// The window's panels: the spaces and their conversations on the left, the objects on the right.
+        /// The window's panel of spaces and their conversations.
         var showsSidebar = true
-        var showsObjects = false
 
         /// What the View menu's item for the conversations panel says.
         var sidebarCommand: String { showsSidebar ? "Hide Conversations" : "Show Conversations" }
         /// What the View menu's item for the objects panel says.
-        var objectsCommand: String { showsObjects ? "Hide Objects" : "Show Objects" }
 
         var screen: Screen {
             switch (connection, account) {
@@ -177,7 +175,6 @@ struct AppFeature {
         case chat(ChatFeature.Action)
         case objects(ObjectsFeature.Action)
         case sidebarToggled
-        case objectsToggled
     }
 
     private enum CancelID { case expiry }
@@ -218,10 +215,6 @@ struct AppFeature {
 
             case .sidebarToggled:
                 state.showsSidebar.toggle()
-                return .none
-
-            case .objectsToggled:
-                state.showsObjects.toggle()
                 return .none
 
             case .appeared:

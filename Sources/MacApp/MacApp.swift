@@ -36,11 +36,18 @@ public struct TurgaiScenes: Scene {
         .defaultSize(width: 960, height: 720)
         .commands { PanelCommands(store: app) }
 
+        Window("Objects", id: WindowID.objects) {
+            ObjectsView(store: app.scope(state: \.objects, action: \.objects))
+                .frame(minWidth: 320, minHeight: 400)
+        }
+        .defaultSize(width: 380, height: 600)
+
     }
 }
 
 enum WindowID {
     static let chat = "chat"
+    static let objects = "objects"
 }
 
 private struct MenuContent: View {
