@@ -26,8 +26,11 @@ struct MainWindow: View {
             .safeAreaPadding(.leading, (store.showsSidebar ? Self.sidebarWidth + Self.gap : 0) + Self.gap)
             .safeAreaPadding(.trailing, Self.gap)
             .toolbar {
-                ToolbarItem(placement: .primaryAction) { ObjectsButton() }
-                ToolbarItem(placement: .primaryAction) {
+                // At the window's trailing edge: with nothing in the toolbar's middle, macOS would
+                // put them right after the traffic lights.
+                ToolbarSpacer(.flexible)
+                ToolbarItem { ObjectsButton() }
+                ToolbarItem {
                     AccountButton(initial: store.profile.initial, name: store.profile.me?.name)
                 }
                 // A stamp of its own, not on the toolbar's glass.
