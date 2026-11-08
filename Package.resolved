@@ -1,13 +1,13 @@
 {
-  "originHash" : "b4666eed5f164beff5f8bf7aa74c66ecdebb0fd7f673f0705fee7ebdc299aac1",
+  "originHash" : "43a48ab9bbff8de8ec2c3bcd67b7c2f50c58030d2d4f7789502749aca510c2fb",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/akbashev/AnyLanguageModel.git",
+      "location" : "https://github.com/huggingface/AnyLanguageModel.git",
       "state" : {
-        "branch" : "fix/schema-in-prompt",
-        "revision" : "b9f2eafe99f524ac8a7d9d40561733c419108cb2"
+        "revision" : "749319da3984e341d89febc32e452054c5bfcf17",
+        "version" : "1.2.0"
       }
     },
     {
@@ -105,8 +105,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/mattt/EventSource",
       "state" : {
-        "revision" : "86b5096ac59ab46e66bd1f6377c604bc1dab0bc2",
-        "version" : "1.5.1"
+        "revision" : "bb4b61273b5a976bb571859c17f903ebc3439df1",
+        "version" : "1.6.0"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "849255e3ea73d39406f037ee216da96afb343f0b"
+        "revision" : "0ae687f734402d4c7b5757df673372dfe83dba60"
       }
     },
     {
