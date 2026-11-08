@@ -219,7 +219,7 @@ struct SidebarFeatureTests {
         ]
         state.selected = dinner.id
         #expect(state.shownSpace == family)
-        #expect(state.entries == [.init(id: dinner.id, title: "plan dinner", unread: false)])
+        #expect(state.entries == [.init(id: dinner.id, title: "plan dinner", unread: false, isOpen: true)])
         #expect(state.spaceChoices.map(\.initial) == ["T", "F", "W"])
         #expect(state.spaceChoices.map(\.unread) == [true, false, false])
         #expect(state.spaceChoices.map(\.isShown) == [false, true, false])
@@ -237,8 +237,6 @@ struct SidebarFeatureTests {
             }
         }
         await store.send(.spaceSwitched("family"))
-        await store.send(.selectionChanged(nil))
-        await store.send(.selectionChanged(dinner.id))
         await store.send(.spaceSwitched("turgai"))
         await store.receive(\.selected) {
             $0.selected = self.trip.id

@@ -2,37 +2,61 @@ import ComposableArchitecture
 import SwiftUI
 import TurgaiModels
 
-/// The main window, once someone is signed in, built from the system's split view so the system
-/// draws its Liquid Glass: the sidebar holds the person's spaces on a rail and the shown space's
-/// conversations; the open conversation is the detail, over Turgai's field; the objects they may
-/// see are its inspector.
+/// The main window, once someone is signed in: Turgai's field behind everything, the open
+/// conversation over it, and two glass panels floating over both, each with the button that hides
+/// it: on the left one panel with the person's spaces on a rail and the shown space's
+/// conversations, on the right every object they may see. A hidden panel leaves a button where it
+/// was to show it again.
 struct MainWindow: View {
     let session: Session
     @Bindable var store: StoreOf<AppFeature>
 
+    private static let sidebarWidth: CGFloat = 300
+    private static let objectsWidth: CGFloat = 300
+    /// Between a panel and the window's edge, and between a panel and the conversation.
+    private static let gap: CGFloat = 10
+    /// How wide the button that shows a hidden panel is.
+    private static let showButtonWidth: CGFloat = 36
+
     var body: some View {
-        NavigationSplitView(columnVisibility: $store.sidebarVisibility) {
-            SidebarView(store: store.scope(state: \.sidebar, action: \.sidebar))
-                .navigationSplitViewColumnWidth(min: 260, ideal: 290, max: 380)
-        } detail: {
+        ZStack {
+            WorkingField()
+            // The conversation keeps clear of the panels; the field runs under them.
             ChatView(
                 session: session, title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
             )
-            .background { WorkingField().backgroundExtensionEffect() }
-            .inspector(isPresented: $store.showsObjects) {
-                ObjectsPanel(store: store.scope(state: \.objects, action: \.objects))
-                    .inspectorColumnWidth(min: 260, ideal: 300, max: 440)
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        store.send(.objectsToggled, animation: .smooth)
-                    } label: {
-                        Label("Objects", systemImage: "sidebar.right")
+            .safeAreaPadding(.leading, (store.showsSidebar ? Self.sidebarWidth : Self.showButtonWidth) + Self.gap)
+            .safeAreaPadding(.trailing, (store.showsObjects ? Self.objectsWidth : Self.showButtonWidth) + Self.gap)
+            HStack(alignment: .top, spacing: 0) {
+                if store.showsSidebar {
+                    GlassPanel(width: Self.sidebarWidth) {
+                        SidebarView(store: store.scope(state: \.sidebar, action: \.sidebar)) {
+                            store.send(.sidebarToggled, animation: .smooth)
+                        }
                     }
-                    .help(store.objectsCommand)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                } else {
+                    ShowPanelButton(systemImage: "sidebar.left", help: "Show conversations") {
+                        store.send(.sidebarToggled, animation: .smooth)
+                    }
+                }
+                Spacer(minLength: 0)
+                if store.showsObjects {
+                    GlassPanel(width: Self.objectsWidth) {
+                        ObjectsPanel(store: store.scope(state: \.objects, action: \.objects)) {
+                            store.send(.objectsToggled, animation: .smooth)
+                        }
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                } else {
+                    ShowPanelButton(systemImage: "sidebar.right", help: "Show objects") {
+                        store.send(.objectsToggled, animation: .smooth)
+                    }
                 }
             }
+            .padding(Self.gap)
+            // A hidden panel's button stays at the top, where its panel's header was.
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         .modifier(SidebarDialogs(store: store.scope(state: \.sidebar, action: \.sidebar)))
         .task(id: session) { store.send(.sidebar(.appeared(session))) }
@@ -134,65 +158,124 @@ struct PanelCommands: Commands {
     }
 }
 
-/// The objects, under their name.
-private struct ObjectsPanel: View {
-    let store: StoreOf<ObjectsFeature>
+/// A glass panel floating over the window: one surface of clear glass, faintly tinted so text on
+/// it reads over the field's colors, its corners concentric with the window's.
+private struct GlassPanel<Content: View>: View {
+    let width: CGFloat
+    @ViewBuilder let content: Content
+
+    private var shape: ConcentricRectangle { ConcentricRectangle(corners: .concentric(minimum: 12), isUniform: true) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Objects")
-                .font(.headline)
-                .foregroundStyle(Color.turgaiInk)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-                .padding(.bottom, 4)
+        content
+            .frame(width: width)
+            .frame(maxHeight: .infinity)
+            .clipShape(shape)
+            .glassEffect(.clear.tint(Color.turgaiCanvas.opacity(0.3)), in: shape)
+    }
+}
+
+/// Where a hidden panel was: a glass button that shows it again.
+private struct ShowPanelButton: View {
+    let systemImage: String
+    let help: String
+    let show: () -> Void
+
+    var body: some View {
+        Button(action: show) {
+            Image(systemName: systemImage).frame(width: 20, height: 20)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .help(help)
+    }
+}
+
+/// The button in a panel's header that hides it.
+private struct HidePanelButton: View {
+    let systemImage: String
+    let help: String
+    let hide: () -> Void
+
+    var body: some View {
+        Button(action: hide) {
+            Image(systemName: systemImage).frame(width: 26, height: 26).contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Color.turgaiMuted)
+        .help(help)
+    }
+}
+
+/// The objects panel: its name and the button that hides it, over the objects.
+private struct ObjectsPanel: View {
+    let store: StoreOf<ObjectsFeature>
+    let hide: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Objects").font(.headline).foregroundStyle(Color.turgaiInk)
+                Spacer()
+                HidePanelButton(systemImage: "sidebar.right", help: "Hide objects", hide: hide)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
             ObjectsView(store: store)
         }
     }
 }
 
-/// The sidebar, Slack's way, on one surface: the spaces on a rail, then the shown space's name,
-/// New conversation in it, and its conversations.
+/// The left panel, Slack's way, on one surface: the spaces on a rail under the button that hides
+/// the panel, a hairline, then the shown space's name, New conversation in it, and its
+/// conversations.
 private struct SidebarView: View {
     let store: StoreOf<SidebarFeature>
+    let hide: () -> Void
 
     var body: some View {
         HStack(spacing: 0) {
-            SpaceRail(store: store)
-            Divider()
+            SpaceRail(store: store, hide: hide)
+            Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 12)
             ConversationColumn(store: store)
         }
     }
 }
 
-/// Every space the person is in: a tile each with its initial, filled in the accent while it's the
-/// one shown, as a chosen conversation is, and dotted when something's new in it; + makes or joins
-/// one. It scrolls when there are many.
+/// Every space the person is in, under the button that hides the panel: a tile each with its
+/// initial, filled in the accent while it's the one shown, as the open conversation is, and dotted
+/// when something's new in it; + makes or joins one. It scrolls when there are many.
 private struct SpaceRail: View {
     let store: StoreOf<SidebarFeature>
+    let hide: () -> Void
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
-                    SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
+        VStack(spacing: 8) {
+            HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
+                .padding(.top, 10)
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
+                        SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
+                    }
+                    Button {
+                        store.send(.addSpaceTapped)
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.turgaiMuted)
+                            .frame(width: 30, height: 30)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Make or join a space")
                 }
-                Button {
-                    store.send(.addSpaceTapped)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.turgaiMuted)
-                        .frame(width: 30, height: 30)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help("Make or join a space")
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 8)
+            .scrollIndicators(.never)
         }
-        .scrollIndicators(.never)
-        .frame(width: 46)
+        .frame(width: 50)
     }
 }
 
@@ -208,7 +291,7 @@ private struct SpaceTile: View {
                 .foregroundStyle(choice.isShown ? Color.white : Color.turgaiInk)
                 .frame(width: 30, height: 30)
                 .background(
-                    choice.isShown ? Color.turgaiAccent : Color.primary.opacity(0.07), in: .rect(cornerRadius: 8)
+                    choice.isShown ? Color.turgaiAccent : Color.turgaiInk.opacity(0.08), in: .rect(cornerRadius: 8)
                 )
                 .contentShape(.rect)
         }
@@ -223,11 +306,10 @@ private struct SpaceTile: View {
     }
 }
 
-/// The shown space's name and New conversation in it, over its conversations: the system's sidebar
-/// list, the latest first, a dot marking one with something new. A conversation renames from its
-/// menu.
+/// The shown space's name and New conversation in it, over its conversations, the latest first, a
+/// dot marking one with something new. A conversation renames from its menu.
 private struct ConversationColumn: View {
-    @Bindable var store: StoreOf<SidebarFeature>
+    let store: StoreOf<SidebarFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -248,21 +330,22 @@ private struct ConversationColumn: View {
                 .foregroundStyle(Color.turgaiAccent)
                 .help(store.newConversationHelp)
             }
-            .padding(.leading, 16)
-            .padding(.trailing, 12)
+            .padding(.leading, 14)
+            .padding(.trailing, 10)
             .padding(.top, 10)
-            .padding(.bottom, 4)
-            List(selection: $store.selected.sending(\.selectionChanged)) {
-                ForEach(store.entries) { (entry: SidebarFeature.Entry) in
-                    ConversationRow(entry: entry)
-                        .tag(entry.id)
-                        .contextMenu {
-                            Button("Rename…") { store.send(.renameConversationTapped(entry.id)) }
-                        }
+            .padding(.bottom, 8)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(store.entries) { (entry: SidebarFeature.Entry) in
+                        ConversationLine(entry: entry) { store.send(.selected(entry.id)) }
+                            .contextMenu {
+                                Button("Rename…") { store.send(.renameConversationTapped(entry.id)) }
+                            }
+                    }
                 }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 12)
             }
-            .listStyle(.sidebar)
-            .tint(Color.turgaiAccent)
             if let error = store.error {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
             }
@@ -270,21 +353,32 @@ private struct ConversationColumn: View {
     }
 }
 
-/// A conversation in the list: its name, bolder with a dot when something's new in it.
-private struct ConversationRow: View {
+/// A conversation: its name, bolder with a dot when something's new in it; filled in the accent
+/// while it's open, as the shown space's tile is.
+private struct ConversationLine: View {
     let entry: SidebarFeature.Entry
+    let open: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(entry.title)
-                .fontWeight(entry.unread ? .semibold : .regular)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            if entry.unread {
-                Circle().fill(Color.turgaiAccent).frame(width: 7, height: 7)
-                    .accessibilityLabel("New messages")
+        Button(action: open) {
+            HStack(spacing: 6) {
+                Text(entry.title)
+                    .font(.system(size: 13, weight: entry.unread ? .semibold : .regular))
+                    .lineLimit(1)
+                    .foregroundStyle(entry.isOpen ? Color.white : Color.turgaiInk)
+                Spacer(minLength: 0)
+                if entry.unread {
+                    Circle().fill(entry.isOpen ? Color.white : Color.turgaiAccent).frame(width: 7, height: 7)
+                        .accessibilityLabel("New messages")
+                }
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(entry.isOpen ? Color.turgaiAccent : .clear, in: .rect(cornerRadius: 8))
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
     }
 }
 

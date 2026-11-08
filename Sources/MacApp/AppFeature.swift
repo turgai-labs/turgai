@@ -1,6 +1,5 @@
 import ComposableArchitecture
 import Foundation
-import SwiftUI
 
 /// Waits for the local server to be running and set up, signs in, then runs the chat.
 @Reducer
@@ -143,13 +142,12 @@ struct AppFeature {
         var sidebar = SidebarFeature.State()
         var chat = ChatFeature.State()
         var objects = ObjectsFeature.State()
-        /// The window's sidebar, the conversations: shown, or hidden for the conversation alone.
-        var sidebarVisibility = NavigationSplitViewVisibility.all
-        /// The window's inspector, the objects.
+        /// The window's panels: the spaces and their conversations on the left, the objects on the right.
+        var showsSidebar = true
         var showsObjects = false
 
-        /// What the View menu's item for the sidebar says.
-        var sidebarCommand: String { sidebarVisibility == .detailOnly ? "Show Conversations" : "Hide Conversations" }
+        /// What the View menu's item for the conversations panel says.
+        var sidebarCommand: String { showsSidebar ? "Hide Conversations" : "Show Conversations" }
         /// What the View menu's item for the objects panel says.
         var objectsCommand: String { showsObjects ? "Hide Objects" : "Show Objects" }
 
@@ -219,7 +217,7 @@ struct AppFeature {
                 return .none
 
             case .sidebarToggled:
-                state.sidebarVisibility = state.sidebarVisibility == .detailOnly ? .all : .detailOnly
+                state.showsSidebar.toggle()
                 return .none
 
             case .objectsToggled:
