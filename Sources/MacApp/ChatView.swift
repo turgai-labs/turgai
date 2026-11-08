@@ -15,18 +15,25 @@ struct ChatView: View {
     private var state: ChatFeature.State { store.state }
 
     var body: some View {
-        ScrollView {
-            MessageList(store: store)
+        ZStack {
+            ScrollView {
+                MessageList(store: store)
+            }
+            // What's new keeps the end in view, and a short conversation sits at the bottom.
+            .defaultScrollAnchor(.bottom)
+            // The messages run under the headline's glass and the floating composer; the glass is
+            // the headline's own, not the bar's dimming behind it.
+            .safeAreaBar(edge: .top, spacing: 0) {
+                Headline(title: title, hue: hue, participants: state.shownParticipants, notice: state.connectionNotice)
+            }
+            .scrollEdgeEffectHidden(true, for: .top)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                BottomBar(store: store)
+            }
         }
-        // What's new keeps the end in view, and a short conversation sits at the bottom.
-        .defaultScrollAnchor(.bottom)
-        // The messages run under the headline's glass and the floating composer.
-        .safeAreaBar(edge: .top, spacing: 0) {
-            Headline(title: title, hue: hue, participants: state.shownParticipants, notice: state.connectionNotice)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            BottomBar(store: store)
-        }
+        // Not on under the toolbar: what scrolls up goes under the headline's glass, and is cut off
+        // behind it.
+        .clipped()
         .modifier(
             AccessRequestAlert(request: state.accessRequests.first) { request, answer in
                 store.send(.accessAnswered(request.id, answer))
@@ -38,7 +45,7 @@ struct ChatView: View {
 
 /// The conversation's name, as the screen's headline, set off by a bar of its space's color; under
 /// it, who's in it, each on a stamp of their messages' color, and what's wrong with the connection
-/// while something is.
+/// while something is. It floats on glass, as the panel does, as far from it and the window's edge.
 private struct Headline: View {
     let title: String
     let hue: SpaceHue
@@ -67,9 +74,10 @@ private struct Headline: View {
             .padding(.leading, 16)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 24)
-        .padding(.top, 4)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .padding(.horizontal, 10)
     }
 }
 
@@ -348,8 +356,9 @@ private struct BottomBar: View {
             }
             Composer(store: store)
         }
-        .padding(.horizontal, 24)
-        .padding(.bottom, 20)
+        // Glass floats as far from the window's edges as the panel and the headline do; the
+        // messages keep wider margins.
+        .padding([.horizontal, .bottom], 10)
     }
 }
 
