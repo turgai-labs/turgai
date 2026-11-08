@@ -43,10 +43,9 @@ extension Image {
     static let skylark = Image("Skylark", bundle: .module)
 }
 
-/// Turgai's geometry for working screens: a coral block tilted into the top right corner and a
-/// yellow square at the right edge, low down, each mostly past the window's edge. They sit at the
-/// edges, out of the reading path and out from under the panel on the left, and cut off as no
-/// message ever is, so they're never read as one.
+/// Turgai's geometry for working screens: a coral block tilted into the top right corner, mostly
+/// past the window's edge; a yellow square at the left, and a blue bar low on the left, which the
+/// panel's glass blurs into itself.
 struct WorkingField: View {
     var body: some View {
         GeometryReader { geometry in
@@ -60,9 +59,14 @@ struct WorkingField: View {
                     .position(x: size.width - 70, y: 30)
                 Rectangle()
                     .fill(Color.signalYellow.opacity(0.55))
-                    .frame(width: 96, height: 96)
+                    .frame(width: 112, height: 112)
                     .rotationEffect(.degrees(14))
-                    .position(x: size.width - 14, y: size.height - 200)
+                    .position(x: 56, y: 248)
+                Rectangle()
+                    .fill(Color.signalBlue.opacity(0.22))
+                    .frame(width: 384, height: 80)
+                    .rotationEffect(.degrees(7))
+                    .position(x: 192, y: size.height - 152)
             }
         }
         .ignoresSafeArea()
