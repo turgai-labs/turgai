@@ -88,24 +88,21 @@ struct ConversationTests {
     func memoryIsShownWithItsButtons() {
         let fact = MemoryFact(
             id: MemoryFactID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!),
-            path: MemoryPath(["lives in"])!,
-            value: MemoryValue("Haar, Germany")!,
-            learned: Said(observation: ObservationID(), at: Date(timeIntervalSince1970: 1)),
-            confidence: 0.9
+            relation: .livesIn,
+            to: MemoryName("Haar, Germany")!,
+            learned: Said(observation: ObservationID(), at: Date(timeIntervalSince1970: 1))
         )
-        let remembered = MemoryTree([fact])
-        #expect(
-            MemoryPresentation.text(remembered, remembering: .on)
-                == "Remembered:\n```\nYou\n└─ lives in: Haar, Germany\n```")
+        let remembered = Remembered([fact])
+        #expect(MemoryPresentation.text(remembered, remembering: .on) == "Remembered:\nLives in: Haar, Germany")
         #expect(
             MemoryPresentation.actions(for: remembered, remembering: .on).map(\.command) == [
                 "/forget-fact 00000000-0000-0000-0000-000000000001", "/memory-off", "/forget",
             ])
-        #expect(MemoryPresentation.actions(for: remembered, remembering: .on).first?.label == "Forget lives in: Haar, Germany")
+        #expect(MemoryPresentation.actions(for: remembered, remembering: .on).first?.label == "Forget Lives in: Haar, Germany")
         #expect(
-            MemoryPresentation.text(MemoryTree([]), remembering: .off)
+            MemoryPresentation.text(Remembered([]), remembering: .off)
                 == "Memory is off: nothing new is remembered.\nNothing is remembered.")
-        #expect(MemoryPresentation.actions(for: MemoryTree([]), remembering: .off).map(\.label) == ["Turn memory on"])
+        #expect(MemoryPresentation.actions(for: Remembered([]), remembering: .off).map(\.label) == ["Turn memory on"])
     }
 
     /// Only its people add someone: a person, or an agent while it has none; never a guest, either

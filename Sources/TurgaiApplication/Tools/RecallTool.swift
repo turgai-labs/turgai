@@ -5,6 +5,12 @@ import TurgaiDomain
 import TurgaiMemory
 import TurgaiPeople
 
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
+
 /// Recalls what's remembered about the person the agent talks with: what it learned from earlier
 /// conversations, most important first.
 public struct RecallTool: HailCore.Tool {
@@ -27,8 +33,8 @@ public struct RecallTool: HailCore.Tool {
     }
 }
 
-/// Reads what's remembered about a human: by each of their linked persons who remembers, in one
-/// tree.
+/// Reads what's remembered about a human: by each of their linked persons who remembers, each fact
+/// once, the earliest learned.
 public struct RecallEffect: ScopedEffect, Sendable {
     public let name = "memory.recall"
     let actorSystem: ClusterSystem
@@ -41,6 +47,27 @@ public struct RecallEffect: ScopedEffect, Sendable {
             let user = try await User.resolve(on: actorSystem, userID: person)
             if try await user.recallable() { facts += try await user.remembered().facts }
         }
-        return CallReturn(.text(MemoryRetrieval.recalled(MemoryTree(facts))))
+        var recalled: [MemoryFact] = []
+        for fact in Remembered(facts).facts where !recalled.contains(where: { $0.isSame(as: fact) }) {
+            recalled.append(fact)
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let body = try encoder.encode(recalled.map(Recalled.init))
+        return .data(ToolData(body: body, contentType: "application/json"))
+    }
+}
+
+/// A fact as a recall gives it: how the person is related to whom or what, and the day it was
+/// learned.
+struct Recalled: Encodable, Equatable {
+    let relation: MemoryRelation
+    let to: String
+    let learned: String
+
+    init(_ fact: MemoryFact) {
+        self.relation = fact.relation
+        self.to = fact.to.rawValue
+        self.learned = fact.learned.at.formatted(.iso8601.year().month().day())
     }
 }

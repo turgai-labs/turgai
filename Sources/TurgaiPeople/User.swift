@@ -183,19 +183,14 @@ public distributed actor User {
     /// How many of a conversation's exchanges read already a pass shows as context.
     private static let contextExchanges = 10
 
-    /// What's remembered about them, as a recall answers it.
-    public distributed func recalled() -> String {
-        MemoryRetrieval.recalled(state.memory.tree)
-    }
-
     /// Whether there's anything to recall: they remember, and something is remembered.
     public distributed func recallable() -> Bool {
         state.memory.remembering == .on && !state.memory.currentFacts().isEmpty
     }
 
     /// What's remembered about them, as they see it.
-    public distributed func remembered() -> MemoryTree {
-        state.memory.tree
+    public distributed func remembered() -> Remembered {
+        state.memory.remembered
     }
 
     /// Forgets the fact `id`: whether it was remembered.

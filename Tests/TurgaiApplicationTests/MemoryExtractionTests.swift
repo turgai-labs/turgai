@@ -1,3 +1,4 @@
+import AnyLanguageModel
 import Foundation
 import Testing
 import TurgaiDomain
@@ -5,7 +6,7 @@ import TurgaiMemory
 
 @testable import TurgaiApplication
 
-/// What the extractor is shown of a conversation.
+/// What the extractor is given of a conversation, and what it answers.
 struct MemoryExtractionTests {
     private let check = ConversationID(stableKey: "turgai:check")!
 
@@ -15,37 +16,46 @@ struct MemoryExtractionTests {
             response: response, observedAt: Date())
     }
 
-    /// Exchanges read already are context, unnumbered; the new ones are numbered from 1, each reply
-    /// beside what it answers, so a short answer keeps its question.
+    /// It's given their memory, each fact numbered; the exchanges read already, as they were; and the
+    /// new ones numbered from 1, each reply beside what it answers, so a short answer keeps its
+    /// question, and none when there was none.
     @Test
-    func theNewExchangesAreNumberedAfterTheEarlierOnes() {
+    func itIsGivenTheirMemoryAndTheNewExchangesNumbered() {
+        let haar = MemoryFact(
+            relation: .livesIn, to: MemoryName("Haar")!, learned: Said(observation: ObservationID(), at: Date()))
         let input = ExtractionInput(
             conversation: check,
             earlier: [exchange("Weather in Haar, Germany?", response: "Rain all week.")],
             new: [
                 exchange("Where I'm living?", response: "I don't know. Want to tell me?"), exchange("Haar"),
             ],
-            generation: .initial, existingFacts: [])
+            generation: .initial, existingFacts: [haar])
 
         #expect(
-            MemoryExtractionService.transcript(input) == """
-                Earlier in this conversation, read already:
-                user: Weather in Haar, Germany?
-                assistant: Rain all week.
-
-                New:
-                user [1]: Where I'm living?
-                assistant [1]: I don't know. Want to tell me?
-                user [2]: Haar
-                """)
+            MemoryPassInput(input).generatedContent.jsonString
+                == #"{"memory":[{"fact":1,"relation":"livesIn","to":"Haar"}],"#
+                + #""earlier":[{"person":"Weather in Haar, Germany?","assistant":"Rain all week."}],"#
+                + #""new":[{"exchange":1,"person":"Where I'm living?","assistant":"I don't know. Want to tell me?"},"#
+                + #"{"exchange":2,"person":"Haar"}]}"#)
     }
 
-    /// With nothing read yet, there's nothing earlier.
+    /// Its answer is a relation from the list for each fact learned, and a fact's number for each
+    /// ended; a relation not on the list isn't one.
     @Test
-    func aConversationReadForTheFirstTimeHasNoEarlierPart() {
-        let input = ExtractionInput(
-            conversation: check, new: [exchange("Haar", response: "Got it.")], generation: .initial, existingFacts: [])
+    func itAnswersWithRelationsFromTheList() throws {
+        let answer =
+            #"{"learned":[{"relation":"livesIn","to":"Haar","exchange":1}],"#
+            + #""ended":[{"fact":2,"exchange":1}]}"#
+        let report = try MemoryReport(GeneratedContent(json: answer))
 
-        #expect(MemoryExtractionService.transcript(input) == "New:\nuser [1]: Haar\nassistant [1]: Got it.")
+        #expect(
+            report.proposal
+                == MemoryProposal(
+                    facts: [.init(relation: .livesIn, to: "Haar", exchange: 1)],
+                    endings: [.init(fact: 2, exchange: 1)]))
+        #expect(throws: (any Error).self) {
+            try MemoryReport(
+                GeneratedContent(json: #"{"learned":[{"relation":"home","to":"Haar","exchange":1}],"ended":[]}"#))
+        }
     }
 }

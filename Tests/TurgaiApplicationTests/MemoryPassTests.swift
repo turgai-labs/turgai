@@ -15,8 +15,7 @@ struct MemoryPassTests {
         changes: [
             .learned(
                 MemoryFact(
-                    path: MemoryPath(["likes"])!, value: MemoryValue("tea")!,
-                    learned: Said(observation: ObservationID(), at: Date()), confidence: 1))
+                    relation: .likes, to: MemoryName("tea")!, learned: Said(observation: ObservationID(), at: Date())))
         ],
         rejected: [])
 

@@ -1031,9 +1031,12 @@ extension SpaceSummary {
 }
 
 extension MemorySummary {
-    /// `tree`, and whether its person is remembered, as the API gives them.
-    fileprivate init(_ tree: MemoryTree, remembering: TurgaiMemory.Remembering) {
-        self.init(nodes: tree.nodes.map(Node.init), remembering: Remembering(remembering))
+    /// What's `remembered`, a line for each relation, and whether its person is remembered, as the
+    /// API gives them.
+    fileprivate init(_ remembered: Remembered, remembering: TurgaiMemory.Remembering) {
+        self.init(
+            nodes: remembered.lines.map { Node(name: $0.relation.words, said: $0.said, children: []) },
+            remembering: Remembering(remembering))
     }
 }
 
@@ -1054,12 +1057,6 @@ extension TurgaiMemory.Remembering {
         case .on: self = .on
         case .off: self = .off
         }
-    }
-}
-
-extension MemorySummary.Node {
-    fileprivate init(_ node: MemoryTree.Node) {
-        self.init(name: node.name.rawValue, said: node.said, children: node.children.map(Self.init))
     }
 }
 

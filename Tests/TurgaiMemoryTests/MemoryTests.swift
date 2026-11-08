@@ -17,13 +17,12 @@ struct MemoryTests {
     private let turgai = AgentProfileID("turgai")
 
     /// A fact learned on `day`, days since 1970.
-    private func fact(_ path: [String], _ value: String, on day: Int = 1, id: MemoryFactID = MemoryFactID())
-        -> MemoryFact
-    {
+    private func fact(
+        _ relation: MemoryRelation, _ to: String, on day: Int = 1, id: MemoryFactID = MemoryFactID()
+    ) -> MemoryFact {
         let at = Date(timeIntervalSince1970: TimeInterval(day) * 86_400)
         return MemoryFact(
-            id: id, path: MemoryPath(path)!, value: MemoryValue(value)!,
-            learned: Said(observation: ObservationID(), at: at), confidence: 0.9)
+            id: id, relation: relation, to: MemoryName(to)!, learned: Said(observation: ObservationID(), at: at))
     }
 
     /// A memory that's learned `facts`.
@@ -117,7 +116,7 @@ struct MemoryTests {
     @Test
     func clearingMemoryStartsANewGenerationAndRemovesTheProjection() {
         let observation = message("My name is Ada", at: 1, id: observationID, sourceID: sourceID)
-        var projection = remembering([fact(["name"], "Ada")])
+        var projection = remembering([fact(.name, "Ada")])
         projection.apply(.observationRecorded(observation))
         let generation = projection.generation
 
@@ -181,45 +180,33 @@ struct MemoryTests {
         #expect(memory.read(in: check, last: 1) == [answer])
     }
 
-    /// One human's linked persons remember in one tree: the same value at a path once, and
-    /// different ones each with the day it was learned, the earliest first.
+    /// One human's linked persons are remembered in one: a line for each relation, each name once,
+    /// the earliest learned first.
     @Test
-    func linkedPersonsRememberInOneTree() {
-        let telegram = [fact(["home"], "Munich", on: 20_390), fact(["sister"], "Ann", on: 20_000)]
-        let account = [fact(["home"], "Berlin", on: 20_373), fact(["sister"], "Ann", on: 20_100)]
+    func linkedPersonsAreRememberedInOne() {
+        let telegram = [fact(.livesIn, "Munich", on: 20_390), fact(.sibling, "Ann", on: 20_000)]
+        let account = [fact(.livesIn, "Berlin", on: 20_373), fact(.sibling, "ann", on: 20_100)]
 
-        #expect(
-            MemoryTree(telegram + account).rendered() == """
-                You
-                ├─ home: Berlin (2025-10-12) · Munich (2025-10-29)
-                └─ sister: Ann
-                """)
+        let remembered = Remembered(telegram + account)
+        #expect(remembered.lines.map(\.relation) == [.livesIn, .sibling])
+        #expect(remembered.lines.map(\.said) == ["Berlin · Munich", "Ann"])
     }
 
-    /// What's remembered is a tree: names a path shares are one node, each fact sits at its path's
-    /// last name, and a recall gives it as data that can be out of date.
+    /// What's remembered is a line for each relation, in the order relations are listed, with whom
+    /// or what in the order learned.
     @Test
-    func whatsRememberedIsATreeOfPaths() {
+    func whatsRememberedIsALineForEachRelation() {
         let memory = remembering([
-            fact(["lives in"], "Haar, Germany"), fact(["family", "sister"], "Ann"), fact(["Family", "brother"], "Bob"),
+            fact(.likes, "pasta"), fact(.sibling, "Ann"), fact(.livesIn, "Haar, Germany"), fact(.likes, "sushi"),
         ])
 
-        #expect(memory.tree.nodes.map(\.name.rawValue) == ["lives in", "family"])
+        #expect(memory.remembered.lines.map(\.relation) == [.livesIn, .likes, .sibling])
+        #expect(memory.remembered.lines.map(\.said) == ["Haar, Germany", "pasta · sushi", "Ann"])
         #expect(
-            memory.tree.facts.map(\.line) == [
-                "lives in: Haar, Germany", "family › sister: Ann", "family › brother: Bob",
+            memory.remembered.facts.map(\.line) == [
+                "Lives in: Haar, Germany", "Likes: pasta", "Likes: sushi", "Sibling: Ann",
             ])
-        #expect(
-            memory.tree.rendered() == """
-                You
-                ├─ lives in: Haar, Germany
-                └─ family
-                   ├─ sister: Ann
-                   └─ brother: Bob
-                """)
-        #expect(MemoryRetrieval.recalled(memory.tree).hasSuffix(memory.tree.rendered()))
-        #expect(MemoryRetrieval.recalled(memory.tree).contains("may be out of date"))
-        #expect(MemoryRetrieval.recalled(Memory().tree) == "Nothing is remembered.")
+        #expect(Memory().remembered.isEmpty)
     }
 
     /// What they see of their memory changes with what's learned, ended, forgotten, or remembering
@@ -230,7 +217,7 @@ struct MemoryTests {
             generation: .initial, conversation: check, readThrough: MemorySourceID(), changes: [])
         let learned = MemoryExtractionCommit(
             generation: .initial, conversation: check, readThrough: MemorySourceID(),
-            changes: [.learned(fact(["home"], "Haar"))])
+            changes: [.learned(fact(.livesIn, "Haar"))])
 
         #expect(!MemoryEvent.observationRecorded(message("Haar")).changesWhatsRemembered)
         #expect(!MemoryEvent.extractionCommitted(read).changesWhatsRemembered)
@@ -240,15 +227,15 @@ struct MemoryTests {
         #expect(MemoryEvent.cleared(at: Date()).changesWhatsRemembered)
     }
 
-    /// A path has one to three names, none of them empty or too long.
+    /// A name is what was written, its spaces collapsed, never empty or too long, and the same as
+    /// another whatever their case.
     @Test
-    func aPathHasOneToThreeNames() {
-        #expect(MemoryPath([]) == nil)
-        #expect(MemoryPath(["family", " "]) == nil)
-        #expect(MemoryPath([String(repeating: "a", count: MemoryName.maximumLength + 1)]) == nil)
-        #expect(MemoryPath(["a", "b", "c", "d"]) == nil)
-        #expect(MemoryPath([" Lives   In "])?.description == "lives in")
-        #expect(MemoryPath(["family", "sister"])?.description == "family › sister")
+    func aNameIsWhatWasWritten() {
+        #expect(MemoryName("") == nil)
+        #expect(MemoryName("  ") == nil)
+        #expect(MemoryName(String(repeating: "a", count: MemoryName.maximumLength + 1)) == nil)
+        #expect(MemoryName(" Haar,   Germany ")?.rawValue == "Haar, Germany")
+        #expect(MemoryName("haar")!.isSame(as: MemoryName("Haar")!))
     }
 
     // MARK: Reading what they said
@@ -258,11 +245,11 @@ struct MemoryTests {
     func messagesAreReadOnce() {
         let said = message("I live in Haar")
         var memory = Memory()
-        let proposal = MemoryProposal(facts: [.init(path: ["lives in"], value: "Haar", exchange: 1, confidence: 1)])
+        let proposal = MemoryProposal(facts: [.init(relation: .livesIn, to: "Haar", exchange: 1)])
 
         _ = read(proposal, from: [said], into: &memory)
 
-        #expect(memory.currentFacts().map(\.line) == ["lives in: Haar"])
+        #expect(memory.currentFacts().map(\.line) == ["Lives in: Haar"])
         #expect(memory.unread(in: check).isEmpty)
         let again = ExtractionInput(
             conversation: check, new: [said], generation: memory.generation, existingFacts: memory.currentFacts())
@@ -277,7 +264,7 @@ struct MemoryTests {
         var memory = Memory()
 
         let (changes, rejected) = read(
-            MemoryProposal(facts: [.init(path: ["name"], value: "Ada", exchange: 3, confidence: 1)]),
+            MemoryProposal(facts: [.init(relation: .name, to: "Ada", exchange: 3)]),
             from: [first, second], into: &memory)
 
         #expect(changes.isEmpty)
@@ -286,106 +273,107 @@ struct MemoryTests {
         #expect(memory.readThrough[check] == second.sourceID)
     }
 
-    /// A new value at a path is kept beside the ones there: liking sushi isn't liking pasta no more.
+    /// A relation they have many of keeps each: liking sushi isn't liking pasta no more.
     @Test
-    func aNewValueAtAPathIsKeptBesideTheOthers() {
-        var memory = remembering([fact(["likes"], "pasta")])
+    func aRelationTheyHaveManyOfKeepsEach() {
+        var memory = remembering([fact(.likes, "pasta")])
 
         _ = read(
-            MemoryProposal(facts: [.init(path: ["likes"], value: "sushi", exchange: 1, confidence: 0.9)]),
+            MemoryProposal(facts: [.init(relation: .likes, to: "sushi", exchange: 1)]),
             from: [message("I also love sushi")], into: &memory)
 
-        #expect(memory.currentFacts().map(\.line) == ["likes: pasta", "likes: sushi"])
-        #expect(memory.tree.rendered() == "You\n└─ likes: pasta (1970-01-02) · sushi (1970-01-03)")
+        #expect(memory.currentFacts().map(\.line) == ["Likes: pasta", "Likes: sushi"])
     }
 
     /// Saying what's remembered again, written another way, changes nothing.
     @Test
     func sayingItAgainChangesNothing() {
-        var memory = remembering([fact(["lives in"], "Haar")])
+        var memory = remembering([fact(.livesIn, "Haar")])
 
         let (changes, rejected) = read(
-            MemoryProposal(facts: [.init(path: ["Lives  In"], value: " haar", exchange: 1, confidence: 0.9)]),
+            MemoryProposal(facts: [.init(relation: .livesIn, to: " haar", exchange: 1)]),
             from: [message("I live in Haar")], into: &memory)
 
         #expect(changes.isEmpty)
         #expect(rejected.isEmpty)
-        #expect(memory.currentFacts().map(\.line) == ["lives in: Haar"])
+        #expect(memory.currentFacts().map(\.line) == ["Lives in: Haar"])
     }
 
-    /// Moving ends every line it makes untrue, at any path, and what ended is kept, ended, with
-    /// where they said it.
+    /// A relation they have one of at a time ends the one before, once, whether or not the proposal
+    /// ends it too; and what ended is kept, ended, with where they said it.
     @Test
-    func aMoveEndsWhatItMakesUntrue() {
-        let haar = fact(["lives in"], "Haar")
-        let gym = fact(["gym"], "in Haar")
-        var memory = remembering([haar, gym, fact(["likes"], "pasta")])
-        let keys = message("We just got the keys to our flat in Berlin!")
+    func aNewHomeEndsTheOldOne() {
+        let haar = fact(.livesIn, "Haar")
+        var memory = remembering([haar, fact(.likes, "pasta")])
+        let keys = message("We just got the keys to our flat in Berlin!", at: 2 * 86_400)
         let berlin = MemoryFactID()
 
         let (changes, rejected) = read(
             MemoryProposal(
-                facts: [.init(path: ["home"], value: "Berlin", exchange: 1, confidence: 0.9)],
-                endings: [.init(line: "Lives in - Haar", exchange: 1), .init(line: "gym: in Haar", exchange: 1)]),
+                facts: [.init(relation: .livesIn, to: "Berlin", exchange: 1)],
+                endings: [.init(fact: 1, exchange: 1)]),
             from: [keys], into: &memory, newID: berlin)
 
         let said = Said(observation: keys.id, at: keys.observedAt)
         #expect(rejected.isEmpty)
-        #expect(changes.count == 3)
-        #expect(changes.prefix(2) == [.ended(haar.id, said), .ended(gym.id, said)])
-        #expect(memory.currentFacts().map(\.line) == ["likes: pasta", "home: Berlin"])
-        #expect(memory.currentFacts().last?.id == berlin)
+        #expect(changes.count == 2)
+        #expect(changes.first == .ended(haar.id, said))
+        #expect(memory.currentFacts().map(\.line) == ["Likes: pasta", "Lives in: Berlin"])
         #expect(memory.facts.first { $0.id == haar.id }?.status == .ended(said))
-        #expect(!memory.tree.rendered().contains("Haar"))
+
+        let moved = message("Moved to Munich last week", at: 3 * 86_400)
+        let (later, _) = read(
+            MemoryProposal(facts: [.init(relation: .livesIn, to: "Munich", exchange: 1)]),
+            from: [moved], into: &memory)
+        #expect(later.first == .ended(berlin, Said(observation: moved.id, at: moved.observedAt)))
+        #expect(memory.currentFacts().map(\.line) == ["Likes: pasta", "Lives in: Munich"])
     }
 
     /// What they say can end a fact without telling anything new.
     @Test
     func anEndingNeedsNoNewFact() {
-        let pasta = fact(["likes"], "pasta")
-        var memory = remembering([pasta, fact(["likes"], "sushi")])
+        let pasta = fact(.likes, "pasta")
+        var memory = remembering([pasta, fact(.likes, "sushi")])
         let stopped = message("I don't eat pasta anymore")
 
         let (changes, _) = read(
-            MemoryProposal(endings: [.init(line: "likes: pasta", exchange: 1)]),
+            MemoryProposal(endings: [.init(fact: 1, exchange: 1)]),
             from: [stopped], into: &memory)
 
         #expect(changes == [.ended(pasta.id, Said(observation: stopped.id, at: stopped.observedAt))])
-        #expect(memory.currentFacts().map(\.line) == ["likes: sushi"])
+        #expect(memory.currentFacts().map(\.line) == ["Likes: sushi"])
     }
 
-    /// An ending names exactly one current fact by its line; one that doesn't changes nothing, and
-    /// the rest of the proposal stands.
+    /// An ending names a fact the extractor was shown, by its number, that's still current; one
+    /// that doesn't changes nothing, and the rest of the proposal stands.
     @Test
-    func anEndingMustNameOneCurrentFact() {
-        let pasta = fact(["likes"], "pasta")
-        var memory = remembering([
-            fact(["lives in"], "Haar"), pasta, fact(["family", "sister"], "Kate"), fact(["family sister"], "Kate"),
-        ])
+    func anEndingNamesACurrentFactItWasShown() {
+        let haar = fact(.livesIn, "Haar")
+        let pasta = fact(.likes, "pasta")
+        var memory = recording([message("I like tea, and pasta isn't for me")], into: remembering([haar, pasta]))
+        let input = ExtractionInput(
+            conversation: check, new: memory.unread(in: check), generation: memory.generation,
+            existingFacts: memory.currentFacts())
         memory.apply(.factForgotten(pasta.id))
-        let said = message("I moved to Munich, I like tea, and Kate is my sister")
 
-        let (changes, rejected) = read(
-            MemoryProposal(
-                facts: [.init(path: ["likes"], value: "tea", exchange: 1, confidence: 0.9)],
-                endings: [
-                    .init(line: "lives in: Munich", exchange: 1), .init(line: "likes: pasta", exchange: 1),
-                    .init(line: "family sister: Kate", exchange: 1),
-                ]),
-            from: [said], into: &memory)
+        guard
+            case .read(let commit, let rejected) = memory.reading(
+                MemoryProposal(
+                    facts: [.init(relation: .likes, to: "tea", exchange: 1)],
+                    endings: [.init(fact: 0, exchange: 1), .init(fact: 3, exchange: 1), .init(fact: 2, exchange: 1)]),
+                of: input)
+        else {
+            Issue.record("Expected the messages to be read")
+            return
+        }
+        memory.apply(.extractionCommitted(commit))
 
-        #expect(
-            rejected == [
-                .notRemembered(line: "lives in: Munich"), .notRemembered(line: "likes: pasta"),
-                .notRemembered(line: "family sister: Kate"),
-            ])
-        #expect(changes.count == 1)
-        #expect(memory.currentFacts().map(\.line).contains("likes: tea"))
-        #expect(memory.currentFacts().map(\.line).contains("lives in: Haar"))
+        #expect(rejected == [.noSuchFact(0), .noSuchFact(3), .noSuchFact(2)])
+        #expect(memory.currentFacts().map(\.line) == ["Lives in: Haar", "Likes: tea"])
     }
 
     /// A fact names the new exchange it comes from, read in context: an answer counts by the question
-    /// it answers, and a word said before doesn't make it ambiguous. Only new exchanges can be named.
+    /// it answers. Only new exchanges can be named.
     @Test
     func aFactComesFromANewExchangeReadInContext() {
         let weather = message(
@@ -399,41 +387,39 @@ struct MemoryTests {
 
         let (changes, rejected) = read(
             MemoryProposal(facts: [
-                .init(path: ["home"], value: "Haar, Germany", exchange: 4, confidence: 0.95),
-                .init(path: ["likes"], value: "snow", exchange: 0, confidence: 0.9),
-                .init(path: ["likes"], value: "rain", exchange: 5, confidence: 0.9),
+                .init(relation: .livesIn, to: "Haar, Germany", exchange: 4),
+                .init(relation: .likes, to: "snow", exchange: 0),
+                .init(relation: .likes, to: "rain", exchange: 5),
             ]),
             from: [weather, snow, question, answer], into: &memory)
 
         #expect(rejected == [.noSuchExchange(0), .noSuchExchange(5)])
         #expect(changes.count == 1)
-        #expect(memory.currentFacts().map(\.line) == ["home: Haar, Germany"])
+        #expect(memory.currentFacts().map(\.line) == ["Lives in: Haar, Germany"])
         #expect(memory.currentFacts()[0].learned == Said(observation: answer.id, at: answer.observedAt))
 
         // Read already, the four are context: a new exchange is 1 again.
         let tea = message("I like tea", at: 5)
         let (more, _) = read(
-            MemoryProposal(facts: [.init(path: ["likes"], value: "tea", exchange: 1, confidence: 0.9)]),
+            MemoryProposal(facts: [.init(relation: .likes, to: "tea", exchange: 1)]),
             from: [tea], into: &memory)
         #expect(more.count == 1)
         #expect(memory.currentFacts()[1].learned.observation == tea.id)
     }
 
-    /// A fact has a path, a value, and is sure enough.
+    /// A fact names someone or something.
     @Test
-    func aFactNeedsAPathAValueAndCertainty() {
+    func aFactNamesSomething() {
         var memory = Memory()
+        let long = String(repeating: "a", count: MemoryName.maximumLength + 1)
         let (changes, rejected) = read(
             MemoryProposal(facts: [
-                .init(path: [], value: "coffee", exchange: 1, confidence: 0.9),
-                .init(path: ["a", "b", "c", "d"], value: "coffee", exchange: 1, confidence: 0.9),
-                .init(path: ["drinks"], value: " ", exchange: 1, confidence: 0.9),
-                .init(path: ["drinks"], value: "coffee", exchange: 1, confidence: 0.5),
+                .init(relation: .likes, to: " ", exchange: 1), .init(relation: .likes, to: long, exchange: 1),
             ]),
             from: [message("I drink coffee every morning")], into: &memory)
 
         #expect(changes.isEmpty)
-        #expect(rejected == [.notAPath([]), .notAPath(["a", "b", "c", "d"]), .notAValue(" "), .unsure(0.5)])
+        #expect(rejected == [.notAName(" "), .notAName(long)])
     }
 
     /// An extraction that began before they had their memory forgotten writes nothing.
@@ -444,7 +430,7 @@ struct MemoryTests {
         let input = ExtractionInput(conversation: check, new: [said], generation: memory.generation, existingFacts: [])
         memory.apply(.cleared(at: Date(timeIntervalSince1970: 3 * 86_400)))
 
-        let proposal = MemoryProposal(facts: [.init(path: ["lives in"], value: "Haar", exchange: 1, confidence: 1)])
+        let proposal = MemoryProposal(facts: [.init(relation: .livesIn, to: "Haar", exchange: 1)])
         #expect(memory.reading(proposal, of: input) == .stale)
     }
 }

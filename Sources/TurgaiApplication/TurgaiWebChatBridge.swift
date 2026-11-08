@@ -175,7 +175,7 @@ public actor TurgaiWebChatBridge {
     }
 
     /// What's remembered about `person`, as they see it.
-    public func remembered(about person: TurgaiDomain.UserID) async throws -> MemoryTree {
+    public func remembered(about person: TurgaiDomain.UserID) async throws -> Remembered {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }

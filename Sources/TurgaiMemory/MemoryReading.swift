@@ -10,28 +10,27 @@ import TurgaiDomain
 public struct MemoryProposal: Codable, Sendable, Equatable {
     /// Something new about the person.
     public struct Fact: Codable, Sendable, Equatable {
-        public let path: [String]
-        public let value: String
+        public let relation: MemoryRelation
+        public let to: String
         /// The new exchange it comes from, by its number.
         public let exchange: Int
-        public let confidence: Double
 
-        public init(path: [String], value: String, exchange: Int, confidence: Double) {
-            self.path = path
-            self.value = value
+        public init(relation: MemoryRelation, to: String, exchange: Int) {
+            self.relation = relation
+            self.to = to
             self.exchange = exchange
-            self.confidence = confidence
         }
     }
 
-    /// A line of their memory that what they said makes untrue.
+    /// A fact of their memory that what they said makes untrue.
     public struct Ending: Codable, Sendable, Equatable {
-        public let line: String
+        /// The fact, by its number.
+        public let fact: Int
         /// The new exchange that makes it untrue, by its number.
         public let exchange: Int
 
-        public init(line: String, exchange: Int) {
-            self.line = line
+        public init(fact: Int, exchange: Int) {
+            self.fact = fact
             self.exchange = exchange
         }
     }
@@ -49,12 +48,9 @@ public struct MemoryProposal: Codable, Sendable, Equatable {
 public enum MemoryRejection: Error, Codable, Sendable, Equatable {
     /// No new exchange has the number.
     case noSuchExchange(Int)
-    case notAPath([String])
-    case notAValue(String)
-    /// Less sure than a fact needs.
-    case unsure(Double)
-    /// The line is no current fact's, or several's.
-    case notRemembered(line: String)
+    /// No fact remembered has the number, or it's no longer current.
+    case noSuchFact(Int)
+    case notAName(String)
 }
 
 /// What reading a proposal decided.
@@ -68,12 +64,10 @@ public enum MemoryReading: Sendable, Equatable {
 }
 
 extension Memory {
-    /// How sure a fact must be, at least.
-    public static let minimumConfidence = 0.7
-
     /// What `proposal`, made from `input`, does to this memory. Endings come first, each naming a
-    /// current fact by its line; then each new fact is learned, unless it's current already. Each
-    /// names the new exchange it comes from: only those, never one read already.
+    /// fact of `input` by its number; then each new fact is learned, unless it's current already,
+    /// ending the one it takes the place of when there's one at a time. Each names the new exchange
+    /// it comes from: only those, never one read already.
     public func reading(
         _ proposal: MemoryProposal,
         of input: ExtractionInput,
@@ -94,9 +88,9 @@ extension Memory {
                 case .fact(let fact): memory.learning(fact, in: input, id: newID)
                 }
             switch step {
-            case .changed(let change):
-                memory.applyFactEvent(change)
-                changes.append(change)
+            case .changed(let changed):
+                for change in changed { memory.applyFactEvent(change) }
+                changes += changed
             case .unchanged:
                 continue
             case .rejected(let rejection):
@@ -119,37 +113,39 @@ extension Memory {
 
     /// What one part of a proposal does.
     private enum Step {
-        case changed(MemoryFactEvent)
+        case changed([MemoryFactEvent])
         /// They said what's remembered already.
         case unchanged
         case rejected(MemoryRejection)
     }
 
     private func ending(_ ending: MemoryProposal.Ending, in input: ExtractionInput) -> Step {
-        let line = Self.comparable(ending.line)
-        let named = currentFacts().filter { Self.comparable($0.line) == line }
-        guard named.count == 1, let fact = named.first else { return .rejected(.notRemembered(line: ending.line)) }
+        guard let fact = input.fact(ending.fact), currentFacts().contains(where: { $0.id == fact.id }) else {
+            return .rejected(.noSuchFact(ending.fact))
+        }
         switch Self.said(in: ending.exchange, of: input) {
-        case .success(let said): return .changed(.ended(fact.id, said))
+        case .success(let said): return .changed([.ended(fact.id, said)])
         case .failure(let rejection): return .rejected(rejection)
         }
     }
 
     private func learning(
-        _ fact: MemoryProposal.Fact, in input: ExtractionInput, id: () -> MemoryFactID
+        _ proposed: MemoryProposal.Fact, in input: ExtractionInput, id: () -> MemoryFactID
     ) -> Step {
-        guard let path = MemoryPath(fact.path) else { return .rejected(.notAPath(fact.path)) }
-        guard let value = MemoryValue(fact.value) else { return .rejected(.notAValue(fact.value)) }
-        guard fact.confidence >= Self.minimumConfidence else { return .rejected(.unsure(fact.confidence)) }
-        switch Self.said(in: fact.exchange, of: input) {
+        guard let name = MemoryName(proposed.to) else { return .rejected(.notAName(proposed.to)) }
+        switch Self.said(in: proposed.exchange, of: input) {
         case .failure(let rejection):
             return .rejected(rejection)
         case .success(let said):
-            guard !currentFacts().contains(where: { $0.path == path && $0.value.isSame(as: value) }) else {
-                return .unchanged
-            }
-            return .changed(
-                .learned(MemoryFact(id: id(), path: path, value: value, learned: said, confidence: fact.confidence)))
+            let fact = MemoryFact(id: id(), relation: proposed.relation, to: name, learned: said)
+            let current = currentFacts()
+            guard !current.contains(where: { $0.isSame(as: fact) }) else { return .unchanged }
+            let replaced: [MemoryFact] =
+                switch fact.relation.atOnce {
+                case .one: current.filter { $0.relation == fact.relation }
+                case .many: []
+                }
+            return .changed(replaced.map { MemoryFactEvent.ended($0.id, said) } + [.learned(fact)])
         }
     }
 
@@ -157,14 +153,5 @@ extension Memory {
     private static func said(in number: Int, of input: ExtractionInput) -> Result<Said, MemoryRejection> {
         guard let exchange = input.exchange(number) else { return .failure(.noSuchExchange(number)) }
         return .success(Said(observation: exchange.id, at: exchange.observedAt))
-    }
-
-    /// `text` as lines are compared: models copy loosely, so case, punctuation, and spacing aside.
-    private static func comparable(_ text: String) -> String {
-        text
-            .lowercased()
-            .filter { $0.isLetter || $0.isNumber || $0.isWhitespace }
-            .split(whereSeparator: \.isWhitespace)
-            .joined(separator: " ")
     }
 }

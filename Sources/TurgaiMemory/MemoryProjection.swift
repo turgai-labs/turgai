@@ -144,9 +144,9 @@ public struct Memory: Codable, Sendable, Equatable {
         facts.filter { $0.status == .current }
     }
 
-    /// What's remembered now, as a tree.
-    public var tree: MemoryTree {
-        MemoryTree(currentFacts())
+    /// What's remembered now.
+    public var remembered: Remembered {
+        Remembered(currentFacts())
     }
 
     /// The exchanges in `conversation` past its cursor: all of them, before any is read.

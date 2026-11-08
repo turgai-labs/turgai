@@ -12,88 +12,121 @@ import TurgaiPeople
     import Foundation
 #endif
 
-/// What one extraction pass found a conversation shows about the person. The User aggregate reads
-/// it into their memory: an exchange that isn't a new one, or a line that isn't in their memory,
-/// changes nothing.
+/// What one extraction pass found the new exchanges show about the person. The User aggregate reads
+/// it into their memory: an exchange or a fact it wasn't shown changes nothing.
 @Generable(description: "What the new exchanges show about the person.")
-public struct MemoryExtractionReport: Codable, Sendable {
-    @Generable
-    public struct MemoryExtractionCandidate: Codable, Sendable {
-        @Guide(
-            description:
-                "Where it goes in their memory: the names from them down, one to three, each a few words."
-        )
-        public let path: [String]
-        @Guide(description: "What it is.")
-        public let value: String
-        @Guide(description: "The number of the new exchange it comes from.")
-        public let exchange: Int
-        @Guide(description: "How certain it is that this is true, between 0 and 1.")
-        public let confidence: Double
-    }
-
-    @Generable
-    public struct MemoryExtractionEnding: Codable, Sendable {
-        @Guide(description: "A line of their memory, copied exactly.")
-        public let line: String
-        @Guide(description: "The number of the new exchange that makes it untrue.")
+public struct MemoryReport: Codable, Sendable {
+    @Generable(description: "A fact about the person.")
+    public struct Learned: Codable, Sendable {
+        public let relation: MemoryRelation
+        @Guide(description: "Who or what, by name.")
+        public let to: String
+        @Guide(description: "The new exchange it comes from.")
         public let exchange: Int
     }
 
-    public let memories: [MemoryExtractionCandidate]
-    @Guide(description: "The lines of their memory that the new exchanges make untrue.")
-    public let noLongerTrue: [MemoryExtractionEnding]
+    @Generable(description: "A fact of their memory that's no longer true.")
+    public struct Ended: Codable, Sendable {
+        @Guide(description: "A fact of their memory, by its number.")
+        public let fact: Int
+        @Guide(description: "The new exchange that makes it untrue.")
+        public let exchange: Int
+    }
+
+    public let learned: [Learned]
+    public let ended: [Ended]
 }
 
-extension MemoryExtractionReport {
+extension MemoryReport {
     /// It as the proposal it is: nothing in it checked.
     var proposal: MemoryProposal {
         MemoryProposal(
-            facts: memories.map {
-                MemoryProposal.Fact(path: $0.path, value: $0.value, exchange: $0.exchange, confidence: $0.confidence)
-            },
-            endings: noLongerTrue.map { MemoryProposal.Ending(line: $0.line, exchange: $0.exchange) }
+            facts: learned.map { MemoryProposal.Fact(relation: $0.relation, to: $0.to, exchange: $0.exchange) },
+            endings: ended.map { MemoryProposal.Ending(fact: $0.fact, exchange: $0.exchange) }
         )
     }
 }
 
-/// Runs one background extraction pass over one conversation: renders its exchanges as a
-/// transcript, those read already as context and the new ones numbered, with the person's memory
-/// as it is, asks the model for the typed extraction report, and returns it.
-public enum MemoryExtractionService {
-    /// Task instructions that are not field requirements belong here; the
-    /// generated schema carries the report and field descriptions.
-    private static let task = """
-        Find what this conversation shows about the person that will matter in later \
-        conversations: who they are, where they live, what they like, the people they know, their \
-        habits. Read their words together with the replies: what they answer, what they ask about \
-        and what they react to can show it as well as what they say outright. Only the new \
-        exchanges count; earlier ones are context. Leave out what matters only to this \
-        conversation. Put each at a path in their memory, under the names it already has. When the \
-        new exchanges make a line of their memory untrue, even without saying so, give that line. \
-        Return empty lists when they show nothing about the person.
-        """
+/// What a pass gives the model: their memory, each fact numbered; the conversation's exchanges read
+/// already; and its new ones, numbered.
+@Generable
+struct MemoryPassInput {
+    @Generable
+    struct Fact {
+        let fact: Int
+        let relation: MemoryRelation
+        let to: String
+    }
 
-    public static func extract(endpoint: any ModelEndpoint, input: ExtractionInput) async throws
-        -> MemoryExtractionReport
-    {
-        let lines = MemoryTree(input.existingFacts).facts.map(\.line)
-        let memory = lines.isEmpty ? "Their memory is empty." : "Their memory now:\n" + lines.joined(separator: "\n")
+    @Generable
+    struct Earlier {
+        let person: String
+        let assistant: String?
+    }
+
+    @Generable
+    struct New {
+        let exchange: Int
+        let person: String
+        let assistant: String?
+    }
+
+    let memory: [Fact]
+    let earlier: [Earlier]
+    let new: [New]
+}
+
+extension MemoryPassInput {
+    /// What `input` gives the model: its facts and new exchanges numbered from 1, as it reads them.
+    init(_ input: ExtractionInput) {
+        self.init(
+            memory: input.existingFacts.enumerated().map { index, fact in
+                Fact(fact: index + 1, relation: fact.relation, to: fact.to.rawValue)
+            },
+            earlier: input.earlier.map { Earlier(person: $0.text, assistant: $0.response) },
+            new: input.new.enumerated().map { index, exchange in
+                New(exchange: index + 1, person: exchange.text, assistant: exchange.response)
+            })
+    }
+}
+
+/// A relation, as a model writes it: one of their names.
+extension MemoryRelation: Generable {
+    public static var generationSchema: GenerationSchema {
+        GenerationSchema(
+            type: Self.self, description: "How the person is related to it.", anyOf: allCases.map(\.rawValue))
+    }
+
+    public init(_ content: GeneratedContent) throws {
+        guard case .string(let written) = content.kind, let relation = Self(rawValue: written) else {
+            throw GeneratedContentError.typeMismatch
+        }
+        self = relation
+    }
+
+    public var generatedContent: GeneratedContent {
+        GeneratedContent(rawValue)
+    }
+}
+
+/// Runs one background extraction pass over one conversation: gives the model the person's memory
+/// and the conversation's exchanges, those read already as context and the new ones numbered, asks
+/// it for the typed report, and returns it.
+public enum MemoryExtractionService {
+    public static func extract(endpoint: any ModelEndpoint, input: ExtractionInput) async throws -> MemoryReport {
+        let shown = MemoryPassInput(input)
         let entries: [Transcript.Entry] = [
-            .instructions(
-                .init(
-                    segments: [.text(.init(content: task))],
-                    toolDefinitions: []
-                )
-            ),
-            .prompt(.init(segments: [.text(.init(content: memory + "\n\n" + transcript(input)))])),
+            .prompt(
+                .init(segments: [
+                    .structure(.init(source: String(describing: MemoryPassInput.self), content: shown.generatedContent))
+                ]))
         ]
 
         let stream = endpoint.stream(
             request: ModelRequest(input: entries, entries: entries),
             tools: [],
             authority: FullAuthority(),
-            generating: MemoryExtractionReport.self,
+            generating: MemoryReport.self,
             purpose: .generation
         )
         for await event in stream {
@@ -148,24 +181,6 @@ public enum MemoryExtractionService {
             }
         }
         return outcome
-    }
-
-    /// `input`'s exchanges as the extractor reads them: those read already, unnumbered, then the
-    /// new ones, numbered from 1.
-    static func transcript(_ input: ExtractionInput) -> String {
-        let earlier = input.earlier.flatMap { lines(of: $0, numbered: nil) }
-        let new = input.new.enumerated().flatMap { index, exchange in lines(of: exchange, numbered: index + 1) }
-        let sections = [
-            earlier.isEmpty ? nil : (["Earlier in this conversation, read already:"] + earlier),
-            ["New:"] + new,
-        ]
-        return sections.compactMap { $0?.joined(separator: "\n") }.joined(separator: "\n\n")
-    }
-
-    /// One exchange's lines: what the person said, then the reply, under `number` when it's new.
-    private static func lines(of exchange: MemoryObservation, numbered number: Int?) -> [String] {
-        let label = number.map { " [\($0)]" } ?? ""
-        return ["user\(label): \(exchange.text)"] + (exchange.response.map { ["assistant\(label): \($0)"] } ?? [])
     }
 }
 

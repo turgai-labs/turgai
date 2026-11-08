@@ -83,8 +83,66 @@ public struct MemoryObservation: Hashable, Codable, Sendable {
     }
 }
 
-/// A name in a person's memory, as it's compared: trimmed, lowercased, its spaces collapsed, so
-/// `Lives in` and `lives  in` are the same name.
+/// How the person is related to whom or what a fact names.
+public enum MemoryRelation: String, Codable, Sendable, CaseIterable {
+    case name
+    case livesIn
+    case from
+    case worksAt
+    case worksAs
+    case studies
+    case speaks
+    case likes
+    case dislikes
+    case owns
+    case partner
+    case child
+    case parent
+    case sibling
+    case friend
+    case colleague
+    case plans
+
+    /// How many a person has at once.
+    public enum AtOnce: Sendable {
+        /// A new one ends the one before.
+        case one
+        case many
+    }
+
+    public var atOnce: AtOnce {
+        switch self {
+        case .name, .livesIn, .from, .worksAt, .worksAs, .partner: .one
+        case .studies, .speaks, .likes, .dislikes, .owns, .child, .parent, .sibling, .friend, .colleague, .plans:
+            .many
+        }
+    }
+
+    /// It as the person reads it: `Lives in`.
+    public var words: String {
+        switch self {
+        case .name: "Name"
+        case .livesIn: "Lives in"
+        case .from: "From"
+        case .worksAt: "Works at"
+        case .worksAs: "Works as"
+        case .studies: "Studies"
+        case .speaks: "Speaks"
+        case .likes: "Likes"
+        case .dislikes: "Dislikes"
+        case .owns: "Owns"
+        case .partner: "Partner"
+        case .child: "Child"
+        case .parent: "Parent"
+        case .sibling: "Sibling"
+        case .friend: "Friend"
+        case .colleague: "Colleague"
+        case .plans: "Plans"
+        }
+    }
+}
+
+/// Who or what a fact names, as it was written, its spaces collapsed: `Haar` or `Ann`.
 public struct MemoryName: Hashable, Codable, Sendable, CustomStringConvertible {
     /// How long a name is, at most.
     public static let maximumLength = 100
@@ -93,56 +151,14 @@ public struct MemoryName: Hashable, Codable, Sendable, CustomStringConvertible {
 
     /// `written`, as a name: `nil` when nothing's written, or too much.
     public init?(_ written: String) {
-        let name = written.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let name = written.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         guard !name.isEmpty, name.count <= Self.maximumLength else { return nil }
         self.rawValue = name
     }
 
-    public var description: String { rawValue }
-}
-
-/// Where a fact is in a person's memory: the names from them down, `lives in` or
-/// `family › sister`. Several facts can be at one path.
-public struct MemoryPath: Hashable, Codable, Sendable, CustomStringConvertible {
-    /// How deep a path goes, at most.
-    public static let maximumDepth = 3
-
-    public let names: [MemoryName]
-
-    /// `written`, from the person down, as a path: `nil` when a name isn't one, or there are none
-    /// or too many.
-    public init?(_ written: [String]) {
-        let names = written.compactMap(MemoryName.init)
-        guard names.count == written.count, (1...Self.maximumDepth).contains(names.count) else { return nil }
-        self.names = names
-    }
-
-    public var description: String {
-        names.map(\.rawValue).joined(separator: " › ")
-    }
-}
-
-/// What a fact says, as it was written, its ends trimmed.
-public struct MemoryValue: Hashable, Codable, Sendable, CustomStringConvertible {
-    /// How long a value is, at most.
-    public static let maximumLength = 500
-
-    public let rawValue: String
-
-    /// `written`, as a value: `nil` when nothing's written, or too much.
-    public init?(_ written: String) {
-        let value = written.trimmed()
-        guard !value.isEmpty, value.count <= Self.maximumLength else { return nil }
-        self.rawValue = value
-    }
-
-    /// Whether it says what `other` says, its case and spaces aside.
-    public func isSame(as other: MemoryValue) -> Bool {
-        compared == other.compared
-    }
-
-    private var compared: String {
-        rawValue.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    /// Whether it names what `other` names, its case aside.
+    public func isSame(as other: MemoryName) -> Bool {
+        rawValue.lowercased() == other.rawValue.lowercased()
     }
 
     public var description: String { rawValue }
@@ -159,8 +175,9 @@ public struct Said: Hashable, Codable, Sendable {
     }
 }
 
-/// Something a conversation showed about the person, at its place in their memory, with the exchange
-/// it came from. It's current until what they say makes it untrue, or they have it forgotten.
+/// Something a conversation showed about the person: how they're related to whom or what, with
+/// the exchange it came from. It's current until what they say makes it untrue, or they have it
+/// forgotten.
 public struct MemoryFact: Hashable, Codable, Sendable {
     public enum Status: Hashable, Codable, Sendable {
         /// True, as far as they've said.
@@ -172,32 +189,29 @@ public struct MemoryFact: Hashable, Codable, Sendable {
     }
 
     public let id: MemoryFactID
-    public let path: MemoryPath
-    public let value: MemoryValue
+    public let relation: MemoryRelation
+    public let to: MemoryName
     /// Where they said it.
     public let learned: Said
-    public let confidence: Double
     public private(set) var status: Status
 
     /// A fact just learned: current.
-    public init(
-        id: MemoryFactID = MemoryFactID(),
-        path: MemoryPath,
-        value: MemoryValue,
-        learned: Said,
-        confidence: Double
-    ) {
+    public init(id: MemoryFactID = MemoryFactID(), relation: MemoryRelation, to: MemoryName, learned: Said) {
         self.id = id
-        self.path = path
-        self.value = value
+        self.relation = relation
+        self.to = to
         self.learned = learned
-        self.confidence = min(max(confidence, 0), 1)
         self.status = .current
     }
 
-    /// It as a line of their memory: `lives in: Haar`.
+    /// It as a line of their memory: `Lives in: Haar`.
     public var line: String {
-        "\(path): \(value)"
+        "\(relation.words): \(to)"
+    }
+
+    /// Whether it says what `other` says: the same relation, to the same name.
+    public func isSame(as other: MemoryFact) -> Bool {
+        relation == other.relation && to.isSame(as: other.to)
     }
 
     mutating func transition(to status: Status) {
@@ -205,8 +219,8 @@ public struct MemoryFact: Hashable, Codable, Sendable {
     }
 }
 
-/// What one memory extraction reads: one conversation's exchanges, the last few read already, as
-/// context, and those since, which the extractor numbers from 1.
+/// What one memory extraction reads: what's remembered, which the extractor numbers from 1; and one
+/// conversation's exchanges, the last few read already, as context, and those since, numbered from 1.
 public struct ExtractionInput: Codable, Sendable, Equatable {
     /// The conversation they're from.
     public let conversation: ConversationID
@@ -215,6 +229,7 @@ public struct ExtractionInput: Codable, Sendable, Equatable {
     /// Its exchanges since: what's read now.
     public let new: [MemoryObservation]
     public let generation: MemoryGeneration
+    /// What's remembered: the facts current when it was taken.
     public let existingFacts: [MemoryFact]
 
     public init(
@@ -234,5 +249,10 @@ public struct ExtractionInput: Codable, Sendable, Equatable {
     /// The new exchange numbered `number`, counting from 1: none when there's no such one.
     public func exchange(_ number: Int) -> MemoryObservation? {
         new.indices.contains(number - 1) ? new[number - 1] : nil
+    }
+
+    /// The fact remembered numbered `number`, counting from 1: none when there's no such one.
+    public func fact(_ number: Int) -> MemoryFact? {
+        existingFacts.indices.contains(number - 1) ? existingFacts[number - 1] : nil
     }
 }

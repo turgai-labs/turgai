@@ -110,15 +110,16 @@ enum MemoryPresentation {
     /// How long a fact is on its button, at most.
     private static let maximumLabel = 48
 
-    /// What's remembered, as its tree, drawn in a code block so its lines stay in place.
-    static func text(_ remembered: MemoryTree, remembering: Remembering) -> String {
+    /// What's remembered, a line for each relation.
+    static func text(_ remembered: Remembered, remembering: Remembering) -> String {
         let off = remembering == .off ? "Memory is off: nothing new is remembered.\n" : ""
         guard !remembered.isEmpty else { return off + "Nothing is remembered." }
-        return off + "Remembered:\n```\n" + remembered.rendered() + "\n```"
+        let lines = remembered.lines.map { "\($0.relation.words): \($0.said)" }
+        return off + "Remembered:\n" + lines.joined(separator: "\n")
     }
 
     /// A button to forget each fact, one to turn remembering off or on, and one to forget everything.
-    static func actions(for remembered: MemoryTree, remembering: Remembering) -> [OutboundAction] {
+    static func actions(for remembered: Remembered, remembering: Remembering) -> [OutboundAction] {
         let forgetting = remembered.facts.map { fact in
             OutboundAction(
                 label: "Forget " + shortened(fact.line),
