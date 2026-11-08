@@ -4,7 +4,7 @@ import TurgaiModels
 
 /// The main window, once someone is signed in: Turgai's field behind everything, the open
 /// conversation over it, and a glass panel on the left, from the window's top, the traffic lights
-/// in its corner and the button that hides it beside them, with the person's spaces on a rail and
+/// in its corner and the button that hides it at its top right, with the person's spaces on a rail and
 /// the shown space's conversations. Hidden, the toolbar shows the button that brings it back, in
 /// the same place. The objects open in a window of their own.
 struct MainWindow: View {
@@ -276,23 +276,20 @@ private struct ObjectsButton: View {
     }
 }
 
-/// The left panel, Slack's way, on one surface: a row for the window's traffic lights with the
-/// button that hides the panel beside them; then the spaces on a rail, a hairline, and the shown
+/// The left panel, Slack's way, on one surface: a row for the window's traffic lights, the button
+/// that hides the panel at its other end; then the spaces on a rail, a hairline, and the shown
 /// space's heading, New conversation in it, and its conversations.
 private struct SidebarView: View {
     let store: StoreOf<SidebarFeature>
     let hide: () -> Void
 
-    /// How much of the panel's top row the traffic lights take.
-    private static let trafficLightsWidth: CGFloat = 70
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
-                    .padding(.leading, Self.trafficLightsWidth)
                 Spacer(minLength: 0)
+                HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
             }
+            .padding(.trailing, 10)
             .frame(height: 32)
             HStack(spacing: 0) {
                 SpaceRail(store: store)
