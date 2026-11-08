@@ -1,3 +1,5 @@
+import TurgaiDomain
+
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
@@ -74,12 +76,15 @@ public struct MemoryObservation: Hashable, Codable, Sendable {
 /// A name in a person's memory, as it's compared: trimmed, lowercased, its spaces collapsed, so
 /// `Lives in` and `lives  in` are the same name.
 public struct MemoryName: Hashable, Codable, Sendable, CustomStringConvertible {
+    /// How long a name is, at most.
+    public static let maximumLength = 100
+
     public let rawValue: String
 
-    /// `written`, as a name: `nil` when nothing's written.
+    /// `written`, as a name: `nil` when nothing's written, or too much.
     public init?(_ written: String) {
         let name = written.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !name.isEmpty else { return nil }
+        guard !name.isEmpty, name.count <= Self.maximumLength else { return nil }
         self.rawValue = name
     }
 
@@ -87,14 +92,14 @@ public struct MemoryName: Hashable, Codable, Sendable, CustomStringConvertible {
 }
 
 /// Where a fact is in a person's memory: the names from them down, `lives in` or
-/// `family › sister`. A fact is known by its path: a new value at the same path replaces it.
+/// `family › sister`. Several facts can be at one path.
 public struct MemoryPath: Hashable, Codable, Sendable, CustomStringConvertible {
     /// How deep a path goes, at most.
     public static let maximumDepth = 3
 
     public let names: [MemoryName]
 
-    /// `written`, from the person down, as a path: `nil` when a name is empty, or there are none
+    /// `written`, from the person down, as a path: `nil` when a name isn't one, or there are none
     /// or too many.
     public init?(_ written: [String]) {
         let names = written.compactMap(MemoryName.init)
@@ -107,116 +112,86 @@ public struct MemoryPath: Hashable, Codable, Sendable, CustomStringConvertible {
     }
 }
 
-public enum MemoryFactStatus: Hashable, Codable, Sendable {
-    case active
-    case superseded(by: MemoryFactID)
-    case forgotten
+/// What a fact says, as it was written, its ends trimmed.
+public struct MemoryValue: Hashable, Codable, Sendable, CustomStringConvertible {
+    /// How long a value is, at most.
+    public static let maximumLength = 500
+
+    public let rawValue: String
+
+    /// `written`, as a value: `nil` when nothing's written, or too much.
+    public init?(_ written: String) {
+        let value = written.trimmed()
+        guard !value.isEmpty, value.count <= Self.maximumLength else { return nil }
+        self.rawValue = value
+    }
+
+    /// Whether it says what `other` says, its case and spaces aside.
+    public func isSame(as other: MemoryValue) -> Bool {
+        compared == other.compared
+    }
+
+    private var compared: String {
+        rawValue.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    public var description: String { rawValue }
 }
 
-/// Something the person said about themselves, at its place in their memory, with the messages it
-/// came from.
-///
-/// A newer value at the same path supersedes the older one, which is kept as superseded.
+/// Where the person said something: the message, and when.
+public struct Said: Hashable, Codable, Sendable {
+    public let observation: ObservationID
+    public let at: Date
+
+    public init(observation: ObservationID, at: Date) {
+        self.observation = observation
+        self.at = at
+    }
+}
+
+/// Something the person said about themselves, at its place in their memory, with where they said
+/// it. It's current until what they say makes it untrue, or they have it forgotten.
 public struct MemoryFact: Hashable, Codable, Sendable {
+    public enum Status: Hashable, Codable, Sendable {
+        /// True, as far as they've said.
+        case current
+        /// What they said made it untrue.
+        case ended(Said)
+        /// They had it forgotten.
+        case forgotten
+    }
+
     public let id: MemoryFactID
     public let path: MemoryPath
-    public let value: String
-    public private(set) var evidence: [ObservationID]
-    public private(set) var confidence: Double
-    public let observedAt: Date
-    public private(set) var status: MemoryFactStatus
+    public let value: MemoryValue
+    /// Where they said it.
+    public let learned: Said
+    public let confidence: Double
+    public private(set) var status: Status
 
+    /// A fact just learned: current.
     public init(
         id: MemoryFactID = MemoryFactID(),
         path: MemoryPath,
-        value: String,
-        evidence: [ObservationID],
-        confidence: Double,
-        observedAt: Date,
-        status: MemoryFactStatus = .active
+        value: MemoryValue,
+        learned: Said,
+        confidence: Double
     ) {
         self.id = id
         self.path = path
         self.value = value
-        self.evidence = evidence
+        self.learned = learned
         self.confidence = min(max(confidence, 0), 1)
-        self.observedAt = observedAt
+        self.status = .current
+    }
+
+    /// It as a line of their memory: `lives in: Haar`.
+    public var line: String {
+        "\(path): \(value)"
+    }
+
+    mutating func transition(to status: Status) {
         self.status = status
-    }
-
-    mutating func reinforce(evidence: [ObservationID], confidence: Double) {
-        let merged = self.evidence + evidence.filter { !self.evidence.contains($0) }
-        self.evidence = merged
-        self.confidence = min(max(confidence, 0), 1)
-    }
-
-    mutating func transition(to status: MemoryFactStatus) {
-        self.status = status
-    }
-}
-
-/// The extractor's proposal. Carries no identity and no authority: the
-/// deterministic ``MemoryPolicy`` decides what becomes a durable fact, while
-/// ``MemoryEvidence`` validates that its provenance is user-authored.
-public struct FactCandidate: Hashable, Codable, Sendable {
-    public let path: MemoryPath
-    public let value: String
-    public let evidence: [ObservationID]
-    /// A short verbatim fragment from one of the referenced user
-    /// observations. This is deliberately separate from the assistant
-    /// response: tool output and generated text can provide context, but
-    /// cannot establish a personal fact.
-    public let supportingText: String
-    public let confidence: Double
-    public let observedAt: Date
-
-    public init(
-        path: MemoryPath,
-        value: String,
-        evidence: [ObservationID],
-        supportingText: String,
-        confidence: Double,
-        observedAt: Date = Date()
-    ) {
-        self.path = path
-        self.value = value
-        self.evidence = evidence
-        self.supportingText = supportingText
-        self.confidence = min(max(confidence, 0), 1)
-        self.observedAt = observedAt
-    }
-}
-
-/// Pure validation of proposal provenance. The referenced observation IDs
-/// identify possible sources; the supporting text proves that at least one of
-/// those sources is the user's own message. Observation responses are never
-/// searched, so generated replies and tool results cannot become evidence.
-public enum MemoryEvidence {
-    public static func supports(
-        _ candidate: FactCandidate,
-        in observations: [MemoryObservation]
-    ) -> Bool {
-        let quote = normalized(candidate.supportingText)
-        guard !candidate.evidence.isEmpty, !quote.isEmpty else { return false }
-        guard
-            candidate.evidence.allSatisfy({ evidenceID in
-                observations.contains { $0.id == evidenceID }
-            })
-        else {
-            return false
-        }
-
-        return observations.contains { observation in
-            candidate.evidence.contains(observation.id)
-                && normalized(observation.text).contains(quote)
-        }
-    }
-
-    private static func normalized(_ text: String) -> String {
-        text
-            .lowercased()
-            .split(whereSeparator: { $0.isWhitespace })
-            .joined(separator: " ")
     }
 }
 
@@ -255,47 +230,5 @@ public struct ExtractionInput: Codable, Sendable, Equatable {
                 return $0.offset < $1.offset
             }
             .map(\.element)
-    }
-}
-
-public enum MemoryFactChange: String, Codable, Sendable, Equatable {
-    case accepted
-    case reinforced
-    case superseded
-}
-
-/// The transient result of one memory write. It is returned to the
-/// application shell so a channel can acknowledge meaningful changes without
-/// coupling the memory journal to any transport.
-public struct MemoryUpdate: Hashable, Codable, Sendable, Equatable {
-    public let observationRecorded: Bool
-    public let factChanges: [MemoryFactChange]
-
-    public init(
-        observationRecorded: Bool = false,
-        factChanges: [MemoryFactChange] = []
-    ) {
-        self.observationRecorded = observationRecorded
-        self.factChanges = factChanges
-    }
-
-    /// Number of fact changes represented by this update, not the total number
-    /// of facts currently stored in the projection.
-    public var changedFactCount: Int {
-        factChanges.count
-    }
-
-    public var newFactCount: Int {
-        factChanges.count { $0 == .accepted }
-    }
-
-    /// Number of existing facts reinforced or superseded by this update.
-    /// This is intentionally scoped to this update, not the whole memory.
-    public var updatedFactCount: Int {
-        factChanges.count { $0 != .accepted }
-    }
-
-    public var shouldNotify: Bool {
-        !factChanges.isEmpty
     }
 }

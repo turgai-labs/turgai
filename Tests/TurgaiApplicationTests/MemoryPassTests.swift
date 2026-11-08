@@ -1,5 +1,7 @@
+import Foundation
 import Testing
 import TurgaiMemory
+import TurgaiPeople
 
 @testable import TurgaiApplication
 
@@ -7,6 +9,16 @@ import TurgaiMemory
 /// and noting only what was kept.
 struct MemoryPassTests {
     private struct Unreachable: Error {}
+
+    /// What a pass that learned something returns.
+    private let learned = ExtractionOutcome.committed(
+        changes: [
+            .learned(
+                MemoryFact(
+                    path: MemoryPath(["likes"])!, value: MemoryValue("tea")!,
+                    learned: Said(observation: ObservationID(), at: Date()), confidence: 1))
+        ],
+        rejected: [])
 
     /// How many times it was asked to extract.
     private actor Tries {
@@ -25,7 +37,7 @@ struct MemoryPassTests {
             after: .zero, retries: [.zero, .zero],
             extract: {
                 guard await tries.next() == 3 else { throw Unreachable() }
-                return .committed(MemoryUpdate(factChanges: [.accepted]))
+                return learned
             },
             failed: { _ in }
         )
@@ -38,7 +50,7 @@ struct MemoryPassTests {
         #expect(!(await MemoryPass.run(after: .zero, retries: [], extract: { .alreadyHandled }, failed: { _ in })))
         #expect(
             !(await MemoryPass.run(
-                after: .zero, retries: [], extract: { .committed(MemoryUpdate(factChanges: [])) }, failed: { _ in })))
+                after: .zero, retries: [], extract: { .committed(changes: [], rejected: []) }, failed: { _ in })))
         #expect(!(await MemoryPass.run(after: .zero, retries: [.zero], extract: { throw Unreachable() }, failed: { _ in })))
     }
 
@@ -51,7 +63,7 @@ struct MemoryPassTests {
                 after: .seconds(60), retries: [],
                 extract: {
                     _ = await tries.next()
-                    return .committed(MemoryUpdate(factChanges: [.accepted]))
+                    return learned
                 },
                 failed: { _ in }
             )

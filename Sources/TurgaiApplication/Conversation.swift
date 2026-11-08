@@ -121,7 +121,7 @@ enum MemoryPresentation {
     static func actions(for remembered: MemoryTree, remembering: Remembering) -> [OutboundAction] {
         let forgetting = remembered.facts.map { fact in
             OutboundAction(
-                label: "Forget " + shortened("\(fact.path): \(fact.value)"),
+                label: "Forget " + shortened(fact.line),
                 command: "/forget-fact \(fact.id.rawValue.uuidString)")
         }
         let turning =

@@ -1,6 +1,7 @@
 import AnyLanguageModel
 import DistributedCluster
 import Hail
+import Logging
 import TurgaiDomain
 import TurgaiMemory
 import TurgaiPeople
@@ -12,8 +13,8 @@ import TurgaiPeople
 #endif
 
 /// What one extraction pass found the person said about themselves. The User
-/// aggregate reconciles every candidate against its durable observations, so a
-/// candidate whose quote does not match a user message verbatim is rejected.
+/// aggregate reads it into their memory: a quote that isn't their own words, or
+/// a line that isn't in their memory, changes nothing.
 @Generable(description: "What the person said about themselves.")
 public struct MemoryExtractionReport: Codable, Sendable {
     @Generable
@@ -31,7 +32,29 @@ public struct MemoryExtractionReport: Codable, Sendable {
         public let confidence: Double
     }
 
+    @Generable
+    public struct MemoryExtractionEnding: Codable, Sendable {
+        @Guide(description: "A line of their memory, copied exactly.")
+        public let line: String
+        @Guide(description: "The words that make it untrue, copied exactly from the person's own message.")
+        public let quote: String
+    }
+
     public let memories: [MemoryExtractionCandidate]
+    @Guide(description: "The lines of their memory that what they say makes untrue.")
+    public let noLongerTrue: [MemoryExtractionEnding]
+}
+
+extension MemoryExtractionReport {
+    /// It as the proposal it is: nothing in it checked.
+    var proposal: MemoryProposal {
+        MemoryProposal(
+            facts: memories.map {
+                MemoryProposal.Fact(path: $0.path, value: $0.value, quote: $0.quote, confidence: $0.confidence)
+            },
+            endings: noLongerTrue.map { MemoryProposal.Ending(line: $0.line, quote: $0.quote) }
+        )
+    }
 }
 
 /// Runs one background extraction pass: renders the user messages under
@@ -44,17 +67,18 @@ public enum MemoryExtractionService {
         Find what the person says about themselves that matters in later conversations: who they \
         are, where they live, what they like, the people they know, their habits. A request to \
         make or do something is not about them. Assistant replies are only context. Put each at a \
-        path in their memory, under the names it already has. Return an empty list when they say \
-        nothing about themselves.
+        path in their memory, under the names it already has. When what they say makes a line of \
+        their memory untrue, even without saying so, give that line. Return empty lists when they \
+        say nothing about themselves.
         """
 
     public static func extract(
         endpoint: any ModelEndpoint,
         observations: [MemoryObservation],
-        remembered: MemoryTree
+        remembered: [MemoryFact]
     ) async throws -> MemoryExtractionReport {
-        let memory =
-            remembered.isEmpty ? "Their memory is empty." : "Their memory now:\n" + remembered.rendered(root: "They")
+        let lines = MemoryTree(remembered).facts.map(\.line)
+        let memory = lines.isEmpty ? "Their memory is empty." : "Their memory now:\n" + lines.joined(separator: "\n")
         let entries: [Transcript.Entry] = [
             .instructions(
                 .init(
@@ -85,10 +109,9 @@ public enum MemoryExtractionService {
         throw AgentRuntimeError.modelMisbehavior("Memory extraction produced no report")
     }
 
-    /// The background pass runs after the conversation goes quiet: it extracts
-    /// candidates for pending exchanges, validates them against the captured
-    /// batch and its context, then commits the result. User owns the write-time
-    /// generation and latest-source guards.
+    /// The background pass runs after the conversation goes quiet: it asks for
+    /// a proposal for pending exchanges, and User reads it into their memory,
+    /// with the write-time generation and latest-source guards.
     public static func extractAndCommit(
         endpoint: any ModelEndpoint,
         actorSystem: ClusterSystem,
@@ -99,68 +122,30 @@ public enum MemoryExtractionService {
         guard snapshot.latestObservationSourceID == expectedLatestSourceID else { return .stale }
         guard !snapshot.input.observations.isEmpty else { return .alreadyHandled }
 
-        let evidence = snapshot.input.chronologicalObservations
         let report = try await extract(
-            endpoint: endpoint, observations: evidence, remembered: MemoryTree(snapshot.input.existingFacts))
+            endpoint: endpoint, observations: snapshot.input.chronologicalObservations,
+            remembered: snapshot.input.existingFacts)
 
         // Keep the input and generation captured before the model call so a
         // concurrent forget cannot associate this report with a new generation.
-        let candidates = report.memories.compactMap { candidate in
-            Self.candidate(from: candidate, evidence: evidence)
-        }
-        let rejected = report.memories.count - candidates.count
-        if rejected > 0 {
-            actorSystem.log.warning(
-                "Memory extraction rejected candidates",
-                metadata: [
-                    "returned": "\(report.memories.count)",
-                    "kept": "\(candidates.count)",
-                    "rejectedQuotes": .string(report.memories.map(\.quote).joined(separator: " | ")),
-                ]
-            )
-        } else {
-            actorSystem.log.info(
-                "Memory extraction pass",
-                metadata: [
-                    "observations": "\(snapshot.input.observations.count)",
-                    "candidates": "\(report.memories.count)",
-                ]
-            )
-        }
-        return try await user.commitExtraction(
+        let outcome = try await user.commitExtraction(
             snapshot.input,
-            candidates: candidates,
+            proposal: report.proposal,
             expectedLatestSourceID: expectedLatestSourceID
         )
-    }
-
-    /// Maps one model candidate to a concrete one. Validation, not trust: the quote must match
-    /// exactly one stored observation verbatim, the path must be one, and the value must be
-    /// written. Candidates that fail are dropped here, before User ever sees them.
-    static func candidate(
-        from candidate: MemoryExtractionReport.MemoryExtractionCandidate,
-        evidence: [MemoryObservation]
-    ) -> FactCandidate? {
-        let quote = normalize(candidate.quote)
-        let value = candidate.value.trimmed()
-        guard !quote.isEmpty, !value.isEmpty, value.count <= 500,
-            let path = MemoryPath(candidate.path),
-            path.names.allSatisfy({ $0.rawValue.count <= 100 })
-        else { return nil }
-        let matchingSources = evidence.filter { normalize($0.text).contains(quote) }
-        let matchingSourceIDs = Set(matchingSources.map(\.sourceID))
-        guard matchingSourceIDs.count == 1,
-            let sourceID = matchingSourceIDs.first,
-            let source = matchingSources.first(where: { $0.sourceID == sourceID })
-        else { return nil }
-        return FactCandidate(
-            path: path,
-            value: value,
-            evidence: [source.id],
-            supportingText: candidate.quote,
-            confidence: candidate.confidence,
-            observedAt: source.observedAt
-        )
+        if case .committed(let changes, let rejected) = outcome {
+            let metadata: Logger.Metadata = [
+                "observations": "\(snapshot.input.observations.count)",
+                "changes": "\(changes.count)",
+                "rejected": .string(rejected.map { String(describing: $0) }.joined(separator: " | ")),
+            ]
+            if rejected.isEmpty {
+                actorSystem.log.info("Memory extraction pass", metadata: metadata)
+            } else {
+                actorSystem.log.warning("Memory extraction rejected part of its proposal", metadata: metadata)
+            }
+        }
+        return outcome
     }
 
     static func transcript(_ observations: [MemoryObservation]) -> String {
@@ -171,16 +156,6 @@ public enum MemoryExtractionService {
             }
             return exchange
         }.joined(separator: "\n")
-    }
-
-    private static func normalize(_ value: String) -> String {
-        // Punctuation-tolerant: models quote loosely ("mornings," vs
-        // "mornings"), so matching ignores case, punctuation, and spacing.
-        value
-            .lowercased()
-            .filter { $0.isLetter || $0.isNumber || $0.isWhitespace }
-            .split(whereSeparator: { $0.isWhitespace })
-            .joined(separator: " ")
     }
 }
 
@@ -229,8 +204,8 @@ enum MemoryPass {
         var waits = retries[...]
         while true {
             do {
-                guard case .committed(let update) = try await extract() else { return false }
-                return update.shouldNotify
+                guard case .committed(let changes, _) = try await extract() else { return false }
+                return !changes.isEmpty
             } catch is CancellationError {
                 return false
             } catch {

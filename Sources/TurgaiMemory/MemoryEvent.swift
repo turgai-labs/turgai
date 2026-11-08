@@ -6,21 +6,16 @@
 
 /// Events in the memory section of one user's journal.
 ///
-/// Facts are proposals over observations, not direct mutations. Rejected
-/// Rejected candidates produce no fact-level event. A completed extraction
-/// still records which source messages were examined, even when no fact was
-/// accepted.
+/// Facts change only when an extraction is committed: what was learned and what ended, decided by
+/// ``Memory/reading(_:of:newID:)``. A committed extraction still records which messages it read,
+/// even when nothing changed.
 public indirect enum MemoryEvent: Codable, Sendable, Equatable {
     /// Logically forgets the active memory projection. Earlier journal events
     /// remain available to infrastructure readers, but replay after this
     /// boundary starts a fresh memory generation.
     case cleared(at: Date)
     case observationRecorded(MemoryObservation)
-    case factAccepted(MemoryFact)
-    case factReinforced(MemoryFactID, evidence: [ObservationID], confidence: Double)
-    /// One atomic event: the old fact becomes `superseded(by:)` and the
-    /// replacement fact is appended as active.
-    case factSuperseded(MemoryFactID, by: MemoryFact)
+    /// They had a fact forgotten.
     case factForgotten(MemoryFactID)
     case extractionCommitted(MemoryExtractionCommit)
     /// The person turned remembering what they say on or off.
@@ -34,8 +29,8 @@ public enum Remembering: String, Codable, Sendable, Equatable {
     case off
 }
 
-/// One atomic extraction result: processed sources plus any accepted
-/// fact-level changes. Lifecycle events such as `cleared` cannot be nested.
+/// One atomic extraction result: the messages read, and what that changed in their memory.
+/// Lifecycle events such as `cleared` cannot be nested.
 public struct MemoryExtractionCommit: Codable, Sendable, Equatable {
     public let generation: MemoryGeneration
     public let processedSources: [MemorySourceID]
@@ -55,8 +50,10 @@ public struct MemoryExtractionCommit: Codable, Sendable, Equatable {
     }
 }
 
+/// What reading their messages changed in their memory.
 public enum MemoryFactEvent: Codable, Sendable, Equatable {
-    case factAccepted(MemoryFact)
-    case factReinforced(MemoryFactID, evidence: [ObservationID], confidence: Double)
-    case factSuperseded(MemoryFactID, by: MemoryFact)
+    /// They said something new about themselves.
+    case learned(MemoryFact)
+    /// What they said made a fact untrue.
+    case ended(MemoryFactID, Said)
 }

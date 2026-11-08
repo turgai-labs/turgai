@@ -37,16 +37,13 @@ public struct UserRecord: Codable, Sendable, Equatable {
 /// The read model for one background extraction pass.
 public struct MemoryExtractionSnapshot: Codable, Sendable {
     public let input: ExtractionInput
-    /// Every stored observation, for verbatim candidate matching.
-    public let evidence: [MemoryObservation]
-
-    public var latestObservationSourceID: MemorySourceID? {
-        Memory.latestObservation(in: evidence)?.sourceID
-    }
+    /// The latest message they sent, when it was taken.
+    public let latestObservationSourceID: MemorySourceID?
 }
 
 public enum ExtractionOutcome: Codable, Sendable, Equatable {
-    case committed(MemoryUpdate)
+    /// The messages are read: what changed in their memory, and what didn't and why.
+    case committed(changes: [MemoryFactEvent], rejected: [MemoryRejection])
     case stale
     case alreadyHandled
 }
@@ -121,25 +118,21 @@ public distributed actor User {
         try await emit(event: .memory(.observationRecorded(observation)))
     }
 
-    /// Applies the pure extraction decision as one memory journal event.
+    /// Reads `proposal`, made from `input`, into their memory, and journals what it decided.
     public distributed func commitExtraction(
         _ input: ExtractionInput,
-        candidates: [FactCandidate],
+        proposal: MemoryProposal,
         expectedLatestSourceID: MemorySourceID
     ) async throws -> ExtractionOutcome {
         guard state.memory.latestObservationSourceID == expectedLatestSourceID else {
             return .stale
         }
-        switch MemoryExtraction.decide(
-            state: state.memory,
-            input: input,
-            candidates: candidates
-        ) {
+        switch state.memory.reading(proposal, of: input) {
         case .stale:
             return .stale
-        case .alreadyHandled:
+        case .alreadyRead:
             return .alreadyHandled
-        case .commit(let commit):
+        case .read(let commit, let rejected):
             try await emit(event: .memory(.extractionCommitted(commit)))
             // `emit` persists and applies the event, but it suspends. A
             // reentrant `/forget` may therefore have established a newer
@@ -153,17 +146,12 @@ public distributed actor User {
             else {
                 return .stale
             }
-            return .committed(
-                MemoryUpdate(
-                    factChanges: commit.changes.map(Self.change(from:))
-                )
-            )
+            return .committed(changes: commit.changes, rejected: rejected)
         }
     }
 
     /// The state slice one extraction pass needs: an immutable input built
-    /// from current state, plus the full evidence list for candidate
-    /// matching. Conversation owns all extraction logic; User exposes reads.
+    /// from current state, and the latest message it's for.
     public distributed func extractionSnapshot() -> MemoryExtractionSnapshot {
         let pending = state.memory.observations.filter {
             state.memory.accepts($0) && !state.memory.isProcessed($0)
@@ -175,16 +163,8 @@ public distributed actor User {
                 existingFacts: state.memory.currentFacts(),
                 previousObservations: state.memory.recentObservations(limit: 32)
             ),
-            evidence: state.memory.observations
+            latestObservationSourceID: state.memory.latestObservationSourceID
         )
-    }
-
-    private static func change(from event: MemoryFactEvent) -> MemoryFactChange {
-        switch event {
-        case .factAccepted: .accepted
-        case .factReinforced: .reinforced
-        case .factSuperseded: .superseded
-        }
     }
 
     /// What's remembered about them, as a recall answers it.

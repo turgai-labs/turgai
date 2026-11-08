@@ -4,14 +4,13 @@
     import Foundation
 #endif
 
-/// What's remembered about a person, as a tree: under them, each name with the value of the fact at
-/// its path, when there's one, and the names under it, in the order they were first learned. The
-/// tree of a human's linked persons holds each one's fact at a path, where they differ.
+/// What's remembered about a person, as a tree: under them, each name with the values of the facts
+/// at its path, when there are any, and the names under it, in the order they were first learned.
+/// The tree of a human's linked persons holds each one's facts.
 public struct MemoryTree: Hashable, Codable, Sendable {
     public struct Node: Hashable, Codable, Sendable {
         public let name: MemoryName
-        /// The facts at its path: one in a person's own memory, none when a name only groups the
-        /// ones under it, and one from each linked person who remembers it.
+        /// The facts at its path: none when a name only groups the ones under it.
         public let here: [MemoryFact]
         public let children: [Node]
 
@@ -24,13 +23,13 @@ public struct MemoryTree: Hashable, Codable, Sendable {
         /// learned, the earliest first.
         var said: String? {
             var values: [MemoryFact] = []
-            for fact in here.sorted(by: { $0.observedAt < $1.observedAt })
-            where !values.contains(where: { $0.value == fact.value }) {
+            for fact in here.sorted(by: { $0.learned.at < $1.learned.at })
+            where !values.contains(where: { $0.value.isSame(as: fact.value) }) {
                 values.append(fact)
             }
             guard let only = values.first else { return nil }
-            guard values.count > 1 else { return only.value }
-            return values.map { "\($0.value) (\($0.observedAt.formatted(.iso8601.year().month().day())))" }
+            guard values.count > 1 else { return only.value.rawValue }
+            return values.map { "\($0.value) (\($0.learned.at.formatted(.iso8601.year().month().day())))" }
                 .joined(separator: " · ")
         }
     }
@@ -38,7 +37,7 @@ public struct MemoryTree: Hashable, Codable, Sendable {
     /// The names right under the person.
     public let nodes: [Node]
 
-    /// The tree of `facts`: one at each path in a person's own memory.
+    /// The tree of `facts`.
     public init(_ facts: [MemoryFact]) {
         self.nodes = Self.nodes(of: facts, at: 0)
     }

@@ -89,10 +89,9 @@ struct ConversationTests {
         let fact = MemoryFact(
             id: MemoryFactID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!),
             path: MemoryPath(["lives in"])!,
-            value: "Haar, Germany",
-            evidence: [],
-            confidence: 0.9,
-            observedAt: Date(timeIntervalSince1970: 1)
+            value: MemoryValue("Haar, Germany")!,
+            learned: Said(observation: ObservationID(), at: Date(timeIntervalSince1970: 1)),
+            confidence: 0.9
         )
         let remembered = MemoryTree([fact])
         #expect(

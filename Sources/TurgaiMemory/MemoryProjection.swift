@@ -9,7 +9,7 @@
 ///
 /// The journal keeps full provenance; memory keeps only a bounded
 /// tail of recent observations (extraction context) plus every fact with its
-/// status, so contradictions stay visible after supersession.
+/// status, so a fact that ended stays, ended.
 public struct Memory: Codable, Sendable, Equatable {
     /// The observation tail is hard-bounded; older observations remain in
     /// the journal, not in memory. `processedSources` is keyed by sourceID,
@@ -110,17 +110,8 @@ public struct Memory: Codable, Sendable, Equatable {
             else { return }
             appendObservation(observation)
 
-        case .factAccepted(let fact):
-            applyFactEvent(.factAccepted(fact))
-
-        case .factReinforced(let id, let evidence, let confidence):
-            applyFactEvent(.factReinforced(id, evidence: evidence, confidence: confidence))
-
-        case .factSuperseded(let id, let replacement):
-            applyFactEvent(.factSuperseded(id, by: replacement))
-
         case .factForgotten(let id):
-            guard let index = facts.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = facts.firstIndex(where: { $0.id == id && $0.status == .current }) else { return }
             facts[index].transition(to: .forgotten)
 
         case .extractionCommitted(let commit):
@@ -148,24 +139,19 @@ public struct Memory: Codable, Sendable, Equatable {
         }
     }
 
-    public mutating func applyFactEvent(_ event: MemoryFactEvent) {
+    mutating func applyFactEvent(_ event: MemoryFactEvent) {
         switch event {
-        case .factAccepted(let fact):
+        case .learned(let fact):
             facts.append(fact)
-        case .factReinforced(let id, let evidence, let confidence):
-            guard let index = facts.firstIndex(where: { $0.id == id }) else { return }
-            facts[index].reinforce(evidence: evidence, confidence: confidence)
-        case .factSuperseded(let id, let replacement):
-            if let index = facts.firstIndex(where: { $0.id == id }) {
-                facts[index].transition(to: .superseded(by: replacement.id))
-            }
-            facts.append(replacement)
+        case .ended(let id, let said):
+            guard let index = facts.firstIndex(where: { $0.id == id && $0.status == .current }) else { return }
+            facts[index].transition(to: .ended(said))
         }
     }
 
     /// The facts that are true now, in the order they were learned.
     public func currentFacts() -> [MemoryFact] {
-        facts.filter { $0.status == .active }
+        facts.filter { $0.status == .current }
     }
 
     /// What's remembered now, as a tree.
