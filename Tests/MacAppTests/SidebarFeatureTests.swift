@@ -138,11 +138,11 @@ struct SidebarFeatureTests {
         }
     }
 
-    /// The sidebar shows the open conversation's space; its switcher lists every space, dotted
-    /// where something's new; switching opens a space's latest conversation, or starts one in a
-    /// space with none; New conversation starts one in the space shown.
+    /// The sidebar shows the open conversation's space; its rail has every space, dotted where
+    /// something's new; switching opens a space's latest conversation, or starts one in a space
+    /// with none; New conversation starts one in the space shown.
     @Test
-    func theSwitcherShowsOneSpaceAtATime() async {
+    func theRailShowsOneSpaceAtATime() async {
         let family = SpaceSummary(id: "family", name: "Family", role: .admin)
         let work = SpaceSummary(id: "work", name: "Work", role: .member)
         let started = LockIsolated<[String?]>([])
@@ -156,11 +156,12 @@ struct SidebarFeatureTests {
         state.selected = dinner.id
         #expect(state.shownSpace == family)
         #expect(state.entries == [.init(id: dinner.id, title: "plan dinner", unread: false, isOpen: true)])
-        #expect(state.spaceChoices.map(\.title) == ["Turgai  •", "Family", "Work"])
-        #expect(state.unreadElsewhere)
+        #expect(state.spaceChoices.map(\.initial) == ["T", "F", "W"])
+        #expect(state.spaceChoices.map(\.unread) == [true, false, false])
+        #expect(state.spaceChoices.map(\.isShown) == [false, true, false])
         #expect(state.renameShownSpace == "Rename “Family”…")
         #expect(state.newConversationHelp == "New conversation in Family")
-        #expect(state.switcherTitle == "Family")
+        #expect(state.shownSpaceName == "Family")
 
         let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "work")
         let store = TestStore(initialState: state) {

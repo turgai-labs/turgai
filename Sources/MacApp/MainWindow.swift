@@ -2,8 +2,8 @@ import ComposableArchitecture
 import SwiftUI
 import TurgaiModels
 
-/// The main window, once someone is signed in: their conversations on the left, by space, and
-/// every object they may see on the right, each in a glass panel floating over Turgai's field with
+/// The main window, once someone is signed in: their spaces on a rail at the left, then the shown
+/// space's conversations, and every object they may see on the right, each in a glass panel floating over Turgai's field with
 /// the button that hides it; a hidden panel leaves a button where it was to show it again. The open
 /// conversation is between them.
 struct MainWindow: View {
@@ -11,6 +11,8 @@ struct MainWindow: View {
     @Bindable var store: StoreOf<AppFeature>
 
     private static let sidebarWidth: CGFloat = 250
+    /// How wide the rail of spaces is.
+    private static let railWidth: CGFloat = 36
     private static let objectsWidth: CGFloat = 300
     /// Between a panel and the window's edge, and between a panel and the conversation.
     private static let gap: CGFloat = 10
@@ -24,9 +26,15 @@ struct MainWindow: View {
             ChatView(
                 session: session, title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
             )
-            .safeAreaPadding(.leading, (store.showsSidebar ? Self.sidebarWidth : Self.showButtonWidth) + Self.gap)
+            .safeAreaPadding(
+                .leading,
+                Self.railWidth + Self.gap + (store.showsSidebar ? Self.sidebarWidth : Self.showButtonWidth) + Self.gap
+            )
             .safeAreaPadding(.trailing, (store.showsObjects ? Self.objectsWidth : Self.showButtonWidth) + Self.gap)
             HStack(alignment: .top, spacing: 0) {
+                SpaceRail(store: store.scope(state: \.sidebar, action: \.sidebar))
+                    .frame(width: Self.railWidth)
+                    .padding(.trailing, Self.gap)
                 if store.showsSidebar {
                     FloatingPanel(width: Self.sidebarWidth) {
                         SidebarView(store: store.scope(state: \.sidebar, action: \.sidebar)) {
@@ -143,9 +151,9 @@ private struct ObjectsPanel: View {
     }
 }
 
-/// The conversations panel: the button that hides it; the space shown, whose name switches spaces,
-/// and New conversation in it; then its conversations, the latest first, a dot marking one with
-/// something new. A conversation renames from its menu.
+/// The conversations panel: the button that hides it; the shown space's name and New conversation
+/// in it; then its conversations, the latest first, a dot marking one with something new. A
+/// conversation renames from its menu.
 private struct SidebarView: View {
     @Bindable var store: StoreOf<SidebarFeature>
     let hide: () -> Void
@@ -156,7 +164,9 @@ private struct SidebarView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 12)
             HStack(spacing: 8) {
-                SpaceSwitcher(store: store)
+                SpaceHeading(name: store.shownSpaceName, rename: store.renameShownSpace) {
+                    store.send(.renameShownSpaceTapped)
+                }
                 Spacer(minLength: 0)
                 Button {
                     store.send(.newConversationTapped)
@@ -199,50 +209,96 @@ private struct SidebarView: View {
     }
 }
 
-/// The space shown, by its name: a menu of every space, with New space and, for
-/// its admins, renaming it. A dot says something's new in another.
-private struct SpaceSwitcher: View {
+/// Every space the person is in, Slack's way: a glass tile each with its initial, tinted in the
+/// accent while it's the one shown, dotted when something's new in it; + makes a new space.
+private struct SpaceRail: View {
     let store: StoreOf<SidebarFeature>
 
     var body: some View {
-        Menu {
+        VStack(spacing: 10) {
             ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
-                Button {
-                    store.send(.spaceSwitched(choice.id))
-                } label: {
-                    if choice.isShown {
-                        Label(choice.title, systemImage: "checkmark")
-                    } else {
-                        Text(choice.title)
-                    }
-                }
+                SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
             }
-            Divider()
-            Button("New space…") { store.send(.newSpaceTapped) }
-            if let rename = store.renameShownSpace {
-                Button(rename) { store.send(.renameShownSpaceTapped) }
+            Button {
+                store.send(.newSpaceTapped)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 36, height: 36)
+                    .contentShape(.rect)
             }
-        } label: {
-            HStack(spacing: 6) {
-                Text(store.switcherTitle)
-                    .font(.system(size: 18, weight: .heavy))
-                    .tracking(-0.4)
-                    .lineLimit(1)
-                    .foregroundStyle(Color.turgaiInk)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.turgaiMuted)
-                if store.unreadElsewhere {
-                    Circle().fill(Color.turgaiAccent).frame(width: 7, height: 7)
-                        .accessibilityLabel("New messages in another space")
-                }
-            }
-            .contentShape(.rect)
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.turgaiMuted)
+            .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
+            .help("New space")
         }
-        .menuStyle(.button)
+    }
+}
+
+/// A space's tile on the rail.
+private struct SpaceTile: View {
+    let choice: SidebarFeature.SpaceChoice
+    let pick: () -> Void
+
+    var body: some View {
+        Button(action: pick) {
+            Text(choice.initial)
+                .font(.system(size: 15, weight: .heavy))
+                .foregroundStyle(choice.isShown ? .white : Color.turgaiInk)
+                .frame(width: 36, height: 36)
+                .contentShape(.rect)
+        }
         .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .help("Switch spaces")
+        .glassEffect(.regular.tint(choice.isShown ? .turgaiAccent : nil).interactive(), in: .rect(cornerRadius: 10))
+        .overlay(alignment: .topTrailing) {
+            if choice.unread {
+                Circle().fill(Color.turgaiAccent).frame(width: 9, height: 9).offset(x: 3, y: -3)
+                    .accessibilityLabel("New messages")
+            }
+        }
+        .help(choice.space.name)
+    }
+}
+
+/// The shown space's name, heading the panel: for its admins, a menu that renames it.
+private struct SpaceHeading: View {
+    let name: String
+    /// What renaming it says, when its person may: none otherwise.
+    let rename: String?
+    let renameTapped: () -> Void
+
+    var body: some View {
+        if let rename {
+            Menu {
+                Button(rename, action: renameTapped)
+            } label: {
+                HStack(spacing: 6) {
+                    SpaceName(name: name)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(Color.turgaiMuted)
+                }
+                .contentShape(.rect)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+        } else {
+            SpaceName(name: name)
+        }
+    }
+}
+
+/// A space's name, as the panel's heading sets it.
+private struct SpaceName: View {
+    let name: String
+
+    var body: some View {
+        Text(name)
+            .font(.system(size: 18, weight: .heavy))
+            .tracking(-0.4)
+            .lineLimit(1)
+            .foregroundStyle(Color.turgaiInk)
     }
 }
 

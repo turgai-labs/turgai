@@ -2,9 +2,9 @@ import ComposableArchitecture
 import Foundation
 import TurgaiModels
 
-/// The window's sidebar: one of the person's spaces at a time, the open conversation's, with its
-/// conversations, the one something was last said in first; the one open; and which have something
-/// new since they were last open.
+/// The window's sidebar, Slack's way: every space the person is in, on a rail; the one shown, the
+/// open conversation's, with its conversations, the one something was last said in first; the one
+/// open; and which have something new since they were last open.
 @Reducer
 struct SidebarFeature {
     /// A conversation, as the sidebar lists it.
@@ -31,15 +31,15 @@ struct SidebarFeature {
         var isEmphasized: Bool { isOpen || unread }
     }
 
-    /// A space in the switcher's menu: whether it's the one shown, and whether something's new in it.
+    /// A space on the rail: whether it's the one shown, and whether something's new in it.
     struct SpaceChoice: Equatable, Identifiable {
         let space: SpaceSummary
         let isShown: Bool
         let unread: Bool
 
         var id: String { space.id }
-        /// What the menu says: its name, and a dot when something's new in it.
-        var title: String { unread ? "\(space.name)  •" : space.name }
+        /// What its tile says: the first letter of its name.
+        var initial: String { space.name.prefix(1).uppercased() }
     }
 
     /// A name being written: a conversation's or a space's new one, or a new space's.
@@ -109,22 +109,16 @@ struct SidebarFeature {
             }
         }
 
-        /// What the switcher says: the shown space's name, or what it switches before the spaces are
-        /// read.
-        var switcherTitle: String { shownSpace?.name ?? "Spaces" }
+        /// What the panel is headed: the shown space's name, or Spaces before they're read.
+        var shownSpaceName: String { shownSpace?.name ?? "Spaces" }
 
-        /// Every space, for the switcher's menu.
+        /// Every space, for the rail.
         var spaceChoices: [SpaceChoice] {
             spaces.map { space in
                 SpaceChoice(
                     space: space, isShown: space.id == shownSpace?.id,
                     unread: conversations.contains { $0.spaceID == space.id && $0.unread })
             }
-        }
-
-        /// Something's new in a space that isn't shown.
-        var unreadElsewhere: Bool {
-            spaceChoices.contains { !$0.isShown && $0.unread }
         }
 
         /// What renaming the shown space says, when its person is one of its admins: none otherwise.
@@ -144,7 +138,7 @@ struct SidebarFeature {
         case loaded([SpaceSummary], [Conversation])
         case failed(String)
         case selected(ConversationID)
-        /// A space picked in the switcher: its latest conversation opens, or a new one starts there.
+        /// A space picked on the rail: its latest conversation opens, or a new one starts there.
         case spaceSwitched(String)
         /// New conversation, in the shown space.
         case newConversationTapped
