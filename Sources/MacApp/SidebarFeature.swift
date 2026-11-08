@@ -19,16 +19,11 @@ struct SidebarFeature {
         var shownTitle: String { title ?? "New conversation" }
     }
 
-    /// A conversation as a line in the sidebar: what it's called, whether something's new in it,
-    /// and whether it's the one open.
+    /// A conversation as a line in the sidebar: what it's called, and whether something's new in it.
     struct Entry: Equatable, Identifiable {
         let id: ConversationID
         let title: String
         let unread: Bool
-        let isOpen: Bool
-
-        /// It stands out: it's open, or something's new in it.
-        var isEmphasized: Bool { isOpen || unread }
     }
 
     /// A space on the rail: whether it's the one shown, and whether something's new in it.
@@ -140,7 +135,7 @@ struct SidebarFeature {
         /// The shown space's conversations, the one something was last said in first.
         var entries: [Entry] {
             conversations.filter { $0.spaceID == shownSpace?.id }.map {
-                Entry(id: $0.id, title: $0.shownTitle, unread: $0.unread, isOpen: $0.id == selected)
+                Entry(id: $0.id, title: $0.shownTitle, unread: $0.unread)
             }
         }
 
@@ -173,6 +168,8 @@ struct SidebarFeature {
         case loaded([SpaceSummary], [Conversation])
         case failed(String)
         case selected(ConversationID)
+        /// The list's selection changed: none when it's cleared, which changes nothing.
+        case selectionChanged(ConversationID?)
         /// A space picked on the rail: its latest conversation opens, or a new one starts there.
         case spaceSwitched(String)
         /// New conversation, in the shown space.
@@ -242,6 +239,10 @@ struct SidebarFeature {
             case .failed(let why):
                 state.error = why
                 return .none
+
+            case .selectionChanged(let id):
+                guard let id, id != state.selected else { return .none }
+                return .send(.selected(id))
 
             case .selected(let id):
                 state.selected = id
