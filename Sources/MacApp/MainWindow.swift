@@ -54,6 +54,8 @@ struct MainWindow: View {
                 }
             }
             .padding(Self.gap)
+            // A hidden panel's button stays at the top, as its panel's header was.
+            .frame(maxHeight: .infinity, alignment: .top)
         }
         .task(id: session) { store.send(.sidebar(.appeared(session))) }
     }
@@ -72,17 +74,20 @@ struct PanelCommands: Commands {
     }
 }
 
-/// A glass panel floating over the window.
+/// A glass panel floating over the window, its corners concentric with the window's, as the
+/// system's own sidebars are.
 private struct FloatingPanel<Content: View>: View {
     let width: CGFloat
     @ViewBuilder let content: Content
+
+    private var shape: ConcentricRectangle { ConcentricRectangle(corners: .concentric(minimum: 12), isUniform: true) }
 
     var body: some View {
         content
             .frame(width: width)
             .frame(maxHeight: .infinity)
-            .clipShape(.rect(cornerRadius: 24))
-            .glassEffect(.regular, in: .rect(cornerRadius: 24))
+            .clipShape(shape)
+            .glassEffect(.regular, in: shape)
     }
 }
 
@@ -138,41 +143,44 @@ private struct ObjectsPanel: View {
     }
 }
 
-/// The conversations panel: the button that hides it and Turgai's name; New conversation; then
-/// each space with its conversations, the latest first, a dot marking one with something new; New
-/// space at the bottom. A conversation, and a space to its admins, renames from its menu.
+/// The conversations panel: the button that hides it; the space shown, whose name switches spaces,
+/// and New conversation in it; then its conversations, the latest first, a dot marking one with
+/// something new. A conversation renames from its menu.
 private struct SidebarView: View {
     @Bindable var store: StoreOf<SidebarFeature>
     let hide: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
+                .padding(.horizontal, 12)
+                .padding(.top, 12)
             HStack(spacing: 8) {
-                HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
-                Wordmark()
+                SpaceSwitcher(store: store)
+                Spacer(minLength: 0)
+                Button {
+                    store.send(.newConversationTapped)
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.turgaiAccent)
+                .help(store.newConversationHelp)
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
-            if let choice = store.newConversation {
-                NewConversationButton(choice: choice) { store.send(.newConversationTapped(spaceID: $0)) }
-                    .padding(.horizontal, 8)
-            }
+            .padding(.leading, 16)
+            .padding(.trailing, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(store.sections) { (section: SidebarFeature.Section) in
-                        SpaceHeader(name: section.space.name)
+                    ForEach(store.entries) { (entry: SidebarFeature.Entry) in
+                        ConversationLine(entry: entry) { store.send(.selected(entry.id)) }
                             .contextMenu {
-                                if section.canRename {
-                                    Button("Rename…") { store.send(.renameSpaceTapped(section.id)) }
-                                }
+                                Button("Rename…") { store.send(.renameConversationTapped(entry.id)) }
                             }
-                        ForEach(section.entries) { (entry: SidebarFeature.Entry) in
-                            ConversationLine(entry: entry) { store.send(.selected(entry.id)) }
-                                .contextMenu {
-                                    Button("Rename…") { store.send(.renameConversationTapped(entry.id)) }
-                                }
-                        }
                     }
                 }
                 .padding(.horizontal, 8)
@@ -181,17 +189,6 @@ private struct SidebarView: View {
             if let error = store.error {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
             }
-            Button {
-                store.send(.newSpaceTapped)
-            } label: {
-                Label("New space", systemImage: "plus")
-                    .foregroundStyle(Color.turgaiMuted)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
         }
         .alert(store.naming?.title ?? "", isPresented: $store.isNaming.sending(\.namingPresented)) {
             TextField("Name", text: $store.name.sending(\.nameChanged))
@@ -202,63 +199,60 @@ private struct SidebarView: View {
     }
 }
 
-/// New conversation: in the one space there is, or in one picked from a menu.
-private struct NewConversationButton: View {
-    let choice: SidebarFeature.NewConversation
-    let start: (String) -> Void
+/// The space shown, as Turgai's mark and its name: a menu of every space, with New space and, for
+/// its admins, renaming it. A dot says something's new in another.
+private struct SpaceSwitcher: View {
+    let store: StoreOf<SidebarFeature>
 
     var body: some View {
-        switch choice {
-        case .inSpace(let space):
-            Button {
-                start(space)
-            } label: {
-                NewConversationLabel()
-            }
-            .buttonStyle(.plain)
-        case .pick(let spaces):
-            Menu {
-                ForEach(spaces) { (space: SpaceSummary) in
-                    Button(space.name) { start(space.id) }
+        Menu {
+            ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
+                Button {
+                    store.send(.spaceSwitched(choice.id))
+                } label: {
+                    if choice.isShown {
+                        Label(choice.title, systemImage: "checkmark")
+                    } else {
+                        Text(choice.title)
+                    }
                 }
-            } label: {
-                NewConversationLabel()
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-        }
-    }
-}
-
-/// What New conversation looks like: a line like a conversation's, in the accent.
-private struct NewConversationLabel: View {
-    var body: some View {
-        Label("New conversation", systemImage: "square.and.pencil")
-            .font(.body.weight(.semibold))
-            .foregroundStyle(Color.turgaiAccent)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Divider()
+            Button("New space…") { store.send(.newSpaceTapped) }
+            if let rename = store.renameShownSpace {
+                Button(rename) { store.send(.renameShownSpaceTapped) }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image.skylark
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 20, height: 20)
+                    .foregroundStyle(Color.turgaiAccent)
+                Text(store.switcherTitle)
+                    .font(.system(size: 18, weight: .heavy))
+                    .tracking(-0.4)
+                    .lineLimit(1)
+                    .foregroundStyle(Color.turgaiInk)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.turgaiMuted)
+                if store.unreadElsewhere {
+                    Circle().fill(Color.turgaiAccent).frame(width: 7, height: 7)
+                        .accessibilityLabel("New messages in another space")
+                }
+            }
             .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .help("Switch spaces")
     }
 }
 
-/// A space's name, over its conversations.
-private struct SpaceHeader: View {
-    let name: String
-
-    var body: some View {
-        Text(name)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(Color.turgaiInk)
-            .padding(.horizontal, 10)
-            .padding(.top, 14)
-            .padding(.bottom, 4)
-    }
-}
-
-/// A conversation: its name, a dot when something's new in it, tinted while it's open.
+/// A conversation: its name, a dot when something's new in it; while it's open, tinted and marked
+/// with a bar in the accent.
 private struct ConversationLine: View {
     let entry: SidebarFeature.Entry
     let open: () -> Void
@@ -266,17 +260,29 @@ private struct ConversationLine: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: 6) {
-                Text(entry.title).lineLimit(1).foregroundStyle(Color.turgaiInk)
+                Text(entry.title)
+                    .font(.system(size: 13, weight: entry.isEmphasized ? .semibold : .regular))
+                    .lineLimit(1)
+                    .foregroundStyle(Color.turgaiInk)
                 Spacer(minLength: 0)
                 if entry.unread {
                     Circle().fill(Color.turgaiAccent).frame(width: 7, height: 7)
                         .accessibilityLabel("New messages")
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
+            .padding(.leading, 12)
+            .padding(.trailing, 10)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(entry.isOpen ? Color.turgaiAccent.opacity(0.14) : .clear, in: .rect(cornerRadius: 8))
+            .background(alignment: .leading) {
+                if entry.isOpen {
+                    ZStack(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 6).fill(Color.turgaiAccent.opacity(0.12))
+                        RoundedRectangle(cornerRadius: 1.5).fill(Color.turgaiAccent).frame(width: 3)
+                            .padding(.vertical, 5)
+                    }
+                }
+            }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)

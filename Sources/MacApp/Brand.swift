@@ -7,7 +7,6 @@ extension Color {
     static let turgaiInk = Color(light: 0x20313D, dark: 0xEEF4F3)
     static let turgaiMuted = Color(light: 0x536671, dark: 0xA0B7BF)
     static let turgaiCanvas = Color(light: 0xFFFFFF, dark: 0x09151E)
-    static let turgaiAccentSoft = Color(light: 0xFFF0EC, dark: 0x4B2423)
     static let signalCoral = Color(light: 0xEF5B4D, dark: 0xFF8175)
     static let signalYellow = Color(light: 0xF4C542, dark: 0xF7D66B)
     static let signalBlue = Color(light: 0x2864E8, dark: 0x79A7FF)
@@ -44,26 +43,9 @@ extension Image {
     static let skylark = Image("Skylark", bundle: .module)
 }
 
-/// The skylark and Turgai's name beside it, as the cards show them, smaller.
-struct Wordmark: View {
-    var body: some View {
-        HStack(spacing: 6) {
-            Image.skylark
-                .resizable()
-                .scaledToFit()
-                .frame(width: 20, height: 20)
-                .foregroundStyle(Color.turgaiAccent)
-            Text("Turgai")
-                .font(.system(size: 20, weight: .heavy))
-                .tracking(-0.5)
-                .foregroundStyle(Color.turgaiInk)
-        }
-    }
-}
-
-/// Turgai's geometry for working screens, as the web's app pages draw it: a soft accent block tilted
-/// at the top right, a faint coral bar at the bottom left, a faint yellow square above it; quiet
-/// enough to read over, for the glass to sit on.
+/// Turgai's geometry for working screens, after the web's app pages: a coral block tilted at the
+/// top right, a blue bar at the bottom left, a yellow square above it; strong enough for the glass
+/// to have color to bend, quiet enough for messages to read over.
 struct WorkingField: View {
     var body: some View {
         GeometryReader { geometry in
@@ -72,17 +54,17 @@ struct WorkingField: View {
             ZStack {
                 Color.turgaiCanvas
                 Rectangle()
-                    .fill(Color.turgaiAccentSoft.opacity(0.62))
+                    .fill(Color.signalCoral.opacity(0.28))
                     .frame(width: block.width, height: block.height)
                     .rotationEffect(.degrees(-9))
                     .position(x: size.width - block.width / 2, y: 112 + block.height / 2)
                 Rectangle()
-                    .fill(Color.signalYellow.opacity(0.16))
+                    .fill(Color.signalYellow.opacity(0.55))
                     .frame(width: 112, height: 112)
                     .rotationEffect(.degrees(14))
                     .position(x: 56, y: 248)
                 Rectangle()
-                    .fill(Color.signalCoral.opacity(0.12))
+                    .fill(Color.signalBlue.opacity(0.22))
                     .frame(width: 384, height: 80)
                     .rotationEffect(.degrees(7))
                     .position(x: 192, y: size.height - 152)

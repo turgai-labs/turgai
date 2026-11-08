@@ -138,32 +138,51 @@ struct SidebarFeatureTests {
         }
     }
 
-    /// Each space lists its own conversations, the open one marked; New conversation starts in the
-    /// one space there is, or offers each, the open conversation's first.
+    /// The sidebar shows the open conversation's space; its switcher lists every space, dotted
+    /// where something's new; switching opens a space's latest conversation, or starts one in a
+    /// space with none; New conversation starts one in the space shown.
     @Test
-    func spacesListTheirConversationsAndWhereANewOneStarts() {
+    func theSwitcherShowsOneSpaceAtATime() async {
         let family = SpaceSummary(id: "family", name: "Family", role: .admin)
+        let work = SpaceSummary(id: "work", name: "Work", role: .member)
+        let started = LockIsolated<[String?]>([])
         var state = SidebarFeature.State()
-        #expect(state.newConversation == nil)
-        state.spaces = [turgai]
+        state.session = session
+        state.spaces = [turgai, family, work]
         state.conversations = [
             .init(id: dinner.id, title: "plan dinner", spaceID: "family"),
             .init(id: trip.id, title: nil, spaceID: "turgai", unread: true),
         ]
-        #expect(state.newConversation == .inSpace("turgai"))
-
-        state.spaces = [turgai, family]
         state.selected = dinner.id
-        #expect(
-            state.sections == [
-                .init(
-                    space: turgai,
-                    entries: [.init(id: trip.id, title: "New conversation", unread: true, isOpen: false)]),
-                .init(
-                    space: family,
-                    entries: [.init(id: dinner.id, title: "plan dinner", unread: false, isOpen: true)]),
-            ])
-        #expect(state.newConversation == .pick([family, turgai]))
+        #expect(state.shownSpace == family)
+        #expect(state.entries == [.init(id: dinner.id, title: "plan dinner", unread: false, isOpen: true)])
+        #expect(state.spaceChoices.map(\.title) == ["Turgai  •", "Family", "Work"])
+        #expect(state.unreadElsewhere)
+        #expect(state.renameShownSpace == "Rename “Family”…")
+        #expect(state.newConversationHelp == "New conversation in Family")
+        #expect(state.switcherTitle == "Family")
+
+        let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "work")
+        let store = TestStore(initialState: state) {
+            SidebarFeature()
+        } withDependencies: {
+            $0.server.startConversation = { _, space in
+                started.withValue { $0.append(space) }
+                return lunch
+            }
+        }
+        await store.send(.spaceSwitched("family"))
+        await store.send(.spaceSwitched("turgai"))
+        await store.receive(\.selected) {
+            $0.selected = self.trip.id
+            $0.conversations[id: self.trip.id]?.unread = false
+        }
+        await store.receive(\.delegate, .open(trip.id))
+        await store.send(.spaceSwitched("work"))
+        await store.receive(\.started) { $0.conversations.insert(.init(id: lunch.id, spaceID: "work"), at: 0) }
+        await store.receive(\.selected) { $0.selected = lunch.id }
+        await store.receive(\.delegate, .open(lunch.id))
+        #expect(started.value == ["work"])
     }
 }
 
