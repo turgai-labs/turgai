@@ -129,10 +129,9 @@ struct SidebarFeatureTests {
         state.selected = dinner.id
         let store = TestStore(initialState: state) { SidebarFeature() }
 
-        await store.send(.conversationTitled(Conversation(id: trip.id, botID: trip.botID, title: "Rome", spaceID: "turgai"))) {
-            $0.conversations[id: self.trip.id]?.title = "Rome"
-        }
-        await store.send(.conversationJoined(Conversation(id: trip.id, botID: trip.botID, title: "Rome", spaceID: "turgai")))
+        let rome = Conversation(id: trip.id, botID: trip.botID, title: "Rome", spaceID: "turgai")
+        await store.send(.conversationTitled(rome)) { $0.conversations[id: self.trip.id]?.title = "Rome" }
+        await store.send(.conversationJoined(rome))
         let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "turgai")
         await store.send(.conversationJoined(lunch)) {
             $0.conversations.insert(.init(id: lunch.id, title: nil, spaceID: "turgai", unread: true), at: 0)
@@ -186,12 +185,15 @@ struct ChatOpeningTests {
             $0.chat.send = { command in sent.withValue { $0.append(command) } }
         }
 
-        await store.send(.open(trip, inSpace: "turgai")) {
+        let turgai = SpaceSummary(id: "turgai", name: "Turgai", role: .member)
+        await store.send(.open(trip, in: turgai)) {
             $0.conversationID = trip
-            $0.spaceID = "turgai"
+            $0.space = turgai
             $0.messages = []
         }
         #expect(sent.value == [.open(conversationID: trip)])
+        #expect(store.state.addingTitle == "Add someone from Turgai")
+        #expect(store.state.nobodyToAdd == "Everyone in Turgai is here already.")
 
         let late = Message(id: MessageID(), role: .user, text: "late")
         await store.send(.received(ChatEvent(payload: .messageAccepted(conversationID: dinner, turnID: nil, message: late))))

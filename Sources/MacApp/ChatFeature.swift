@@ -29,8 +29,8 @@ struct ChatFeature {
         var session: Session?
         /// The conversation it shows: none until the window opens one.
         var conversationID: ConversationID?
-        /// The space it's in.
-        var spaceID: String?
+        /// The space it's in, as it was when it was opened.
+        var space: SpaceSummary?
         /// Who's in it: its agent and its people.
         var participants: [ParticipantSummary] = []
         /// The people in its space who aren't in it, while one is being picked to add: none otherwise.
@@ -70,6 +70,14 @@ struct ChatFeature {
         /// Someone in the space is being picked to add.
         var isAddingPeople: Bool { addable != nil }
 
+        /// What adding someone is called: from its space.
+        var addingTitle: String { space.map { "Add someone from \($0.name)" } ?? "Add someone" }
+
+        /// What adding someone says when everyone in its space is in it.
+        var nobodyToAdd: String {
+            space.map { "Everyone in \($0.name) is here already." } ?? "Everyone is here already."
+        }
+
         /// Something's typed, and there's a connection to send it on.
         var canSend: Bool {
             guard case .connected = connection else { return false }
@@ -102,8 +110,8 @@ struct ChatFeature {
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         case connect(Session)
-        /// Show `id`, in the space `spaceID`, instead of the conversation shown before.
-        case open(ConversationID, inSpace: String)
+        /// Show `id`, in `space`, instead of the conversation shown before.
+        case open(ConversationID, in: SpaceSummary?)
         case participantsLoaded([ParticipantSummary])
         case addPeopleTapped
         case addableLoaded([SpacePerson])
@@ -192,7 +200,7 @@ struct ChatFeature {
 
             case .open(let id, let space):
                 guard id != state.conversationID else { return .none }
-                state = State(connection: state.connection, session: state.session, conversationID: id, spaceID: space)
+                state = State(connection: state.connection, session: state.session, conversationID: id, space: space)
                 return .merge(
                     .run { _ in try? await chat.send(.open(conversationID: id)) },
                     loadParticipants(of: id, as: state.session)
@@ -203,9 +211,9 @@ struct ChatFeature {
                 return .none
 
             case .addPeopleTapped:
-                guard let session = state.session, let space = state.spaceID else { return .none }
+                guard let session = state.session, let space = state.space else { return .none }
                 return .run { send in
-                    if let people = try? await server.people(session, space) { await send(.addableLoaded(people)) }
+                    if let people = try? await server.people(session, space.id) { await send(.addableLoaded(people)) }
                 }
 
             case .addableLoaded(let people):

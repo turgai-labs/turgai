@@ -94,6 +94,11 @@ struct SidebarFeature {
             selected.flatMap { conversations[id: $0]?.shownTitle } ?? "New conversation"
         }
 
+        /// The space `id` is in, as it's listed.
+        func space(of id: ConversationID) -> SpaceSummary? {
+            conversations[id: id].flatMap { row in spaces.first { $0.id == row.spaceID } }
+        }
+
         /// Each space, with its conversations, the one something was last said in first.
         var sections: [Section] {
             spaces.map { space in

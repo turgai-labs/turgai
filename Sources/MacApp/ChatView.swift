@@ -33,7 +33,7 @@ struct ChatView: View {
                 } label: {
                     Label("Add someone", systemImage: "person.badge.plus")
                 }
-                .help("Add someone from this space")
+                .help(state.addingTitle)
             }
         }
         .modifier(
@@ -43,7 +43,10 @@ struct ChatView: View {
         .task(id: session) { store.send(.connect(session)) }
         .onDisappear { store.send(.disconnect) }
         .sheet(isPresented: $store.isAddingPeople.sending(\.addingPresented)) {
-            AddPeopleSheet(people: state.addable ?? [], add: { store.send(.addTapped($0)) }) {
+            AddPeopleSheet(
+                title: state.addingTitle, nobody: state.nobodyToAdd, people: state.addable ?? [],
+                add: { store.send(.addTapped($0)) }
+            ) {
                 store.send(.addingPresented(false))
             }
         }
@@ -348,17 +351,21 @@ private struct AccessRequestAlert: ViewModifier {
     }
 }
 
-/// The people in the conversation's space who aren't in it: picking one adds them.
+/// The people in the conversation's space who aren't in it: picking one adds them. It says which
+/// space, and when there's no one left to add.
 private struct AddPeopleSheet: View {
+    let title: String
+    /// What it says when there's no one left to add.
+    let nobody: String
     let people: [SpacePerson]
     let add: (SpacePerson) -> Void
     let done: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Add someone").font(.headline)
+            Text(title).font(.headline)
             if people.isEmpty {
-                Text("Everyone in this space is in this conversation.")
+                Text(nobody)
                     .foregroundStyle(Color.turgaiMuted)
             } else {
                 List(people) { (person: SpacePerson) in
