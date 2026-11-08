@@ -3,37 +3,30 @@ import ComposableArchitecture
 import SwiftUI
 import TurgaiModels
 
-/// The open conversation, under its name as a headline.
+/// The open conversation, its name in the window's toolbar.
 struct ChatView: View {
     let session: Session
     /// What it's called.
     let title: String
-    /// Its space's color.
-    let hue: SpaceHue
     @Bindable var store: StoreOf<ChatFeature>
 
     private var state: ChatFeature.State { store.state }
 
     var body: some View {
-        ZStack {
-            ScrollView {
-                MessageList(store: store)
-            }
-            // What's new keeps the end in view, and a short conversation sits at the bottom.
-            .defaultScrollAnchor(.bottom)
-            // The messages run under the headline's glass and the floating composer; the glass is
-            // the headline's own, not the bar's dimming behind it.
-            .safeAreaBar(edge: .top, spacing: 0) {
-                Headline(title: title, hue: hue, participants: state.shownParticipants, notice: state.connectionNotice)
-            }
-            .scrollEdgeEffectHidden(true, for: .top)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                BottomBar(store: store)
+        ScrollView {
+            MessageList(store: store)
+        }
+        // What's new keeps the end in view, and a short conversation sits at the bottom.
+        .defaultScrollAnchor(.bottom)
+        // The messages run under the floating composer.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            BottomBar(store: store)
+        }
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                ConversationHeader(title: title, participants: state.participantsLine, notice: state.connectionNotice)
             }
         }
-        // Not on under the toolbar: what scrolls up goes under the headline's glass, and is cut off
-        // behind it.
-        .clipped()
         .modifier(
             AccessRequestAlert(request: state.accessRequests.first) { request, answer in
                 store.send(.accessAnswered(request.id, answer))
@@ -43,75 +36,32 @@ struct ChatView: View {
     }
 }
 
-/// The conversation's name, as the screen's headline, set off by a bar of its space's color; under
-/// it, who's in it, each on a stamp of their messages' color, and what's wrong with the connection
-/// while something is. It floats on glass, as the panel does, as far from it and the window's edge.
-private struct Headline: View {
+/// The toolbar's middle: the conversation's name, and what's wrong with the connection while
+/// something is; under them, who's in it.
+private struct ConversationHeader: View {
     let title: String
-    let hue: SpaceHue
-    let participants: [ShownParticipant]
+    let participants: String
     /// What's wrong with the connection: none while it's connected.
     let notice: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Rectangle().fill(hue.color).frame(width: 6, height: 26)
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
                 Text(title)
-                    .font(.system(size: 30, weight: .heavy).width(.condensed))
+                    .font(.system(size: 13, weight: .bold))
                     .tracking(-0.3)
                     .lineLimit(1)
                     .foregroundStyle(Color.turgaiInk)
-            }
-            HStack(spacing: 8) {
-                ForEach(participants) { (participant: ShownParticipant) in
-                    ParticipantStamp(participant: participant)
-                }
                 if let notice {
                     Text(notice).font(.caption).foregroundStyle(Color.turgaiAccent)
                 }
             }
-            .padding(.leading, 16)
+            Text(participants)
+                .font(.caption)
+                .foregroundStyle(Color.turgaiMuted)
+                .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
-        .padding(.horizontal, 10)
-    }
-}
-
-/// Someone in the conversation, on a stamp of their messages' color.
-private struct ParticipantStamp: View {
-    let participant: ShownParticipant
-
-    var body: some View {
-        Text(participant.name)
-            .font(.system(size: 11, weight: .semibold))
-            .lineLimit(1)
-            .foregroundStyle(participant.role.ink)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(StampBackground(color: participant.role.color, lean: participant.lean))
-    }
-}
-
-extension ShownParticipant.Role {
-    /// Their messages' color.
-    fileprivate var color: Color {
-        switch self {
-        case .you: .bubbleYours
-        case .agent: .bubbleAgent
-        case .someoneElse: .bubbleSomeoneElse
-        }
-    }
-
-    /// Text on their messages' color.
-    fileprivate var ink: Color {
-        switch self {
-        case .you, .someoneElse: .inkOnSignal
-        case .agent: .white
-        }
+        .padding(.horizontal, 12)
     }
 }
 

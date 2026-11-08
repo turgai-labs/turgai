@@ -20,17 +20,13 @@ struct MainWindow: View {
             WorkingField(hue: store.sidebar.shownSpaceHue)
             // The conversation keeps clear of the panel; the field runs under it.
             ChatView(
-                session: session, title: store.sidebar.openTitle, hue: store.sidebar.shownSpaceHue,
-                store: store.scope(state: \.chat, action: \.chat)
+                session: session, title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
             )
             // Only the panel's room: what's in the conversation keeps its own margins.
             .safeAreaPadding(.leading, store.showsSidebar ? Self.sidebarWidth + Self.gap : 0)
             .toolbar {
-                // At the window's trailing edge: with nothing in the toolbar's middle, macOS would
-                // put them right after the traffic lights.
-                ToolbarSpacer(.flexible)
-                ToolbarItem { ObjectsButton() }
-                ToolbarItem {
+                ToolbarItem(placement: .primaryAction) { ObjectsButton() }
+                ToolbarItem(placement: .primaryAction) {
                     AccountButton(initial: store.profile.initial, name: store.profile.me?.name)
                 }
                 // A stamp of its own, not on the toolbar's glass.

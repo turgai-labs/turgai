@@ -372,16 +372,12 @@ struct MentionTests {
             SpacePerson(id: "account-bob", name: "bob", role: .member),
             SpacePerson(id: "account-cat", name: "cat", role: .member),
         ]
-        #expect(state.shownParticipants == [.init(id: "account-bob", name: "bob", role: .someoneElse)])
+        #expect(state.participantsLine == "bob")
         state.participants = [
             ParticipantSummary(kind: .agent, id: "agent", name: "Turgai"), bob,
             ParticipantSummary(kind: .person, id: "account-ann", name: "ann"),
         ]
-        #expect(
-            state.shownParticipants == [
-                .init(id: "account-ann", name: "You", role: .you), .init(id: "agent", name: "Turgai", role: .agent),
-                .init(id: "account-bob", name: "bob", role: .someoneElse),
-            ])
+        #expect(state.participantsLine == "You, Turgai, bob")
         state.participants = [bob]
         #expect(state.connectionNotice == nil)
         state.connection = .disconnected(why: "gone")

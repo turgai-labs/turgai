@@ -67,15 +67,10 @@ struct ChatFeature {
             }
         }
 
-        /// Who's in it, as its headline shows them: you first, as You, then the others.
-        var shownParticipants: [ShownParticipant] {
-            let yours = participants.filter { $0.id == you }.map {
-                ShownParticipant(id: $0.id, name: "You", role: .you)
-            }
-            let others = participants.filter { $0.id != you }.map {
-                ShownParticipant(id: $0.id, name: $0.name, role: $0.kind == .agent ? .agent : .someoneElse)
-            }
-            return yours + others
+        /// Who's in it, as the line under its name says them: you first, as You, then the others.
+        var participantsLine: String {
+            let others = participants.filter { $0.id != you }.map(\.name)
+            return ((participants.contains { $0.id == you } ? ["You"] : []) + others).joined(separator: ", ")
         }
 
         /// What's wrong with the connection, while something is: none while it's connected.
@@ -413,23 +408,6 @@ struct ShownMessage: Equatable, Identifiable {
     let showsTurn: Bool
 
     var id: MessageID { message.id }
-}
-
-/// Someone in the conversation, as its headline shows them: by who they are to you, which is the
-/// color of their messages.
-struct ShownParticipant: Equatable, Identifiable {
-    enum Role: Equatable {
-        case you
-        case agent
-        case someoneElse
-    }
-
-    let id: String
-    let name: String
-    let role: Role
-
-    /// How their stamp leans.
-    var lean: Lean { Lean(seed: id) }
 }
 
 /// A suggestion for the `@` being typed, as it's shown: whether Return picks it, and whether
