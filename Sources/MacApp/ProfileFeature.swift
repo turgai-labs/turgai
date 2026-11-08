@@ -2,8 +2,8 @@ import ComposableArchitecture
 import Foundation
 import TurgaiModels
 
-/// The signed-in person's profile: who they are, what's remembered about them, forgetting all of it
-/// once they say so again, and signing out.
+/// The signed-in person's profile: who they are, what's remembered about them, whether what they
+/// say is remembered, forgetting all of it once they say so again, and signing out.
 @Reducer
 struct ProfileFeature {
     /// What's remembered about them, as it's read.
@@ -42,6 +42,8 @@ struct ProfileFeature {
         /// Who's signed in, once it's read.
         var me: Me?
         var memory = Memory.reading
+        /// Why remembering couldn't be turned on or off, when it couldn't.
+        var rememberingProblem: String?
         /// Asking whether to forget everything, while it asks.
         @Presents var alert: AlertState<Action.Alert>?
 
@@ -65,6 +67,16 @@ struct ProfileFeature {
             if case .lines = memoryShown { true } else { false }
         }
 
+        /// Whether what they say is remembered, as the switch shows it: off until it's read.
+        var remembers: Bool {
+            if case .read(let summary) = memory { summary.remembering == .on } else { false }
+        }
+
+        /// The switch can be used: once whether they're remembered is read.
+        var canSwitchRemembering: Bool {
+            if case .read = memory { true } else { false }
+        }
+
         private static func lines(of nodes: [MemorySummary.Node], under path: [String]) -> [MemoryLine] {
             nodes.flatMap { node in
                 let here = path + [node.name]
@@ -85,6 +97,10 @@ struct ProfileFeature {
         case forgetTapped
         case alert(PresentationAction<Alert>)
         case forgotten
+        /// The remembering switch, turned on or off.
+        case rememberingToggled(Bool)
+        /// Turning it on or off didn't work: it's as it was.
+        case rememberingFailed(MemorySummary.Remembering)
         /// Sign Out: the app signs them out.
         case signOutTapped
 
@@ -146,7 +162,29 @@ struct ProfileFeature {
                 return .none
 
             case .forgotten:
-                state.memory = .read(MemorySummary(nodes: []))
+                guard case .read(let summary) = state.memory else { return .none }
+                state.memory = .read(MemorySummary(nodes: [], remembering: summary.remembering))
+                return .none
+
+            case .rememberingToggled(let on):
+                let remembering: MemorySummary.Remembering = on ? .on : .off
+                guard case .read(let summary) = state.memory, summary.remembering != remembering,
+                    let session = state.session
+                else { return .none }
+                state.memory = .read(MemorySummary(nodes: summary.nodes, remembering: remembering))
+                state.rememberingProblem = nil
+                return .run { send in
+                    do {
+                        try await server.setRemembering(session, remembering)
+                    } catch {
+                        await send(.rememberingFailed(summary.remembering))
+                    }
+                }
+
+            case .rememberingFailed(let was):
+                guard case .read(let summary) = state.memory else { return .none }
+                state.memory = .read(MemorySummary(nodes: summary.nodes, remembering: was))
+                state.rememberingProblem = "Couldn't change it. Try again."
                 return .none
 
             case .signOutTapped:

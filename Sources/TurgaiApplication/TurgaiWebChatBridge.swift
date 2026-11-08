@@ -157,6 +157,22 @@ public actor TurgaiWebChatBridge {
         return try await User.resolve(on: runtime.actorSystem, userID: person).remembered()
     }
 
+    /// Whether what `person` says is remembered.
+    public func remembering(of person: TurgaiDomain.UserID) async throws -> Remembering {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        return try await User.resolve(on: runtime.actorSystem, userID: person).currentRemembering()
+    }
+
+    /// What `person` says remembered from now on, or not.
+    public func setRemembering(_ remembering: Remembering, for person: TurgaiDomain.UserID) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await User.resolve(on: runtime.actorSystem, userID: person).setRemembering(remembering)
+    }
+
     /// Everything remembered about `person`, forgotten; their conversations stay.
     public func forgetMemory(of person: TurgaiDomain.UserID) async throws {
         guard let runtime else {

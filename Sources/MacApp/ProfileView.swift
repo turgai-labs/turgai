@@ -11,7 +11,10 @@ struct ProfileView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             ProfileHeading(initial: store.initial, name: store.name)
-            MemorySection(shown: store.memoryShown, canForget: store.canForget) { store.send(.forgetTapped) }
+            MemorySection(
+                shown: store.memoryShown, remembers: $store.remembers.sending(\.rememberingToggled),
+                canSwitch: store.canSwitchRemembering, problem: store.rememberingProblem, canForget: store.canForget
+            ) { store.send(.forgetTapped) }
             Spacer(minLength: 0)
             Button("Sign Out") { store.send(.signOutTapped) }
         }
@@ -48,9 +51,14 @@ private struct ProfileHeading: View {
 }
 
 /// What's remembered about them, a line for each name, under the names it's under; or why there's
-/// nothing to show. Forget Everything… under it, while there's something to forget.
+/// nothing to show. Above it, the switch that has what they say remembered or not; Forget
+/// Everything… under it, while there's something to forget.
 private struct MemorySection: View {
     let shown: ProfileFeature.MemoryShown
+    @Binding var remembers: Bool
+    let canSwitch: Bool
+    /// Why the switch didn't work, when it didn't.
+    let problem: String?
     let canForget: Bool
     let forget: () -> Void
 
@@ -59,6 +67,19 @@ private struct MemorySection: View {
             Text("Remembered about you")
                 .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(Color.turgaiInk)
+            Toggle(isOn: $remembers) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Remember what I say")
+                    Text("Off, nothing new is remembered. What is stays until you forget it.")
+                        .font(.caption)
+                        .foregroundStyle(Color.turgaiMuted)
+                }
+            }
+            .toggleStyle(.switch)
+            .disabled(!canSwitch)
+            if let problem {
+                Text(problem).font(.caption).foregroundStyle(Color.turgaiAccent)
+            }
             switch shown {
             case .reading:
                 ProgressView().controlSize(.small)

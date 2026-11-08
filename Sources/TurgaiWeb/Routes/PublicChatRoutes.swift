@@ -57,12 +57,24 @@ extension TurgaiMainWebApp {
             let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
             return try publicAPIResponse(Me(id: person.key, name: try await names.name(of: .person(person))))
         }
-        // What's remembered about whoever's signed in; and all of it forgotten.
+        // What's remembered about whoever's signed in, and whether they're remembered; remembering
+        // turned on or off; and all of it forgotten.
         api.get("me/memory") { request, _ in
             guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
                 return signInRequired()
             }
-            return try publicAPIResponse(MemorySummary(try await dependencies.webChatBridge.remembered(about: person)))
+            let bridge = dependencies.webChatBridge
+            return try publicAPIResponse(
+                MemorySummary(
+                    try await bridge.remembered(about: person), remembering: try await bridge.remembering(of: person)))
+        }
+        api.put("me/memory/remembering") { request, context in
+            guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
+                return signInRequired()
+            }
+            let input = try await body(SetRememberingRequest.self, of: request, context: context)
+            try await dependencies.webChatBridge.setRemembering(Remembering(input.remembering), for: person)
+            return Response(status: .noContent)
         }
         api.delete("me/memory") { request, _ in
             guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
@@ -945,9 +957,29 @@ extension SpaceSummary {
 }
 
 extension MemorySummary {
-    /// `tree`, as the API gives it.
-    fileprivate init(_ tree: MemoryTree) {
-        self.init(nodes: tree.nodes.map(Node.init))
+    /// `tree`, and whether its person is remembered, as the API gives them.
+    fileprivate init(_ tree: MemoryTree, remembering: TurgaiMemory.Remembering) {
+        self.init(nodes: tree.nodes.map(Node.init), remembering: Remembering(remembering))
+    }
+}
+
+extension MemorySummary.Remembering {
+    /// `remembering`, as the API gives it.
+    fileprivate init(_ remembering: TurgaiMemory.Remembering) {
+        switch remembering {
+        case .on: self = .on
+        case .off: self = .off
+        }
+    }
+}
+
+extension TurgaiMemory.Remembering {
+    /// `remembering`, as the API gives it.
+    fileprivate init(_ remembering: MemorySummary.Remembering) {
+        switch remembering {
+        case .on: self = .on
+        case .off: self = .off
+        }
     }
 }
 

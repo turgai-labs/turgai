@@ -16,6 +16,8 @@ struct TurgaiServerClient: Sendable {
     var memory: @Sendable (Session) async throws -> MemorySummary
     /// Everything remembered about the account's person, forgotten.
     var forgetMemory: @Sendable (Session) async throws -> Void
+    /// What the account's person says remembered from now on, or not.
+    var setRemembering: @Sendable (Session, MemorySummary.Remembering) async throws -> Void
     /// The spaces the account is in.
     var spaces: @Sendable (Session) async throws -> [SpaceSummary]
     /// The account's conversations, the one something was last said in first.
@@ -72,6 +74,11 @@ extension TurgaiServerClient: DependencyKey {
             me: { try await api("GET", "api/v1/me", as: $0) },
             memory: { try await api("GET", "api/v1/me/memory", as: $0) },
             forgetMemory: { _ = try await request("DELETE", "api/v1/me/memory", as: $0) },
+            setRemembering: { session, remembering in
+                _ = try await request(
+                    "PUT", "api/v1/me/memory/remembering", body: SetRememberingRequest(remembering: remembering),
+                    as: session)
+            },
             spaces: { try await api("GET", "api/v1/spaces", as: $0) },
             conversations: { try await api("GET", "api/v1/conversations", as: $0) },
             startConversation: { session, space in
