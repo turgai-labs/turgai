@@ -158,8 +158,8 @@ struct PanelCommands: Commands {
     }
 }
 
-/// A glass panel floating over the window: one surface of clear glass, faintly tinted so text on
-/// it reads over the field's colors, its corners concentric with the window's.
+/// A glass panel floating over the window: one surface of regular glass, which blurs the field's
+/// colors under it into the panel, its corners concentric with the window's.
 private struct GlassPanel<Content: View>: View {
     let width: CGFloat
     @ViewBuilder let content: Content
@@ -171,7 +171,7 @@ private struct GlassPanel<Content: View>: View {
             .frame(width: width)
             .frame(maxHeight: .infinity)
             .clipShape(shape)
-            .glassEffect(.clear.tint(Color.turgaiCanvas.opacity(0.3)), in: shape)
+            .glassEffect(.regular, in: shape)
     }
 }
 
