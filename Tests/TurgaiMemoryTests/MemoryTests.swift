@@ -116,7 +116,7 @@ struct MemoryTests {
         #expect(projection.observations.count == Memory.maximumObservations)
         #expect(!projection.containsObservation(for: sourceID))
         #expect(
-            projection.recentObservations(limit: 1).first?.text
+            projection.observations.last?.text
                 == "message \(Memory.maximumObservations + 1)"
         )
     }
@@ -209,6 +209,7 @@ struct MemoryTests {
                 .previousObservations(before: second.sourceID, limit: 2)
                 .map(\.id) == [first.id]
         )
+        #expect(projection.previousObservations(before: MemorySourceID(), limit: 2).isEmpty)
     }
 
     @Test

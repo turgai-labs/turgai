@@ -159,21 +159,12 @@ public struct Memory: Codable, Sendable, Equatable {
         MemoryTree(currentFacts())
     }
 
-    public func recentObservations(limit: Int) -> [MemoryObservation] {
-        Array(observations.suffix(limit))
-    }
-
-    /// Returns the observations that precede a source in journal order. The
-    /// source is expected to have been recorded before extraction begins.
+    /// The last `limit` observations before a source's, in journal order: none when it isn't here.
     public func previousObservations(
         before sourceID: MemorySourceID,
         limit: Int
     ) -> [MemoryObservation] {
-        guard limit > 0,
-            let index = observations.firstIndex(where: { $0.sourceID == sourceID })
-        else {
-            return recentObservations(limit: limit)
-        }
+        guard let index = observations.firstIndex(where: { $0.sourceID == sourceID }) else { return [] }
         return Array(observations[..<index].suffix(limit))
     }
 

@@ -161,7 +161,9 @@ public distributed actor User {
                 observations: pending,
                 generation: state.memory.generation,
                 existingFacts: state.memory.currentFacts(),
-                previousObservations: state.memory.recentObservations(limit: 32)
+                previousObservations: pending.first.map {
+                    state.memory.previousObservations(before: $0.sourceID, limit: 32)
+                } ?? []
             ),
             latestObservationSourceID: state.memory.latestObservationSourceID
         )
