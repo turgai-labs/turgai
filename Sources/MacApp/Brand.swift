@@ -100,6 +100,20 @@ extension SpaceHue {
     }
 }
 
+/// A ring around a stamp leaning by `lean`, a little apart from it: what's picked.
+struct StampOutline: View {
+    let lean: Lean
+
+    var body: some View {
+        GeometryReader { geometry in
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(Color.turgaiInk, lineWidth: 2)
+                .padding(-4)
+                .rotationEffect(lean.angle(across: geometry.size.width))
+        }
+    }
+}
+
 /// Turgai's geometry for working screens: a block in the shown space's color, tilted into the top
 /// right corner and cut off by it; a yellow square and a blue bar on the left, which the panel's
 /// glass blurs into itself.
