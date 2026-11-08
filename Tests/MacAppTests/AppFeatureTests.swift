@@ -49,6 +49,36 @@ struct AppFeatureTests {
         #expect(cleared.value == 1)
     }
 
+    /// Who's signed in is read for the account button; Sign Out forgets them and the session,
+    /// and the expiry it was waiting for no longer signs anyone out.
+    @Test
+    func signingOutForgetsTheAccount() async {
+        let clock = TestClock()
+        let session = Session(token: "token", expiresAt: now.addingTimeInterval(60))
+        let cleared = LockIsolated(0)
+        let store = TestStore(initialState: AppFeature.State(account: .signedOut)) {
+            AppFeature()
+        } withDependencies: {
+            $0.server.me = { _ in Me(id: "account-ada", name: "ada") }
+            $0.sessions.clear = { cleared.withValue { $0 += 1 } }
+            $0.chat.disconnect = {}
+            $0.continuousClock = clock
+            $0.date.now = now
+        }
+
+        await store.send(.sessionLoaded(session)) { $0.account = .signedIn(session) }
+        await store.send(.accountAppeared(session))
+        await store.receive(\.meLoaded) { $0.me = Me(id: "account-ada", name: "ada") }
+        #expect(store.state.accountInitial == "A")
+        await store.send(.signOutTapped) {
+            $0.account = .signedOut
+            $0.me = nil
+        }
+        await store.receive(\.chat.disconnect)
+        await clock.advance(by: .seconds(60))
+        #expect(cleared.value == 1)
+    }
+
     @Test
     func expiredSavedSessionShowsLogin() async {
         let cleared = LockIsolated(0)

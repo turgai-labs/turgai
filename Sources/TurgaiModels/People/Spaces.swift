@@ -4,6 +4,17 @@
     import Foundation
 #endif
 
+/// The signed-in person: their id, and what they're called.
+public struct Me: Codable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 /// A space the signed-in person is in, as their list shows it: what it's called, and their role.
 public struct SpaceSummary: Codable, Hashable, Sendable, Identifiable {
     public enum Role: String, Codable, Hashable, Sendable {

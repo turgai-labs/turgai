@@ -10,6 +10,8 @@ struct TurgaiServerClient: Sendable {
     var signIn: @Sendable (_ username: String, _ password: String) async throws -> Session
     /// Creates a chat account and signs in to it.
     var register: @Sendable (_ username: String, _ password: String) async throws -> Session
+    /// Who the account is.
+    var me: @Sendable (Session) async throws -> Me
     /// The spaces the account is in.
     var spaces: @Sendable (Session) async throws -> [SpaceSummary]
     /// The account's conversations, the one something was last said in first.
@@ -61,6 +63,7 @@ extension TurgaiServerClient: DependencyKey {
             },
             signIn: { try await postCredentials($0, $1, to: baseURL.appending(path: "login")) },
             register: { try await postCredentials($0, $1, to: baseURL.appending(path: "register")) },
+            me: { try await api("GET", "api/v1/me", as: $0) },
             spaces: { try await api("GET", "api/v1/spaces", as: $0) },
             conversations: { try await api("GET", "api/v1/conversations", as: $0) },
             startConversation: { session, space in

@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import TurgaiModels
 
 /// Waits for the local server to be running and set up, signs in, then runs the chat.
 @Reducer
@@ -144,6 +145,11 @@ struct AppFeature {
         var objects = ObjectsFeature.State()
         /// The window's panel of spaces and their conversations.
         var showsSidebar = true
+        /// Who's signed in, once it's read.
+        var me: Me?
+
+        /// What the account button shows: the first letter of the name, once it's read.
+        var accountInitial: String { me.map { $0.name.prefix(1).uppercased() } ?? "" }
 
         /// What the View menu's item for the conversations panel says.
         var sidebarCommand: String { showsSidebar ? "Hide Conversations" : "Show Conversations" }
@@ -171,6 +177,10 @@ struct AppFeature {
         case submitFinished(Result<Session, AccountError>)
         /// The session reached its expiry date.
         case sessionExpired(Session)
+        /// The window is shown for `session`: who's signed in is read.
+        case accountAppeared(Session)
+        case meLoaded(Me)
+        case signOutTapped
         case sidebar(SidebarFeature.Action)
         case chat(ChatFeature.Action)
         case objects(ObjectsFeature.Action)
@@ -301,15 +311,35 @@ struct AppFeature {
 
             case .sessionExpired(let session):
                 guard state.account == .signedIn(session) else { return .none }
-                state.account = .signedOut
-                state.login = LoginForm(notice: .sessionEnded)
-                state.sidebar = SidebarFeature.State()
-                return .merge(
-                    .send(.chat(.disconnect)),
-                    .run { _ in sessions.clear() }
-                )
+                return signOut(&state, notice: .sessionEnded)
+
+            case .accountAppeared(let session):
+                return .run { send in
+                    if let me = try? await server.me(session) { await send(.meLoaded(me)) }
+                }
+
+            case .meLoaded(let me):
+                state.me = me
+                return .none
+
+            case .signOutTapped:
+                guard case .signedIn = state.account else { return .none }
+                return signOut(&state, notice: nil)
             }
         }
+    }
+
+    /// Signed out: the login form again, saying `notice`, and nothing of the person's kept.
+    private func signOut(_ state: inout State, notice: LoginForm.Notice?) -> Effect<Action> {
+        state.account = .signedOut
+        state.login = LoginForm(notice: notice)
+        state.sidebar = SidebarFeature.State()
+        state.me = nil
+        return .merge(
+            .cancel(id: CancelID.expiry),
+            .send(.chat(.disconnect)),
+            .run { _ in sessions.clear() }
+        )
     }
 
     /// Sends ``Action/sessionExpired(_:)`` when `session` reaches its expiry date.

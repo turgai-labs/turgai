@@ -48,6 +48,14 @@ extension TurgaiMainWebApp {
             response.setCookie(TurgaiWebSupport.guestCookie(token))
             return response
         }
+        // Who's signed in: their id and name.
+        api.get("me") { request, _ in
+            guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
+                return signInRequired()
+            }
+            let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
+            return try publicAPIResponse(Me(id: person.key, name: try await names.name(of: .person(person))))
+        }
         registerConversations(on: api.group("conversations"), dependencies: dependencies)
         registerLinks(on: api.group("me/links"), dependencies: dependencies)
         registerSpaces(on: api.group("spaces"), dependencies: dependencies)

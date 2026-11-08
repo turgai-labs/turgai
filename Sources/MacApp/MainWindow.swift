@@ -27,6 +27,11 @@ struct MainWindow: View {
             .safeAreaPadding(.trailing, Self.gap)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) { ObjectsButton() }
+                ToolbarItem(placement: .primaryAction) {
+                    AccountButton(initial: store.accountInitial, name: store.me?.name) {
+                        store.send(.signOutTapped)
+                    }
+                }
             }
             HStack(alignment: .top, spacing: 0) {
                 if store.showsSidebar {
@@ -48,7 +53,10 @@ struct MainWindow: View {
             .frame(maxHeight: .infinity, alignment: .top)
         }
         .modifier(SidebarDialogs(store: store.scope(state: \.sidebar, action: \.sidebar)))
-        .task(id: session) { store.send(.sidebar(.appeared(session))) }
+        .task(id: session) {
+            store.send(.sidebar(.appeared(session)))
+            store.send(.accountAppeared(session))
+        }
     }
 }
 
@@ -196,6 +204,32 @@ private struct HidePanelButton: View {
         .buttonStyle(.plain)
         .foregroundStyle(Color.turgaiMuted)
         .help(help)
+    }
+}
+
+/// Who's signed in, as their initial in a circle: a menu with their name and Sign Out.
+private struct AccountButton: View {
+    let initial: String
+    /// Their name, once it's read.
+    let name: String?
+    let signOut: () -> Void
+
+    var body: some View {
+        Menu {
+            if let name {
+                Text(name)
+                Divider()
+            }
+            Button("Sign Out", action: signOut)
+        } label: {
+            Text(initial)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.white)
+                .frame(width: 26, height: 26)
+                .background(Color.turgaiAccent, in: .circle)
+        }
+        .menuIndicator(.hidden)
+        .help(name ?? "Account")
     }
 }
 
