@@ -541,7 +541,7 @@ extension TurgaiMainWebApp {
                 return try publicAPIResponse(
                     SpaceInviteOffer(
                         id: invite.id.rawValue.uuidString, token: token.rawValue,
-                        link: "turgai://join/\(space.rawValue.uuidString)/\(token.rawValue)",
+                        link: SpaceInviteLink(spaceID: space.rawValue.uuidString, token: token.rawValue).description,
                         expiresAt: invite.expiresAt),
                     status: .created)
             }

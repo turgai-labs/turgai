@@ -91,6 +91,30 @@ public struct SpaceInviteListing: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// An invite to a space, as its link writes it: `turgai://join/<space>/<token>`.
+public struct SpaceInviteLink: Hashable, Sendable, CustomStringConvertible {
+    public let spaceID: String
+    public let token: String
+
+    public init(spaceID: String, token: String) {
+        self.spaceID = spaceID
+        self.token = token
+    }
+
+    /// `written`, a link as it's pasted, its space around it aside: none when it isn't an invite's.
+    public init?(_ written: String) {
+        let words = written.split(whereSeparator: \.isWhitespace)
+        guard words.count == 1, let link = words.first, link.hasPrefix(Self.prefix) else { return nil }
+        let parts = link.dropFirst(Self.prefix.count).split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 2, UUID(uuidString: String(parts[0])) != nil, !parts[1].isEmpty else { return nil }
+        self.init(spaceID: String(parts[0]), token: String(parts[1]))
+    }
+
+    public var description: String { Self.prefix + "\(spaceID)/\(token)" }
+
+    private static let prefix = "turgai://join/"
+}
+
 /// Joining a space with the token an invite's link carries.
 public struct JoinSpaceRequest: Codable, Hashable, Sendable {
     public let token: String

@@ -42,12 +42,39 @@ struct SidebarFeature {
         var initial: String { space.name.prefix(1).uppercased() }
     }
 
-    /// A name being written: a conversation's or a space's new one, or a new space's.
-    struct Naming: Equatable {
+    /// The dialog open over the window, with what's written in it.
+    enum Dialog: Equatable {
+        /// A conversation's or a space's new name.
+        case renaming(Renaming)
+        /// A space to make, by its name, or to join, by an invite's link.
+        case addingSpace(AddingSpace)
+
+        /// What's written for a name in it.
+        var name: String {
+            get {
+                switch self {
+                case .renaming(let renaming): renaming.name
+                case .addingSpace(let adding): adding.name
+                }
+            }
+            set {
+                switch self {
+                case .renaming(var renaming):
+                    renaming.name = newValue
+                    self = .renaming(renaming)
+                case .addingSpace(var adding):
+                    adding.name = newValue
+                    self = .addingSpace(adding)
+                }
+            }
+        }
+    }
+
+    /// A conversation's or a space's new name, being written.
+    struct Renaming: Equatable {
         enum Subject: Equatable {
             case conversation(ConversationID)
             case space(String)
-            case newSpace
         }
 
         let subject: Subject
@@ -58,17 +85,21 @@ struct SidebarFeature {
             switch subject {
             case .conversation: "Rename conversation"
             case .space: "Rename space"
-            case .newSpace: "New space"
             }
         }
+    }
 
-        /// What its button says.
-        var confirmation: String {
-            switch subject {
-            case .conversation, .space: "Rename"
-            case .newSpace: "Make"
-            }
-        }
+    /// A space being added: made, by the name written, or joined, by the invite's link pasted.
+    struct AddingSpace: Equatable {
+        var name = ""
+        var link = ""
+        /// What went wrong making or joining one, when something did.
+        var problem: String?
+
+        /// The invite the link is: none while it isn't one.
+        var invite: SpaceInviteLink? { SpaceInviteLink(link) }
+        var canMake: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        var canJoin: Bool { invite != nil }
     }
 
     @ObservableState
@@ -80,12 +111,16 @@ struct SidebarFeature {
         var selected: ConversationID?
         /// What went wrong reading or starting conversations, when something did.
         var error: String?
-        /// The name being written, while one is: none otherwise.
-        var naming: Naming?
+        /// The dialog open, while one is.
+        var dialog: Dialog?
 
-        var isNaming: Bool { naming != nil }
-        /// What's written for the name, while one is.
-        var name: String { naming?.name ?? "" }
+        var hasDialog: Bool { dialog != nil }
+        /// What's written for a name in the dialog.
+        var name: String { dialog?.name ?? "" }
+        /// What's pasted for a link in the dialog.
+        var link: String {
+            if case .addingSpace(let adding) = dialog { adding.link } else { "" }
+        }
 
         /// What the open conversation is called.
         var openTitle: String {
@@ -154,14 +189,21 @@ struct SidebarFeature {
         case renameConversationTapped(ConversationID)
         /// Rename… on the space shown.
         case renameShownSpaceTapped
-        case newSpaceTapped
+        /// + on the rail: a space to make or join.
+        case addSpaceTapped
         case nameChanged(String)
-        /// The naming dialog: `false` once it's closed.
-        case namingPresented(Bool)
-        case namingConfirmed
+        case linkChanged(String)
+        /// The dialog: `false` once it's closed.
+        case dialogPresented(Bool)
+        case renameConfirmed
+        case makeSpaceTapped
+        case joinTapped
         case renamed(ConversationID, title: String)
-        case spaceMade(SpaceSummary)
         case spaceRenamed(SpaceSummary)
+        /// A space made or joined: it's shown.
+        case spaceAdded(SpaceSummary)
+        /// Making or joining a space failed, and why.
+        case addingFailed(String)
         case delegate(Delegate)
 
         enum Delegate: Equatable {
@@ -253,53 +295,90 @@ struct SidebarFeature {
                 return .none
 
             case .renameConversationTapped(let id):
-                state.naming = Naming(subject: .conversation(id), name: state.conversations[id: id]?.title ?? "")
+                state.dialog = .renaming(
+                    Renaming(subject: .conversation(id), name: state.conversations[id: id]?.title ?? ""))
                 return .none
 
             case .renameShownSpaceTapped:
                 guard let space = state.shownSpace else { return .none }
-                state.naming = Naming(subject: .space(space.id), name: space.name)
+                state.dialog = .renaming(Renaming(subject: .space(space.id), name: space.name))
                 return .none
 
-            case .newSpaceTapped:
-                state.naming = Naming(subject: .newSpace, name: "")
+            case .addSpaceTapped:
+                state.dialog = .addingSpace(AddingSpace())
                 return .none
 
             case .nameChanged(let name):
-                state.naming?.name = name
+                state.dialog?.name = name
                 return .none
 
-            case .namingPresented(let presented):
-                if !presented { state.naming = nil }
+            case .linkChanged(let link):
+                guard case .addingSpace(var adding) = state.dialog else { return .none }
+                adding.link = link
+                adding.problem = nil
+                state.dialog = .addingSpace(adding)
                 return .none
 
-            case .namingConfirmed:
-                guard let naming = state.naming, let session = state.session else { return .none }
-                state.naming = nil
-                let name = naming.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            case .dialogPresented(let presented):
+                if !presented { state.dialog = nil }
+                return .none
+
+            case .renameConfirmed:
+                guard case .renaming(let renaming) = state.dialog, let session = state.session else { return .none }
+                state.dialog = nil
+                let name = renaming.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty else { return .none }
                 return .run { send in
                     do {
-                        switch naming.subject {
+                        switch renaming.subject {
                         case .conversation(let id):
                             try await server.titleConversation(session, id, name)
                             await send(.renamed(id, title: name))
                         case .space(let id):
                             await send(.spaceRenamed(try await server.renameSpace(session, id, name)))
-                        case .newSpace:
-                            await send(.spaceMade(try await server.makeSpace(session, name)))
                         }
                     } catch {
                         await send(.failed("Couldn't save the name."))
                     }
                 }
 
-            case .renamed(let id, let title):
-                state.conversations[id: id]?.title = title
+            case .makeSpaceTapped:
+                guard case .addingSpace(let adding) = state.dialog, adding.canMake, let session = state.session
+                else { return .none }
+                let name = adding.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return .run { send in
+                    do {
+                        await send(.spaceAdded(try await server.makeSpace(session, name)))
+                    } catch {
+                        await send(.addingFailed("Couldn't make the space."))
+                    }
+                }
+
+            case .joinTapped:
+                guard case .addingSpace(let adding) = state.dialog, let invite = adding.invite,
+                    let session = state.session
+                else { return .none }
+                return .run { send in
+                    do {
+                        await send(.spaceAdded(try await server.joinSpace(session, invite)))
+                    } catch {
+                        await send(.addingFailed("That link didn't work: it may be used up or out of date."))
+                    }
+                }
+
+            case .spaceAdded(let space):
+                state.dialog = nil
+                if !state.spaces.contains(where: { $0.id == space.id }) { state.spaces.append(space) }
+                return .send(.spaceSwitched(space.id))
+
+            case .addingFailed(let why):
+                guard case .addingSpace(var adding) = state.dialog else { return .none }
+                adding.problem = why
+                state.dialog = .addingSpace(adding)
                 return .none
 
-            case .spaceMade(let space):
-                state.spaces.append(space)
+            case .renamed(let id, let title):
+                state.conversations[id: id]?.title = title
                 return .none
 
             case .spaceRenamed(let space):

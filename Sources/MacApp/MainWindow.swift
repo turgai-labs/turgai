@@ -65,7 +65,90 @@ struct MainWindow: View {
             // A hidden panel's button stays at the top, as its panel's header was.
             .frame(maxHeight: .infinity, alignment: .top)
         }
+        .modifier(SidebarDialogs(store: store.scope(state: \.sidebar, action: \.sidebar)))
         .task(id: session) { store.send(.sidebar(.appeared(session))) }
+    }
+}
+
+/// The sidebar's dialog, over the whole window, so it shows whatever's hidden: renaming a
+/// conversation or a space, or adding a space.
+private struct SidebarDialogs: ViewModifier {
+    @Bindable var store: StoreOf<SidebarFeature>
+
+    func body(content: Content) -> some View {
+        content.sheet(isPresented: $store.hasDialog.sending(\.dialogPresented)) {
+            switch store.dialog {
+            case .renaming(let renaming)?:
+                RenameSheet(
+                    title: renaming.title, name: $store.name.sending(\.nameChanged),
+                    rename: { store.send(.renameConfirmed) }, cancel: { store.send(.dialogPresented(false)) })
+            case .addingSpace(let adding)?:
+                AddSpaceSheet(
+                    adding: adding, name: $store.name.sending(\.nameChanged), link: $store.link.sending(\.linkChanged),
+                    make: { store.send(.makeSpaceTapped) }, join: { store.send(.joinTapped) },
+                    cancel: { store.send(.dialogPresented(false)) })
+            case nil:
+                EmptyView()
+            }
+        }
+    }
+}
+
+/// A new name for a conversation or a space.
+private struct RenameSheet: View {
+    let title: String
+    @Binding var name: String
+    let rename: () -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title).font(.headline)
+            TextField("Name", text: $name).onSubmit(rename)
+            HStack {
+                Spacer()
+                Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+                Button("Rename", action: rename).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 340)
+    }
+}
+
+/// A space to add: a new one, by its name, or one joined, by an invite's link; why it didn't work
+/// when it didn't.
+private struct AddSpaceSheet: View {
+    let adding: SidebarFeature.AddingSpace
+    @Binding var name: String
+    @Binding var link: String
+    let make: () -> Void
+    let join: () -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New space").font(.headline)
+            HStack {
+                TextField("Name", text: $name).onSubmit(make)
+                Button("Make", action: make).disabled(!adding.canMake)
+            }
+            Divider()
+            Text("Join a space").font(.headline)
+            HStack {
+                TextField("turgai://join/…", text: $link).onSubmit(join)
+                Button("Join", action: join).disabled(!adding.canJoin)
+            }
+            if let problem = adding.problem {
+                Text(problem).font(.callout).foregroundStyle(Color.turgaiAccent)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
     }
 }
 
@@ -155,7 +238,7 @@ private struct ObjectsPanel: View {
 /// in it; then its conversations, the latest first, a dot marking one with something new. A
 /// conversation renames from its menu.
 private struct SidebarView: View {
-    @Bindable var store: StoreOf<SidebarFeature>
+    let store: StoreOf<SidebarFeature>
     let hide: () -> Void
 
     var body: some View {
@@ -200,12 +283,6 @@ private struct SidebarView: View {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
             }
         }
-        .alert(store.naming?.title ?? "", isPresented: $store.isNaming.sending(\.namingPresented)) {
-            TextField("Name", text: $store.name.sending(\.nameChanged))
-            Button(store.naming?.confirmation ?? "") { store.send(.namingConfirmed) }
-                .keyboardShortcut(.defaultAction)
-            Button("Cancel", role: .cancel) {}
-        }
     }
 }
 
@@ -220,7 +297,7 @@ private struct SpaceRail: View {
                 SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
             }
             Button {
-                store.send(.newSpaceTapped)
+                store.send(.addSpaceTapped)
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 14, weight: .semibold))
@@ -230,7 +307,7 @@ private struct SpaceRail: View {
             .buttonStyle(.plain)
             .foregroundStyle(Color.turgaiMuted)
             .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 10))
-            .help("New space")
+            .help("Make or join a space")
         }
     }
 }

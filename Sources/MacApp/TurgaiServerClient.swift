@@ -28,6 +28,8 @@ struct TurgaiServerClient: Sendable {
     var makeSpace: @Sendable (Session, _ name: String) async throws -> SpaceSummary
     /// A space called `name` from now on.
     var renameSpace: @Sendable (Session, _ spaceID: String, _ name: String) async throws -> SpaceSummary
+    /// The space `link` invites to, joined by the account's person.
+    var joinSpace: @Sendable (Session, SpaceInviteLink) async throws -> SpaceSummary
 }
 
 enum AccountError: Error, Equatable {
@@ -84,6 +86,11 @@ extension TurgaiServerClient: DependencyKey {
             },
             renameSpace: { session, space, name in
                 try await api("PATCH", "api/v1/spaces/\(space)", body: RenameSpaceRequest(name: name), as: session)
+            },
+            joinSpace: { session, link in
+                try await api(
+                    "POST", "api/v1/spaces/\(link.spaceID)/join", body: JoinSpaceRequest(token: link.token),
+                    as: session)
             }
         )
     }()

@@ -85,11 +85,10 @@ struct SidebarFeatureTests {
         await store.receive(\.delegate, .open(trip.id))
     }
 
-    /// Rename… writes a conversation's new title, New space makes one; a blank name does nothing.
+    /// Rename… writes a conversation's new title; a blank name does nothing.
     @Test
-    func namesAreWrittenAndSaved() async {
+    func aConversationIsRenamed() async {
         let titled = LockIsolated<[String]>([])
-        let family = SpaceSummary(id: "family", name: "Family", role: .admin)
         var state = SidebarFeature.State()
         state.session = session
         state.spaces = [turgai]
@@ -98,23 +97,88 @@ struct SidebarFeatureTests {
             SidebarFeature()
         } withDependencies: {
             $0.server.titleConversation = { _, _, title in titled.withValue { $0.append(title) } }
-            $0.server.makeSpace = { _, _ in family }
         }
 
         await store.send(.renameConversationTapped(dinner.id)) {
-            $0.naming = .init(subject: .conversation(self.dinner.id), name: "plan dinner")
+            $0.dialog = .renaming(.init(subject: .conversation(self.dinner.id), name: "plan dinner"))
         }
-        await store.send(.nameChanged(" Dinner ")) { $0.naming?.name = " Dinner " }
-        await store.send(.namingConfirmed) { $0.naming = nil }
+        await store.send(.nameChanged(" Dinner ")) { $0.dialog?.name = " Dinner " }
+        await store.send(.renameConfirmed) { $0.dialog = nil }
         await store.receive(\.renamed) { $0.conversations[id: self.dinner.id]?.title = "Dinner" }
+        await store.send(.renameConversationTapped(dinner.id)) {
+            $0.dialog = .renaming(.init(subject: .conversation(self.dinner.id), name: "Dinner"))
+        }
+        await store.send(.nameChanged(" ")) { $0.dialog?.name = " " }
+        await store.send(.renameConfirmed) { $0.dialog = nil }
         #expect(titled.value == ["Dinner"])
+    }
 
-        await store.send(.newSpaceTapped) { $0.naming = .init(subject: .newSpace, name: "") }
-        await store.send(.namingConfirmed) { $0.naming = nil }
-        await store.send(.newSpaceTapped) { $0.naming = .init(subject: .newSpace, name: "") }
-        await store.send(.nameChanged("Family")) { $0.naming?.name = "Family" }
-        await store.send(.namingConfirmed) { $0.naming = nil }
-        await store.receive(\.spaceMade) { $0.spaces = [self.turgai, family] }
+    /// + makes a space by its name, or joins one by an invite's link; either is then shown. A link
+    /// that isn't one can't be joined, and one that doesn't work says so, the dialog still open.
+    @Test
+    func aSpaceIsMadeOrJoined() async {
+        let family = SpaceSummary(id: "family", name: "Family", role: .admin)
+        let space = "8F3C1E2A-4B5D-4E6F-8A9B-0C1D2E3F4A5B"
+        let work = SpaceSummary(id: space, name: "Work", role: .member)
+        let joined = LockIsolated<[SpaceInviteLink]>([])
+        var state = SidebarFeature.State()
+        state.session = session
+        state.spaces = [turgai]
+        state.conversations = [.init(id: dinner.id, title: "plan dinner", spaceID: "family")]
+        let store = TestStore(initialState: state) {
+            SidebarFeature()
+        } withDependencies: {
+            $0.server.makeSpace = { _, _ in family }
+            $0.server.joinSpace = { _, link in
+                joined.withValue { $0.append(link) }
+                guard link.token == "good" else { throw URLError(.badServerResponse) }
+                return work
+            }
+            $0.server.startConversation = { _, _ in self.trip }
+        }
+
+        await store.send(.addSpaceTapped) { $0.dialog = .addingSpace(.init()) }
+        await store.send(.nameChanged("Family")) { $0.dialog = .addingSpace(.init(name: "Family")) }
+        await store.send(.makeSpaceTapped)
+        await store.receive(\.spaceAdded) {
+            $0.dialog = nil
+            $0.spaces = [self.turgai, family]
+        }
+        await store.receive(\.spaceSwitched)
+        await store.receive(\.selected) { $0.selected = self.dinner.id }
+        await store.receive(\.delegate, .open(dinner.id))
+
+        await store.send(.addSpaceTapped) { $0.dialog = .addingSpace(.init()) }
+        await store.send(.linkChanged("turgai://join/family/x")) {
+            $0.dialog = .addingSpace(.init(link: "turgai://join/family/x"))
+        }
+        #expect(store.state.dialog == .addingSpace(.init(link: "turgai://join/family/x")))
+        await store.send(.joinTapped)
+        await store.send(.linkChanged("turgai://join/\(space)/bad")) {
+            $0.dialog = .addingSpace(.init(link: "turgai://join/\(space)/bad"))
+        }
+        await store.send(.joinTapped)
+        await store.receive(\.addingFailed) {
+            $0.dialog = .addingSpace(
+                .init(
+                    link: "turgai://join/\(space)/bad",
+                    problem: "That link didn't work: it may be used up or out of date."))
+        }
+        await store.send(.linkChanged("turgai://join/\(space)/good")) {
+            $0.dialog = .addingSpace(.init(link: "turgai://join/\(space)/good"))
+        }
+        await store.send(.joinTapped)
+        await store.receive(\.spaceAdded) {
+            $0.dialog = nil
+            $0.spaces = [self.turgai, family, work]
+        }
+        await store.receive(\.spaceSwitched)
+        await store.receive(\.started) {
+            $0.conversations.insert(.init(id: self.trip.id, title: "trip", spaceID: "turgai"), at: 0)
+        }
+        await store.receive(\.selected) { $0.selected = self.trip.id }
+        await store.receive(\.delegate, .open(trip.id))
+        #expect(joined.value.map(\.token) == ["bad", "good"])
     }
 
     /// A new title renames a conversation where it is, marking nothing; one joined comes first,
