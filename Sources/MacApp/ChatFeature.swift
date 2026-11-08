@@ -67,10 +67,15 @@ struct ChatFeature {
             }
         }
 
-        /// Who's in it, as the line under its title says them: you first, as You, then the others.
-        var participantsLine: String {
-            let others = participants.filter { $0.id != you }.map(\.name)
-            return ((participants.contains { $0.id == you } ? ["You"] : []) + others).joined(separator: ", ")
+        /// Who's in it, as its headline shows them: you first, as You, then the others.
+        var shownParticipants: [ShownParticipant] {
+            let yours = participants.filter { $0.id == you }.map {
+                ShownParticipant(id: $0.id, name: "You", role: .you)
+            }
+            let others = participants.filter { $0.id != you }.map {
+                ShownParticipant(id: $0.id, name: $0.name, role: $0.kind == .agent ? .agent : .someoneElse)
+            }
+            return yours + others
         }
 
         /// What's wrong with the connection, while something is: none while it's connected.
@@ -410,6 +415,23 @@ struct ShownMessage: Equatable, Identifiable {
     var id: MessageID { message.id }
 }
 
+/// Someone in the conversation, as its headline shows them: by who they are to you, which is the
+/// color of their messages.
+struct ShownParticipant: Equatable, Identifiable {
+    enum Role: Equatable {
+        case you
+        case agent
+        case someoneElse
+    }
+
+    let id: String
+    let name: String
+    let role: Role
+
+    /// How their stamp leans.
+    var lean: Lean { Lean(seed: id) }
+}
+
 /// A suggestion for the `@` being typed, as it's shown: whether Return picks it, and whether
 /// mentioning them brings them into the conversation.
 struct ShownSuggestion: Equatable, Identifiable {
@@ -421,14 +443,8 @@ struct ShownSuggestion: Equatable, Identifiable {
 }
 
 extension MessageID {
-    /// How far its bubble leans, in degrees, as the web works it out: between −2.4 and 2.4, the
-    /// same for the same message.
-    var tilt: Double {
-        let hash = rawValue.uuidString.utf16.reduce(Int32(0)) { hash, unit in
-            (hash &<< 5) &- hash &+ Int32(unit)
-        }
-        return Double(Int(hash.magnitude % 49) - 24) / 10
-    }
+    /// How its bubble leans, as the web works it out: the same for the same message.
+    var lean: Lean { Lean(seed: rawValue.uuidString) }
 }
 
 extension TurnRecord {

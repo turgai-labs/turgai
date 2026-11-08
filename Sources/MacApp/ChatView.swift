@@ -3,11 +3,13 @@ import ComposableArchitecture
 import SwiftUI
 import TurgaiModels
 
-/// The open conversation.
+/// The open conversation, under its name as a headline.
 struct ChatView: View {
     let session: Session
     /// What it's called.
     let title: String
+    /// Its space's color.
+    let hue: SpaceHue
     @Bindable var store: StoreOf<ChatFeature>
 
     private var state: ChatFeature.State { store.state }
@@ -18,14 +20,12 @@ struct ChatView: View {
         }
         // What's new keeps the end in view, and a short conversation sits at the bottom.
         .defaultScrollAnchor(.bottom)
-        // The messages run under the floating composer, softened at the edge.
+        // The messages run under the headline and the floating composer, softened at the edges.
+        .safeAreaBar(edge: .top, spacing: 0) {
+            Headline(title: title, hue: hue, participants: state.shownParticipants, notice: state.connectionNotice)
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             BottomBar(store: store)
-        }
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                ConversationHeader(title: title, participants: state.participantsLine, notice: state.connectionNotice)
-            }
         }
         .modifier(
             AccessRequestAlert(request: state.accessRequests.first) { request, answer in
@@ -36,44 +36,87 @@ struct ChatView: View {
     }
 }
 
-/// The toolbar's middle: the conversation's name, and what's wrong with the connection while
-/// something is; under them, who's in it.
-private struct ConversationHeader: View {
+/// The conversation's name, as the screen's headline, set off by a bar of its space's color; under
+/// it, who's in it, each on a stamp of their messages' color, and what's wrong with the connection
+/// while something is.
+private struct Headline: View {
     let title: String
-    let participants: String
+    let hue: SpaceHue
+    let participants: [ShownParticipant]
     /// What's wrong with the connection: none while it's connected.
     let notice: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Rectangle().fill(hue.color).frame(width: 6, height: 26)
                 Text(title)
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 30, weight: .heavy).width(.condensed))
                     .tracking(-0.3)
                     .lineLimit(1)
                     .foregroundStyle(Color.turgaiInk)
+            }
+            HStack(spacing: 8) {
+                ForEach(participants) { (participant: ShownParticipant) in
+                    ParticipantStamp(participant: participant)
+                }
                 if let notice {
                     Text(notice).font(.caption).foregroundStyle(Color.turgaiAccent)
                 }
             }
-            Text(participants)
-                .font(.caption)
-                .foregroundStyle(Color.turgaiMuted)
-                .lineLimit(1)
+            .padding(.leading, 16)
         }
-        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 24)
+        .padding(.top, 4)
+        .padding(.bottom, 12)
+    }
+}
+
+/// Someone in the conversation, on a stamp of their messages' color.
+private struct ParticipantStamp: View {
+    let participant: ShownParticipant
+
+    var body: some View {
+        Text(participant.name)
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .foregroundStyle(participant.role.ink)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(StampBackground(color: participant.role.color, lean: participant.lean))
+    }
+}
+
+extension ShownParticipant.Role {
+    /// Their messages' color.
+    fileprivate var color: Color {
+        switch self {
+        case .you: .bubbleYours
+        case .agent: .bubbleAgent
+        case .someoneElse: .bubbleSomeoneElse
+        }
+    }
+
+    /// Text on their messages' color.
+    fileprivate var ink: Color {
+        switch self {
+        case .you, .someoneElse: .inkOnSignal
+        case .agent: .white
+        }
     }
 }
 
 /// A message, as the web stamps them: yours on the right in yellow, the agent's on the left in blue,
-/// someone else's on the left in coral with their name. Its background leans by `tilt` degrees; its
-/// text doesn't.
-private struct Bubble: View {
+/// someone else's on the left in coral with their name. Its background leans by `lean`; its text
+/// doesn't. What's `beside` it sits just after its end.
+private struct Bubble<Beside: View>: View {
     let role: MessageRole
     let text: String
-    let tilt: Double
+    let lean: Lean
     /// Who wrote it, when that's someone else.
     var someoneElse: String? = nil
+    @ViewBuilder var beside: Beside
 
     var body: some View {
         switch role {
@@ -82,19 +125,22 @@ private struct Bubble: View {
                 Text(someoneElse ?? "").font(.caption.weight(.semibold))
                 Text(text).textSelection(.enabled)
             }
-            .modifier(Stamp(color: .bubbleSomeoneElse, ink: .inkOnSignal, tilt: tilt))
+            .modifier(Stamp(color: .bubbleSomeoneElse, ink: .inkOnSignal, lean: lean))
             .frame(maxWidth: 520, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         case .user:
             Text(text)
                 .textSelection(.enabled)
-                .modifier(Stamp(color: .bubbleYours, ink: .inkOnSignal, tilt: tilt))
+                .modifier(Stamp(color: .bubbleYours, ink: .inkOnSignal, lean: lean))
                 .frame(maxWidth: 520, alignment: .trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         case .assistant:
             Text(Self.markdown(text))
                 .textSelection(.enabled)
-                .modifier(Stamp(color: .bubbleAgent, ink: .white, tilt: tilt))
+                .modifier(Stamp(color: .bubbleAgent, ink: .white, lean: lean))
+                .overlay(alignment: .bottomTrailing) {
+                    beside.alignmentGuide(.trailing) { $0[.leading] - 8 }
+                }
                 .frame(maxWidth: 560, alignment: .leading)
         }
     }
@@ -107,20 +153,24 @@ private struct Bubble: View {
     }
 }
 
-/// A bubble's look: `ink` on a nearly square block of `color` leaning `tilt` degrees.
+extension Bubble where Beside == EmptyView {
+    init(role: MessageRole, text: String, lean: Lean) {
+        self.init(role: role, text: text, lean: lean) { EmptyView() }
+    }
+}
+
+/// A bubble's look: `ink` on a stamp of `color` leaning by `lean`.
 private struct Stamp: ViewModifier {
     let color: Color
     let ink: Color
-    let tilt: Double
+    let lean: Lean
 
     func body(content: Content) -> some View {
         content
             .foregroundStyle(ink)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background {
-                RoundedRectangle(cornerRadius: 3).fill(color).rotationEffect(.degrees(tilt))
-            }
+            .background(StampBackground(color: color, lean: lean))
     }
 }
 
@@ -130,7 +180,7 @@ private struct TurnView: View {
 
     var body: some View {
         if let partial = turn.partial {
-            Bubble(role: .assistant, text: partial.text, tilt: partial.id.tilt)
+            Bubble(role: .assistant, text: partial.text, lean: partial.id.lean)
         } else {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -154,32 +204,26 @@ private struct Composer: View {
             if !store.shownSuggestions.isEmpty {
                 Suggestions(suggestions: store.shownSuggestions) { store.send(.mentioned($0)) }
             }
-            GlassEffectContainer(spacing: 12) {
-                HStack(alignment: .bottom, spacing: 12) {
-                    TextField("Message · @ to mention", text: $store.draft, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .lineLimit(1...8)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .glassEffect(.regular, in: .rect(cornerRadius: 22))
-                        .onSubmit { store.send(.submitted) }
-                        // The keys are the suggestions' while there are some, the field's otherwise.
-                        .onKeyPress(.downArrow) { suggestionsKey(.markMoved(by: 1)) }
-                        .onKeyPress(.upArrow) { suggestionsKey(.markMoved(by: -1)) }
-                        .onKeyPress(.tab) { suggestionsKey(.submitted) }
-                    Button {
-                        store.send(.sendTapped)
-                    } label: {
-                        Image(systemName: "arrow.up")
-                            .font(.system(size: 16, weight: .bold))
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .buttonBorderShape(.circle)
-                    .tint(.turgaiAccent)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!store.canSend)
+            HStack(alignment: .bottom, spacing: 12) {
+                TextField("Message · @ to mention", text: $store.draft, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...8)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                    .onSubmit { store.send(.submitted) }
+                    // The keys are the suggestions' while there are some, the field's otherwise.
+                    .onKeyPress(.downArrow) { suggestionsKey(.markMoved(by: 1)) }
+                    .onKeyPress(.upArrow) { suggestionsKey(.markMoved(by: -1)) }
+                    .onKeyPress(.tab) { suggestionsKey(.submitted) }
+                Button {
+                    store.send(.sendTapped)
+                } label: {
+                    Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
                 }
+                .buttonStyle(SendStampStyle())
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!store.canSend)
             }
         }
     }
@@ -188,6 +232,23 @@ private struct Composer: View {
         guard store.picked != nil else { return .ignored }
         store.send(action)
         return .handled
+    }
+}
+
+/// Send, on a coral stamp; on a quiet one while there's nothing to send.
+private struct SendStampStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? Color.white : Color.turgaiMuted)
+            .frame(width: 40, height: 40)
+            .background(
+                StampBackground(
+                    color: isEnabled ? .turgaiAccent : Color.turgaiInk.opacity(0.1), lean: Lean(degrees: -3))
+            )
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .contentShape(.rect)
     }
 }
 
@@ -259,7 +320,7 @@ private struct MessageList: View {
                 .transition(.scale(scale: 0.78).combined(with: .opacity))
             }
             ForEach(store.pending) { (request: SendMessageRequest) in
-                Bubble(role: .user, text: request.text, tilt: request.id.tilt).opacity(0.55)
+                Bubble(role: .user, text: request.text, lean: request.id.lean).opacity(0.55)
             }
             if let turn = store.turn {
                 TurnView(turn: turn)
@@ -315,17 +376,16 @@ private struct AccessRequestAlert: ViewModifier {
     }
 }
 
-/// A message, and for a reply of the agent's, ⓘ beside it that shows the turn that made it.
+/// A message, and for a reply of the agent's, ⓘ just after it that shows the turn that made it.
 private struct MessageRow: View {
     let shown: ShownMessage
     let showTurn: () -> Void
     let dismissTurn: () -> Void
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 6) {
-            Bubble(
-                role: shown.message.role, text: shown.message.text, tilt: shown.id.tilt,
-                someoneElse: shown.someoneElse)
+        Bubble(
+            role: shown.message.role, text: shown.message.text, lean: shown.id.lean, someoneElse: shown.someoneElse
+        ) {
             if let turn = shown.turn {
                 Button(action: showTurn) {
                     Image(systemName: "info.circle")

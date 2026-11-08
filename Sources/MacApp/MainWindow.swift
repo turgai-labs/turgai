@@ -17,10 +17,11 @@ struct MainWindow: View {
 
     var body: some View {
         ZStack {
-            WorkingField()
+            WorkingField(hue: store.sidebar.shownSpaceHue)
             // The conversation keeps clear of the panel; the field runs under it.
             ChatView(
-                session: session, title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
+                session: session, title: store.sidebar.openTitle, hue: store.sidebar.shownSpaceHue,
+                store: store.scope(state: \.chat, action: \.chat)
             )
             .safeAreaPadding(.leading, (store.showsSidebar ? Self.sidebarWidth + Self.gap : 0) + Self.gap)
             .safeAreaPadding(.trailing, Self.gap)
@@ -31,6 +32,8 @@ struct MainWindow: View {
                         store.send(.signOutTapped)
                     }
                 }
+                // A stamp of its own, not on the toolbar's glass.
+                .sharedBackgroundVisibility(.hidden)
             }
             GeometryReader { geometry in
                 SidebarGlass(
@@ -249,7 +252,8 @@ private struct HidePanelButton: View {
     }
 }
 
-/// Who's signed in, as their initial in a circle: a menu with their name and Sign Out.
+/// Who's signed in, as their initial on a stamp of their messages' yellow: a menu with their name and
+/// Sign Out.
 private struct AccountButton: View {
     let initial: String
     /// Their name, once it's read.
@@ -265,10 +269,10 @@ private struct AccountButton: View {
             Button("Sign Out", action: signOut)
         } label: {
             Text(initial)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(Color.turgaiInk)
-                .frame(width: 26, height: 26)
-                .background(Color.turgaiInk.opacity(0.1), in: .circle)
+                .font(.system(size: 13, weight: .heavy))
+                .foregroundStyle(Color.inkOnSignal)
+                .frame(width: 28, height: 28)
+                .background(StampBackground(color: .bubbleYours, lean: Lean(degrees: 4)))
         }
         .menuIndicator(.hidden)
         .help(name ?? "Account")
@@ -344,14 +348,14 @@ private struct SpaceRail: View {
     }
 }
 
-/// A space's tile on the rail.
+/// A space's tile on the rail: its stamp.
 private struct SpaceTile: View {
     let choice: SidebarFeature.SpaceChoice
     let pick: () -> Void
 
     var body: some View {
         Button(action: pick) {
-            SpaceMark(initial: choice.initial, hue: choice.hue)
+            SpaceMark(initial: choice.initial, hue: choice.hue, lean: choice.lean)
         }
         .buttonStyle(.plain)
         .overlay(alignment: .leading) {
@@ -371,38 +375,19 @@ private struct SpaceTile: View {
     }
 }
 
-/// A space's mark: its initial in its color's deep shade, on a tint of it.
+/// A space's mark: its initial on a stamp of its color.
 private struct SpaceMark: View {
     let initial: String
-    let hue: SidebarFeature.SpaceHue
+    let hue: SpaceHue
+    let lean: Lean
 
     var body: some View {
         Text(initial)
-            .font(.system(size: 13, weight: .bold))
+            .font(.system(size: 14, weight: .heavy))
             .foregroundStyle(hue.ink)
             .frame(width: 30, height: 30)
-            .background(hue.color.opacity(0.22), in: .rect(cornerRadius: 8))
+            .background(StampBackground(color: hue.color, lean: lean))
             .contentShape(.rect)
-    }
-}
-
-extension SidebarFeature.SpaceHue {
-    /// The tile's color.
-    fileprivate var color: Color {
-        switch self {
-        case .coral: .signalCoral
-        case .yellow: .signalYellow
-        case .blue: .signalBlue
-        }
-    }
-
-    /// The initial's color on a tint of it: its deep shade.
-    fileprivate var ink: Color {
-        switch self {
-        case .coral: .signalCoralDeep
-        case .yellow: .signalYellowDeep
-        case .blue: .signalBlueDeep
-        }
     }
 }
 
@@ -415,10 +400,8 @@ private struct ConversationColumn: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 SpaceHeading(
-                    initial: store.shownSpaceInitial, hue: store.shownSpaceHue, name: store.shownSpaceName,
-                    detail: store.shownSpaceDetail,
-                    menu: store.shownSpaceMenu, rename: { store.send(.renameShownSpaceTapped) },
-                    invite: { store.send(.inviteTapped) })
+                    name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
+                    rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
                 Spacer(minLength: 0)
                 Button {
                     store.send(.newConversationTapped)
@@ -439,7 +422,7 @@ private struct ConversationColumn: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(store.entries) { (entry: SidebarFeature.Entry) in
-                        ConversationLine(entry: entry) { store.send(.selected(entry.id)) }
+                        ConversationLine(entry: entry, hue: store.shownSpaceHue) { store.send(.selected(entry.id)) }
                             .contextMenu {
                                 Button("Rename…") { store.send(.renameConversationTapped(entry.id)) }
                             }
@@ -455,10 +438,12 @@ private struct ConversationColumn: View {
     }
 }
 
-/// A conversation: its name, bolder with a dot when something's new in it; on a quiet fill, bolder,
-/// while it's open.
+/// A conversation: its name, bolder with a dot when something's new in it; on a stamp of its space's
+/// color, bolder, while it's open.
 private struct ConversationLine: View {
     let entry: SidebarFeature.Entry
+    /// Its space's color.
+    let hue: SpaceHue
     let open: () -> Void
 
     var body: some View {
@@ -467,7 +452,7 @@ private struct ConversationLine: View {
                 Text(entry.title)
                     .font(.system(size: 13, weight: entry.unread || entry.isOpen ? .semibold : .regular))
                     .lineLimit(1)
-                    .foregroundStyle(Color.turgaiInk)
+                    .foregroundStyle(entry.isOpen ? hue.ink : Color.turgaiInk)
                 Spacer(minLength: 0)
                 if entry.unread {
                     Circle().fill(Color.turgaiAccent).frame(width: 7, height: 7)
@@ -477,18 +462,16 @@ private struct ConversationLine: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.turgaiInk.opacity(entry.isOpen ? 0.08 : 0), in: .rect(cornerRadius: 8))
+            .background(StampBackground(color: entry.isOpen ? hue.color : .clear, lean: entry.lean))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
     }
 }
 
-/// The shown space, heading its conversations: its mark, as the rail has it, and its name over
-/// what it is; for its admins, the name is a menu that invites people to it and renames it.
+/// The shown space, heading its conversations: its name over what it is; for its admins, the name
+/// is a menu that invites people to it and renames it.
 private struct SpaceHeading: View {
-    let initial: String
-    let hue: SidebarFeature.SpaceHue
     let name: String
     /// What it is and who's in it.
     let detail: String
@@ -498,30 +481,27 @@ private struct SpaceHeading: View {
     let invite: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            SpaceMark(initial: initial, hue: hue)
-            VStack(alignment: .leading, spacing: 1) {
-                if let menu {
-                    Menu {
-                        Button(menu.invite, action: invite)
-                        Button(menu.rename, action: rename)
-                    } label: {
-                        HStack(spacing: 4) {
-                            SpaceName(name: name)
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(Color.turgaiMuted)
-                        }
-                        .contentShape(.rect)
+        VStack(alignment: .leading, spacing: 1) {
+            if let menu {
+                Menu {
+                    Button(menu.invite, action: invite)
+                    Button(menu.rename, action: rename)
+                } label: {
+                    HStack(spacing: 4) {
+                        SpaceName(name: name)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Color.turgaiMuted)
                     }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
-                } else {
-                    SpaceName(name: name)
+                    .contentShape(.rect)
                 }
-                Text(detail).font(.caption).foregroundStyle(Color.turgaiMuted)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+            } else {
+                SpaceName(name: name)
             }
+            Text(detail).font(.caption).foregroundStyle(Color.turgaiMuted)
         }
     }
 }
@@ -532,8 +512,7 @@ private struct SpaceName: View {
 
     var body: some View {
         Text(name)
-            .font(.system(size: 15, weight: .bold))
-            .tracking(-0.2)
+            .font(.system(size: 20, weight: .heavy).width(.condensed))
             .lineLimit(1)
             .foregroundStyle(Color.turgaiInk)
     }

@@ -2,6 +2,19 @@ import ComposableArchitecture
 import Foundation
 import TurgaiModels
 
+/// A space's color, one of the brand's signals, worked out from its name: the same name has the
+/// same one wherever and whenever it's shown.
+enum SpaceHue: CaseIterable, Equatable {
+    case coral
+    case yellow
+    case blue
+
+    init(name: String) {
+        let hash = name.utf16.reduce(Int32(0)) { hash, unit in (hash &<< 5) &- hash &+ Int32(unit) }
+        self = Self.allCases[Int(hash.magnitude % UInt32(Self.allCases.count))]
+    }
+}
+
 /// The window's sidebar, Slack's way: every space the person is in, on a rail; the one shown, the
 /// open conversation's, with its conversations, the one something was last said in first; the one
 /// open; and which have something new since they were last open.
@@ -26,6 +39,9 @@ struct SidebarFeature {
         let title: String
         let unread: Bool
         let isOpen: Bool
+
+        /// How its stamp leans while it's open.
+        var lean: Lean { Lean(seed: id.rawValue) }
     }
 
     /// A space on the rail: whether it's the one shown, and whether something's new in it.
@@ -38,19 +54,8 @@ struct SidebarFeature {
         /// What its tile says: the first letter of its name.
         var initial: String { space.name.prefix(1).uppercased() }
         var hue: SpaceHue { SpaceHue(name: space.name) }
-    }
-
-    /// A space's color, one of the brand's signals, worked out from its name: the same name has
-    /// the same one wherever and whenever it's shown.
-    enum SpaceHue: CaseIterable, Equatable {
-        case coral
-        case yellow
-        case blue
-
-        init(name: String) {
-            let hash = name.utf16.reduce(Int32(0)) { hash, unit in (hash &<< 5) &- hash &+ Int32(unit) }
-            self = Self.allCases[Int(hash.magnitude % UInt32(Self.allCases.count))]
-        }
+        /// How its tile leans.
+        var lean: Lean { Lean(seed: space.id) }
     }
 
     /// The dialog open over the window, with what's written in it.
@@ -182,8 +187,6 @@ struct SidebarFeature {
         /// What the panel is headed: the shown space's name, or Spaces before they're read.
         var shownSpaceName: String { shownSpace?.name ?? "Spaces" }
 
-        /// The shown space's initial, as its tile on the rail has it.
-        var shownSpaceInitial: String { shownSpace.map { $0.name.prefix(1).uppercased() } ?? "" }
         /// The shown space's color, as its tile on the rail has it.
         var shownSpaceHue: SpaceHue { SpaceHue(name: shownSpace?.name ?? "") }
 

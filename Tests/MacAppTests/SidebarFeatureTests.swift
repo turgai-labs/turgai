@@ -34,6 +34,7 @@ struct SidebarFeatureTests {
         }
         await store.receive(\.selected) { $0.selected = self.dinner.id }
         await store.receive(\.delegate, .open(dinner.id))
+        await store.finish()
     }
 
     /// With no conversations yet, one is started in Turgai's own space, and opened.
@@ -57,6 +58,7 @@ struct SidebarFeatureTests {
         }
         await store.receive(\.selected) { $0.selected = self.dinner.id }
         await store.receive(\.delegate, .open(dinner.id))
+        await store.finish()
         #expect(started.value == [nil])
     }
 
@@ -83,6 +85,7 @@ struct SidebarFeatureTests {
             $0.conversations[id: self.trip.id]?.unread = false
         }
         await store.receive(\.delegate, .open(trip.id))
+        await store.finish()
     }
 
     /// Rename… writes a conversation's new title; a blank name does nothing.
@@ -178,6 +181,7 @@ struct SidebarFeatureTests {
         }
         await store.receive(\.selected) { $0.selected = self.trip.id }
         await store.receive(\.delegate, .open(trip.id))
+        await store.finish()
         #expect(joined.value.map(\.token) == ["bad", "good"])
     }
 
@@ -259,7 +263,6 @@ struct SidebarFeatureTests {
         #expect(state.shownSpaceMenu == .init(rename: "Rename “Family”…", invite: "Invite People…"))
         #expect(state.newConversationHelp == "New conversation in Family")
         #expect(state.shownSpaceName == "Family")
-        #expect(state.shownSpaceInitial == "F")
         #expect(state.spaceChoices.map(\.hue) == [.blue, .yellow, .blue])
         #expect(state.shownSpaceHue == .yellow)
         #expect(state.shownSpaceDetail == "Space")
@@ -288,6 +291,7 @@ struct SidebarFeatureTests {
         await store.receive(\.started) { $0.conversations.insert(.init(id: lunch.id, spaceID: "work"), at: 0) }
         await store.receive(\.selected) { $0.selected = lunch.id }
         await store.receive(\.delegate, .open(lunch.id))
+        await store.finish()
         #expect(started.value == ["work"])
     }
 }
@@ -368,9 +372,16 @@ struct MentionTests {
             SpacePerson(id: "account-bob", name: "bob", role: .member),
             SpacePerson(id: "account-cat", name: "cat", role: .member),
         ]
-        #expect(state.participantsLine == "bob")
-        state.participants = [ParticipantSummary(kind: .person, id: "account-ann", name: "ann"), bob]
-        #expect(state.participantsLine == "You, bob")
+        #expect(state.shownParticipants == [.init(id: "account-bob", name: "bob", role: .someoneElse)])
+        state.participants = [
+            ParticipantSummary(kind: .agent, id: "agent", name: "Turgai"), bob,
+            ParticipantSummary(kind: .person, id: "account-ann", name: "ann"),
+        ]
+        #expect(
+            state.shownParticipants == [
+                .init(id: "account-ann", name: "You", role: .you), .init(id: "agent", name: "Turgai", role: .agent),
+                .init(id: "account-bob", name: "bob", role: .someoneElse),
+            ])
         state.participants = [bob]
         #expect(state.connectionNotice == nil)
         state.connection = .disconnected(why: "gone")

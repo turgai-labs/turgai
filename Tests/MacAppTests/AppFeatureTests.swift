@@ -209,9 +209,18 @@ struct ChatFeatureTests {
     /// A bubble leans as the web's does for the same message: between −2.4° and 2.4°.
     @Test
     func aBubbleLeansAsOnTheWeb() {
-        #expect(MessageID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!).tilt == 1.6)
-        #expect(MessageID(rawValue: UUID(uuidString: "E621E1F8-C36C-495A-93FC-0C247A3E6E5F")!).tilt == 1.9)
-        #expect((0..<200).map { _ in MessageID().tilt }.allSatisfy { (-2.4...2.4).contains($0) })
+        #expect(MessageID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!).lean.degrees == 1.6)
+        #expect(MessageID(rawValue: UUID(uuidString: "E621E1F8-C36C-495A-93FC-0C247A3E6E5F")!).lean.degrees == 1.9)
+        #expect((0..<200).map { _ in MessageID().lean.degrees }.allSatisfy { (-2.4...2.4).contains($0) })
+    }
+
+    /// A short stamp takes its whole lean; a long one leans less, so its ends lift 6 points apart
+    /// at most.
+    @Test
+    func aLongStampLeansLess() {
+        #expect(Lean(degrees: -2).angle(across: 60) == .degrees(-2))
+        let long = Lean(degrees: 2).angle(across: 600)
+        #expect(abs(600 * sin(long.radians) - 6) < 0.001)
     }
 
     @Test

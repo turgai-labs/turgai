@@ -10,11 +10,6 @@ extension Color {
     static let signalCoral = Color(light: 0xEF5B4D, dark: 0xFF8175)
     static let signalYellow = Color(light: 0xF4C542, dark: 0xF7D66B)
     static let signalBlue = Color(light: 0x2864E8, dark: 0x79A7FF)
-    /// Each signal's deep shade, for text on a tint of it: dark enough to read in the light theme,
-    /// the bright signal itself in the dark one.
-    static let signalCoralDeep = Color(light: 0xB8402F, dark: 0xFF8175)
-    static let signalYellowDeep = Color(light: 0x8C6A00, dark: 0xF7D66B)
-    static let signalBlueDeep = Color(light: 0x1747AD, dark: 0x79A7FF)
 
     /// A message's background, as the web's: its signal color, 78% of it over the surface.
     static let bubbleYours = Color(light: 0xF6D26C, dark: 0xC4AF5E)
@@ -48,20 +43,79 @@ extension Image {
     static let skylark = Image("Skylark", bundle: .module)
 }
 
-/// Turgai's geometry for working screens: a coral block tilted into the top right corner, mostly
-/// past the window's edge; a yellow square at the left, and a blue bar low on the left, which the
-/// panel's glass blurs into itself.
+/// How a stamp leans, as the web's do: up to 2.4° either way, the same for the same seed. A long
+/// stamp leans less, so its ends lift no further apart than a short one's.
+struct Lean: Equatable {
+    /// How far its ends may lift apart, in points.
+    private static let mostLift: CGFloat = 6
+
+    /// Its angle, for a stamp short enough to take it whole.
+    let degrees: Double
+
+    init(degrees: Double) {
+        self.degrees = degrees
+    }
+
+    /// The lean the web works out for `seed`: between −2.4° and 2.4°.
+    init(seed: String) {
+        let hash = seed.utf16.reduce(Int32(0)) { hash, unit in (hash &<< 5) &- hash &+ Int32(unit) }
+        degrees = Double(Int(hash.magnitude % 49) - 24) / 10
+    }
+
+    /// Its angle across `width`: its own, or less, so its ends lift no more than `mostLift` apart.
+    func angle(across width: CGFloat) -> Angle {
+        let most = Angle.radians(asin(min(1, Self.mostLift / max(width, 1))))
+        return .degrees(min(abs(degrees), most.degrees) * (degrees < 0 ? -1 : 1))
+    }
+}
+
+/// Turgai's stamp, behind what it marks: a nearly square block of `color`, leaning by `lean`.
+struct StampBackground: View {
+    let color: Color
+    let lean: Lean
+
+    var body: some View {
+        GeometryReader { geometry in
+            RoundedRectangle(cornerRadius: 3).fill(color).rotationEffect(lean.angle(across: geometry.size.width))
+        }
+    }
+}
+
+extension SpaceHue {
+    /// Its signal color.
+    var color: Color {
+        switch self {
+        case .coral: .signalCoral
+        case .yellow: .signalYellow
+        case .blue: .signalBlue
+        }
+    }
+
+    /// Text on a stamp of it: the light theme's ink on coral and yellow, white on blue.
+    var ink: Color {
+        switch self {
+        case .coral, .yellow: .inkOnSignal
+        case .blue: .white
+        }
+    }
+}
+
+/// Turgai's geometry for working screens: a block in the shown space's color, tilted into the top
+/// right corner and cut off by it; a yellow square and a blue bar on the left, which the panel's
+/// glass blurs into itself.
 struct WorkingField: View {
+    let hue: SpaceHue
+
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
             ZStack {
                 Color.turgaiCanvas
                 Rectangle()
-                    .fill(Color.signalCoral.opacity(0.28))
-                    .frame(width: 360, height: 170)
+                    .fill(hue.color)
+                    .frame(width: 320, height: 150)
                     .rotationEffect(.degrees(-9))
-                    .position(x: size.width - 70, y: 30)
+                    .position(x: size.width - 60, y: 24)
                 Rectangle()
                     .fill(Color.signalYellow.opacity(0.55))
                     .frame(width: 112, height: 112)
@@ -69,10 +123,11 @@ struct WorkingField: View {
                     .position(x: 56, y: 248)
                 Rectangle()
                     .fill(Color.signalBlue.opacity(0.22))
-                    .frame(width: 384, height: 80)
+                    .frame(width: 280, height: 80)
                     .rotationEffect(.degrees(7))
-                    .position(x: 192, y: size.height - 152)
+                    .position(x: 140, y: size.height - 152)
             }
+            .animation(.easeInOut(duration: 0.3), value: hue)
         }
         .ignoresSafeArea()
     }
