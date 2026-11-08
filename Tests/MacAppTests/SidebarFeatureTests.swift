@@ -181,6 +181,39 @@ struct SidebarFeatureTests {
         #expect(joined.value.map(\.token) == ["bad", "good"])
     }
 
+    /// Invite People… makes a link to the shown space, shown to copy; one that can't be made says so.
+    @Test
+    func anInviteIsMadeAndCopied() async {
+        let family = SpaceSummary(id: "family", name: "Family", role: .admin)
+        let link = "turgai://join/8F3C1E2A-4B5D-4E6F-8A9B-0C1D2E3F4A5B/abc"
+        let copied = LockIsolated<[String]>([])
+        let makes = LockIsolated(0)
+        var state = SidebarFeature.State()
+        state.session = session
+        state.spaces = [family]
+        let store = TestStore(initialState: state) {
+            SidebarFeature()
+        } withDependencies: {
+            $0.server.makeInvite = { _, space in
+                makes.withValue { $0 += 1 }
+                guard makes.value == 1 else { throw URLError(.badServerResponse) }
+                return SpaceInviteOffer(id: "invite", token: "abc", link: link, expiresAt: nil)
+            }
+            $0.pasteboard.copy = { text in copied.withValue { $0.append(text) } }
+        }
+
+        await store.send(.inviteTapped) { $0.dialog = .inviting(.init(spaceName: "Family")) }
+        await store.receive(\.inviteMade) { $0.dialog = .inviting(.init(spaceName: "Family", link: link)) }
+        await store.send(.copyInviteTapped)
+        #expect(copied.value == [link])
+        await store.send(.dialogPresented(false)) { $0.dialog = nil }
+
+        await store.send(.inviteTapped) { $0.dialog = .inviting(.init(spaceName: "Family")) }
+        await store.receive(\.inviteFailed) {
+            $0.dialog = .inviting(.init(spaceName: "Family", problem: "Couldn't make an invite. Try again."))
+        }
+    }
+
     /// A new title renames a conversation where it is, marking nothing; one joined comes first,
     /// marked, unless it's listed already.
     @Test
@@ -223,7 +256,7 @@ struct SidebarFeatureTests {
         #expect(state.spaceChoices.map(\.initial) == ["T", "F", "W"])
         #expect(state.spaceChoices.map(\.unread) == [true, false, false])
         #expect(state.spaceChoices.map(\.isShown) == [false, true, false])
-        #expect(state.renameShownSpace == "Rename “Family”…")
+        #expect(state.shownSpaceMenu == .init(rename: "Rename “Family”…", invite: "Invite People…"))
         #expect(state.newConversationHelp == "New conversation in Family")
         #expect(state.shownSpaceName == "Family")
 

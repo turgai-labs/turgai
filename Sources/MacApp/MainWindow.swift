@@ -77,6 +77,10 @@ private struct SidebarDialogs: ViewModifier {
                     adding: adding, name: $store.name.sending(\.nameChanged), link: $store.link.sending(\.linkChanged),
                     make: { store.send(.makeSpaceTapped) }, join: { store.send(.joinTapped) },
                     cancel: { store.send(.dialogPresented(false)) })
+            case .inviting(let inviting)?:
+                InviteSheet(
+                    inviting: inviting, copy: { store.send(.copyInviteTapped) },
+                    done: { store.send(.dialogPresented(false)) })
             case nil:
                 EmptyView()
             }
@@ -139,6 +143,42 @@ private struct AddSpaceSheet: View {
         }
         .padding(20)
         .frame(width: 380)
+    }
+}
+
+/// An invite to a space: its link, to copy and give someone, while it's made a moment, or why it
+/// couldn't be.
+private struct InviteSheet: View {
+    let inviting: SidebarFeature.Inviting
+    let copy: () -> Void
+    let done: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(inviting.title).font(.headline)
+            Text("Whoever opens this link joins. It works once.")
+                .foregroundStyle(Color.turgaiMuted)
+            if let link = inviting.link {
+                Text(link)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.turgaiInk.opacity(0.05), in: .rect(cornerRadius: 8))
+            } else if let problem = inviting.problem {
+                Text(problem).font(.callout).foregroundStyle(Color.turgaiAccent)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            HStack {
+                Spacer()
+                Button("Copy Link", action: copy).disabled(inviting.link == nil)
+                Button("Done", action: done).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
     }
 }
 
@@ -334,9 +374,9 @@ private struct ConversationColumn: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                SpaceHeading(name: store.shownSpaceName, rename: store.renameShownSpace) {
-                    store.send(.renameShownSpaceTapped)
-                }
+                SpaceHeading(
+                    name: store.shownSpaceName, menu: store.shownSpaceMenu,
+                    rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
                 Spacer(minLength: 0)
                 Button {
                     store.send(.newConversationTapped)
@@ -402,17 +442,20 @@ private struct ConversationLine: View {
     }
 }
 
-/// The shown space's name, heading its conversations: for its admins, a menu that renames it.
+/// The shown space's name, heading its conversations: for its admins, a menu that renames it and
+/// invites people to it.
 private struct SpaceHeading: View {
     let name: String
-    /// What renaming it says, when its person may: none otherwise.
-    let rename: String?
-    let renameTapped: () -> Void
+    /// What its menu offers, when its person is one of its admins: none otherwise.
+    let menu: SidebarFeature.SpaceMenu?
+    let rename: () -> Void
+    let invite: () -> Void
 
     var body: some View {
-        if let rename {
+        if let menu {
             Menu {
-                Button(rename, action: renameTapped)
+                Button(menu.invite, action: invite)
+                Button(menu.rename, action: rename)
             } label: {
                 HStack(spacing: 6) {
                     SpaceName(name: name)

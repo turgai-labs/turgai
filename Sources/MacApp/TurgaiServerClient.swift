@@ -28,6 +28,8 @@ struct TurgaiServerClient: Sendable {
     var makeSpace: @Sendable (Session, _ name: String) async throws -> SpaceSummary
     /// A space called `name` from now on.
     var renameSpace: @Sendable (Session, _ spaceID: String, _ name: String) async throws -> SpaceSummary
+    /// A new invite to a space, working until it's used.
+    var makeInvite: @Sendable (Session, _ spaceID: String) async throws -> SpaceInviteOffer
     /// The space `link` invites to, joined by the account's person.
     var joinSpace: @Sendable (Session, SpaceInviteLink) async throws -> SpaceSummary
 }
@@ -83,6 +85,10 @@ extension TurgaiServerClient: DependencyKey {
             },
             renameSpace: { session, space, name in
                 try await api("PATCH", "api/v1/spaces/\(space)", body: RenameSpaceRequest(name: name), as: session)
+            },
+            makeInvite: { session, space in
+                try await api(
+                    "POST", "api/v1/spaces/\(space)/invites", body: MakeInviteRequest(validForDays: nil), as: session)
             },
             joinSpace: { session, link in
                 try await api(

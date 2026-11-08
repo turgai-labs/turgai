@@ -45,13 +45,16 @@ struct SidebarFeature {
         case renaming(Renaming)
         /// A space to make, by its name, or to join, by an invite's link.
         case addingSpace(AddingSpace)
+        /// An invite to a space, its link to give someone.
+        case inviting(Inviting)
 
-        /// What's written for a name in it.
+        /// What's written for a name in it: nothing in an invite.
         var name: String {
             get {
                 switch self {
                 case .renaming(let renaming): renaming.name
                 case .addingSpace(let adding): adding.name
+                case .inviting: ""
                 }
             }
             set {
@@ -62,9 +65,28 @@ struct SidebarFeature {
                 case .addingSpace(var adding):
                     adding.name = newValue
                     self = .addingSpace(adding)
+                case .inviting:
+                    break
                 }
             }
         }
+    }
+
+    /// An invite to a space being made: its link once it's made, or why it couldn't be.
+    struct Inviting: Equatable {
+        let spaceName: String
+        /// The link to give someone: none while it's made, or when it couldn't be.
+        var link: String?
+        var problem: String?
+
+        /// What the dialog is called.
+        var title: String { "Invite people to \(spaceName)" }
+    }
+
+    /// What the shown space's menu offers its admins: renaming it, and inviting people to it.
+    struct SpaceMenu: Equatable {
+        let rename: String
+        let invite: String
     }
 
     /// A conversation's or a space's new name, being written.
@@ -154,8 +176,10 @@ struct SidebarFeature {
         }
 
         /// What renaming the shown space says, when its person is one of its admins: none otherwise.
-        var renameShownSpace: String? {
-            shownSpace.flatMap { $0.role == .admin ? "Rename “\($0.name)”…" : nil }
+        var shownSpaceMenu: SpaceMenu? {
+            shownSpace.flatMap {
+                $0.role == .admin ? SpaceMenu(rename: "Rename “\($0.name)”…", invite: "Invite People…") : nil
+            }
         }
 
         /// What New conversation says it does.
@@ -186,6 +210,12 @@ struct SidebarFeature {
         case renameConversationTapped(ConversationID)
         /// Rename… on the space shown.
         case renameShownSpaceTapped
+        /// Invite People… on the space shown: an invite to it is made.
+        case inviteTapped
+        case inviteMade(SpaceInviteOffer)
+        case inviteFailed
+        /// Copy in the invite: its link is copied.
+        case copyInviteTapped
         /// + on the rail: a space to make or join.
         case addSpaceTapped
         case nameChanged(String)
@@ -210,6 +240,7 @@ struct SidebarFeature {
     }
 
     @Dependency(\.server) var server
+    @Dependency(\.pasteboard) var pasteboard
 
     var body: some ReducerOf<Self> {
         Reduce { state, action in
@@ -300,6 +331,33 @@ struct SidebarFeature {
                 guard let space = state.shownSpace else { return .none }
                 state.dialog = .renaming(Renaming(subject: .space(space.id), name: space.name))
                 return .none
+
+            case .inviteTapped:
+                guard let space = state.shownSpace, let session = state.session else { return .none }
+                state.dialog = .inviting(Inviting(spaceName: space.name))
+                return .run { send in
+                    do {
+                        await send(.inviteMade(try await server.makeInvite(session, space.id)))
+                    } catch {
+                        await send(.inviteFailed)
+                    }
+                }
+
+            case .inviteMade(let offer):
+                guard case .inviting(var inviting) = state.dialog else { return .none }
+                inviting.link = offer.link
+                state.dialog = .inviting(inviting)
+                return .none
+
+            case .inviteFailed:
+                guard case .inviting(var inviting) = state.dialog else { return .none }
+                inviting.problem = "Couldn't make an invite. Try again."
+                state.dialog = .inviting(inviting)
+                return .none
+
+            case .copyInviteTapped:
+                guard case .inviting(let inviting) = state.dialog, let link = inviting.link else { return .none }
+                return .run { _ in await pasteboard.copy(link) }
 
             case .addSpaceTapped:
                 state.dialog = .addingSpace(AddingSpace())
