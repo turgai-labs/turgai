@@ -201,8 +201,8 @@ private struct SidebarGlass: View {
     let store: StoreOf<SidebarFeature>
     let toggle: () -> Void
 
-    /// How much of the window's top left the traffic lights take.
-    private static let trafficLightsWidth: CGFloat = 70
+    /// How much of the window's top left the traffic lights take, with room after them.
+    private static let trafficLightsWidth: CGFloat = 86
     private static let buttonSize: CGFloat = 32
     private static let shape = RoundedRectangle(cornerRadius: 16)
 
@@ -313,9 +313,9 @@ private struct SidebarView: View {
     }
 }
 
-/// Every space the person is in: a tile each with its initial, the shown one darker with a bar
-/// beside it, Slack's way, and dotted when something's new in it; + makes or joins one. It scrolls
-/// when there are many.
+/// Every space the person is in: a tile each with its initial, in its color, the shown one with a
+/// bar beside it, Slack's way, and dotted when something's new in it; + makes or joins one. It
+/// scrolls when there are many.
 private struct SpaceRail: View {
     let store: StoreOf<SidebarFeature>
 
@@ -351,7 +351,7 @@ private struct SpaceTile: View {
 
     var body: some View {
         Button(action: pick) {
-            SpaceMark(initial: choice.initial, isShown: choice.isShown)
+            SpaceMark(initial: choice.initial, hue: choice.hue)
         }
         .buttonStyle(.plain)
         .overlay(alignment: .leading) {
@@ -361,7 +361,9 @@ private struct SpaceTile: View {
         }
         .overlay(alignment: .topTrailing) {
             if choice.unread {
-                Circle().fill(Color.turgaiAccent).frame(width: 8, height: 8).offset(x: 2, y: -2)
+                Circle().fill(Color.turgaiAccent).frame(width: 8, height: 8)
+                    .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                    .offset(x: 3, y: -3)
                     .accessibilityLabel("New messages")
             }
         }
@@ -369,18 +371,37 @@ private struct SpaceTile: View {
     }
 }
 
-/// A space's mark: its initial on a tile, darker when it's the one shown.
+/// A space's mark: its initial on a tile in its color.
 private struct SpaceMark: View {
     let initial: String
-    let isShown: Bool
+    let hue: SidebarFeature.SpaceHue
 
     var body: some View {
         Text(initial)
             .font(.system(size: 13, weight: .bold))
-            .foregroundStyle(isShown ? Color.turgaiInk : Color.turgaiMuted)
+            .foregroundStyle(hue.ink)
             .frame(width: 30, height: 30)
-            .background(Color.turgaiInk.opacity(isShown ? 0.16 : 0.06), in: .rect(cornerRadius: 8))
+            .background(hue.color, in: .rect(cornerRadius: 8))
             .contentShape(.rect)
+    }
+}
+
+extension SidebarFeature.SpaceHue {
+    /// The tile's color.
+    fileprivate var color: Color {
+        switch self {
+        case .coral: .signalCoral
+        case .yellow: .signalYellow
+        case .blue: .signalBlue
+        }
+    }
+
+    /// The initial's color on it: ink on coral and yellow, white on blue.
+    fileprivate var ink: Color {
+        switch self {
+        case .coral, .yellow: .inkOnSignal
+        case .blue: .white
+        }
     }
 }
 
@@ -393,7 +414,8 @@ private struct ConversationColumn: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 SpaceHeading(
-                    initial: store.shownSpaceInitial, name: store.shownSpaceName, detail: store.shownSpaceDetail,
+                    initial: store.shownSpaceInitial, hue: store.shownSpaceHue, name: store.shownSpaceName,
+                    detail: store.shownSpaceDetail,
                     menu: store.shownSpaceMenu, rename: { store.send(.renameShownSpaceTapped) },
                     invite: { store.send(.inviteTapped) })
                 Spacer(minLength: 0)
@@ -465,6 +487,7 @@ private struct ConversationLine: View {
 /// what it is; for its admins, the name is a menu that invites people to it and renames it.
 private struct SpaceHeading: View {
     let initial: String
+    let hue: SidebarFeature.SpaceHue
     let name: String
     /// What it is and who's in it.
     let detail: String
@@ -475,7 +498,7 @@ private struct SpaceHeading: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            SpaceMark(initial: initial, isShown: true)
+            SpaceMark(initial: initial, hue: hue)
             VStack(alignment: .leading, spacing: 1) {
                 if let menu {
                     Menu {

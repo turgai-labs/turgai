@@ -260,6 +260,8 @@ struct SidebarFeatureTests {
         #expect(state.newConversationHelp == "New conversation in Family")
         #expect(state.shownSpaceName == "Family")
         #expect(state.shownSpaceInitial == "F")
+        #expect(state.spaceChoices.map(\.hue) == [.blue, .yellow, .blue])
+        #expect(state.shownSpaceHue == .yellow)
         #expect(state.shownSpaceDetail == "Space")
         state.peopleCounts["family"] = 1
         #expect(state.shownSpaceDetail == "Space · 1 person")

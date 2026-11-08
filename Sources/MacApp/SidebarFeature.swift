@@ -37,6 +37,20 @@ struct SidebarFeature {
         var id: String { space.id }
         /// What its tile says: the first letter of its name.
         var initial: String { space.name.prefix(1).uppercased() }
+        var hue: SpaceHue { SpaceHue(name: space.name) }
+    }
+
+    /// A space's color, one of the brand's signals, worked out from its name: the same name has
+    /// the same one wherever and whenever it's shown.
+    enum SpaceHue: CaseIterable, Equatable {
+        case coral
+        case yellow
+        case blue
+
+        init(name: String) {
+            let hash = name.utf16.reduce(Int32(0)) { hash, unit in (hash &<< 5) &- hash &+ Int32(unit) }
+            self = Self.allCases[Int(hash.magnitude % UInt32(Self.allCases.count))]
+        }
     }
 
     /// The dialog open over the window, with what's written in it.
@@ -170,6 +184,8 @@ struct SidebarFeature {
 
         /// The shown space's initial, as its tile on the rail has it.
         var shownSpaceInitial: String { shownSpace.map { $0.name.prefix(1).uppercased() } ?? "" }
+        /// The shown space's color, as its tile on the rail has it.
+        var shownSpaceHue: SpaceHue { SpaceHue(name: shownSpace?.name ?? "") }
 
         /// What the shown space is, under its name: a space, and how many people are in it once
         /// they're counted.
