@@ -34,6 +34,7 @@ public struct TurgaiScenes: Scene {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 960, height: 720)
+        .commands { PanelCommands(store: app) }
 
     }
 }

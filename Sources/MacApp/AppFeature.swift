@@ -146,6 +146,11 @@ struct AppFeature {
         var showsSidebar = true
         var showsObjects = false
 
+        /// What the View menu's item for the conversations panel says.
+        var sidebarCommand: String { showsSidebar ? "Hide Conversations" : "Show Conversations" }
+        /// What the View menu's item for the objects panel says.
+        var objectsCommand: String { showsObjects ? "Hide Objects" : "Show Objects" }
+
         var screen: Screen {
             switch (connection, account) {
             case (.ready, .signedIn(let session)): .chat(session)

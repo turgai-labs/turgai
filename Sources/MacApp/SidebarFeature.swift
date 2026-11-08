@@ -13,6 +13,33 @@ struct SidebarFeature {
         let spaceID: String
         /// Something was said in it since it was last open.
         var unread = false
+
+        /// What it's called where it's shown: its title, or else that it's new.
+        var shownTitle: String { title ?? "New conversation" }
+    }
+
+    /// A conversation as a line in the sidebar: what it's called, whether something's new in it,
+    /// and whether it's the one open.
+    struct Entry: Equatable, Identifiable {
+        let id: ConversationID
+        let title: String
+        let unread: Bool
+        let isOpen: Bool
+    }
+
+    /// A space, with its conversations, as the sidebar shows it.
+    struct Section: Equatable, Identifiable {
+        let space: SpaceSummary
+        let entries: [Entry]
+
+        var id: String { space.id }
+    }
+
+    /// Where a new conversation starts: in the one space there is, or in one picked.
+    enum NewConversation: Equatable {
+        case inSpace(String)
+        /// The spaces to pick from, the open conversation's first.
+        case pick([SpaceSummary])
     }
 
     @ObservableState
@@ -27,7 +54,26 @@ struct SidebarFeature {
 
         /// What the open conversation is called.
         var openTitle: String {
-            selected.flatMap { conversations[id: $0]?.title } ?? "New conversation"
+            selected.flatMap { conversations[id: $0]?.shownTitle } ?? "New conversation"
+        }
+
+        /// Each space, with its conversations, the one something was last said in first.
+        var sections: [Section] {
+            spaces.map { space in
+                Section(
+                    space: space,
+                    entries: conversations.filter { $0.spaceID == space.id }.map {
+                        Entry(id: $0.id, title: $0.shownTitle, unread: $0.unread, isOpen: $0.id == selected)
+                    })
+            }
+        }
+
+        /// Where New conversation starts one: none until the spaces are read.
+        var newConversation: NewConversation? {
+            guard let only = spaces.first else { return nil }
+            guard spaces.count > 1 else { return .inSpace(only.id) }
+            let open = selected.flatMap { conversations[id: $0]?.spaceID }
+            return .pick(spaces.filter { $0.id == open } + spaces.filter { $0.id != open })
         }
     }
 
@@ -37,7 +83,7 @@ struct SidebarFeature {
         case loaded([SpaceSummary], [Conversation])
         case failed(String)
         case selected(ConversationID)
-        /// ✎ in a space's header: a new conversation there.
+        /// New conversation, in `spaceID`.
         case newConversationTapped(spaceID: String)
         case started(Conversation)
         case conversationChanged(Conversation)

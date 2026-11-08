@@ -84,6 +84,34 @@ struct SidebarFeatureTests {
         }
         await store.receive(\.delegate, .open(trip.id))
     }
+
+    /// Each space lists its own conversations, the open one marked; New conversation starts in the
+    /// one space there is, or offers each, the open conversation's first.
+    @Test
+    func spacesListTheirConversationsAndWhereANewOneStarts() {
+        let family = SpaceSummary(id: "family", name: "Family", role: .admin)
+        var state = SidebarFeature.State()
+        #expect(state.newConversation == nil)
+        state.spaces = [turgai]
+        state.conversations = [
+            .init(id: dinner.id, title: "plan dinner", spaceID: "family"),
+            .init(id: trip.id, title: nil, spaceID: "turgai", unread: true),
+        ]
+        #expect(state.newConversation == .inSpace("turgai"))
+
+        state.spaces = [turgai, family]
+        state.selected = dinner.id
+        #expect(
+            state.sections == [
+                .init(
+                    space: turgai,
+                    entries: [.init(id: trip.id, title: "New conversation", unread: true, isOpen: false)]),
+                .init(
+                    space: family,
+                    entries: [.init(id: dinner.id, title: "plan dinner", unread: false, isOpen: true)]),
+            ])
+        #expect(state.newConversation == .pick([family, turgai]))
+    }
 }
 
 @MainActor
