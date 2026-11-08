@@ -3,29 +3,38 @@ import SwiftUI
 import TurgaiModels
 
 /// The main window, once someone is signed in: Turgai's field behind everything, the open
-/// conversation over it, and a glass panel floating on the left with the person's spaces on a rail
-/// and the shown space's conversations, with the button that hides it; hidden, it leaves a button
-/// where it was to show it again. The objects open in a window of their own, from the toolbar.
+/// conversation over it, and a glass panel on the left, from the window's top, the traffic lights
+/// in its corner and the button that hides it beside them, with the person's spaces on a rail and
+/// the shown space's conversations. Hidden, the toolbar shows the button that brings it back, in
+/// the same place. The objects open in a window of their own.
 struct MainWindow: View {
     let session: Session
     @Bindable var store: StoreOf<AppFeature>
 
     private static let sidebarWidth: CGFloat = 300
-    /// Between a panel and the window's edge, and between a panel and the conversation.
+    /// Between the panel and the window's edges, and between the panel and the conversation.
     private static let gap: CGFloat = 10
-    /// How wide the button that shows a hidden panel is.
-    private static let showButtonWidth: CGFloat = 36
 
     var body: some View {
         ZStack {
             WorkingField()
-            // The conversation keeps clear of the panels; the field runs under them.
+            // The conversation keeps clear of the panel; the field runs under it.
             ChatView(
                 session: session, title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
             )
-            .safeAreaPadding(.leading, (store.showsSidebar ? Self.sidebarWidth : Self.showButtonWidth) + Self.gap)
+            .safeAreaPadding(.leading, (store.showsSidebar ? Self.sidebarWidth + Self.gap : 0) + Self.gap)
             .safeAreaPadding(.trailing, Self.gap)
             .toolbar {
+                if !store.showsSidebar {
+                    ToolbarItem(placement: .navigation) {
+                        Button {
+                            store.send(.sidebarToggled, animation: .smooth)
+                        } label: {
+                            Label("Show Conversations", systemImage: "sidebar.left")
+                        }
+                        .help("Show conversations")
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) { ObjectsButton() }
                 ToolbarItem(placement: .primaryAction) {
                     AccountButton(initial: store.accountInitial, name: store.me?.name) {
@@ -33,24 +42,20 @@ struct MainWindow: View {
                     }
                 }
             }
-            HStack(alignment: .top, spacing: 0) {
-                if store.showsSidebar {
+            if store.showsSidebar {
+                HStack(spacing: 0) {
                     GlassPanel(width: Self.sidebarWidth) {
                         SidebarView(store: store.scope(state: \.sidebar, action: \.sidebar)) {
                             store.send(.sidebarToggled, animation: .smooth)
                         }
                     }
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                } else {
-                    ShowPanelButton(systemImage: "sidebar.left", help: "Show conversations") {
-                        store.send(.sidebarToggled, animation: .smooth)
-                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .padding(Self.gap)
+                // From the window's top, as the system's own sidebars are: the traffic lights sit in it.
+                .ignoresSafeArea(.container, edges: .top)
+                .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            .padding(Self.gap)
-            // A hidden panel's button stays at the top, where its panel's header was.
-            .frame(maxHeight: .infinity, alignment: .top)
         }
         .modifier(SidebarDialogs(store: store.scope(state: \.sidebar, action: \.sidebar)))
         .task(id: session) {
@@ -215,22 +220,6 @@ private struct GlassPanel<Content: View>: View {
     }
 }
 
-/// Where a hidden panel was: a glass button that shows it again.
-private struct ShowPanelButton: View {
-    let systemImage: String
-    let help: String
-    let show: () -> Void
-
-    var body: some View {
-        Button(action: show) {
-            Image(systemName: systemImage).frame(width: 20, height: 20)
-        }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .help(help)
-    }
-}
-
 /// The button in a panel's header that hides it.
 private struct HidePanelButton: View {
     let systemImage: String
@@ -263,10 +252,10 @@ private struct AccountButton: View {
             Button("Sign Out", action: signOut)
         } label: {
             Text(initial)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color.white)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(Color.turgaiInk)
                 .frame(width: 26, height: 26)
-                .background(Color.turgaiAccent, in: .circle)
+                .background(Color.turgaiInk.opacity(0.1), in: .circle)
         }
         .menuIndicator(.hidden)
         .help(name ?? "Account")
@@ -287,54 +276,60 @@ private struct ObjectsButton: View {
     }
 }
 
-/// The left panel, Slack's way, on one surface: the spaces on a rail under the button that hides
-/// the panel, a hairline, then the shown space's name, New conversation in it, and its
-/// conversations.
+/// The left panel, Slack's way, on one surface: a row for the window's traffic lights with the
+/// button that hides the panel beside them; then the spaces on a rail, a hairline, and the shown
+/// space's heading, New conversation in it, and its conversations.
 private struct SidebarView: View {
     let store: StoreOf<SidebarFeature>
     let hide: () -> Void
 
+    /// How much of the panel's top row the traffic lights take.
+    private static let trafficLightsWidth: CGFloat = 70
+
     var body: some View {
-        HStack(spacing: 0) {
-            SpaceRail(store: store, hide: hide)
-            Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 12)
-            ConversationColumn(store: store)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
+                    .padding(.leading, Self.trafficLightsWidth)
+                Spacer(minLength: 0)
+            }
+            .frame(height: 32)
+            HStack(spacing: 0) {
+                SpaceRail(store: store)
+                Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 8)
+                ConversationColumn(store: store)
+            }
         }
     }
 }
 
-/// Every space the person is in, under the button that hides the panel: a tile each with its
-/// initial, filled in the accent while it's the one shown, as the open conversation is, and dotted
-/// when something's new in it; + makes or joins one. It scrolls when there are many.
+/// Every space the person is in: a tile each with its initial, the shown one darker with a bar
+/// beside it, Slack's way, and dotted when something's new in it; + makes or joins one. It scrolls
+/// when there are many.
 private struct SpaceRail: View {
     let store: StoreOf<SidebarFeature>
-    let hide: () -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
-            HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
-                .padding(.top, 10)
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
-                        SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
-                    }
-                    Button {
-                        store.send(.addSpaceTapped)
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color.turgaiMuted)
-                            .frame(width: 30, height: 30)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Make or join a space")
+        ScrollView {
+            VStack(spacing: 8) {
+                ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
+                    SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
                 }
-                .padding(.vertical, 4)
+                Button {
+                    store.send(.addSpaceTapped)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.turgaiMuted)
+                        .frame(width: 30, height: 30)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("Make or join a space")
             }
-            .scrollIndicators(.never)
+            .padding(.vertical, 10)
         }
+        .scrollIndicators(.never)
         .frame(width: 50)
     }
 }
@@ -346,16 +341,14 @@ private struct SpaceTile: View {
 
     var body: some View {
         Button(action: pick) {
-            Text(choice.initial)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(choice.isShown ? Color.white : Color.turgaiInk)
-                .frame(width: 30, height: 30)
-                .background(
-                    choice.isShown ? Color.turgaiAccent : Color.turgaiInk.opacity(0.08), in: .rect(cornerRadius: 8)
-                )
-                .contentShape(.rect)
+            SpaceMark(initial: choice.initial, isShown: choice.isShown)
         }
         .buttonStyle(.plain)
+        .overlay(alignment: .leading) {
+            if choice.isShown {
+                RoundedRectangle(cornerRadius: 1.5).fill(Color.turgaiInk).frame(width: 3, height: 18).offset(x: -8)
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if choice.unread {
                 Circle().fill(Color.turgaiAccent).frame(width: 8, height: 8).offset(x: 2, y: -2)
@@ -363,6 +356,21 @@ private struct SpaceTile: View {
             }
         }
         .help(choice.space.name)
+    }
+}
+
+/// A space's mark: its initial on a tile, darker when it's the one shown.
+private struct SpaceMark: View {
+    let initial: String
+    let isShown: Bool
+
+    var body: some View {
+        Text(initial)
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(isShown ? Color.turgaiInk : Color.turgaiMuted)
+            .frame(width: 30, height: 30)
+            .background(Color.turgaiInk.opacity(isShown ? 0.16 : 0.06), in: .rect(cornerRadius: 8))
+            .contentShape(.rect)
     }
 }
 
@@ -375,8 +383,9 @@ private struct ConversationColumn: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 SpaceHeading(
-                    name: store.shownSpaceName, menu: store.shownSpaceMenu,
-                    rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
+                    initial: store.shownSpaceInitial, name: store.shownSpaceName, detail: store.shownSpaceDetail,
+                    menu: store.shownSpaceMenu, rename: { store.send(.renameShownSpaceTapped) },
+                    invite: { store.send(.inviteTapped) })
                 Spacer(minLength: 0)
                 Button {
                     store.send(.newConversationTapped)
@@ -413,8 +422,8 @@ private struct ConversationColumn: View {
     }
 }
 
-/// A conversation: its name, bolder with a dot when something's new in it; filled in the accent
-/// while it's open, as the shown space's tile is.
+/// A conversation: its name, bolder with a dot when something's new in it; on a quiet fill, bolder,
+/// while it's open.
 private struct ConversationLine: View {
     let entry: SidebarFeature.Entry
     let open: () -> Void
@@ -423,53 +432,62 @@ private struct ConversationLine: View {
         Button(action: open) {
             HStack(spacing: 6) {
                 Text(entry.title)
-                    .font(.system(size: 13, weight: entry.unread ? .semibold : .regular))
+                    .font(.system(size: 13, weight: entry.unread || entry.isOpen ? .semibold : .regular))
                     .lineLimit(1)
-                    .foregroundStyle(entry.isOpen ? Color.white : Color.turgaiInk)
+                    .foregroundStyle(Color.turgaiInk)
                 Spacer(minLength: 0)
                 if entry.unread {
-                    Circle().fill(entry.isOpen ? Color.white : Color.turgaiAccent).frame(width: 7, height: 7)
+                    Circle().fill(Color.turgaiAccent).frame(width: 7, height: 7)
                         .accessibilityLabel("New messages")
                 }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(entry.isOpen ? Color.turgaiAccent : .clear, in: .rect(cornerRadius: 8))
+            .background(Color.turgaiInk.opacity(entry.isOpen ? 0.08 : 0), in: .rect(cornerRadius: 8))
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
     }
 }
 
-/// The shown space's name, heading its conversations: for its admins, a menu that renames it and
-/// invites people to it.
+/// The shown space, heading its conversations: its mark, as the rail has it, and its name over
+/// what it is; for its admins, the name is a menu that invites people to it and renames it.
 private struct SpaceHeading: View {
+    let initial: String
     let name: String
+    /// What it is and who's in it.
+    let detail: String
     /// What its menu offers, when its person is one of its admins: none otherwise.
     let menu: SidebarFeature.SpaceMenu?
     let rename: () -> Void
     let invite: () -> Void
 
     var body: some View {
-        if let menu {
-            Menu {
-                Button(menu.invite, action: invite)
-                Button(menu.rename, action: rename)
-            } label: {
-                HStack(spacing: 6) {
+        HStack(spacing: 10) {
+            SpaceMark(initial: initial, isShown: true)
+            VStack(alignment: .leading, spacing: 1) {
+                if let menu {
+                    Menu {
+                        Button(menu.invite, action: invite)
+                        Button(menu.rename, action: rename)
+                    } label: {
+                        HStack(spacing: 4) {
+                            SpaceName(name: name)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(Color.turgaiMuted)
+                        }
+                        .contentShape(.rect)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                } else {
                     SpaceName(name: name)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(Color.turgaiMuted)
                 }
-                .contentShape(.rect)
+                Text(detail).font(.caption).foregroundStyle(Color.turgaiMuted)
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-        } else {
-            SpaceName(name: name)
         }
     }
 }
@@ -480,8 +498,8 @@ private struct SpaceName: View {
 
     var body: some View {
         Text(name)
-            .font(.system(size: 16, weight: .heavy))
-            .tracking(-0.3)
+            .font(.system(size: 15, weight: .bold))
+            .tracking(-0.2)
             .lineLimit(1)
             .foregroundStyle(Color.turgaiInk)
     }

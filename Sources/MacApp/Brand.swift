@@ -43,31 +43,26 @@ extension Image {
     static let skylark = Image("Skylark", bundle: .module)
 }
 
-/// Turgai's geometry for working screens, after the web's app pages: a coral block tilted at the
-/// top right, a blue bar at the bottom left, a yellow square above it; strong enough for the glass
-/// to have color to bend, quiet enough for messages to read over.
+/// Turgai's geometry for working screens: a coral block tilted into the top right corner and a
+/// yellow square at the right edge, low down, each mostly past the window's edge. They sit at the
+/// edges, out of the reading path and out from under the panel on the left, and cut off as no
+/// message ever is, so they're never read as one.
 struct WorkingField: View {
     var body: some View {
         GeometryReader { geometry in
             let size = geometry.size
-            let block = CGSize(width: min(672, size.width * 0.64), height: 288)
             ZStack {
                 Color.turgaiCanvas
                 Rectangle()
                     .fill(Color.signalCoral.opacity(0.28))
-                    .frame(width: block.width, height: block.height)
+                    .frame(width: 360, height: 170)
                     .rotationEffect(.degrees(-9))
-                    .position(x: size.width - block.width / 2, y: 112 + block.height / 2)
+                    .position(x: size.width - 70, y: 30)
                 Rectangle()
                     .fill(Color.signalYellow.opacity(0.55))
-                    .frame(width: 112, height: 112)
+                    .frame(width: 96, height: 96)
                     .rotationEffect(.degrees(14))
-                    .position(x: 56, y: 248)
-                Rectangle()
-                    .fill(Color.signalBlue.opacity(0.22))
-                    .frame(width: 384, height: 80)
-                    .rotationEffect(.degrees(7))
-                    .position(x: 192, y: size.height - 152)
+                    .position(x: size.width - 14, y: size.height - 200)
             }
         }
         .ignoresSafeArea()

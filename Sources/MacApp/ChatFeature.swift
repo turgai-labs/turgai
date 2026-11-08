@@ -67,6 +67,21 @@ struct ChatFeature {
             }
         }
 
+        /// Who's in it, as the line under its title says them: you first, as You, then the others.
+        var participantsLine: String {
+            let others = participants.filter { $0.id != you }.map(\.name)
+            return ((participants.contains { $0.id == you } ? ["You"] : []) + others).joined(separator: ", ")
+        }
+
+        /// What's wrong with the connection, while something is: none while it's connected.
+        var connectionNotice: String? {
+            switch connection {
+            case .connected: nil
+            case .connecting: "Connecting…"
+            case .disconnected: "Reconnecting…"
+            }
+        }
+
         /// Something's typed, and there's a connection to send it on.
         var canSend: Bool {
             guard case .connected = connection else { return false }

@@ -130,6 +130,8 @@ struct SidebarFeature {
         var selected: ConversationID?
         /// What went wrong reading or starting conversations, when something did.
         var error: String?
+        /// How many people each space has, by its id, once they're counted.
+        var peopleCounts: [String: Int] = [:]
         /// The dialog open, while one is.
         var dialog: Dialog?
 
@@ -166,6 +168,19 @@ struct SidebarFeature {
         /// What the panel is headed: the shown space's name, or Spaces before they're read.
         var shownSpaceName: String { shownSpace?.name ?? "Spaces" }
 
+        /// The shown space's initial, as its tile on the rail has it.
+        var shownSpaceInitial: String { shownSpace.map { $0.name.prefix(1).uppercased() } ?? "" }
+
+        /// What the shown space is, under its name: a space, and how many people are in it once
+        /// they're counted.
+        var shownSpaceDetail: String {
+            switch shownSpace.flatMap({ peopleCounts[$0.id] }) {
+            case nil: "Space"
+            case 1?: "Space · 1 person"
+            case let count?: "Space · \(count) people"
+            }
+        }
+
         /// Every space, for the rail.
         var spaceChoices: [SpaceChoice] {
             spaces.map { space in
@@ -194,6 +209,8 @@ struct SidebarFeature {
         case loaded([SpaceSummary], [Conversation])
         case failed(String)
         case selected(ConversationID)
+        /// `count` people are in the space `spaceID`.
+        case peopleCounted(String, Int)
         /// A space picked on the rail: its latest conversation opens, or a new one starts there.
         case spaceSwitched(String)
         /// New conversation, in the shown space.
@@ -274,7 +291,11 @@ struct SidebarFeature {
             case .selected(let id):
                 state.selected = id
                 state.conversations[id: id]?.unread = false
-                return .send(.delegate(.open(id)))
+                return .merge(.send(.delegate(.open(id))), countPeople(in: state.shownSpace, of: state))
+
+            case .peopleCounted(let space, let count):
+                state.peopleCounts[space] = count
+                return .none
 
             case .spaceSwitched(let space):
                 guard space != state.shownSpace?.id else { return .none }
@@ -443,6 +464,16 @@ struct SidebarFeature {
 
             case .delegate:
                 return .none
+            }
+        }
+    }
+
+    /// How many people are in `space`, counted once for `state`'s person.
+    private func countPeople(in space: SpaceSummary?, of state: State) -> Effect<Action> {
+        guard let space, state.peopleCounts[space.id] == nil, let session = state.session else { return .none }
+        return .run { send in
+            if let people = try? await server.people(session, space.id) {
+                await send(.peopleCounted(space.id, people.count))
             }
         }
     }

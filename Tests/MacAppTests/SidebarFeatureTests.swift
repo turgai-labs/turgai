@@ -259,6 +259,12 @@ struct SidebarFeatureTests {
         #expect(state.shownSpaceMenu == .init(rename: "Rename “Family”…", invite: "Invite People…"))
         #expect(state.newConversationHelp == "New conversation in Family")
         #expect(state.shownSpaceName == "Family")
+        #expect(state.shownSpaceInitial == "F")
+        #expect(state.shownSpaceDetail == "Space")
+        state.peopleCounts["family"] = 1
+        #expect(state.shownSpaceDetail == "Space · 1 person")
+        state.peopleCounts["family"] = 3
+        #expect(state.shownSpaceDetail == "Space · 3 people")
 
         let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "work")
         let store = TestStore(initialState: state) {
@@ -360,6 +366,14 @@ struct MentionTests {
             SpacePerson(id: "account-bob", name: "bob", role: .member),
             SpacePerson(id: "account-cat", name: "cat", role: .member),
         ]
+        #expect(state.participantsLine == "bob")
+        state.participants = [ParticipantSummary(kind: .person, id: "account-ann", name: "ann"), bob]
+        #expect(state.participantsLine == "You, bob")
+        state.participants = [bob]
+        #expect(state.connectionNotice == nil)
+        state.connection = .disconnected(why: "gone")
+        #expect(state.connectionNotice == "Reconnecting…")
+        state.connection = .connected(botID: BotID(rawValue: "conversation"))
         state.draft = "@"
         #expect(state.suggestions == [bob, cat])
         #expect(

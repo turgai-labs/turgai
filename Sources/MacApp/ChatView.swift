@@ -24,8 +24,7 @@ struct ChatView: View {
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                ConversationHeader(
-                    title: title, participants: state.participants.map(\.name), connection: state.connection)
+                ConversationHeader(title: title, participants: state.participantsLine, notice: state.connectionNotice)
             }
         }
         .modifier(
@@ -37,12 +36,13 @@ struct ChatView: View {
     }
 }
 
-/// The toolbar's middle: the conversation's name and the connection; under them, who's in the
-/// conversation.
+/// The toolbar's middle: the conversation's name, and what's wrong with the connection while
+/// something is; under them, who's in it.
 private struct ConversationHeader: View {
     let title: String
-    let participants: [String]
-    let connection: ChatFeature.Connection
+    let participants: String
+    /// What's wrong with the connection: none while it's connected.
+    let notice: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,33 +52,16 @@ private struct ConversationHeader: View {
                     .tracking(-0.3)
                     .lineLimit(1)
                     .foregroundStyle(Color.turgaiInk)
-                Circle()
-                    .fill(connectionColor)
-                    .frame(width: 6, height: 6)
-                    .help(connectionHelp)
+                if let notice {
+                    Text(notice).font(.caption).foregroundStyle(Color.turgaiAccent)
+                }
             }
-            Text(participants.joined(separator: ", "))
+            Text(participants)
                 .font(.caption)
                 .foregroundStyle(Color.turgaiMuted)
                 .lineLimit(1)
         }
         .padding(.horizontal, 12)
-    }
-
-    private var connectionColor: Color {
-        switch connection {
-        case .connected: .signalBlue
-        case .connecting: .signalYellow
-        case .disconnected: .signalCoral
-        }
-    }
-
-    private var connectionHelp: String {
-        switch connection {
-        case .connected: "Connected"
-        case .connecting: "Connecting…"
-        case .disconnected(let why): "Reconnecting… \(why)"
-        }
     }
 }
 
@@ -173,7 +156,7 @@ private struct Composer: View {
             }
             GlassEffectContainer(spacing: 12) {
                 HStack(alignment: .bottom, spacing: 12) {
-                    TextField("Message", text: $store.draft, axis: .vertical)
+                    TextField("Message · @ to mention", text: $store.draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...8)
                         .padding(.horizontal, 16)
