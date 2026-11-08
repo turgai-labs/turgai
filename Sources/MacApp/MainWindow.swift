@@ -5,8 +5,8 @@ import TurgaiModels
 /// The main window, once someone is signed in: Turgai's field behind everything, the open
 /// conversation over it, and a glass panel on the left, from the window's top, the traffic lights
 /// in its corner and the button that hides it at its top right, with the person's spaces on a rail and
-/// the shown space's conversations. Hidden, its glass draws into a button beside the traffic lights
-/// that brings it back, and grows out of it again. The objects open in a window of their own.
+/// the shown space's conversations. Hidden, its glass shrinks into a button beside the traffic
+/// lights that brings it back, and grows out of it again. The objects open in a window of their own.
 struct MainWindow: View {
     let session: Session
     @Bindable var store: StoreOf<AppFeature>
@@ -14,11 +14,6 @@ struct MainWindow: View {
     private static let sidebarWidth: CGFloat = 300
     /// Between the panel and the window's edges, and between the panel and the conversation.
     private static let gap: CGFloat = 10
-    /// How much of the window's top left the traffic lights take.
-    private static let trafficLightsWidth: CGFloat = 70
-    /// The glass the panel and its show button share, so one morphs into the other.
-    private static let sidebarGlass = "conversations"
-    @Namespace private var glass
 
     var body: some View {
         ZStack {
@@ -37,25 +32,15 @@ struct MainWindow: View {
                     }
                 }
             }
-            GlassEffectContainer(spacing: 24) {
-                HStack(alignment: .top, spacing: 0) {
-                    if store.showsSidebar {
-                        GlassPanel(width: Self.sidebarWidth, glassID: Self.sidebarGlass, in: glass) {
-                            SidebarView(store: store.scope(state: \.sidebar, action: \.sidebar)) {
-                                store.send(.sidebarToggled, animation: .panelMorph)
-                            }
-                        }
-                    } else {
-                        ShowPanelButton(glassID: Self.sidebarGlass, in: glass) {
-                            store.send(.sidebarToggled, animation: .panelMorph)
-                        }
-                        .padding(.leading, Self.trafficLightsWidth)
-                    }
-                    Spacer(minLength: 0)
+            GeometryReader { geometry in
+                SidebarGlass(
+                    isShown: store.showsSidebar, size: CGSize(width: Self.sidebarWidth, height: geometry.size.height),
+                    store: store.scope(state: \.sidebar, action: \.sidebar)
+                ) {
+                    store.send(.sidebarToggled, animation: .panelMorph)
                 }
             }
             .padding(Self.gap)
-            .frame(maxHeight: .infinity, alignment: .top)
             // From the window's top, as the system's own sidebars are: the traffic lights sit in it.
             .ignoresSafeArea(.container, edges: .top)
         }
@@ -205,55 +190,46 @@ struct PanelCommands: Commands {
     }
 }
 
-/// A glass panel floating over the window: one surface of regular glass, which blurs the field's
-/// colors under it into the panel, its corners concentric with the window's.
-private struct GlassPanel<Content: View>: View {
-    let width: CGFloat
-    /// The glass it shares with what it morphs into.
-    let glassID: String
-    let namespace: Namespace.ID
-    let content: Content
+/// The left panel and the button it shrinks into, as one glass shape: shown, the panel of `size`;
+/// hidden, a glass circle beside the window's traffic lights. Its frame is what animates, so the
+/// panel's content, kept at its full size and clipped by the glass, is drawn into the button as it
+/// fades, and out of it again.
+private struct SidebarGlass: View {
+    let isShown: Bool
+    /// The panel's size, shown.
+    let size: CGSize
+    let store: StoreOf<SidebarFeature>
+    let toggle: () -> Void
 
-    init(width: CGFloat, glassID: String, in namespace: Namespace.ID, @ViewBuilder content: () -> Content) {
-        self.width = width
-        self.glassID = glassID
-        self.namespace = namespace
-        self.content = content()
-    }
-
-    private var shape: ConcentricRectangle { ConcentricRectangle(corners: .concentric(minimum: 12), isUniform: true) }
+    /// How much of the window's top left the traffic lights take.
+    private static let trafficLightsWidth: CGFloat = 70
+    private static let buttonSize: CGFloat = 32
+    private static let shape = RoundedRectangle(cornerRadius: 16)
 
     var body: some View {
-        content
-            .frame(width: width)
-            .frame(maxHeight: .infinity)
-            .clipShape(shape)
-            .glassEffect(.regular, in: shape)
-            .glassEffectID(glassID, in: namespace)
-    }
-}
-
-/// Where the hidden panel's glass drew in: a glass circle that grows it out again.
-private struct ShowPanelButton: View {
-    /// The glass it shares with the panel.
-    let glassID: String
-    let namespace: Namespace.ID
-    let show: () -> Void
-
-    init(glassID: String, in namespace: Namespace.ID, show: @escaping () -> Void) {
-        self.glassID = glassID
-        self.namespace = namespace
-        self.show = show
-    }
-
-    var body: some View {
-        Button(action: show) {
-            Image(systemName: "sidebar.left").frame(width: 32, height: 32).contentShape(.circle)
+        ZStack(alignment: .topLeading) {
+            if isShown {
+                SidebarView(store: store, hide: toggle)
+                    .frame(width: size.width, height: size.height, alignment: .topLeading)
+                    .transition(.opacity)
+            } else {
+                Button(action: toggle) {
+                    Image(systemName: "sidebar.left")
+                        .frame(width: Self.buttonSize, height: Self.buttonSize)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("Show conversations")
+                .transition(.opacity)
+            }
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .circle)
-        .glassEffectID(glassID, in: namespace)
-        .help("Show conversations")
+        .frame(
+            width: isShown ? size.width : Self.buttonSize, height: isShown ? size.height : Self.buttonSize,
+            alignment: .topLeading
+        )
+        .clipShape(Self.shape)
+        .glassEffect(.regular, in: Self.shape)
+        .padding(.leading, isShown ? 0 : Self.trafficLightsWidth)
     }
 }
 
