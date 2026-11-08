@@ -21,7 +21,7 @@ struct MainWindow: View {
             // The conversation keeps clear of the panel; the field runs under it.
             ChatView(
                 session: session, title: store.sidebar.openTitle, hue: store.sidebar.shownSpaceHue,
-                reach: store.headlineReach, store: store.scope(state: \.chat, action: \.chat)
+                store: store.scope(state: \.chat, action: \.chat)
             )
             // Only the panel's room: what's in the conversation keeps its own margins.
             .safeAreaPadding(.leading, store.showsSidebar ? Self.sidebarWidth + Self.gap : 0)
@@ -30,12 +30,8 @@ struct MainWindow: View {
                 // put them right after the traffic lights.
                 ToolbarSpacer(.flexible)
                 ToolbarItem { ObjectsButton() }
-                    // In the headline's glass, it isn't on glass of its own.
-                    .sharedBackgroundVisibility(store.headlineReach.buttonGlass)
                 ToolbarItem {
-                    // In from the window's edge, inside the headline's glass.
                     AccountButton(initial: store.profile.initial, name: store.profile.me?.name)
-                        .padding(.trailing, 8)
                 }
                 // A stamp of its own, not on the toolbar's glass.
                 .sharedBackgroundVisibility(.hidden)
@@ -516,16 +512,6 @@ private struct SpaceName: View {
             .font(.system(size: 20, weight: .heavy).width(.condensed))
             .lineLimit(1)
             .foregroundStyle(Color.turgaiInk)
-    }
-}
-
-extension HeadlineReach {
-    /// Whether a toolbar button has glass of its own: not while it's in the headline's.
-    fileprivate var buttonGlass: Visibility {
-        switch self {
-        case .windowTop: .hidden
-        case .underControls: .automatic
-        }
     }
 }
 
