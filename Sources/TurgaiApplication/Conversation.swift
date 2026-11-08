@@ -392,14 +392,9 @@ public distributed actor Conversation {
 
     /// A conversation can passivate while idle, but never while a model turn
     /// is marked running. The running bit is journaled, so this does not rely
-    /// on a transient Task existing. Nor while a noted message shows its mark, or one of its
-    /// agents waits to extract what was said.
+    /// on a transient Task existing. Nor while a noted message shows its mark.
     public func shouldDeactivate() async -> Bool {
-        guard state.inbox.activeTurnID == nil, connections.isEmpty, unnoting == nil else { return false }
-        for participant in participants.values {
-            if await participant.whenLocal({ $0.isRemembering }) == true { return false }
-        }
-        return true
+        state.inbox.activeTurnID == nil && connections.isEmpty && unnoting == nil
     }
 
     public distributed func currentRecord() -> ConversationState {

@@ -1,3 +1,5 @@
+import TurgaiDomain
+
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
@@ -10,14 +12,14 @@ public struct MemoryProposal: Codable, Sendable, Equatable {
     public struct Fact: Codable, Sendable, Equatable {
         public let path: [String]
         public let value: String
-        /// Their words it comes from.
-        public let quote: String
+        /// The new exchange it comes from, by its number.
+        public let exchange: Int
         public let confidence: Double
 
-        public init(path: [String], value: String, quote: String, confidence: Double) {
+        public init(path: [String], value: String, exchange: Int, confidence: Double) {
             self.path = path
             self.value = value
-            self.quote = quote
+            self.exchange = exchange
             self.confidence = confidence
         }
     }
@@ -25,12 +27,12 @@ public struct MemoryProposal: Codable, Sendable, Equatable {
     /// A line of their memory that what they said makes untrue.
     public struct Ending: Codable, Sendable, Equatable {
         public let line: String
-        /// Their words that make it untrue.
-        public let quote: String
+        /// The new exchange that makes it untrue, by its number.
+        public let exchange: Int
 
-        public init(line: String, quote: String) {
+        public init(line: String, exchange: Int) {
             self.line = line
-            self.quote = quote
+            self.exchange = exchange
         }
     }
 
@@ -45,10 +47,8 @@ public struct MemoryProposal: Codable, Sendable, Equatable {
 
 /// Why part of a proposal changed nothing.
 public enum MemoryRejection: Error, Codable, Sendable, Equatable {
-    /// The quote is in none of the messages the extractor saw.
-    case notSaid(quote: String)
-    /// The quote is in more than one of them.
-    case saidInSeveral(quote: String)
+    /// No new exchange has the number.
+    case noSuchExchange(Int)
     case notAPath([String])
     case notAValue(String)
     /// Less sure than a fact needs.
@@ -59,11 +59,11 @@ public enum MemoryRejection: Error, Codable, Sendable, Equatable {
 
 /// What reading a proposal decided.
 public enum MemoryReading: Sendable, Equatable {
-    /// Their memory was forgotten since the extraction began, or the messages came before that.
+    /// Their memory was forgotten since the extraction began, or the exchanges came before that.
     case stale
-    /// The messages were read already.
+    /// The exchanges were read already.
     case alreadyRead
-    /// The messages are read: what changed, and what didn't and why.
+    /// The exchanges are read: what changed, and what didn't and why.
     case read(MemoryExtractionCommit, rejected: [MemoryRejection])
 }
 
@@ -72,25 +72,26 @@ extension Memory {
     public static let minimumConfidence = 0.7
 
     /// What `proposal`, made from `input`, does to this memory. Endings come first, each naming a
-    /// current fact by its line; then each new fact is learned, unless it's current already. Every
-    /// quote must be the person's own words in exactly one message the extractor saw.
+    /// current fact by its line; then each new fact is learned, unless it's current already. Each
+    /// names the new exchange it comes from: only those, never one read already.
     public func reading(
         _ proposal: MemoryProposal,
         of input: ExtractionInput,
         newID: () -> MemoryFactID = { MemoryFactID() }
     ) -> MemoryReading {
-        guard input.generation == generation, input.observations.allSatisfy(accepts) else { return .stale }
-        guard !input.observations.isEmpty, !input.observations.allSatisfy(isProcessed) else { return .alreadyRead }
+        guard input.generation == generation, input.new.allSatisfy(accepts) else { return .stale }
+        guard let last = input.new.last,
+            unread(in: input.conversation).contains(where: { $0.sourceID == last.sourceID })
+        else { return .alreadyRead }
 
-        let seen = input.chronologicalObservations
         var memory = self
         var changes: [MemoryFactEvent] = []
         var rejected: [MemoryRejection] = []
         for part in proposal.endings.map(Part.ending) + proposal.facts.map(Part.fact) {
             let step =
                 switch part {
-                case .ending(let ending): memory.ending(ending, in: seen)
-                case .fact(let fact): memory.learning(fact, in: seen, id: newID)
+                case .ending(let ending): memory.ending(ending, in: input)
+                case .fact(let fact): memory.learning(fact, in: input, id: newID)
                 }
             switch step {
             case .changed(let change):
@@ -104,11 +105,8 @@ extension Memory {
         }
         return .read(
             MemoryExtractionCommit(
-                generation: input.generation,
-                processedSources: input.observations.map(\.sourceID),
-                observations: input.observations,
-                changes: changes
-            ),
+                generation: input.generation, conversation: input.conversation, readThrough: last.sourceID,
+                changes: changes),
             rejected: rejected
         )
     }
@@ -127,23 +125,23 @@ extension Memory {
         case rejected(MemoryRejection)
     }
 
-    private func ending(_ ending: MemoryProposal.Ending, in seen: [MemoryObservation]) -> Step {
+    private func ending(_ ending: MemoryProposal.Ending, in input: ExtractionInput) -> Step {
         let line = Self.comparable(ending.line)
         let named = currentFacts().filter { Self.comparable($0.line) == line }
         guard named.count == 1, let fact = named.first else { return .rejected(.notRemembered(line: ending.line)) }
-        switch Self.said(ending.quote, in: seen) {
+        switch Self.said(in: ending.exchange, of: input) {
         case .success(let said): return .changed(.ended(fact.id, said))
         case .failure(let rejection): return .rejected(rejection)
         }
     }
 
     private func learning(
-        _ fact: MemoryProposal.Fact, in seen: [MemoryObservation], id: () -> MemoryFactID
+        _ fact: MemoryProposal.Fact, in input: ExtractionInput, id: () -> MemoryFactID
     ) -> Step {
         guard let path = MemoryPath(fact.path) else { return .rejected(.notAPath(fact.path)) }
         guard let value = MemoryValue(fact.value) else { return .rejected(.notAValue(fact.value)) }
         guard fact.confidence >= Self.minimumConfidence else { return .rejected(.unsure(fact.confidence)) }
-        switch Self.said(fact.quote, in: seen) {
+        switch Self.said(in: fact.exchange, of: input) {
         case .failure(let rejection):
             return .rejected(rejection)
         case .success(let said):
@@ -155,21 +153,13 @@ extension Memory {
         }
     }
 
-    /// Where `quote` was said: the one message in `seen` whose text has it. Only what the person
-    /// wrote counts, never a reply.
-    private static func said(_ quote: String, in seen: [MemoryObservation]) -> Result<Said, MemoryRejection> {
-        let quoted = comparable(quote)
-        var saidIn: [ObservationID: MemoryObservation] = [:]
-        for message in seen where !quoted.isEmpty && comparable(message.text).contains(quoted) {
-            saidIn[message.id] = message
-        }
-        guard let message = saidIn.values.first else { return .failure(.notSaid(quote: quote)) }
-        guard saidIn.count == 1 else { return .failure(.saidInSeveral(quote: quote)) }
-        return .success(Said(observation: message.id, at: message.observedAt))
+    /// Where the new exchange numbered `number` was: their message in it, and when.
+    private static func said(in number: Int, of input: ExtractionInput) -> Result<Said, MemoryRejection> {
+        guard let exchange = input.exchange(number) else { return .failure(.noSuchExchange(number)) }
+        return .success(Said(observation: exchange.id, at: exchange.observedAt))
     }
 
-    /// `text` as quotes and lines are compared: models copy loosely, so case, punctuation, and
-    /// spacing aside.
+    /// `text` as lines are compared: models copy loosely, so case, punctuation, and spacing aside.
     private static func comparable(_ text: String) -> String {
         text
             .lowercased()

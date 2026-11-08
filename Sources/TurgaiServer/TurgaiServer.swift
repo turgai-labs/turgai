@@ -115,6 +115,7 @@ public struct TurgaiServer: Sendable {
             turgaiSpace: try await .turgai(in: persistence),
             spaceDirectory: try await .live(in: persistence),
             conversationDirectory: try await .live(in: persistence),
+            unreadMemory: try await .live(in: persistence),
             runtimeSnapshotSource: runtimeSnapshotSource,
             objectCatalogSource: objects,
             webChatBridge: webChatBridge,

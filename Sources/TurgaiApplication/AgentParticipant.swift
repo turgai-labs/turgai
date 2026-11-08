@@ -20,11 +20,6 @@ import TurgaiPeople
 public distributed actor AgentParticipant {
     public typealias ActorSystem = ClusterSystem
 
-    /// Long enough for a follow-up exchange to join the same extraction batch.
-    private static let extractionQuietPeriod: Duration = .seconds(240)
-    /// How long a failed extraction waits before it's tried again, each time.
-    private static let extractionRetries: [Duration] = [.seconds(5), .seconds(10), .seconds(20), .seconds(40), .seconds(80)]
-
     /// The conversation it's in, which holds it.
     private weak var conversation: Conversation?
     private let conversationID: ConversationID
@@ -33,8 +28,6 @@ public distributed actor AgentParticipant {
     private var running: (turnID: TurgaiDomain.TurnID, task: Task<Void, Never>)?
     /// The turn the agent is running, as what it does in it shows it.
     private var followedTurn: FollowedTurn?
-    /// The pass that extracts what was said once its author has been quiet, while it waits or runs.
-    private var rememberingPass: Task<Void, Never>?
     /// The request naming the conversation, while one runs.
     private var namingPass: Task<Void, Never>?
 
@@ -211,20 +204,19 @@ public distributed actor AgentParticipant {
 
     // MARK: After a turn
 
-    /// What was said and answered in `request`, kept for its author's memory when memory is set up
-    /// and they remember: the wait for them to go quiet starts over, and once they have, what they
-    /// said is extracted.
+    /// What was said and answered in `request`, kept for its author's memory when the agent has a
+    /// model to read it with and they remember. ``MemoryPasses`` reads it once they've been quiet.
     private func remember(
         _ request: ConversationTurnRequest, answered response: String,
         with configuration: AgentModelSnapshot?
     ) async {
-        let text = request.message.text.trimmed()
-        guard !text.isEmpty, let configuration, configuration.isEnabled,
-            let endpoints = try? await actorSystem.installedTurgaiChannelRuntime?.dependencies().endpoints
-        else { return }
+        guard !request.message.text.trimmed().isEmpty, configuration?.isEnabled == true else { return }
         let observation = MemoryObservation(
             id: ObservationID(rawValue: request.message.id.rawValue),
             sourceID: MemorySourceID(rawValue: request.message.id.rawValue),
+            conversation: request.conversationID,
+            heardBy: AgentProfileID(request.agentRole),
+            channelMessageID: request.message.channelMessageID,
             text: request.message.text,
             response: response,
             observedAt: request.message.receivedAt
@@ -233,53 +225,12 @@ public distributed actor AgentParticipant {
             let user = try await User.resolve(on: actorSystem, userID: request.message.userID)
             guard try await user.currentRemembering() == .on else { return }
             try await user.recordObservation(observation)
-            extractOnceQuiet(
-                for: user, after: observation.sourceID, with: configuration, from: endpoints,
-                noting: NotedMessage(id: request.message.id, channelID: request.message.channelMessageID))
         } catch {
             actorSystem.log.warning(
                 "Could not record memory observation",
                 metadata: ["error": .string(String(describing: error))]
             )
         }
-    }
-
-    /// Extracts what `user` said once they've been quiet, unless they say something else first: the
-    /// pass waiting is cancelled, and this one waits instead. `message`, the last they said here, is
-    /// marked when something was noted.
-    private func extractOnceQuiet(
-        for user: User, after latest: MemorySourceID, with configuration: AgentModelSnapshot,
-        from endpoints: AgentModelEndpointFactory, noting message: NotedMessage
-    ) {
-        rememberingPass?.cancel()
-        let actorSystem = self.actorSystem
-        rememberingPass = Task {
-            let noted = await MemoryPass.run(
-                after: Self.extractionQuietPeriod, retries: Self.extractionRetries,
-                extract: {
-                    // Asked again: they may have stopped remembering while it waited.
-                    guard try await user.currentRemembering() == .on else { return .alreadyHandled }
-                    return try await MemoryExtractionService.extractAndCommit(
-                        endpoint: try await configuration.endpoint(from: endpoints),
-                        actorSystem: actorSystem,
-                        user: user,
-                        expectedLatestSourceID: latest
-                    )
-                },
-                failed: { error in
-                    actorSystem.log.warning(
-                        "Memory extraction failed", metadata: ["error": .string(String(describing: error))])
-                }
-            )
-            guard !Task.isCancelled else { return }
-            rememberingPass = nil
-            if noted { try? await conversation?.noted(message) }
-        }
-    }
-
-    /// Whether it waits to extract what was said, or extracts it now.
-    var isRemembering: Bool {
-        rememberingPass != nil
     }
 
     /// Names the conversation from `request` and its answer, when it has no title yet: one request

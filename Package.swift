@@ -362,7 +362,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TurgaiMemoryTests",
-            dependencies: ["TurgaiMemory"]
+            dependencies: ["TurgaiDomain", "TurgaiMemory"]
         ),
         .testTarget(
             name: "TurgaiHailTests",

@@ -47,13 +47,17 @@ public struct MemoryGeneration: Hashable, Codable, Sendable {
     }
 }
 
-/// A raw, unfiltered record of one user message and its exchange context.
-/// The assistant response can explain a short answer, but only user text is
-/// evidence for a memory. The subject is implicit: each observation lives in
-/// exactly one user's journal.
+/// One exchange the person had: what they said in a conversation, and what its agent answered.
+/// The subject is implicit: each observation lives in exactly one user's journal.
 public struct MemoryObservation: Hashable, Codable, Sendable {
     public let id: ObservationID
     public let sourceID: MemorySourceID
+    /// The conversation it was in: it's read with the rest of that conversation.
+    public let conversation: ConversationID
+    /// The agent that answered, whose model reads it.
+    public let heardBy: AgentProfileID
+    /// Its message's id in the channel it came through: where it's marked once something's noted.
+    public let channelMessageID: ChannelMessageID?
     public let text: String
     public let response: String?
     public let observedAt: Date
@@ -61,12 +65,18 @@ public struct MemoryObservation: Hashable, Codable, Sendable {
     public init(
         id: ObservationID = ObservationID(),
         sourceID: MemorySourceID,
+        conversation: ConversationID,
+        heardBy: AgentProfileID,
+        channelMessageID: ChannelMessageID? = nil,
         text: String,
         response: String? = nil,
         observedAt: Date
     ) {
         self.id = id
         self.sourceID = sourceID
+        self.conversation = conversation
+        self.heardBy = heardBy
+        self.channelMessageID = channelMessageID
         self.text = text
         self.response = response
         self.observedAt = observedAt
@@ -149,8 +159,8 @@ public struct Said: Hashable, Codable, Sendable {
     }
 }
 
-/// Something the person said about themselves, at its place in their memory, with where they said
-/// it. It's current until what they say makes it untrue, or they have it forgotten.
+/// Something a conversation showed about the person, at its place in their memory, with the exchange
+/// it came from. It's current until what they say makes it untrue, or they have it forgotten.
 public struct MemoryFact: Hashable, Codable, Sendable {
     public enum Status: Hashable, Codable, Sendable {
         /// True, as far as they've said.
@@ -195,40 +205,34 @@ public struct MemoryFact: Hashable, Codable, Sendable {
     }
 }
 
-/// The immutable input captured for one memory extraction.
+/// What one memory extraction reads: one conversation's exchanges, the last few read already, as
+/// context, and those since, which the extractor numbers from 1.
 public struct ExtractionInput: Codable, Sendable, Equatable {
-    public let observations: [MemoryObservation]
+    /// The conversation they're from.
+    public let conversation: ConversationID
+    /// Its last exchanges read already: context only.
+    public let earlier: [MemoryObservation]
+    /// Its exchanges since: what's read now.
+    public let new: [MemoryObservation]
     public let generation: MemoryGeneration
     public let existingFacts: [MemoryFact]
-    public let previousObservations: [MemoryObservation]
 
     public init(
-        observations: [MemoryObservation],
+        conversation: ConversationID,
+        earlier: [MemoryObservation] = [],
+        new: [MemoryObservation],
         generation: MemoryGeneration,
-        existingFacts: [MemoryFact],
-        previousObservations: [MemoryObservation] = []
+        existingFacts: [MemoryFact]
     ) {
-        self.observations = observations
+        self.conversation = conversation
+        self.earlier = earlier
+        self.new = new
         self.generation = generation
         self.existingFacts = existingFacts
-        self.previousObservations = previousObservations
     }
 
-    /// The conversation context in the order in which exchanges occurred.
-    /// Separate storage for current and preceding observations must not become
-    /// prompt order.
-    public var chronologicalObservations: [MemoryObservation] {
-        (previousObservations + observations)
-            .enumerated()
-            .sorted {
-                if $0.element.observedAt != $1.element.observedAt {
-                    return $0.element.observedAt < $1.element.observedAt
-                }
-                if $0.element.sourceID != $1.element.sourceID {
-                    return $0.element.sourceID.rawValue.uuidString < $1.element.sourceID.rawValue.uuidString
-                }
-                return $0.offset < $1.offset
-            }
-            .map(\.element)
+    /// The new exchange numbered `number`, counting from 1: none when there's no such one.
+    public func exchange(_ number: Int) -> MemoryObservation? {
+        new.indices.contains(number - 1) ? new[number - 1] : nil
     }
 }

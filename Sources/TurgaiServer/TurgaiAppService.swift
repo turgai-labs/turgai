@@ -76,6 +76,8 @@ struct TurgaiAppService: Service, Sendable {
     private let spaceDirectory: SpaceDirectoryStorage
     /// Where the conversation directory is kept: the conversations each person is in.
     private let conversationDirectory: ConversationDirectoryStorage
+    /// Where what's unread for people's memory is kept: their conversations with exchanges to read.
+    private let unreadMemory: UnreadMemoryStorage
     private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
     private let objectCatalogSource: TurgaiObjectCatalogSource
     private let webChatBridge: TurgaiWebChatBridge
@@ -98,6 +100,7 @@ struct TurgaiAppService: Service, Sendable {
         turgaiSpace: SpaceID,
         spaceDirectory: SpaceDirectoryStorage,
         conversationDirectory: ConversationDirectoryStorage,
+        unreadMemory: UnreadMemoryStorage,
         runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
         objectCatalogSource: TurgaiObjectCatalogSource,
         webChatBridge: TurgaiWebChatBridge,
@@ -118,6 +121,7 @@ struct TurgaiAppService: Service, Sendable {
         self.turgaiSpace = turgaiSpace
         self.spaceDirectory = spaceDirectory
         self.conversationDirectory = conversationDirectory
+        self.unreadMemory = unreadMemory
         self.runtimeSnapshotSource = runtimeSnapshotSource
         self.objectCatalogSource = objectCatalogSource
         self.webChatBridge = webChatBridge
@@ -249,8 +253,8 @@ struct TurgaiAppService: Service, Sendable {
             }
 
             try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
-            // The space and conversation directories, one of each in the cluster, run here, beside
-            // the journal they read.
+            // The space and conversation directories and the memory passes, one of each in the
+            // cluster, run here, beside the journal they read.
             let spaceDirectory = spaceDirectory
             _ = try await system.singleton.host(SpaceDirectory.self, name: SpaceDirectory.singletonName) {
                 SpaceDirectory(actorSystem: $0, storage: spaceDirectory, journal: eventStore)
@@ -258,6 +262,12 @@ struct TurgaiAppService: Service, Sendable {
             let conversationDirectory = conversationDirectory
             _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
                 ConversationDirectory(actorSystem: $0, storage: conversationDirectory, journal: eventStore)
+            }
+            let unreadMemory = unreadMemory
+            _ = try await system.singleton.host(MemoryPasses.self, name: MemoryPasses.singletonName) {
+                MemoryPasses(
+                    actorSystem: $0, storage: unreadMemory, journal: eventStore, agentProfiles: agentProfiles,
+                    endpoints: endpointFactory)
             }
             // The shared production dependency facade for tool effects. The
             // generic parameter is only a carrier; the stored virtual-actor

@@ -1,3 +1,5 @@
+import TurgaiDomain
+
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
@@ -7,8 +9,8 @@
 /// Events in the memory section of one user's journal.
 ///
 /// Facts change only when an extraction is committed: what was learned and what ended, decided by
-/// ``Memory/reading(_:of:newID:)``. A committed extraction still records which messages it read,
-/// even when nothing changed.
+/// ``Memory/reading(_:of:newID:)``. A committed extraction still records how far into its
+/// conversation it read, even when nothing changed.
 public indirect enum MemoryEvent: Codable, Sendable, Equatable {
     /// Logically forgets the active memory projection. Earlier journal events
     /// remain available to infrastructure readers, but replay after this
@@ -29,30 +31,32 @@ public enum Remembering: String, Codable, Sendable, Equatable {
     case off
 }
 
-/// One atomic extraction result: the messages read, and what that changed in their memory.
-/// Lifecycle events such as `cleared` cannot be nested.
+/// One atomic extraction result: how far into a conversation it read, and what that changed in
+/// their memory. Lifecycle events such as `cleared` cannot be nested.
 public struct MemoryExtractionCommit: Codable, Sendable, Equatable {
     public let generation: MemoryGeneration
-    public let processedSources: [MemorySourceID]
-    public let observations: [MemoryObservation]
+    /// The conversation whose exchanges were read.
+    public let conversation: ConversationID
+    /// The last of them: what comes after it in the conversation is new.
+    public let readThrough: MemorySourceID
     public let changes: [MemoryFactEvent]
 
     public init(
         generation: MemoryGeneration,
-        processedSources: [MemorySourceID],
-        observations: [MemoryObservation],
+        conversation: ConversationID,
+        readThrough: MemorySourceID,
         changes: [MemoryFactEvent]
     ) {
         self.generation = generation
-        self.processedSources = processedSources
-        self.observations = observations
+        self.conversation = conversation
+        self.readThrough = readThrough
         self.changes = changes
     }
 }
 
 /// What reading their messages changed in their memory.
 public enum MemoryFactEvent: Codable, Sendable, Equatable {
-    /// They said something new about themselves.
+    /// A conversation showed something new about them.
     case learned(MemoryFact)
     /// What they said made a fact untrue.
     case ended(MemoryFactID, Said)

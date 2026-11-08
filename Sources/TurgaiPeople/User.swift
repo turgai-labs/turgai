@@ -34,10 +34,16 @@ public struct UserRecord: Codable, Sendable, Equatable {
     }
 }
 
-/// The read model for one background extraction pass.
+extension EventTag {
+    /// What's kept of what a person said, and what's read of it: what's unread in each of their
+    /// conversations is kept from it.
+    public static let memory = EventTag("memory")
+}
+
+/// What one pass reads of one of their conversations, and its latest exchange when it was taken.
 public struct MemoryExtractionSnapshot: Codable, Sendable {
     public let input: ExtractionInput
-    /// The latest message they sent, when it was taken.
+    /// Its latest exchange, when it was taken.
     public let latestObservationSourceID: MemorySourceID?
 }
 
@@ -79,6 +85,14 @@ public distributed actor User {
         retention: .keepLast(2)
     )
 
+    /// Tagged for the read side of what's unread: what's said and read, and forgetting it all.
+    public let tagging = Tagging<UserEvent> { event in
+        switch event {
+        case .memory(.observationRecorded), .memory(.extractionCommitted), .memory(.cleared): [.memory]
+        case .memory(.factForgotten), .memory(.rememberingChanged): []
+        }
+    }
+
     private let userID: UserID
 
     public init(actorSystem: ClusterSystem, dependency: Config) async throws {
@@ -96,8 +110,16 @@ public distributed actor User {
     }
 
     public static func persistenceID(for userID: UserID) -> String {
-        "turgai-user-\(userID.key)"
+        persistencePrefix + userID.key
     }
+
+    /// The person whose journal `persistenceID` is: none for anything else's.
+    public static func userID(persistenceID: PersistenceID) -> UserID? {
+        guard persistenceID.hasPrefix(persistencePrefix) else { return nil }
+        return try? UserID(key: String(persistenceID.dropFirst(persistencePrefix.count)))
+    }
+
+    private static let persistencePrefix = "turgai-user-"
 
     public static func resolve(
         on actorSystem: ClusterSystem,
@@ -118,13 +140,14 @@ public distributed actor User {
         try await emit(event: .memory(.observationRecorded(observation)))
     }
 
-    /// Reads `proposal`, made from `input`, into their memory, and journals what it decided.
+    /// Reads `proposal`, made from `input`, into their memory, and journals what it decided: stale
+    /// when something new was said in the conversation since `input` was taken.
     public distributed func commitExtraction(
         _ input: ExtractionInput,
         proposal: MemoryProposal,
         expectedLatestSourceID: MemorySourceID
     ) async throws -> ExtractionOutcome {
-        guard state.memory.latestObservationSourceID == expectedLatestSourceID else {
+        guard state.memory.latestObservation(in: input.conversation)?.sourceID == expectedLatestSourceID else {
             return .stale
         }
         switch state.memory.reading(proposal, of: input) {
@@ -139,10 +162,7 @@ public distributed actor User {
             // generation before this method resumes. Do not report a commit
             // that the current projection no longer contains.
             guard state.memory.generation == commit.generation,
-                state.memory.latestObservationSourceID == expectedLatestSourceID,
-                commit.processedSources.allSatisfy({
-                    state.memory.containsObservation(for: $0)
-                })
+                state.memory.readThrough[commit.conversation] == commit.readThrough
             else {
                 return .stale
             }
@@ -150,24 +170,23 @@ public distributed actor User {
         }
     }
 
-    /// The state slice one extraction pass needs: an immutable input built
-    /// from current state, and the latest message it's for.
-    public distributed func extractionSnapshot() -> MemoryExtractionSnapshot {
-        let pending = state.memory.observations.filter {
-            state.memory.accepts($0) && !state.memory.isProcessed($0)
-        }
-        return MemoryExtractionSnapshot(
+    /// What a pass reads of `conversation`: its exchanges past its cursor, the last few before as
+    /// context, and its latest exchange, to tell whether something new was said meanwhile.
+    public distributed func extractionSnapshot(of conversation: ConversationID) -> MemoryExtractionSnapshot {
+        MemoryExtractionSnapshot(
             input: ExtractionInput(
-                observations: pending,
+                conversation: conversation,
+                earlier: state.memory.read(in: conversation, last: Self.contextExchanges),
+                new: state.memory.unread(in: conversation),
                 generation: state.memory.generation,
-                existingFacts: state.memory.currentFacts(),
-                previousObservations: pending.first.map {
-                    state.memory.previousObservations(before: $0.sourceID, limit: 32)
-                } ?? []
+                existingFacts: state.memory.currentFacts()
             ),
-            latestObservationSourceID: state.memory.latestObservationSourceID
+            latestObservationSourceID: state.memory.latestObservation(in: conversation)?.sourceID
         )
     }
+
+    /// How many of a conversation's exchanges read already a pass shows as context.
+    private static let contextExchanges = 10
 
     /// What's remembered about them, as a recall answers it.
     public distributed func recalled() -> String {

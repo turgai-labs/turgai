@@ -1,4 +1,5 @@
 import Testing
+import TurgaiDomain
 import TurgaiMemory
 
 #if canImport(FoundationEssentials)
@@ -11,6 +12,9 @@ struct MemoryTests {
     private let sourceID = MemorySourceID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!)
     private let observationID = ObservationID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!)
     private let factID = MemoryFactID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!)
+    private let check = ConversationID(stableKey: "turgai:check")!
+    private let skylark = ConversationID(stableKey: "turgai:skylark")!
+    private let turgai = AgentProfileID("turgai")
 
     /// A fact learned on `day`, days since 1970.
     private func fact(_ path: [String], _ value: String, on day: Int = 1, id: MemoryFactID = MemoryFactID())
@@ -28,25 +32,38 @@ struct MemoryTests {
         memory.apply(
             .extractionCommitted(
                 MemoryExtractionCommit(
-                    generation: memory.generation, processedSources: [], observations: [],
+                    generation: memory.generation, conversation: skylark, readThrough: MemorySourceID(),
                     changes: facts.map(MemoryFactEvent.learned))))
         return memory
     }
 
-    /// A message they sent, on day 2.
-    private func message(_ text: String, response: String? = nil) -> MemoryObservation {
+    /// An exchange they had in `conversation`, on day 2, or at `seconds` since 1970.
+    private func message(
+        _ text: String, response: String? = nil, in conversation: ConversationID? = nil, at seconds: Int = 2 * 86_400,
+        id: ObservationID = ObservationID(), sourceID: MemorySourceID = MemorySourceID()
+    ) -> MemoryObservation {
         MemoryObservation(
-            sourceID: MemorySourceID(), text: text, response: response,
-            observedAt: Date(timeIntervalSince1970: 2 * 86_400))
+            id: id, sourceID: sourceID, conversation: conversation ?? check, heardBy: turgai, text: text,
+            response: response, observedAt: Date(timeIntervalSince1970: TimeInterval(seconds)))
     }
 
-    /// What reading `proposal`, made from `messages`, into `memory` changed, and what it rejected.
+    /// A memory that's recorded `messages`.
+    private func recording(_ messages: [MemoryObservation], into memory: Memory = Memory()) -> Memory {
+        var memory = memory
+        for message in messages { memory.apply(.observationRecorded(message)) }
+        return memory
+    }
+
+    /// What reading `proposal`, made from `messages` as Check's new exchanges, into `memory` changed,
+    /// and what it rejected.
     private func read(
         _ proposal: MemoryProposal, from messages: [MemoryObservation], into memory: inout Memory,
         newID: MemoryFactID = MemoryFactID()
     ) -> (changes: [MemoryFactEvent], rejected: [MemoryRejection]) {
+        memory = recording(messages, into: memory)
         let input = ExtractionInput(
-            observations: messages, generation: memory.generation, existingFacts: memory.currentFacts())
+            conversation: check, new: memory.unread(in: check), generation: memory.generation,
+            existingFacts: memory.currentFacts())
         guard case .read(let commit, let rejected) = memory.reading(proposal, of: input, newID: { newID }) else {
             Issue.record("Expected the messages to be read")
             return ([], [])
@@ -57,12 +74,7 @@ struct MemoryTests {
 
     @Test
     func observationProjectionIsIdempotentAndBoundedBySourceMessage() {
-        let observation = MemoryObservation(
-            id: observationID,
-            sourceID: sourceID,
-            text: "Berlin",
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
+        let observation = message("Berlin", at: 1, id: observationID, sourceID: sourceID)
         var projection = Memory()
 
         projection.apply(.observationRecorded(observation))
@@ -72,45 +84,26 @@ struct MemoryTests {
         #expect(projection.containsObservation(for: sourceID))
     }
 
+    /// A conversation's latest exchange is the last kept, even when turns finish out of order, and
+    /// another conversation's doesn't count.
     @Test
-    func latestExtractionTriggerUsesJournalOrderWhenTurnsFinishOutOfOrder() {
-        let laterMessage = MemoryObservation(
-            sourceID: sourceID,
-            text: "sent later, completed first",
-            observedAt: Date(timeIntervalSince1970: 2)
-        )
-        let earlierMessage = MemoryObservation(
-            sourceID: MemorySourceID(),
-            text: "sent earlier, completed later",
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
-        var projection = Memory()
-        projection.apply(.observationRecorded(laterMessage))
-        projection.apply(.observationRecorded(earlierMessage))
+    func latestExchangeUsesJournalOrderWhenTurnsFinishOutOfOrder() {
+        let laterMessage = message("sent later, completed first", at: 2)
+        let earlierMessage = message("sent earlier, completed later", at: 1)
+        let elsewhere = message("elsewhere", in: skylark, at: 3)
+        let projection = recording([laterMessage, earlierMessage, elsewhere])
 
-        #expect(projection.latestObservationSourceID == earlierMessage.sourceID)
+        #expect(projection.latestObservation(in: check) == earlierMessage)
+        #expect(projection.latestObservation(in: skylark) == elsewhere)
     }
 
     @Test
     func observationTailDropsOldestObservationsBeyondTheCap() {
         var projection = Memory()
-        let first = MemoryObservation(
-            sourceID: sourceID,
-            text: "first",
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
-        projection.apply(.observationRecorded(first))
+        projection.apply(.observationRecorded(message("first", at: 1, sourceID: sourceID)))
 
         for index in 2...(Memory.maximumObservations + 1) {
-            projection.apply(
-                .observationRecorded(
-                    MemoryObservation(
-                        sourceID: MemorySourceID(),
-                        text: "message \(index)",
-                        observedAt: Date(timeIntervalSince1970: TimeInterval(index))
-                    )
-                )
-            )
+            projection.apply(.observationRecorded(message("message \(index)", at: index)))
         }
 
         #expect(projection.observations.count == Memory.maximumObservations)
@@ -123,12 +116,7 @@ struct MemoryTests {
 
     @Test
     func clearingMemoryStartsANewGenerationAndRemovesTheProjection() {
-        let observation = MemoryObservation(
-            id: observationID,
-            sourceID: sourceID,
-            text: "My name is Ada",
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
+        let observation = message("My name is Ada", at: 1, id: observationID, sourceID: sourceID)
         var projection = remembering([fact(["name"], "Ada")])
         projection.apply(.observationRecorded(observation))
         let generation = projection.generation
@@ -137,6 +125,7 @@ struct MemoryTests {
 
         #expect(projection.observations.isEmpty)
         #expect(projection.facts.isEmpty)
+        #expect(projection.readThrough.isEmpty)
         #expect(projection.generation == generation.advancing())
     }
 
@@ -145,24 +134,8 @@ struct MemoryTests {
         var projection = Memory()
         projection.apply(.cleared(at: Date(timeIntervalSince1970: 10)))
 
-        #expect(
-            !projection.accepts(
-                MemoryObservation(
-                    sourceID: sourceID,
-                    text: "old",
-                    observedAt: Date(timeIntervalSince1970: 9)
-                )
-            )
-        )
-        #expect(
-            projection.accepts(
-                MemoryObservation(
-                    sourceID: sourceID,
-                    text: "new",
-                    observedAt: Date(timeIntervalSince1970: 11)
-                )
-            )
-        )
+        #expect(!projection.accepts(message("old", at: 9)))
+        #expect(projection.accepts(message("new", at: 11)))
     }
 
     /// Whether a person is remembered is theirs to change, and forgetting what's remembered keeps it.
@@ -177,81 +150,35 @@ struct MemoryTests {
         #expect(decoded.remembering == .off)
     }
 
+    /// Each conversation has its own cursor: what's past it is new, the last few up to it are what
+    /// was read, and one conversation's exchanges never count in another's.
     @Test
-    func previousObservationsFollowJournalOrder() {
-        let first = MemoryObservation(
-            sourceID: MemorySourceID(rawValue: UUID()),
-            text: "Where do you live?",
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
-        let second = MemoryObservation(
-            sourceID: MemorySourceID(rawValue: UUID()),
-            text: "Berlin",
-            observedAt: Date(timeIntervalSince1970: 2)
-        )
-        let third = MemoryObservation(
-            sourceID: MemorySourceID(rawValue: UUID()),
-            text: "I moved to London.",
-            observedAt: Date(timeIntervalSince1970: 3)
-        )
-        var projection = Memory()
-        projection.apply(.observationRecorded(first))
-        projection.apply(.observationRecorded(second))
-        projection.apply(.observationRecorded(third))
+    func eachConversationIsReadFromItsOwnCursor() {
+        let question = message("Where do I live?", at: 1)
+        let tatar = message("How is a skylark called in Tatar?", in: skylark, at: 2)
+        let answer = message("Haar", at: 3)
+        var memory = recording([question, tatar, answer])
 
-        #expect(
-            projection
-                .previousObservations(before: third.sourceID, limit: 2)
-                .map(\.id) == [first.id, second.id]
-        )
-        #expect(
-            projection
-                .previousObservations(before: second.sourceID, limit: 2)
-                .map(\.id) == [first.id]
-        )
-        #expect(projection.previousObservations(before: MemorySourceID(), limit: 2).isEmpty)
-    }
+        #expect(memory.unread(in: check) == [question, answer])
+        #expect(memory.read(in: check, last: 5).isEmpty)
+        memory.apply(
+            .extractionCommitted(
+                MemoryExtractionCommit(
+                    generation: memory.generation, conversation: check, readThrough: question.sourceID,
+                    changes: [])))
+        #expect(memory.unread(in: check) == [answer])
+        #expect(memory.read(in: check, last: 5) == [question])
+        #expect(memory.unread(in: skylark) == [tatar])
 
-    @Test
-    func extractionInputMergesCurrentAndPreviousObservationsChronologically() {
-        let question = MemoryObservation(
-            sourceID: MemorySourceID(rawValue: UUID()),
-            text: "Where do you live?",
-            response: "I don't know yet — where are you based?",
-            observedAt: Date(timeIntervalSince1970: 1)
-        )
-        let correction = MemoryObservation(
-            sourceID: MemorySourceID(rawValue: UUID()),
-            text: "Sorry, I meant Haar.",
-            response: "Thanks, I updated the location context.",
-            observedAt: Date(timeIntervalSince1970: 2)
-        )
-        let answer = MemoryObservation(
-            sourceID: MemorySourceID(rawValue: UUID()),
-            text: "Haar, Landkreis München",
-            response: "Got it.",
-            observedAt: Date(timeIntervalSince1970: 3)
-        )
-        let followUp = MemoryObservation(
-            sourceID: MemorySourceID(rawValue: UUID()),
-            text: "Use that for weather and reminders.",
-            response: "Understood.",
-            observedAt: Date(timeIntervalSince1970: 4)
-        )
-        let input = ExtractionInput(
-            observations: [followUp, answer],
-            generation: .initial,
-            existingFacts: [],
-            previousObservations: [correction, question]
-        )
-
-        #expect(
-            input.chronologicalObservations.map(\.id) == [
-                question.id,
-                correction.id,
-                answer.id,
-                followUp.id,
-            ])
+        let later = message("I like tea", at: 4)
+        memory = recording([later], into: memory)
+        memory.apply(
+            .extractionCommitted(
+                MemoryExtractionCommit(
+                    generation: memory.generation, conversation: check, readThrough: answer.sourceID,
+                    changes: [])))
+        #expect(memory.unread(in: check) == [later])
+        #expect(memory.read(in: check, last: 1) == [answer])
     }
 
     /// One human's linked persons remember in one tree: the same value at a path once, and
@@ -313,34 +240,32 @@ struct MemoryTests {
     func messagesAreReadOnce() {
         let said = message("I live in Haar")
         var memory = Memory()
-        let proposal = MemoryProposal(facts: [
-            .init(path: ["lives in"], value: "Haar", quote: "I live in Haar", confidence: 1)
-        ])
+        let proposal = MemoryProposal(facts: [.init(path: ["lives in"], value: "Haar", exchange: 1, confidence: 1)])
 
         _ = read(proposal, from: [said], into: &memory)
 
         #expect(memory.currentFacts().map(\.line) == ["lives in: Haar"])
-        #expect(memory.isProcessed(said))
+        #expect(memory.unread(in: check).isEmpty)
         let again = ExtractionInput(
-            observations: [said], generation: memory.generation, existingFacts: memory.currentFacts())
+            conversation: check, new: [said], generation: memory.generation, existingFacts: memory.currentFacts())
         #expect(memory.reading(proposal, of: again) == .alreadyRead)
     }
 
-    /// Every message in the batch is read, even when nothing in the proposal is kept.
+    /// Every new exchange is read, even when nothing in the proposal is kept.
     @Test
-    func theBatchIsReadEvenWhenNothingIsKept() {
+    func theNewExchangesAreReadEvenWhenNothingIsKept() {
         let first = message("My name is Ada")
         let second = message("thanks")
         var memory = Memory()
 
         let (changes, rejected) = read(
-            MemoryProposal(facts: [.init(path: ["name"], value: "Ada", quote: "nowhere", confidence: 1)]),
+            MemoryProposal(facts: [.init(path: ["name"], value: "Ada", exchange: 3, confidence: 1)]),
             from: [first, second], into: &memory)
 
         #expect(changes.isEmpty)
-        #expect(rejected == [.notSaid(quote: "nowhere")])
-        #expect(memory.isProcessed(first))
-        #expect(memory.isProcessed(second))
+        #expect(rejected == [.noSuchExchange(3)])
+        #expect(memory.unread(in: check).isEmpty)
+        #expect(memory.readThrough[check] == second.sourceID)
     }
 
     /// A new value at a path is kept beside the ones there: liking sushi isn't liking pasta no more.
@@ -349,8 +274,7 @@ struct MemoryTests {
         var memory = remembering([fact(["likes"], "pasta")])
 
         _ = read(
-            MemoryProposal(facts: [.init(path: ["likes"], value: "sushi", quote: "I also love sushi", confidence: 0.9)]
-            ),
+            MemoryProposal(facts: [.init(path: ["likes"], value: "sushi", exchange: 1, confidence: 0.9)]),
             from: [message("I also love sushi")], into: &memory)
 
         #expect(memory.currentFacts().map(\.line) == ["likes: pasta", "likes: sushi"])
@@ -363,8 +287,7 @@ struct MemoryTests {
         var memory = remembering([fact(["lives in"], "Haar")])
 
         let (changes, rejected) = read(
-            MemoryProposal(facts: [.init(path: ["Lives  In"], value: " haar", quote: "I live in haar", confidence: 0.9)]
-            ),
+            MemoryProposal(facts: [.init(path: ["Lives  In"], value: " haar", exchange: 1, confidence: 0.9)]),
             from: [message("I live in Haar")], into: &memory)
 
         #expect(changes.isEmpty)
@@ -384,11 +307,8 @@ struct MemoryTests {
 
         let (changes, rejected) = read(
             MemoryProposal(
-                facts: [.init(path: ["home"], value: "Berlin", quote: "our flat in Berlin", confidence: 0.9)],
-                endings: [
-                    .init(line: "Lives in - Haar", quote: "got the keys to our flat in Berlin"),
-                    .init(line: "gym: in Haar", quote: "got the keys to our flat in Berlin"),
-                ]),
+                facts: [.init(path: ["home"], value: "Berlin", exchange: 1, confidence: 0.9)],
+                endings: [.init(line: "Lives in - Haar", exchange: 1), .init(line: "gym: in Haar", exchange: 1)]),
             from: [keys], into: &memory, newID: berlin)
 
         let said = Said(observation: keys.id, at: keys.observedAt)
@@ -409,7 +329,7 @@ struct MemoryTests {
         let stopped = message("I don't eat pasta anymore")
 
         let (changes, _) = read(
-            MemoryProposal(endings: [.init(line: "likes: pasta", quote: "I don't eat pasta anymore")]),
+            MemoryProposal(endings: [.init(line: "likes: pasta", exchange: 1)]),
             from: [stopped], into: &memory)
 
         #expect(changes == [.ended(pasta.id, Said(observation: stopped.id, at: stopped.observedAt))])
@@ -429,11 +349,10 @@ struct MemoryTests {
 
         let (changes, rejected) = read(
             MemoryProposal(
-                facts: [.init(path: ["likes"], value: "tea", quote: "I like tea", confidence: 0.9)],
+                facts: [.init(path: ["likes"], value: "tea", exchange: 1, confidence: 0.9)],
                 endings: [
-                    .init(line: "lives in: Munich", quote: "I moved to Munich"),
-                    .init(line: "likes: pasta", quote: "I like tea"),
-                    .init(line: "family sister: Kate", quote: "Kate is my sister"),
+                    .init(line: "lives in: Munich", exchange: 1), .init(line: "likes: pasta", exchange: 1),
+                    .init(line: "family sister: Kate", exchange: 1),
                 ]),
             from: [said], into: &memory)
 
@@ -447,53 +366,53 @@ struct MemoryTests {
         #expect(memory.currentFacts().map(\.line).contains("lives in: Haar"))
     }
 
-    /// A quote must be the person's own words, in exactly one message the extractor saw: never a
-    /// reply, and a short answer counts by its own words.
+    /// A fact names the new exchange it comes from, read in context: an answer counts by the question
+    /// it answers, and a word said before doesn't make it ambiguous. Only new exchanges can be named.
     @Test
-    func aQuoteIsTheirWordsInOneMessage() {
-        let question = message("Weather please", response: "Which location? You live in Haar, right?")
-        let answer = message("Haar, Germany")
-        let again = message("Haar, Germany is lovely")
+    func aFactComesFromANewExchangeReadInContext() {
+        let weather = message(
+            "What's the weather forecast in Haar Germany for upcoming week?",
+            response: "Here's the week ahead in Haar, Germany (near Munich).", at: 1)
+        let snow = message("oof, really snow?", response: "Yep, afraid so.", at: 2)
+        let question = message(
+            "Where I'm living?", response: "Honestly, I don't know. Want to tell me?", at: 3)
+        let answer = message("Haar", response: "Got it — Haar, Germany it is.", at: 4)
         var memory = Memory()
-        func learning(_ quote: String) -> MemoryProposal {
-            MemoryProposal(facts: [.init(path: ["lives in"], value: "Haar", quote: quote, confidence: 0.9)])
-        }
-        let input = ExtractionInput(
-            observations: [answer], generation: memory.generation, existingFacts: [],
-            previousObservations: [question, answer, again])
 
-        for (quote, rejection) in [
-            ("You live in Haar", MemoryRejection.notSaid(quote: "You live in Haar")),
-            ("Haar, Germany", .saidInSeveral(quote: "Haar, Germany")),
-        ] {
-            guard case .read(_, let rejected) = memory.reading(learning(quote), of: input) else {
-                Issue.record("Expected the messages to be read")
-                continue
-            }
-            #expect(rejected == [rejection])
-        }
+        let (changes, rejected) = read(
+            MemoryProposal(facts: [
+                .init(path: ["home"], value: "Haar, Germany", exchange: 4, confidence: 0.95),
+                .init(path: ["likes"], value: "snow", exchange: 0, confidence: 0.9),
+                .init(path: ["likes"], value: "rain", exchange: 5, confidence: 0.9),
+            ]),
+            from: [weather, snow, question, answer], into: &memory)
 
-        // The same message twice, as current and as context, is one message.
-        let (changes, rejected) = read(learning("Haar, Germany is lovely"), from: [again, again], into: &memory)
-        #expect(rejected.isEmpty)
-        #expect(changes == [.learned(memory.currentFacts()[0])])
-        #expect(memory.currentFacts()[0].learned == Said(observation: again.id, at: again.observedAt))
+        #expect(rejected == [.noSuchExchange(0), .noSuchExchange(5)])
+        #expect(changes.count == 1)
+        #expect(memory.currentFacts().map(\.line) == ["home: Haar, Germany"])
+        #expect(memory.currentFacts()[0].learned == Said(observation: answer.id, at: answer.observedAt))
+
+        // Read already, the four are context: a new exchange is 1 again.
+        let tea = message("I like tea", at: 5)
+        let (more, _) = read(
+            MemoryProposal(facts: [.init(path: ["likes"], value: "tea", exchange: 1, confidence: 0.9)]),
+            from: [tea], into: &memory)
+        #expect(more.count == 1)
+        #expect(memory.currentFacts()[1].learned.observation == tea.id)
     }
 
     /// A fact has a path, a value, and is sure enough.
     @Test
     func aFactNeedsAPathAValueAndCertainty() {
         var memory = Memory()
-        let quote = "I drink coffee every morning"
-
         let (changes, rejected) = read(
             MemoryProposal(facts: [
-                .init(path: [], value: "coffee", quote: quote, confidence: 0.9),
-                .init(path: ["a", "b", "c", "d"], value: "coffee", quote: quote, confidence: 0.9),
-                .init(path: ["drinks"], value: " ", quote: quote, confidence: 0.9),
-                .init(path: ["drinks"], value: "coffee", quote: quote, confidence: 0.5),
+                .init(path: [], value: "coffee", exchange: 1, confidence: 0.9),
+                .init(path: ["a", "b", "c", "d"], value: "coffee", exchange: 1, confidence: 0.9),
+                .init(path: ["drinks"], value: " ", exchange: 1, confidence: 0.9),
+                .init(path: ["drinks"], value: "coffee", exchange: 1, confidence: 0.5),
             ]),
-            from: [message(quote)], into: &memory)
+            from: [message("I drink coffee every morning")], into: &memory)
 
         #expect(changes.isEmpty)
         #expect(rejected == [.notAPath([]), .notAPath(["a", "b", "c", "d"]), .notAValue(" "), .unsure(0.5)])
@@ -503,14 +422,11 @@ struct MemoryTests {
     @Test
     func aProposalFromBeforeForgettingIsStale() {
         let said = message("I live in Haar")
-        var memory = Memory()
-        let input = ExtractionInput(observations: [said], generation: memory.generation, existingFacts: [])
+        var memory = recording([said])
+        let input = ExtractionInput(conversation: check, new: [said], generation: memory.generation, existingFacts: [])
         memory.apply(.cleared(at: Date(timeIntervalSince1970: 3 * 86_400)))
 
-        #expect(
-            memory.reading(
-                MemoryProposal(facts: [.init(path: ["lives in"], value: "Haar", quote: "I live in Haar", confidence: 1)]
-                ),
-                of: input) == .stale)
+        let proposal = MemoryProposal(facts: [.init(path: ["lives in"], value: "Haar", exchange: 1, confidence: 1)])
+        #expect(memory.reading(proposal, of: input) == .stale)
     }
 }

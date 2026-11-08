@@ -1,19 +1,21 @@
+import TurgaiDomain
+
 #if canImport(FoundationEssentials)
     import FoundationEssentials
 #else
     import Foundation
 #endif
 
-/// A person's memory: whether what they say is remembered, and what is, with the messages it was
-/// learned from.
+/// A person's memory: whether what they say is remembered, and what is, with the exchanges it was
+/// learned from; and how far into each of their conversations it's read.
 ///
 /// The journal keeps full provenance; memory keeps only a bounded
 /// tail of recent observations (extraction context) plus every fact with its
 /// status, so a fact that ended stays, ended.
 public struct Memory: Codable, Sendable, Equatable {
-    /// The observation tail is hard-bounded; older observations remain in
-    /// the journal, not in memory. `processedSources` is keyed by sourceID,
-    /// so trimming the tail never un-marks a consumed source.
+    /// The observation tail is hard-bounded; older observations remain in the journal, not in
+    /// memory. A conversation's exchanges are read in the order they're kept, so one whose cursor
+    /// was trimmed away has every exchange still kept after it.
     public static let maximumObservations = 500
 
     public private(set) var generation: MemoryGeneration
@@ -21,22 +23,16 @@ public struct Memory: Codable, Sendable, Equatable {
     /// predates `/forget` from re-entering the new generation.
     public private(set) var lastClearedAt: Date?
     public private(set) var observations: [MemoryObservation] = []
-    public private(set) var processedSources: Set<MemorySourceID> = []
+    /// Each conversation's cursor: the last of its exchanges read.
+    public private(set) var readThrough: [ConversationID: MemorySourceID] = [:]
     public private(set) var facts: [MemoryFact] = []
     /// Whether what they say is remembered.
     public private(set) var remembering: Remembering = .on
 
-    public var latestObservationSourceID: MemorySourceID? {
-        Self.latestObservation(in: observations)?.sourceID
-    }
-
-    /// The latest durable observation is the last one appended to the user
-    /// journal. Messages can finish model turns out of send-time order, so
-    /// `observedAt` does not identify the newest extraction trigger.
-    public static func latestObservation(
-        in observations: [MemoryObservation]
-    ) -> MemoryObservation? {
-        observations.last
+    /// The latest exchange in `conversation`: the last kept, since turns can finish out of the order
+    /// their messages were sent in.
+    public func latestObservation(in conversation: ConversationID) -> MemoryObservation? {
+        observations.last { $0.conversation == conversation }
     }
 
     public init(generation: MemoryGeneration = .initial, remembering: Remembering = .on) {
@@ -49,7 +45,7 @@ public struct Memory: Codable, Sendable, Equatable {
         case generation
         case lastClearedAt
         case observations
-        case processedSources
+        case readThrough
         case facts
         case remembering
     }
@@ -70,11 +66,11 @@ public struct Memory: Codable, Sendable, Equatable {
                 [MemoryObservation].self,
                 forKey: .observations
             ) ?? []
-        processedSources =
+        readThrough =
             try container.decodeIfPresent(
-                Set<MemorySourceID>.self,
-                forKey: .processedSources
-            ) ?? []
+                [ConversationID: MemorySourceID].self,
+                forKey: .readThrough
+            ) ?? [:]
         facts =
             try container.decodeIfPresent(
                 [MemoryFact].self,
@@ -88,7 +84,7 @@ public struct Memory: Codable, Sendable, Equatable {
         try container.encode(generation, forKey: .generation)
         try container.encodeIfPresent(lastClearedAt, forKey: .lastClearedAt)
         try container.encode(observations, forKey: .observations)
-        try container.encode(processedSources, forKey: .processedSources)
+        try container.encode(readThrough, forKey: .readThrough)
         try container.encode(facts, forKey: .facts)
         try container.encode(remembering, forKey: .remembering)
     }
@@ -97,7 +93,7 @@ public struct Memory: Codable, Sendable, Equatable {
         switch event {
         case .cleared(let at):
             observations.removeAll(keepingCapacity: true)
-            processedSources.removeAll(keepingCapacity: true)
+            readThrough.removeAll(keepingCapacity: true)
             facts.removeAll(keepingCapacity: true)
             generation = generation.advancing()
             lastClearedAt = max(lastClearedAt ?? at, at)
@@ -116,13 +112,7 @@ public struct Memory: Codable, Sendable, Equatable {
 
         case .extractionCommitted(let commit):
             guard commit.generation == generation else { return }
-            processedSources.formUnion(commit.processedSources)
-            for observation in commit.observations {
-                guard accepts(observation),
-                    !observations.contains(where: { $0.sourceID == observation.sourceID })
-                else { continue }
-                appendObservation(observation)
-            }
+            readThrough[commit.conversation] = commit.readThrough
             for change in commit.changes {
                 applyFactEvent(change)
             }
@@ -159,21 +149,29 @@ public struct Memory: Codable, Sendable, Equatable {
         MemoryTree(currentFacts())
     }
 
-    /// The last `limit` observations before a source's, in journal order: none when it isn't here.
-    public func previousObservations(
-        before sourceID: MemorySourceID,
-        limit: Int
-    ) -> [MemoryObservation] {
-        guard let index = observations.firstIndex(where: { $0.sourceID == sourceID }) else { return [] }
-        return Array(observations[..<index].suffix(limit))
+    /// The exchanges in `conversation` past its cursor: all of them, before any is read.
+    public func unread(in conversation: ConversationID) -> [MemoryObservation] {
+        let (theirs, cursor) = exchanges(in: conversation)
+        return Array(theirs[(cursor.map { $0 + 1 } ?? theirs.startIndex)...])
+    }
+
+    /// The last `limit` exchanges in `conversation` up to its cursor: none before any is read.
+    public func read(in conversation: ConversationID, last limit: Int) -> [MemoryObservation] {
+        let (theirs, cursor) = exchanges(in: conversation)
+        guard let cursor else { return [] }
+        return Array(theirs[...cursor].suffix(limit))
+    }
+
+    /// The exchanges kept in `conversation`, and where its cursor is among them: none when nothing's
+    /// read, or what was is no longer kept.
+    private func exchanges(in conversation: ConversationID) -> (theirs: [MemoryObservation], cursor: Int?) {
+        let theirs = observations.filter { $0.conversation == conversation }
+        let cursor = readThrough[conversation].flatMap { read in theirs.firstIndex { $0.sourceID == read } }
+        return (theirs, cursor)
     }
 
     public func containsObservation(for sourceID: MemorySourceID) -> Bool {
         observations.contains { $0.sourceID == sourceID }
-    }
-
-    public func isProcessed(_ observation: MemoryObservation) -> Bool {
-        processedSources.contains(observation.sourceID)
     }
 
     public func accepts(_ observation: MemoryObservation) -> Bool {
