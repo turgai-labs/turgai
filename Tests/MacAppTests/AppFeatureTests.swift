@@ -26,6 +26,7 @@ struct AppFeatureTests {
             $0.server.signIn = { _, _ in session }
             $0.sessions.save = { session in saved.withValue { $0.append(session) } }
             $0.sessions.clear = { cleared.withValue { $0 += 1 } }
+            $0.chat.connect = { _ in AsyncThrowingStream { _ in } }
             $0.chat.disconnect = {}
             $0.continuousClock = clock
             $0.date.now = now
@@ -39,18 +40,22 @@ struct AppFeatureTests {
             $0.login = AppFeature.LoginForm()
         }
         #expect(saved.value == [session])
+        await store.receive(\.chat.connect) { $0.chat.session = session }
+        await store.receive(\.chat.delegate, .connected)
+        await store.receive(\.profile.connected)
 
         await clock.advance(by: .seconds(60))
         await store.receive(\.sessionExpired) {
             $0.account = .signedOut
             $0.login = AppFeature.LoginForm(notice: .sessionEnded)
         }
-        await store.receive(\.chat.disconnect)
+        await store.receive(\.chat.disconnect) { $0.chat = ChatFeature.State() }
         #expect(cleared.value == 1)
     }
 
-    /// Who's signed in is read for the account button; Sign Out on the profile forgets them and the
-    /// session, and the expiry it was waiting for no longer signs anyone out.
+    /// Signed in, the app's one connection opens; who's signed in is read for the account button;
+    /// Sign Out on the profile forgets them and the session, closes the connection, and the expiry
+    /// it was waiting for no longer signs anyone out.
     @Test
     func signingOutForgetsTheAccount() async {
         let clock = TestClock()
@@ -61,12 +66,17 @@ struct AppFeatureTests {
         } withDependencies: {
             $0.server.me = { _ in Me(id: "account-ada", name: "ada") }
             $0.sessions.clear = { cleared.withValue { $0 += 1 } }
+            // Open until it's closed.
+            $0.chat.connect = { _ in AsyncThrowingStream { _ in } }
             $0.chat.disconnect = {}
             $0.continuousClock = clock
             $0.date.now = now
         }
 
         await store.send(.sessionLoaded(session)) { $0.account = .signedIn(session) }
+        await store.receive(\.chat.connect) { $0.chat.session = session }
+        await store.receive(\.chat.delegate, .connected)
+        await store.receive(\.profile.connected)
         await store.send(.profile(.appeared(session))) { $0.profile.session = session }
         await store.receive(\.profile.meLoaded) { $0.profile.me = Me(id: "account-ada", name: "ada") }
         #expect(store.state.profile.initial == "A")
@@ -74,7 +84,7 @@ struct AppFeatureTests {
             $0.account = .signedOut
             $0.profile = ProfileFeature.State()
         }
-        await store.receive(\.chat.disconnect)
+        await store.receive(\.chat.disconnect) { $0.chat = ChatFeature.State() }
         await clock.advance(by: .seconds(60))
         #expect(cleared.value == 1)
     }
@@ -123,6 +133,7 @@ struct RegistrationTests {
 
     @Test
     func registeringSignsInToTheNewAccount() async {
+        let clock = TestClock()
         let session = Session(token: "new", expiresAt: now.addingTimeInterval(60))
         let registered = LockIsolated<[String]>([])
         let store = TestStore(
@@ -139,9 +150,9 @@ struct RegistrationTests {
             }
             $0.sessions.save = { _ in }
             $0.sessions.clear = {}
+            $0.chat.connect = { _ in AsyncThrowingStream { _ in } }
             $0.chat.disconnect = {}
-            // The expiry timer runs straight through; expiry itself is covered by the sign-in test.
-            $0.continuousClock = ImmediateClock()
+            $0.continuousClock = clock
             $0.date.now = now
         }
 
@@ -153,11 +164,15 @@ struct RegistrationTests {
             $0.login = AppFeature.LoginForm()
         }
         #expect(registered.value == ["ada"])
+        await store.receive(\.chat.connect) { $0.chat.session = session }
+        await store.receive(\.chat.delegate, .connected)
+        await store.receive(\.profile.connected)
+        await clock.advance(by: .seconds(60))
         await store.receive(\.sessionExpired) {
             $0.account = .signedOut
             $0.login = AppFeature.LoginForm(notice: .sessionEnded)
         }
-        await store.receive(\.chat.disconnect)
+        await store.receive(\.chat.disconnect) { $0.chat = ChatFeature.State() }
     }
 
     @Test

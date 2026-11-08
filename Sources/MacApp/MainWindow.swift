@@ -20,7 +20,7 @@ struct MainWindow: View {
             WorkingField(hue: store.sidebar.shownSpaceHue)
             // The conversation keeps clear of the panel; the field runs under it.
             ChatView(
-                session: session, title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
+                title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
             )
             // Only the panel's room: what's in the conversation keeps its own margins.
             .safeAreaPadding(.leading, store.showsSidebar ? Self.sidebarWidth + Self.gap : 0)

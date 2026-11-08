@@ -216,6 +216,10 @@ struct AppFeature {
                 return .send(.sidebar(.conversationTitled(conversation)))
             case .chat(.delegate(.conversationLeft(let id))):
                 return .send(.sidebar(.conversationLeft(id)))
+            case .chat(.delegate(.memoryChanged)):
+                return .send(.profile(.memoryChanged))
+            case .chat(.delegate(.connected)):
+                return .send(.profile(.connected))
 
             case .profile(.signOutTapped):
                 guard case .signedIn = state.account else { return .none }
@@ -256,7 +260,8 @@ struct AppFeature {
                     return .run { _ in sessions.clear() }
                 }
                 state.account = .signedIn(session)
-                return expire(session)
+                // The app's one connection, open while they're signed in, whatever window shows.
+                return .merge(expire(session), .send(.chat(.connect(session))))
 
             case .openSetupTapped:
                 return .run { _ in await openURL(LocalServer.baseURL) }
@@ -296,7 +301,8 @@ struct AppFeature {
                 state.login = LoginForm()
                 return .merge(
                     .run { _ in sessions.save(session) },
-                    expire(session)
+                    expire(session),
+                    .send(.chat(.connect(session)))
                 )
 
             case .submitFinished(.failure(let error)):

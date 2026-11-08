@@ -5,7 +5,6 @@ import TurgaiModels
 
 /// The open conversation, its name in the window's toolbar.
 struct ChatView: View {
-    let session: Session
     /// What it's called.
     let title: String
     @Bindable var store: StoreOf<ChatFeature>
@@ -31,8 +30,6 @@ struct ChatView: View {
             AccessRequestAlert(request: state.accessRequests.first) { request, answer in
                 store.send(.accessAnswered(request.id, answer))
             })
-        .task(id: session) { store.send(.connect(session)) }
-        .onDisappear { store.send(.disconnect) }
     }
 }
 

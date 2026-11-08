@@ -3,7 +3,8 @@ import Foundation
 import TurgaiModels
 
 /// The signed-in person's profile: who they are, what's remembered about them, whether what they
-/// say is remembered, forgetting all of it once they say so again, and signing out.
+/// say is remembered, forgetting all of it once they say so again, and signing out. While it's
+/// shown, it's joined to their memory on the app's connection, and reads it again as it changes.
 @Reducer
 struct ProfileFeature {
     /// What's remembered about them, as it's read.
@@ -35,10 +36,17 @@ struct ProfileFeature {
         case note(String)
     }
 
+    /// Whether its window is open.
+    enum Showing: Equatable {
+        case hidden
+        case shown
+    }
+
     @ObservableState
     struct State: Equatable {
         /// Who it's for: none until someone's signed in.
         var session: Session?
+        var showing = Showing.hidden
         /// Who's signed in, once it's read.
         var me: Me?
         var memory = Memory.reading
@@ -89,8 +97,14 @@ struct ProfileFeature {
         /// Someone's signed in as `session`: who they are is read.
         case appeared(Session)
         case meLoaded(Me)
-        /// The profile is shown: what's remembered is read again.
+        /// The profile is shown: it joins their memory, and reads it.
         case shown
+        /// The profile is closed: it leaves their memory.
+        case hidden
+        /// What's remembered changed: it's read again, while it's shown.
+        case memoryChanged
+        /// The app's connection is open again: what's shown is read again.
+        case connected
         case memoryLoaded(MemorySummary)
         case memoryFailed(String)
         /// Forget Everything…: it's asked again.
@@ -110,6 +124,7 @@ struct ProfileFeature {
     }
 
     @Dependency(\.server) var server
+    @Dependency(\.chat) var chat
 
     var body: some ReducerOf<Self> {
         Reduce { state, action in
@@ -125,11 +140,27 @@ struct ProfileFeature {
                 return .none
 
             case .shown:
-                guard let session = state.session else { return .none }
+                state.showing = .shown
                 state.memory = .reading
+                // Joined before it's read, so no change between the two goes unheard.
                 return .run { send in
                     do {
-                        await send(.memoryLoaded(try await server.memory(session)))
+                        try await chat.perform(.join(.memory))
+                        await send(.memoryLoaded(try await chat.memory()))
+                    } catch {
+                        await send(.memoryFailed("Couldn't read what's remembered."))
+                    }
+                }
+
+            case .hidden:
+                state.showing = .hidden
+                return .run { _ in try? await chat.perform(.leave(.memory)) }
+
+            case .memoryChanged, .connected:
+                guard state.showing == .shown else { return .none }
+                return .run { send in
+                    do {
+                        await send(.memoryLoaded(try await chat.memory()))
                     } catch {
                         await send(.memoryFailed("Couldn't read what's remembered."))
                     }
@@ -148,10 +179,9 @@ struct ProfileFeature {
                 return .none
 
             case .alert(.presented(.forgetConfirmed)):
-                guard let session = state.session else { return .none }
                 return .run { send in
                     do {
-                        try await server.forgetMemory(session)
+                        try await chat.perform(.forgetMemory)
                         await send(.forgotten)
                     } catch {
                         await send(.memoryFailed("Couldn't forget it. Try again."))
@@ -168,14 +198,12 @@ struct ProfileFeature {
 
             case .rememberingToggled(let on):
                 let remembering: MemorySummary.Remembering = on ? .on : .off
-                guard case .read(let summary) = state.memory, summary.remembering != remembering,
-                    let session = state.session
-                else { return .none }
+                guard case .read(let summary) = state.memory, summary.remembering != remembering else { return .none }
                 state.memory = .read(MemorySummary(nodes: summary.nodes, remembering: remembering))
                 state.rememberingProblem = nil
                 return .run { send in
                     do {
-                        try await server.setRemembering(session, remembering)
+                        try await chat.perform(.setRemembering(remembering))
                     } catch {
                         await send(.rememberingFailed(summary.remembering))
                     }

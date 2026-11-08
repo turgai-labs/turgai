@@ -149,6 +149,31 @@ public actor TurgaiWebChatBridge {
             .unfollow(listener)
     }
 
+    /// Told when `person`'s memory changes, through `onChange`, until `unfollowMemory`: the
+    /// listener the memory passes tell.
+    public func followMemory(
+        of person: TurgaiDomain.UserID, onChange: @escaping @Sendable () async -> Void
+    ) async throws -> MemoryNoticeListener {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let listener = MemoryNoticeListener(actorSystem: runtime.actorSystem, onChange: onChange)
+        try await runtime.actorSystem.singleton
+            .proxy(MemoryPasses.self, name: MemoryPasses.singletonName)
+            .follow(person, with: listener)
+        return listener
+    }
+
+    /// `listener` no longer told anything.
+    public func unfollowMemory(_ listener: MemoryNoticeListener) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await runtime.actorSystem.singleton
+            .proxy(MemoryPasses.self, name: MemoryPasses.singletonName)
+            .unfollow(listener)
+    }
+
     /// What's remembered about `person`, as they see it.
     public func remembered(about person: TurgaiDomain.UserID) async throws -> MemoryTree {
         guard let runtime else {

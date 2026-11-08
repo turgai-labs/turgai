@@ -85,13 +85,8 @@ public distributed actor User {
         retention: .keepLast(2)
     )
 
-    /// Tagged for the read side of what's unread: what's said and read, and forgetting it all.
-    public let tagging = Tagging<UserEvent> { event in
-        switch event {
-        case .memory(.observationRecorded), .memory(.extractionCommitted), .memory(.cleared): [.memory]
-        case .memory(.factForgotten), .memory(.rememberingChanged): []
-        }
-    }
+    /// Tagged for the memory read sides: what's unread, and who's told when their memory changes.
+    public let tagging: Tagging<UserEvent> = .always(.memory)
 
     private let userID: UserID
 

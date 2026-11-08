@@ -148,12 +148,17 @@ struct ChatFeature {
         case accessAnswered(AccessRequest.ID, AccessAnswer)
         case delegate(Delegate)
 
-        /// What the connection says about the person's conversations, for the window.
+        /// What the connection says about the person's conversations and memory, for the window,
+        /// and that it's open again.
         enum Delegate: Equatable {
             case conversationJoined(Conversation)
             case conversationSaid(Conversation)
             case conversationTitled(Conversation)
             case conversationLeft(ConversationID)
+            /// What's remembered about them changed.
+            case memoryChanged
+            /// The connection is open, again or for the first time: what's joined is joined again.
+            case connected
         }
     }
 
@@ -181,6 +186,7 @@ struct ChatFeature {
                         let events = await chat.connect(session)
                         // A connection made again shows what was shown before.
                         if let shown { try await chat.send(.open(conversationID: shown)) }
+                        await send(.delegate(.connected))
                         for try await event in events {
                             await send(.received(event))
                         }
@@ -259,6 +265,11 @@ struct ChatFeature {
                     return .send(.delegate(.conversationTitled(conversation)))
                 case .conversationLeft(let id):
                     return .send(.delegate(.conversationLeft(id)))
+                case .memoryChanged:
+                    return .send(.delegate(.memoryChanged))
+                case .reply:
+                    // The client hands replies to what pushed them: none comes here.
+                    return .none
                 default:
                     // Only the shown conversation's: one shown before may still be heard a moment.
                     guard event.conversationID == nil || event.conversationID == state.conversationID else {
@@ -385,8 +396,8 @@ struct ChatFeature {
             state.accessRequests.remove(id: id)
         case .notice(_, _, let error):
             state.error = error
-        case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft:
-            // Passed on to the window before this.
+        case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft, .memoryChanged, .reply:
+            // Passed on to the window before this, or not the conversation's.
             break
         }
     }
@@ -507,6 +518,8 @@ extension ChatEvent {
             id
         case .notice(let id, _, _):
             id
+        case .reply, .memoryChanged:
+            nil
         case .conversationJoined(let conversation), .conversationSaid(let conversation),
             .conversationTitled(let conversation):
             conversation.id

@@ -242,6 +242,9 @@ extension TurgaiMainWebApp {
                     try? await writer.write(.init(payload: payload))
                 }
                 defer { Task { try? await bridge.unfollow(listener) } }
+                // What it's told about besides the conversation it shows, while it's joined.
+                let topics = JoinedTopics()
+                defer { Task { await topics.leaveAll() } }
 
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask {
@@ -289,6 +292,10 @@ extension TurgaiMainWebApp {
                                             by: person),
                                         receipt: receipt))
                                 _ = await receipt.wait()
+                            case .push(let ref, let ask):
+                                let reply = await answer(
+                                    ask, for: person, topics: topics, writer: writer, bridge: bridge)
+                                try await writer.write(.init(payload: .reply(ref: ref, reply: reply)))
                             }
                         }
                     }
@@ -733,6 +740,73 @@ private func apiConversation(
 }
 
 /// The conversation an app's connection has open, if it has one.
+/// The topics a connection has joined, each with how it's left.
+private actor JoinedTopics {
+    private var leaving: [TurgaiModels.ChatTopic: @Sendable () async -> Void] = [:]
+
+    /// `topic` joined by `follow`, which gives how it's left: once, however often it's joined.
+    func join(
+        _ topic: TurgaiModels.ChatTopic, by follow: () async throws -> @Sendable () async -> Void
+    ) async throws {
+        guard leaving[topic] == nil else { return }
+        leaving[topic] = try await follow()
+    }
+
+    func leave(_ topic: TurgaiModels.ChatTopic) async {
+        await leaving.removeValue(forKey: topic)?()
+    }
+
+    func leaveAll() async {
+        for leave in leaving.values { await leave() }
+        leaving = [:]
+    }
+}
+
+/// `person` told about `topic` on the connection `writer` writes to, as it changes, until the
+/// returned function is called.
+private func follow(
+    _ topic: TurgaiModels.ChatTopic, for person: TurgaiDomain.UserID, writer: PublicChatSocketWriter,
+    bridge: TurgaiWebChatBridge
+) async throws -> @Sendable () async -> Void {
+    switch topic {
+    case .memory:
+        let listener = try await bridge.followMemory(of: person) {
+            try? await writer.write(.init(payload: .memoryChanged))
+        }
+        return { try? await bridge.unfollowMemory(listener) }
+    }
+}
+
+/// The answer to `ask`, asked by `person` on the connection `writer` writes to: a topic joined or
+/// left, what's remembered about them, forgetting it, or remembering on or off.
+private func answer(
+    _ ask: TurgaiModels.ChatAsk, for person: TurgaiDomain.UserID, topics: JoinedTopics,
+    writer: PublicChatSocketWriter, bridge: TurgaiWebChatBridge
+) async -> TurgaiModels.ChatReply {
+    do {
+        switch ask {
+        case .join(let topic):
+            try await topics.join(topic) { try await follow(topic, for: person, writer: writer, bridge: bridge) }
+            return .ok
+        case .leave(let topic):
+            await topics.leave(topic)
+            return .ok
+        case .memory:
+            return .memory(
+                MemorySummary(
+                    try await bridge.remembered(about: person), remembering: try await bridge.remembering(of: person)))
+        case .forgetMemory:
+            try await bridge.forgetMemory(of: person)
+            return .ok
+        case .setRemembering(let remembering):
+            try await bridge.setRemembering(Remembering(remembering), for: person)
+            return .ok
+        }
+    } catch {
+        return .failed(TurgaiModels.ChatError(code: "push_failed", message: "That didn't work. Try again."))
+    }
+}
+
 private actor ShownConversation {
     private(set) var conversation: APIConversation?
 

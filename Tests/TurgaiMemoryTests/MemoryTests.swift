@@ -222,6 +222,24 @@ struct MemoryTests {
         #expect(MemoryRetrieval.recalled(Memory().tree) == "Nothing is remembered.")
     }
 
+    /// What they see of their memory changes with what's learned, ended, forgotten, or remembering
+    /// turned on or off; not with a message kept for reading, or a read that kept nothing.
+    @Test
+    func someEventsChangeWhatsRemembered() {
+        let read = MemoryExtractionCommit(
+            generation: .initial, conversation: check, readThrough: MemorySourceID(), changes: [])
+        let learned = MemoryExtractionCommit(
+            generation: .initial, conversation: check, readThrough: MemorySourceID(),
+            changes: [.learned(fact(["home"], "Haar"))])
+
+        #expect(!MemoryEvent.observationRecorded(message("Haar")).changesWhatsRemembered)
+        #expect(!MemoryEvent.extractionCommitted(read).changesWhatsRemembered)
+        #expect(MemoryEvent.extractionCommitted(learned).changesWhatsRemembered)
+        #expect(MemoryEvent.factForgotten(factID).changesWhatsRemembered)
+        #expect(MemoryEvent.rememberingChanged(.off).changesWhatsRemembered)
+        #expect(MemoryEvent.cleared(at: Date()).changesWhatsRemembered)
+    }
+
     /// A path has one to three names, none of them empty or too long.
     @Test
     func aPathHasOneToThreeNames() {

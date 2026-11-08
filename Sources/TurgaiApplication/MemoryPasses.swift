@@ -243,9 +243,27 @@ private actor MemoryUnread {
     }
 }
 
+/// Where a person is told their memory changed: one for each open connection that joined it.
+public distributed actor MemoryNoticeListener {
+    public typealias ActorSystem = ClusterSystem
+
+    private let onChange: @Sendable () async -> Void
+
+    public init(actorSystem: ClusterSystem, onChange: @escaping @Sendable () async -> Void) {
+        self.actorSystem = actorSystem
+        self.onChange = onChange
+    }
+
+    public distributed func memoryChanged() async {
+        await onChange()
+    }
+}
+
 /// Reads what people said into their memory, one conversation at a time, once they've been quiet
 /// in it: from what's unread, kept from their memory events, so a restart picks up what was
-/// waiting. One in the cluster, run where the journal can be read, as its projection must be.
+/// waiting. As it follows their memory events, it also tells whoever's listening when what's
+/// remembered changes. One in the cluster, run where the journal can be read, as its projection
+/// must be.
 public distributed actor MemoryPasses: ClusterSingleton {
     public typealias ActorSystem = ClusterSystem
 
@@ -266,6 +284,8 @@ public distributed actor MemoryPasses: ClusterSingleton {
     private var following: Task<Void, Never>?
     /// The pass waiting or running for each person's conversation.
     private var passes: [UnreadKey: Task<Void, Never>] = [:]
+    /// Who's told when each person's memory changes.
+    private var listeners: [UserID: Set<MemoryNoticeListener>] = [:]
 
     private struct UnreadKey: Hashable {
         let person: UserID
@@ -286,6 +306,30 @@ public distributed actor MemoryPasses: ClusterSingleton {
         self.endpoints = endpoints
     }
 
+    /// `listener` told when `person`'s memory changes, from now on.
+    public distributed func follow(_ person: UserID, with listener: MemoryNoticeListener) {
+        listeners[person, default: []].insert(listener)
+    }
+
+    /// `listener` no longer told anything.
+    public distributed func unfollow(_ listener: MemoryNoticeListener) {
+        for person in listeners.keys { listeners[person]?.remove(listener) }
+        listeners = listeners.filter { !$0.value.isEmpty }
+    }
+
+    /// `person`'s listeners told their memory changed, when `event` changes it: a listener that
+    /// can't be told is let go.
+    private func tell(_ person: UserID, about event: UserEvent) async {
+        guard case .memory(let event) = event, event.changesWhatsRemembered else { return }
+        for listener in listeners[person] ?? [] {
+            do {
+                try await listener.memoryChanged()
+            } catch {
+                unfollow(listener)
+            }
+        }
+    }
+
     /// Reads what was unread when it started, each once its quiet is over, then follows the memory
     /// events while it's the cluster's: a new exchange starts its conversation's wait over.
     public func activateSingleton() async {
@@ -304,7 +348,10 @@ public distributed actor MemoryPasses: ClusterSingleton {
                 }
                 let change = UnreadMemoryChange(envelope.event, of: person)
                 try await storage.keep(change, envelope.offset)
-                await self.whenLocal { $0.follow(change) }
+                await self.whenLocal {
+                    $0.follow(change)
+                    await $0.tell(person, about: envelope.event)
+                }
             })
         let journal = journal
         let log = actorSystem.log

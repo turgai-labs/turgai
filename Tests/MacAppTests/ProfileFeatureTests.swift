@@ -7,7 +7,6 @@ import TurgaiModels
 
 @MainActor
 struct ProfileFeatureTests {
-    let session = Session(token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
     let remembered = MemorySummary(
         nodes: [
             .init(
@@ -17,22 +16,30 @@ struct ProfileFeatureTests {
         ],
         remembering: .on)
 
-    /// Shown, the profile reads what's remembered, a line for each name under the names it's under;
-    /// Forget Everything… asks again, and only a yes forgets it.
+    /// What's asked on the app's connection: each push, in order, answered by `answer`.
+    private func connection(
+        asked: LockIsolated<[ChatAsk]>, answer: @escaping @Sendable (ChatAsk) throws -> ChatReply
+    ) -> @Sendable (ChatAsk) async throws -> ChatReply {
+        { ask in
+            asked.withValue { $0.append(ask) }
+            return try answer(ask)
+        }
+    }
+
+    /// Shown, the profile joins their memory and reads it, a line for each name under the names
+    /// it's under; Forget Everything… asks again, and only a yes forgets it.
     @Test
     func everythingRememberedIsForgottenOnceTheySaySoAgain() async {
-        let forgot = LockIsolated(0)
-        var state = ProfileFeature.State()
-        state.session = session
-        let store = TestStore(initialState: state) {
+        let asked = LockIsolated<[ChatAsk]>([])
+        let remembered = remembered
+        let store = TestStore(initialState: ProfileFeature.State()) {
             ProfileFeature()
         } withDependencies: {
-            $0.server.memory = { _ in self.remembered }
-            $0.server.forgetMemory = { _ in forgot.withValue { $0 += 1 } }
+            $0.chat.ask = connection(asked: asked) { ask in ask == .memory ? .memory(remembered) : .ok }
         }
 
-        await store.send(.shown)
-        await store.receive(\.memoryLoaded) { $0.memory = .read(self.remembered) }
+        await store.send(.shown) { $0.showing = .shown }
+        await store.receive(\.memoryLoaded) { $0.memory = .read(remembered) }
         #expect(
             store.state.memoryShown
                 == .lines([
@@ -44,29 +51,54 @@ struct ProfileFeatureTests {
 
         await store.send(.forgetTapped) { $0.alert = .forgetEverything }
         await store.send(.alert(.dismiss)) { $0.alert = nil }
-        #expect(forgot.value == 0)
-
         await store.send(.forgetTapped) { $0.alert = .forgetEverything }
         await store.send(.alert(.presented(.forgetConfirmed))) { $0.alert = nil }
         await store.receive(\.forgotten) { $0.memory = .read(MemorySummary(nodes: [], remembering: .on)) }
-        #expect(forgot.value == 1)
+        #expect(asked.value == [.join(.memory), .memory, .forgetMemory])
         #expect(store.state.memoryShown == .note("Nothing is remembered about you yet."))
         #expect(!store.state.canForget)
     }
 
-    /// The switch turns remembering off and on; one the server refuses goes back, saying so.
+    /// While it's shown, a change to their memory, or the connection opening again, has it read
+    /// again; closed, it leaves their memory and reads nothing more.
+    @Test
+    func whileShownItStaysCurrentAndClosedItLeaves() async {
+        let asked = LockIsolated<[ChatAsk]>([])
+        let remembered = remembered
+        let forgotten = MemorySummary(nodes: [], remembering: .off)
+        let current = LockIsolated(remembered)
+        let store = TestStore(initialState: ProfileFeature.State()) {
+            ProfileFeature()
+        } withDependencies: {
+            $0.chat.ask = connection(asked: asked) { ask in ask == .memory ? .memory(current.value) : .ok }
+        }
+
+        await store.send(.shown) { $0.showing = .shown }
+        await store.receive(\.memoryLoaded) { $0.memory = .read(remembered) }
+        current.setValue(forgotten)
+        await store.send(.memoryChanged)
+        await store.receive(\.memoryLoaded) { $0.memory = .read(forgotten) }
+        await store.send(.connected)
+        await store.receive(\.memoryLoaded)
+
+        await store.send(.hidden) { $0.showing = .hidden }
+        await store.send(.memoryChanged)
+        await store.send(.connected)
+        await store.finish()
+        #expect(asked.value == [.join(.memory), .memory, .memory, .memory, .leave(.memory)])
+    }
+
+    /// The switch turns remembering off and on; one the connection refuses goes back, saying so.
     @Test
     func rememberingIsTurnedOffAndOn() async {
-        let sent = LockIsolated<[MemorySummary.Remembering]>([])
+        let asked = LockIsolated<[ChatAsk]>([])
         var state = ProfileFeature.State()
-        state.session = session
         state.memory = .read(remembered)
         let store = TestStore(initialState: state) {
             ProfileFeature()
         } withDependencies: {
-            $0.server.setRemembering = { _, remembering in
-                sent.withValue { $0.append(remembering) }
-                if remembering == .on { throw URLError(.badServerResponse) }
+            $0.chat.ask = connection(asked: asked) { ask in
+                ask == .setRemembering(.on) ? .failed(ChatError(code: "push_failed", message: "No")) : .ok
             }
         }
         #expect(store.state.remembers)
@@ -81,21 +113,19 @@ struct ProfileFeatureTests {
             $0.memory = .read(MemorySummary(nodes: self.remembered.nodes, remembering: .off))
             $0.rememberingProblem = "Couldn't change it. Try again."
         }
-        #expect(sent.value == [.off, .on])
+        #expect(asked.value == [.setRemembering(.off), .setRemembering(.on)])
     }
 
     /// What's remembered that can't be read says so, and there's nothing to forget.
     @Test
     func memoryThatCantBeReadSaysSo() async {
-        var state = ProfileFeature.State()
-        state.session = session
-        let store = TestStore(initialState: state) {
+        let store = TestStore(initialState: ProfileFeature.State()) {
             ProfileFeature()
         } withDependencies: {
-            $0.server.memory = { _ in throw URLError(.badServerResponse) }
+            $0.chat.ask = { _ in throw ChatSocketError.closed }
         }
 
-        await store.send(.shown)
+        await store.send(.shown) { $0.showing = .shown }
         await store.receive(\.memoryFailed) { $0.memory = .failed("Couldn't read what's remembered.") }
         #expect(store.state.memoryShown == .note("Couldn't read what's remembered."))
         #expect(!store.state.canForget)

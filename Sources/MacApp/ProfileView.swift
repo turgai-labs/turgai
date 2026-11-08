@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The signed-in person's profile, in a window of its own: their initial on a stamp of their
 /// messages' yellow and their name; what's remembered about them, and Forget Everything…, which asks
-/// again; Sign Out. It closes as they sign out.
+/// again; Sign Out. It closes as they sign out. While it's open, what's remembered stays current.
 struct ProfileView: View {
     @Bindable var store: StoreOf<ProfileFeature>
     @Environment(\.dismissWindow) private var dismissWindow
@@ -23,6 +23,7 @@ struct ProfileView: View {
         .background(ProfileField())
         .alert($store.scope(state: \.alert, action: \.alert))
         .onAppear { store.send(.shown) }
+        .onDisappear { store.send(.hidden) }
         .onChange(of: store.isSignedIn) { _, isSignedIn in
             if !isSignedIn { dismissWindow(id: WindowID.profile) }
         }

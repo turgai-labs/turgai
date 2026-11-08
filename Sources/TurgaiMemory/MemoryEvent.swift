@@ -22,6 +22,16 @@ public indirect enum MemoryEvent: Codable, Sendable, Equatable {
     case extractionCommitted(MemoryExtractionCommit)
     /// The person turned remembering what they say on or off.
     case rememberingChanged(Remembering)
+
+    /// Whether it changes what they see of their memory: what's remembered, or whether they're
+    /// remembered. A message kept for reading, or a read that kept nothing, doesn't.
+    public var changesWhatsRemembered: Bool {
+        switch self {
+        case .cleared, .factForgotten, .rememberingChanged: true
+        case .extractionCommitted(let commit): !commit.changes.isEmpty
+        case .observationRecorded: false
+        }
+    }
 }
 
 /// Whether what a person says is remembered. Off, nothing new is kept or extracted, and what's
