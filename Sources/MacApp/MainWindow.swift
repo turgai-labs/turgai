@@ -23,8 +23,9 @@ struct MainWindow: View {
                 session: session, title: store.sidebar.openTitle, hue: store.sidebar.shownSpaceHue,
                 store: store.scope(state: \.chat, action: \.chat)
             )
-            .safeAreaPadding(.leading, (store.showsSidebar ? Self.sidebarWidth + Self.gap : 0) + Self.gap)
-            .safeAreaPadding(.trailing, Self.gap)
+            // Only the panel's room: the headline's glass reaches the window's other edges, and
+            // what's in it keeps its own margins.
+            .safeAreaPadding(.leading, store.showsSidebar ? Self.sidebarWidth + 2 * Self.gap : 0)
             .toolbar {
                 // At the window's trailing edge: with nothing in the toolbar's middle, macOS would
                 // put them right after the traffic lights.

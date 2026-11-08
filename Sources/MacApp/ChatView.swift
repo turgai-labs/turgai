@@ -15,20 +15,19 @@ struct ChatView: View {
     private var state: ChatFeature.State { store.state }
 
     var body: some View {
-        VStack(spacing: 0) {
+        ScrollView {
+            MessageList(store: store)
+        }
+        // What's new keeps the end in view, and a short conversation sits at the bottom.
+        .defaultScrollAnchor(.bottom)
+        // The messages run under the headline's glass, which fades out below it, and under the
+        // floating composer.
+        .safeAreaBar(edge: .top, spacing: 0) {
             Headline(title: title, hue: hue, participants: state.shownParticipants, notice: state.connectionNotice)
-            ScrollView {
-                MessageList(store: store)
-            }
-            // What's new keeps the end in view, and a short conversation sits at the bottom.
-            .defaultScrollAnchor(.bottom)
-            // The headline is the conversation's, not a bar over it: what scrolls up fades out under
-            // it, and nothing's drawn over the field behind.
-            .mask(TopFade())
-            // The messages run under the floating composer.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                BottomBar(store: store)
-            }
+        }
+        .scrollEdgeEffectStyle(.soft, for: .top)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            BottomBar(store: store)
         }
         .modifier(
             AccessRequestAlert(request: state.accessRequests.first) { request, answer in
@@ -73,16 +72,6 @@ private struct Headline: View {
         .padding(.horizontal, 24)
         .padding(.top, 4)
         .padding(.bottom, 12)
-    }
-}
-
-/// Opaque but for its top, which fades in: the messages' mask, so they fade out as they scroll up.
-private struct TopFade: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 24)
-            Color.black
-        }
     }
 }
 
