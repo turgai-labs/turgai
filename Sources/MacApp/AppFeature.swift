@@ -3,6 +3,14 @@ import Foundation
 import TurgaiModels
 
 /// Waits for the local server to be running and set up, signs in, then runs the chat.
+/// How far up the open conversation's headline reaches.
+enum HeadlineReach: Equatable {
+    /// To the window's top, as the panel does, with a row for the window's buttons in its glass.
+    case windowTop
+    /// Down from under the row of the window's controls.
+    case underControls
+}
+
 @Reducer
 struct AppFeature {
     enum Connection: Equatable, Sendable {
@@ -147,6 +155,10 @@ struct AppFeature {
         var profile = ProfileFeature.State()
         /// The window's panel of spaces and their conversations.
         var showsSidebar = true
+
+        /// Where the headline's glass reaches: the window's top, beside the panel; with the panel
+        /// hidden, only down from under the window's controls, clear of the button that shows it.
+        var headlineReach: HeadlineReach { showsSidebar ? .windowTop : .underControls }
 
         /// What the View menu's item for the conversations panel says.
         var sidebarCommand: String { showsSidebar ? "Hide Conversations" : "Show Conversations" }

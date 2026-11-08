@@ -10,6 +10,8 @@ struct ChatView: View {
     let title: String
     /// Its space's color.
     let hue: SpaceHue
+    /// How far up its headline reaches.
+    let reach: HeadlineReach
     @Bindable var store: StoreOf<ChatFeature>
 
     private var state: ChatFeature.State { store.state }
@@ -24,16 +26,20 @@ struct ChatView: View {
             // The messages run under the headline's glass and the floating composer; the glass is
             // the headline's own, not the bar's dimming behind it.
             .safeAreaBar(edge: .top, spacing: 0) {
-                Headline(title: title, hue: hue, participants: state.shownParticipants, notice: state.connectionNotice)
+                Headline(
+                    title: title, hue: hue, reach: reach, participants: state.shownParticipants,
+                    notice: state.connectionNotice)
             }
             .scrollEdgeEffectHidden(true, for: .top)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 BottomBar(store: store)
             }
         }
-        // Not on under the toolbar: what scrolls up goes under the headline's glass, and is cut off
+        // Not on past the headline's top: what scrolls up goes under its glass, and is cut off
         // behind it.
         .clipped()
+        .padding(.top, reach.gapAbove)
+        .ignoresSafeArea(.container, edges: reach.reachedEdges)
         .modifier(
             AccessRequestAlert(request: state.accessRequests.first) { request, answer in
                 store.send(.accessAnswered(request.id, answer))
@@ -45,10 +51,13 @@ struct ChatView: View {
 
 /// The conversation's name, as the screen's headline, set off by a bar of its space's color; under
 /// it, who's in it, each on a stamp of their messages' color, and what's wrong with the connection
-/// while something is. It floats on glass, as the panel does, as far from it and the window's edge.
+/// while something is. It floats on glass, as the panel does, as far from it and the window's edge;
+/// reaching the window's top, its glass keeps a row for the window's buttons, as the panel's top row
+/// holds the traffic lights, and its name lines up with the space's.
 private struct Headline: View {
     let title: String
     let hue: SpaceHue
+    let reach: HeadlineReach
     let participants: [ShownParticipant]
     /// What's wrong with the connection: none while it's connected.
     let notice: String?
@@ -75,9 +84,37 @@ private struct Headline: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.top, reach.controlsRow + 10)
+        .padding(.bottom, 14)
         .glassEffect(.regular, in: .rect(cornerRadius: 16))
         .padding(.horizontal, 10)
+    }
+}
+
+extension HeadlineReach {
+    /// Above its glass: as far as the panel keeps from the window's top, or nothing under the
+    /// controls' row.
+    fileprivate var gapAbove: CGFloat {
+        switch self {
+        case .windowTop: 10
+        case .underControls: 0
+        }
+    }
+
+    /// The window's edges the conversation runs to, past the controls' row.
+    fileprivate var reachedEdges: Edge.Set {
+        switch self {
+        case .windowTop: .top
+        case .underControls: []
+        }
+    }
+
+    /// The row in its glass the window's buttons sit in: as tall as the panel's.
+    fileprivate var controlsRow: CGFloat {
+        switch self {
+        case .windowTop: 32
+        case .underControls: 0
+        }
     }
 }
 
