@@ -199,7 +199,7 @@ private struct SidebarView: View {
     }
 }
 
-/// The space shown, as Turgai's mark and its name: a menu of every space, with New space and, for
+/// The space shown, by its name: a menu of every space, with New space and, for
 /// its admins, renaming it. A dot says something's new in another.
 private struct SpaceSwitcher: View {
     let store: StoreOf<SidebarFeature>
@@ -224,11 +224,6 @@ private struct SpaceSwitcher: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Image.skylark
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 20, height: 20)
-                    .foregroundStyle(Color.turgaiAccent)
                 Text(store.switcherTitle)
                     .font(.system(size: 18, weight: .heavy))
                     .tracking(-0.4)

@@ -109,8 +109,9 @@ struct SidebarFeature {
             }
         }
 
-        /// What the switcher says: the shown space's name, or Turgai's before the spaces are read.
-        var switcherTitle: String { shownSpace?.name ?? "Turgai" }
+        /// What the switcher says: the shown space's name, or what it switches before the spaces are
+        /// read.
+        var switcherTitle: String { shownSpace?.name ?? "Spaces" }
 
         /// Every space, for the switcher's menu.
         var spaceChoices: [SpaceChoice] {

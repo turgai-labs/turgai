@@ -53,8 +53,8 @@ struct ChatView: View {
     }
 }
 
-/// The toolbar's middle: the mark, the conversation's name, and the connection; under them, who's
-/// in the conversation.
+/// The toolbar's middle: the conversation's name and the connection; under them, who's in the
+/// conversation.
 private struct ConversationHeader: View {
     let title: String
     let participants: [String]
@@ -63,11 +63,6 @@ private struct ConversationHeader: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image.skylark
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 14, height: 14)
-                    .foregroundStyle(Color.turgaiAccent)
                 Text(title)
                     .font(.system(size: 13, weight: .bold))
                     .tracking(-0.3)
@@ -194,7 +189,7 @@ private struct Composer: View {
             }
             GlassEffectContainer(spacing: 12) {
                 HStack(alignment: .bottom, spacing: 12) {
-                    TextField("Message Turgai", text: $store.draft, axis: .vertical)
+                    TextField("Message", text: $store.draft, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...8)
                         .padding(.horizontal, 16)
