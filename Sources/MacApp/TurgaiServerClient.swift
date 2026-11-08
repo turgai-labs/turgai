@@ -22,6 +22,12 @@ struct TurgaiServerClient: Sendable {
     var addParticipant: @Sendable (Session, ConversationID, ParticipantRef) async throws -> Void
     /// Who's in a space, as the account's person sees them.
     var people: @Sendable (Session, _ spaceID: String) async throws -> [SpacePerson]
+    /// A conversation called `title` from now on.
+    var titleConversation: @Sendable (Session, ConversationID, _ title: String) async throws -> Void
+    /// A new space called `name`, the account's person its admin.
+    var makeSpace: @Sendable (Session, _ name: String) async throws -> SpaceSummary
+    /// A space called `name` from now on.
+    var renameSpace: @Sendable (Session, _ spaceID: String, _ name: String) async throws -> SpaceSummary
 }
 
 enum AccountError: Error, Equatable {
@@ -67,7 +73,18 @@ extension TurgaiServerClient: DependencyKey {
                 _ = try await request(
                     "POST", "api/v1/conversations/\(id.rawValue)/participants", body: participant, as: session)
             },
-            people: { session, space in try await api("GET", "api/v1/spaces/\(space)/people", as: session) }
+            people: { session, space in try await api("GET", "api/v1/spaces/\(space)/people", as: session) },
+            titleConversation: { session, id, title in
+                _ = try await request(
+                    "PATCH", "api/v1/conversations/\(id.rawValue)", body: TitleConversationRequest(title: title),
+                    as: session)
+            },
+            makeSpace: { session, name in
+                try await api("POST", "api/v1/spaces", body: MakeSpaceRequest(name: name), as: session)
+            },
+            renameSpace: { session, space, name in
+                try await api("PATCH", "api/v1/spaces/\(space)", body: RenameSpaceRequest(name: name), as: session)
+            }
         )
     }()
 }

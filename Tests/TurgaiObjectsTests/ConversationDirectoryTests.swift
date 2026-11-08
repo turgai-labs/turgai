@@ -78,8 +78,8 @@ struct ConversationDirectoryTests {
             }
             let listed = ConversationListing(id: id, space: family.id, agent: AgentProfileID("conversation"), title: nil)
             let titled = ConversationListing(id: id, space: family.id, agent: AgentProfileID("conversation"), title: "Dinner")
-            #expect(told.first == .changed(listed))
-            #expect(told.contains(.changed(titled)))
+            #expect(told.first == .joined(listed))
+            #expect(told.contains(.titled(titled)))
             #expect(told.last == .left(id))
         }
     }

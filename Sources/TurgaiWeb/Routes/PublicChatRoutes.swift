@@ -184,30 +184,27 @@ extension TurgaiMainWebApp {
             let writer = PublicChatSocketWriter(outbound: outbound)
             let shown = ShownConversation()
             do {
-                // Notices about the person's conversations, but the one it has open, whose own
-                // events it gets.
+                // Notices about the person's conversations in Turgai's apps. What's said in the one
+                // it has open, and leaving it, come as that conversation's own events.
                 let listener = try await bridge.followConversations(of: person) { notice in
-                    let event: TurgaiModels.ChatEvent? =
-                        switch notice {
-                        case .changed(let listing) where listing.id.channel == turgaiChannel:
-                            .init(
-                                payload: .conversationChanged(
-                                    conversation: TurgaiModels.Conversation(
-                                        id: .init(rawValue: listing.id.externalAddress.rawValue),
-                                        botID: .init(rawValue: listing.agent.rawValue), title: listing.title,
-                                        spaceID: listing.space.rawValue.uuidString)))
-                        case .left(let conversation) where conversation.channel == turgaiChannel:
-                            .init(payload: .conversationLeft(conversationID: .init(rawValue: conversation.externalAddress.rawValue)))
-                        case .changed, .left:
-                            nil
-                        }
-                    let about: TurgaiDomain.ConversationID =
-                        switch notice {
-                        case .changed(let listing): listing.id
-                        case .left(let conversation): conversation
-                        }
-                    guard let event, await shown.conversation?.domainID != about else { return }
-                    try? await writer.write(event)
+                    let payload: TurgaiModels.ChatEvent.Payload?
+                    switch notice {
+                    case .joined(let listing) where listing.id.channel == turgaiChannel:
+                        payload = .conversationJoined(conversation: .init(listing))
+                    case .said(let listing) where listing.id.channel == turgaiChannel:
+                        let open = await shown.conversation?.domainID == listing.id
+                        payload = open ? nil : .conversationSaid(conversation: .init(listing))
+                    case .titled(let listing) where listing.id.channel == turgaiChannel:
+                        payload = .conversationTitled(conversation: .init(listing))
+                    case .left(let conversation) where conversation.channel == turgaiChannel:
+                        let open = await shown.conversation?.domainID == conversation
+                        let id = TurgaiModels.ConversationID(rawValue: conversation.externalAddress.rawValue)
+                        payload = open ? nil : .conversationLeft(conversationID: id)
+                    case .joined, .said, .titled, .left:
+                        payload = nil
+                    }
+                    guard let payload else { return }
+                    try? await writer.write(.init(payload: payload))
                 }
                 defer { Task { try? await bridge.unfollow(listener) } }
 
@@ -297,12 +294,7 @@ extension TurgaiMainWebApp {
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
             let listed = try await dependencies.webChatBridge.conversations(of: owner.person)
             return try publicAPIResponse(
-                listed.filter { $0.id.channel == turgaiChannel }.map { listing in
-                    TurgaiModels.Conversation(
-                        id: .init(rawValue: listing.id.externalAddress.rawValue),
-                        botID: .init(rawValue: listing.agent.rawValue),
-                        title: listing.title, spaceID: listing.space.rawValue.uuidString)
-                })
+                listed.filter { $0.id.channel == turgaiChannel }.map(TurgaiModels.Conversation.init))
         }
 
         // A new conversation, in a space the person is in, or Turgai's own, with them its first.
@@ -1634,5 +1626,14 @@ extension ObjectListing {
             id: entry.object.id.description, title: entry.id.description, summary: entry.description,
             actions: entry.actions, events: entry.events, node: "\(endpoint.host):\(endpoint.port)",
             made: DynamicObject.identity(of: entry.object.id).map { MadeObjectID(rawValue: $0.rawValue) })
+    }
+}
+
+extension TurgaiModels.Conversation {
+    /// `listing`, a conversation in Turgai's apps, as the API gives it.
+    fileprivate init(_ listing: ConversationListing) {
+        self.init(
+            id: .init(rawValue: listing.id.externalAddress.rawValue), botID: .init(rawValue: listing.agent.rawValue),
+            title: listing.title, spaceID: listing.space.rawValue.uuidString)
     }
 }

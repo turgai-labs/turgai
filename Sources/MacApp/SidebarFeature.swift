@@ -33,6 +33,37 @@ struct SidebarFeature {
         let entries: [Entry]
 
         var id: String { space.id }
+        /// Its admins rename it.
+        var canRename: Bool { space.role == .admin }
+    }
+
+    /// A name being written: a conversation's or a space's new one, or a new space's.
+    struct Naming: Equatable {
+        enum Subject: Equatable {
+            case conversation(ConversationID)
+            case space(String)
+            case newSpace
+        }
+
+        let subject: Subject
+        var name: String
+
+        /// What the dialog asks for.
+        var title: String {
+            switch subject {
+            case .conversation: "Rename conversation"
+            case .space: "Rename space"
+            case .newSpace: "New space"
+            }
+        }
+
+        /// What its button says.
+        var confirmation: String {
+            switch subject {
+            case .conversation, .space: "Rename"
+            case .newSpace: "Make"
+            }
+        }
     }
 
     /// Where a new conversation starts: in the one space there is, or in one picked.
@@ -51,6 +82,12 @@ struct SidebarFeature {
         var selected: ConversationID?
         /// What went wrong reading or starting conversations, when something did.
         var error: String?
+        /// The name being written, while one is: none otherwise.
+        var naming: Naming?
+
+        var isNaming: Bool { naming != nil }
+        /// What's written for the name, while one is.
+        var name: String { naming?.name ?? "" }
 
         /// What the open conversation is called.
         var openTitle: String {
@@ -86,8 +123,25 @@ struct SidebarFeature {
         /// New conversation, in `spaceID`.
         case newConversationTapped(spaceID: String)
         case started(Conversation)
-        case conversationChanged(Conversation)
+        /// They're in `conversation` now.
+        case conversationJoined(Conversation)
+        /// Something was said in `conversation`.
+        case conversationSaid(Conversation)
+        /// `conversation` is called something else.
+        case conversationTitled(Conversation)
         case conversationLeft(ConversationID)
+        /// Rename… on a conversation.
+        case renameConversationTapped(ConversationID)
+        /// Rename… on a space.
+        case renameSpaceTapped(String)
+        case newSpaceTapped
+        case nameChanged(String)
+        /// The naming dialog: `false` once it's closed.
+        case namingPresented(Bool)
+        case namingConfirmed
+        case renamed(ConversationID, title: String)
+        case spaceMade(SpaceSummary)
+        case spaceRenamed(SpaceSummary)
         case delegate(Delegate)
 
         enum Delegate: Equatable {
@@ -140,7 +194,18 @@ struct SidebarFeature {
                     Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID), at: 0)
                 return .send(.selected(conversation.id))
 
-            case .conversationChanged(let conversation):
+            case .conversationJoined(let conversation):
+                // A new one comes first, marked; one listed already is only called as it's called now.
+                guard state.conversations[id: conversation.id] == nil else {
+                    state.conversations[id: conversation.id]?.title = conversation.title
+                    return .none
+                }
+                state.conversations.insert(
+                    Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID, unread: true),
+                    at: 0)
+                return .none
+
+            case .conversationSaid(let conversation):
                 // To the top, as the latest; marked when it isn't the one open.
                 let unread = conversation.id != state.selected
                 state.conversations.remove(id: conversation.id)
@@ -149,11 +214,69 @@ struct SidebarFeature {
                     at: 0)
                 return .none
 
+            case .conversationTitled(let conversation):
+                state.conversations[id: conversation.id]?.title = conversation.title
+                return .none
+
             case .conversationLeft(let id):
                 state.conversations.remove(id: id)
                 guard state.selected == id else { return .none }
                 state.selected = nil
                 if let next = state.conversations.first { return .send(.selected(next.id)) }
+                return .none
+
+            case .renameConversationTapped(let id):
+                state.naming = Naming(subject: .conversation(id), name: state.conversations[id: id]?.title ?? "")
+                return .none
+
+            case .renameSpaceTapped(let id):
+                state.naming = Naming(subject: .space(id), name: state.spaces.first { $0.id == id }?.name ?? "")
+                return .none
+
+            case .newSpaceTapped:
+                state.naming = Naming(subject: .newSpace, name: "")
+                return .none
+
+            case .nameChanged(let name):
+                state.naming?.name = name
+                return .none
+
+            case .namingPresented(let presented):
+                if !presented { state.naming = nil }
+                return .none
+
+            case .namingConfirmed:
+                guard let naming = state.naming, let session = state.session else { return .none }
+                state.naming = nil
+                let name = naming.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return .none }
+                return .run { send in
+                    do {
+                        switch naming.subject {
+                        case .conversation(let id):
+                            try await server.titleConversation(session, id, name)
+                            await send(.renamed(id, title: name))
+                        case .space(let id):
+                            await send(.spaceRenamed(try await server.renameSpace(session, id, name)))
+                        case .newSpace:
+                            await send(.spaceMade(try await server.makeSpace(session, name)))
+                        }
+                    } catch {
+                        await send(.failed("Couldn't save the name."))
+                    }
+                }
+
+            case .renamed(let id, let title):
+                state.conversations[id: id]?.title = title
+                return .none
+
+            case .spaceMade(let space):
+                state.spaces.append(space)
+                return .none
+
+            case .spaceRenamed(let space):
+                guard let index = state.spaces.firstIndex(where: { $0.id == space.id }) else { return .none }
+                state.spaces[index] = space
                 return .none
 
             case .delegate:

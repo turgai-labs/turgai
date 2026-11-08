@@ -129,9 +129,11 @@ struct ChatFeature {
         case accessAnswered(AccessRequest.ID, AccessAnswer)
         case delegate(Delegate)
 
-        /// What the connection says about the person's other conversations, for the window.
+        /// What the connection says about the person's conversations, for the window.
         enum Delegate: Equatable {
-            case conversationChanged(Conversation)
+            case conversationJoined(Conversation)
+            case conversationSaid(Conversation)
+            case conversationTitled(Conversation)
             case conversationLeft(ConversationID)
         }
     }
@@ -259,8 +261,12 @@ struct ChatFeature {
 
             case .received(let event):
                 switch event.payload {
-                case .conversationChanged(let conversation):
-                    return .send(.delegate(.conversationChanged(conversation)))
+                case .conversationJoined(let conversation):
+                    return .send(.delegate(.conversationJoined(conversation)))
+                case .conversationSaid(let conversation):
+                    return .send(.delegate(.conversationSaid(conversation)))
+                case .conversationTitled(let conversation):
+                    return .send(.delegate(.conversationTitled(conversation)))
                 case .conversationLeft(let id):
                     return .send(.delegate(.conversationLeft(id)))
                 default:
@@ -369,7 +375,7 @@ struct ChatFeature {
             state.accessRequests.remove(id: id)
         case .notice(_, _, let error):
             state.error = error
-        case .conversationChanged, .conversationLeft:
+        case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft:
             // Passed on to the window before this.
             break
         }
@@ -487,7 +493,8 @@ extension ChatEvent {
             id
         case .notice(let id, _, _):
             id
-        case .conversationChanged(let conversation):
+        case .conversationJoined(let conversation), .conversationSaid(let conversation),
+            .conversationTitled(let conversation):
             conversation.id
         }
     }

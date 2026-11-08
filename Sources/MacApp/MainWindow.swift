@@ -139,9 +139,10 @@ private struct ObjectsPanel: View {
 }
 
 /// The conversations panel: the button that hides it and Turgai's name; New conversation; then
-/// each space with its conversations, the latest first, a dot marking one with something new.
+/// each space with its conversations, the latest first, a dot marking one with something new; New
+/// space at the bottom. A conversation, and a space to its admins, renames from its menu.
 private struct SidebarView: View {
-    let store: StoreOf<SidebarFeature>
+    @Bindable var store: StoreOf<SidebarFeature>
     let hide: () -> Void
 
     var body: some View {
@@ -161,8 +162,16 @@ private struct SidebarView: View {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(store.sections) { (section: SidebarFeature.Section) in
                         SpaceHeader(name: section.space.name)
+                            .contextMenu {
+                                if section.canRename {
+                                    Button("Rename…") { store.send(.renameSpaceTapped(section.id)) }
+                                }
+                            }
                         ForEach(section.entries) { (entry: SidebarFeature.Entry) in
                             ConversationLine(entry: entry) { store.send(.selected(entry.id)) }
+                                .contextMenu {
+                                    Button("Rename…") { store.send(.renameConversationTapped(entry.id)) }
+                                }
                         }
                     }
                 }
@@ -172,6 +181,23 @@ private struct SidebarView: View {
             if let error = store.error {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
             }
+            Button {
+                store.send(.newSpaceTapped)
+            } label: {
+                Label("New space", systemImage: "plus")
+                    .foregroundStyle(Color.turgaiMuted)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        }
+        .alert(store.naming?.title ?? "", isPresented: $store.isNaming.sending(\.namingPresented)) {
+            TextField("Name", text: $store.name.sending(\.nameChanged))
+            Button(store.naming?.confirmation ?? "") { store.send(.namingConfirmed) }
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
         }
     }
 }

@@ -42,11 +42,15 @@ public struct ConversationListing: Hashable, Codable, Sendable {
     }
 }
 
-/// What a person is told about their conversations as the directory follows them.
+/// What a person is told about their conversations as the directory follows them, each with the
+/// conversation as it's listed now.
 public enum ConversationNotice: Hashable, Codable, Sendable {
-    /// One of their conversations, as it's listed now: something was said in it, it was titled,
-    /// or they joined it.
-    case changed(ConversationListing)
+    /// They're in it now.
+    case joined(ConversationListing)
+    /// Something was said in it.
+    case said(ConversationListing)
+    /// It's called something else.
+    case titled(ConversationListing)
     /// They're no longer in it.
     case left(ConversationID)
 }
@@ -443,10 +447,16 @@ public distributed actor ConversationDirectory: ClusterSingleton {
         let notices: [(UserID, ConversationNotice)]
         switch change {
         case .joined(let conversation, .person(let person)):
-            notices = try await storage.listing(conversation).map { [(person, .changed($0))] } ?? []
-        case .joined(let conversation, .agent), .titled(let conversation, _), .said(let conversation, _):
+            notices = try await storage.listing(conversation).map { [(person, .joined($0))] } ?? []
+        case .joined(let conversation, .agent):
             guard let listing = try await storage.listing(conversation) else { return }
-            notices = try await storage.people(conversation).map { ($0, .changed(listing)) }
+            notices = try await storage.people(conversation).map { ($0, .joined(listing)) }
+        case .titled(let conversation, _):
+            guard let listing = try await storage.listing(conversation) else { return }
+            notices = try await storage.people(conversation).map { ($0, .titled(listing)) }
+        case .said(let conversation, _):
+            guard let listing = try await storage.listing(conversation) else { return }
+            notices = try await storage.people(conversation).map { ($0, .said(listing)) }
         case .left(let conversation, .person(let person)):
             notices = [(person, .left(conversation))]
         case .started, .left(_, .agent):

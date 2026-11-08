@@ -316,7 +316,9 @@ public enum ChatEventKind: String, Codable, Sendable {
     case notice
     case turns
     case turnStep = "turn.step"
-    case conversationChanged = "conversation.changed"
+    case conversationJoined = "conversation.joined"
+    case conversationSaid = "conversation.said"
+    case conversationTitled = "conversation.titled"
     case conversationLeft = "conversation.left"
 }
 
@@ -396,9 +398,12 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case turns(conversationID: ConversationID, turns: [TurnRecord])
         /// One step of the turn running now.
         case turnStep(conversationID: ConversationID, turnID: TurnID, step: TurnStep)
-        /// One of the person's other conversations, as it's listed now: something was said in it,
-        /// it was titled, or they joined it.
-        case conversationChanged(conversation: Conversation)
+        /// The person is in one more conversation, as it's listed now.
+        case conversationJoined(conversation: Conversation)
+        /// Something was said in one of the person's other conversations, as it's listed now.
+        case conversationSaid(conversation: Conversation)
+        /// One of the person's conversations is called something else, as it's listed now.
+        case conversationTitled(conversation: Conversation)
         /// The person is no longer in one of their conversations.
         case conversationLeft(conversationID: ConversationID)
 
@@ -418,7 +423,9 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             case .notice: .notice
             case .turns: .turns
             case .turnStep: .turnStep
-            case .conversationChanged: .conversationChanged
+            case .conversationJoined: .conversationJoined
+            case .conversationSaid: .conversationSaid
+            case .conversationTitled: .conversationTitled
             case .conversationLeft: .conversationLeft
             }
         }
@@ -519,8 +526,12 @@ public struct ChatEvent: Codable, Equatable, Sendable {
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
                 turns: try values.decode([TurnRecord].self, forKey: .turns)
             )
-        case .conversationChanged:
-            payload = .conversationChanged(conversation: try values.decode(Conversation.self, forKey: .conversation))
+        case .conversationJoined:
+            payload = .conversationJoined(conversation: try values.decode(Conversation.self, forKey: .conversation))
+        case .conversationSaid:
+            payload = .conversationSaid(conversation: try values.decode(Conversation.self, forKey: .conversation))
+        case .conversationTitled:
+            payload = .conversationTitled(conversation: try values.decode(Conversation.self, forKey: .conversation))
         case .conversationLeft:
             payload = .conversationLeft(conversationID: try values.decode(ConversationID.self, forKey: .conversationID))
         case .turnStep:
@@ -587,7 +598,8 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             try values.encode(conversationID, forKey: .conversationID)
             try values.encode(turnID, forKey: .turnID)
             try values.encode(step, forKey: .step)
-        case .conversationChanged(let conversation):
+        case .conversationJoined(let conversation), .conversationSaid(let conversation),
+            .conversationTitled(let conversation):
             try values.encode(conversation, forKey: .conversation)
         case .conversationLeft(let conversationID):
             try values.encode(conversationID, forKey: .conversationID)

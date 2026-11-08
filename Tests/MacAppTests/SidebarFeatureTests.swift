@@ -72,7 +72,7 @@ struct SidebarFeatureTests {
         let store = TestStore(initialState: state) { SidebarFeature() }
 
         let changed = Conversation(id: trip.id, botID: trip.botID, title: "trip to Rome", spaceID: "turgai")
-        await store.send(.conversationChanged(changed)) {
+        await store.send(.conversationSaid(changed)) {
             $0.conversations = [
                 .init(id: self.trip.id, title: "trip to Rome", spaceID: "turgai", unread: true),
                 .init(id: self.dinner.id, title: "plan dinner", spaceID: "turgai"),
@@ -83,6 +83,60 @@ struct SidebarFeatureTests {
             $0.conversations[id: self.trip.id]?.unread = false
         }
         await store.receive(\.delegate, .open(trip.id))
+    }
+
+    /// Rename… writes a conversation's new title, New space makes one; a blank name does nothing.
+    @Test
+    func namesAreWrittenAndSaved() async {
+        let titled = LockIsolated<[String]>([])
+        let family = SpaceSummary(id: "family", name: "Family", role: .admin)
+        var state = SidebarFeature.State()
+        state.session = session
+        state.spaces = [turgai]
+        state.conversations = [.init(id: dinner.id, title: "plan dinner", spaceID: "turgai")]
+        let store = TestStore(initialState: state) {
+            SidebarFeature()
+        } withDependencies: {
+            $0.server.titleConversation = { _, _, title in titled.withValue { $0.append(title) } }
+            $0.server.makeSpace = { _, _ in family }
+        }
+
+        await store.send(.renameConversationTapped(dinner.id)) {
+            $0.naming = .init(subject: .conversation(self.dinner.id), name: "plan dinner")
+        }
+        await store.send(.nameChanged(" Dinner ")) { $0.naming?.name = " Dinner " }
+        await store.send(.namingConfirmed) { $0.naming = nil }
+        await store.receive(\.renamed) { $0.conversations[id: self.dinner.id]?.title = "Dinner" }
+        #expect(titled.value == ["Dinner"])
+
+        await store.send(.newSpaceTapped) { $0.naming = .init(subject: .newSpace, name: "") }
+        await store.send(.namingConfirmed) { $0.naming = nil }
+        await store.send(.newSpaceTapped) { $0.naming = .init(subject: .newSpace, name: "") }
+        await store.send(.nameChanged("Family")) { $0.naming?.name = "Family" }
+        await store.send(.namingConfirmed) { $0.naming = nil }
+        await store.receive(\.spaceMade) { $0.spaces = [self.turgai, family] }
+    }
+
+    /// A new title renames a conversation where it is, marking nothing; one joined comes first,
+    /// marked, unless it's listed already.
+    @Test
+    func aTitleOrAJoinChangesOnlyWhatItSays() async {
+        var state = SidebarFeature.State()
+        state.conversations = [
+            .init(id: dinner.id, title: "plan dinner", spaceID: "turgai"),
+            .init(id: trip.id, title: "trip", spaceID: "turgai"),
+        ]
+        state.selected = dinner.id
+        let store = TestStore(initialState: state) { SidebarFeature() }
+
+        await store.send(.conversationTitled(Conversation(id: trip.id, botID: trip.botID, title: "Rome", spaceID: "turgai"))) {
+            $0.conversations[id: self.trip.id]?.title = "Rome"
+        }
+        await store.send(.conversationJoined(Conversation(id: trip.id, botID: trip.botID, title: "Rome", spaceID: "turgai")))
+        let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "turgai")
+        await store.send(.conversationJoined(lunch)) {
+            $0.conversations.insert(.init(id: lunch.id, title: nil, spaceID: "turgai", unread: true), at: 0)
+        }
     }
 
     /// Each space lists its own conversations, the open one marked; New conversation starts in the
@@ -143,8 +197,8 @@ struct ChatOpeningTests {
         await store.send(.received(ChatEvent(payload: .messageAccepted(conversationID: dinner, turnID: nil, message: late))))
 
         let changed = Conversation(id: dinner, botID: BotID(rawValue: "conversation"), spaceID: "turgai")
-        await store.send(.received(ChatEvent(payload: .conversationChanged(conversation: changed))))
-        await store.receive(\.delegate, .conversationChanged(changed))
+        await store.send(.received(ChatEvent(payload: .conversationSaid(conversation: changed))))
+        await store.receive(\.delegate, .conversationSaid(changed))
     }
 }
 
