@@ -129,24 +129,20 @@ private struct Stamp: ViewModifier {
     }
 }
 
-/// The reply being typed, or what the bot is doing before it types.
-private struct TurnView: View {
-    let turn: ChatFeature.Turn
+/// What the bot is doing before it types.
+private struct Working: View {
+    let activity: String
 
     var body: some View {
-        if let partial = turn.partial {
-            Bubble(role: .assistant, text: partial.text, lean: partial.id.lean)
-        } else {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(turn.activity ?? (turn.phase == .typing ? "Typing…" : "Thinking…"))
-                    .font(.callout)
-                    .foregroundStyle(Color.turgaiMuted)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .glassEffect(.regular, in: .capsule)
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(activity)
+                .font(.callout)
+                .foregroundStyle(Color.turgaiMuted)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .glassEffect(.regular, in: .capsule)
     }
 }
 
@@ -270,8 +266,9 @@ private struct ParticipantIcon: View {
     }
 }
 
-/// The conversation: what was said, what's sent but not yet taken, and the turn running now. A new
-/// message stamps in, as on the web, unless motion is reduced.
+/// The conversation: what was said and the reply being typed, what's sent but not yet taken, and
+/// what the agent is doing before it types. A new message stamps in, as on the web, unless motion is
+/// reduced.
 private struct MessageList: View {
     let store: StoreOf<ChatFeature>
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -288,8 +285,8 @@ private struct MessageList: View {
             ForEach(store.pending) { (request: SendMessageRequest) in
                 Bubble(role: .user, text: request.text, lean: request.id.lean).opacity(0.55)
             }
-            if let turn = store.turn {
-                TurnView(turn: turn)
+            if let working = store.working {
+                Working(activity: working)
             }
         }
         .padding(.horizontal, 24)

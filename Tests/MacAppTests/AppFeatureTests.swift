@@ -369,6 +369,27 @@ struct ShownMessageTests {
         state.shownTurn = reply
         #expect(state.shown.map(\.showsTurn) == [false, false, true])
     }
+
+    /// The reply being typed is the last message shown, under the id it's said with: once it's
+    /// said, it's the same message, there once. Before it's typed, what the agent does shows instead.
+    @Test
+    func theReplyBeingTypedIsTheMessageItBecomes() {
+        let question = Message(id: MessageID(rawValue: UUID(0)), role: .user, text: "pasta?")
+        let reply = MessageID(rawValue: UUID(1))
+        var state = ChatFeature.State(messages: [question], turn: ChatFeature.Turn())
+        #expect(state.working == "Thinking…")
+        state.turn = ChatFeature.Turn(activity: "Using search…")
+        #expect(state.working == "Using search…")
+
+        state.turn = ChatFeature.Turn(phase: .typing, partial: Message(id: reply, role: .assistant, text: "Here"))
+        #expect(state.shown.map(\.id) == [question.id, reply])
+        #expect(state.shown.last?.message.text == "Here")
+        #expect(state.working == nil)
+
+        state.messages.append(Message(id: reply, role: .assistant, text: "Here's one."))
+        #expect(state.shown.map(\.id) == [question.id, reply])
+        #expect(state.shown.last?.message.text == "Here's one.")
+    }
 }
 
 struct ScreenTests {

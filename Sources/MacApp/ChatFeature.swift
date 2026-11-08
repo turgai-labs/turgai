@@ -60,8 +60,11 @@ struct ChatFeature {
         var shownTurn: MessageID?
 
         /// The messages, as the conversation shows them.
+        /// What was said, then the reply being typed: its row stays the same once it's said, so it
+        /// isn't drawn again.
         var shown: [ShownMessage] {
-            messages.map { message in
+            let typed = turn?.partial.flatMap { partial in messages.contains { $0.id == partial.id } ? nil : partial }
+            return (messages + (typed.map { [$0] } ?? [])).map { message in
                 let turn = message.role == .assistant ? turns[id: TurnID(rawValue: message.id.rawValue)] : nil
                 return ShownMessage(
                     message: message,
@@ -69,6 +72,13 @@ struct ChatFeature {
                     turn: turn,
                     showsTurn: turn != nil && shownTurn == message.id)
             }
+        }
+
+        /// What the agent is doing before its reply is typed: none while no turn runs, or once its
+        /// reply shows.
+        var working: String? {
+            guard let turn, turn.partial == nil else { return nil }
+            return turn.activity ?? (turn.phase == .typing ? "Typing…" : "Thinking…")
         }
 
         /// Who's in it, as the line under its name says them: you first, as You, then the others.
