@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import SwiftUI
 import TurgaiModels
 
 /// The open conversation, over the app's one connection: its history, live turns, and sending; and
@@ -46,6 +47,9 @@ struct ChatFeature {
         /// Actions waiting for the user's consent, oldest first.
         var accessRequests: IdentifiedArrayOf<AccessRequest> = []
         var draft = ""
+        /// Where the cursor is in the draft, or what's selected: none until the field says, or
+        /// after the draft is changed here.
+        var draftSelection: TextSelection?
         var error: ChatError?
         /// The agent's turns, step by step: the past ones, then each new one as it runs.
         var turns: IdentifiedArrayOf<TurnRecord> = []
@@ -138,6 +142,9 @@ struct ChatFeature {
         /// Return in the message field: picks the suggestion marked while `@` suggests someone,
         /// sends the draft otherwise.
         case submitted
+        /// Shift-Return in the message field: a new line where the cursor is, instead of what's
+        /// selected.
+        case newLineTyped
         /// ↑ or ↓ while `@` suggests someone: the mark moves `step` suggestions, round the list.
         case markMoved(by: Int)
         case disconnect
@@ -249,6 +256,20 @@ struct ChatFeature {
                 mention(picked, in: &state)
                 return .none
 
+            case .newLineTyped:
+                let end = state.draft.endIndex
+                let range =
+                    if case .selection(let range)? = state.draftSelection?.indices, range.upperBound <= end {
+                        range
+                    } else {
+                        end..<end
+                    }
+                let before = state.draft.distance(from: state.draft.startIndex, to: range.lowerBound)
+                state.draft.replaceSubrange(range, with: "\n")
+                state.draftSelection = TextSelection(
+                    insertionPoint: state.draft.index(state.draft.startIndex, offsetBy: before + 1))
+                return .none
+
             case .markMoved(let step):
                 let suggestions = state.suggestions
                 guard let picked = state.picked, let at = suggestions.firstIndex(of: picked) else { return .none }
@@ -294,7 +315,10 @@ struct ChatFeature {
 
             case .sendFailed(let request):
                 state.pending.removeAll { $0.id == request.id }
-                if state.draft.isEmpty { state.draft = request.text }
+                if state.draft.isEmpty {
+                    state.draft = request.text
+                    state.draftSelection = nil
+                }
                 state.error = ChatError(code: "send_failed", message: "That message didn't go through. Try again.")
                 return .none
             }
@@ -305,6 +329,7 @@ struct ChatFeature {
     private func mention(_ participant: ParticipantSummary, in state: inout State) {
         if let typed = state.typedMention { state.draft.removeSubrange(typed.startIndex...) }
         state.draft += "@\(participant.name) "
+        state.draftSelection = nil
         if !state.to.contains(participant) { state.to.append(participant) }
         state.marked = nil
     }
@@ -318,6 +343,7 @@ struct ChatFeature {
         // The client-generated ID lets the conversation reject a duplicated delivery.
         let request = SendMessageRequest(id: MessageID(rawValue: uuid()), text: text, to: to)
         state.draft = ""
+        state.draftSelection = nil
         state.to = []
         state.error = nil
         state.pending.append(request)

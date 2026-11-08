@@ -160,17 +160,21 @@ private struct Composer: View {
                 Suggestions(suggestions: store.shownSuggestions) { store.send(.mentioned($0)) }
             }
             HStack(alignment: .bottom, spacing: 12) {
-                TextField("Message · @ to mention", text: $store.draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...8)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 22))
-                    .onSubmit { store.send(.submitted) }
-                    // The keys are the suggestions' while there are some, the field's otherwise.
-                    .onKeyPress(.downArrow) { suggestionsKey(.markMoved(by: 1)) }
-                    .onKeyPress(.upArrow) { suggestionsKey(.markMoved(by: -1)) }
-                    .onKeyPress(.tab) { suggestionsKey(.submitted) }
+                TextField(
+                    "Message · @ to mention", text: $store.draft, selection: $store.draftSelection, axis: .vertical
+                )
+                .textFieldStyle(.plain)
+                .lineLimit(1...8)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .glassEffect(.regular, in: .rect(cornerRadius: 22))
+                // Return sends; Shift-Return starts a new line.
+                .onSubmit { store.send(.submitted) }
+                .onKeyPress(.return, phases: .down) { returnKey($0) }
+                // The keys are the suggestions' while there are some, the field's otherwise.
+                .onKeyPress(.downArrow) { suggestionsKey(.markMoved(by: 1)) }
+                .onKeyPress(.upArrow) { suggestionsKey(.markMoved(by: -1)) }
+                .onKeyPress(.tab) { suggestionsKey(.submitted) }
                 Button {
                     store.send(.sendTapped)
                 } label: {
@@ -181,6 +185,13 @@ private struct Composer: View {
                 .disabled(!store.canSend)
             }
         }
+    }
+
+    /// Return with Shift held: a new line; without it, the field submits.
+    private func returnKey(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.contains(.shift) else { return .ignored }
+        store.send(.newLineTyped)
+        return .handled
     }
 
     private func suggestionsKey(_ action: ChatFeature.Action) -> KeyPress.Result {

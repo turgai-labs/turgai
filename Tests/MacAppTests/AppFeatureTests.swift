@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import SwiftUI
 import Testing
 import TurgaiModels
 
@@ -227,6 +228,33 @@ struct ChatFeatureTests {
         #expect(MessageID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!).lean.degrees == 1.6)
         #expect(MessageID(rawValue: UUID(uuidString: "E621E1F8-C36C-495A-93FC-0C247A3E6E5F")!).lean.degrees == 1.9)
         #expect((0..<200).map { _ in MessageID().lean.degrees }.allSatisfy { (-2.4...2.4).contains($0) })
+    }
+
+    /// Shift-Return starts a new line where the cursor is, instead of what's selected, and puts the
+    /// cursor after it; with no cursor yet, at the end.
+    @Test
+    func shiftReturnStartsANewLineAtTheCursor() async {
+        /// What a new line typed into `draft`, its cursor or selection where `selection` puts it, leaves.
+        func typing(into draft: String, at selection: (String) -> TextSelection?) async -> (String, TextSelection?) {
+            var state = ChatFeature.State()
+            state.draft = draft
+            state.draftSelection = selection(draft)
+            let store = TestStore(initialState: state) { ChatFeature() }
+            store.exhaustivity = .off
+            await store.send(.newLineTyped)
+            return (store.state.draft, store.state.draftSelection)
+        }
+
+        let (atCursor, cursor) = await typing(into: "ab") { TextSelection(insertionPoint: $0.index(after: $0.startIndex)) }
+        #expect(atCursor == "a\nb")
+        #expect(cursor == TextSelection(insertionPoint: atCursor.index(atCursor.startIndex, offsetBy: 2)))
+
+        let (overSelection, _) = await typing(into: "ab") { TextSelection(range: $0.range(of: "b")!) }
+        #expect(overSelection == "a\n")
+
+        let (atEnd, end) = await typing(into: "ab") { _ in nil }
+        #expect(atEnd == "ab\n")
+        #expect(end == TextSelection(insertionPoint: atEnd.endIndex))
     }
 
     /// A short stamp takes its whole lean; a long one leans less, so its ends lift 6 points apart
