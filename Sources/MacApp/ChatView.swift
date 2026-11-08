@@ -20,12 +20,10 @@ struct ChatView: View {
         }
         // What's new keeps the end in view, and a short conversation sits at the bottom.
         .defaultScrollAnchor(.bottom)
-        // The messages run under the headline's glass, which fades out below it, and under the
-        // floating composer.
+        // The messages run under the headline's glass and the floating composer.
         .safeAreaBar(edge: .top, spacing: 0) {
             Headline(title: title, hue: hue, participants: state.shownParticipants, notice: state.connectionNotice)
         }
-        .scrollEdgeEffectStyle(.soft, for: .top)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             BottomBar(store: store)
         }
