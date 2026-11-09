@@ -387,7 +387,7 @@ private struct ConversationColumn: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 12)
             }
-            // The conversations scroll under the heading, frosted matte behind it, not cut at its edge.
+            // The conversations scroll under the heading, on frosted matte, not cut at its edge.
             .safeAreaBar(edge: .top) {
                 HStack(spacing: 8) {
                     SpaceHeading(
@@ -410,8 +410,9 @@ private struct ConversationColumn: View {
                 .padding(.trailing, 10)
                 .padding(.top, 10)
                 .padding(.bottom, 8)
+                .background(.thickMaterial)
             }
-            .scrollEdgeEffectStyle(.hard, for: .top)
+            .scrollEdgeEffectHidden(true, for: .top)
             if let error = store.error {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
             }
