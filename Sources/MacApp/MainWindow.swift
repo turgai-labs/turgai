@@ -193,7 +193,8 @@ struct PanelCommands: Commands {
 /// The left panel and the button it shrinks into, as one glass shape: shown, the panel of `size`;
 /// hidden, a glass circle beside the window's traffic lights. Its frame is what animates, so the
 /// panel's content, kept at its full size and clipped by the glass, is drawn into the button as it
-/// fades, and out of it again.
+/// fades, and out of it again. The button that shows and hides it is one, just after the traffic
+/// lights either way: it stays where it is while the glass changes around it.
 private struct SidebarGlass: View {
     let isShown: Bool
     /// The panel's size, shown.
@@ -202,26 +203,27 @@ private struct SidebarGlass: View {
     let toggle: () -> Void
 
     /// How much of the window's top left the traffic lights take, with room after them.
-    static let trafficLightsWidth: CGFloat = 86
+    private static let trafficLightsWidth: CGFloat = 86
     static let buttonSize: CGFloat = 32
     private static let shape = RoundedRectangle(cornerRadius: 16)
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             if isShown {
-                SidebarView(store: store, hide: toggle)
+                SidebarView(store: store)
                     .frame(width: size.width, height: size.height, alignment: .topLeading)
                     .transition(.opacity)
-            } else {
-                Button(action: toggle) {
-                    Image(systemName: "sidebar.left")
-                        .frame(width: Self.buttonSize, height: Self.buttonSize)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help("Show conversations")
-                .transition(.opacity)
             }
+            Button(action: toggle) {
+                Image(systemName: "sidebar.left")
+                    .frame(width: Self.buttonSize, height: Self.buttonSize)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(isShown ? Color.turgaiMuted : Color.primary)
+            .help(isShown ? "Hide conversations" : "Show conversations")
+            // Where the traffic lights end, inside the panel or as the glass itself: the same place.
+            .padding(.leading, isShown ? Self.trafficLightsWidth : 0)
         }
         .frame(
             width: isShown ? size.width : Self.buttonSize, height: isShown ? size.height : Self.buttonSize,
@@ -230,22 +232,6 @@ private struct SidebarGlass: View {
         .clipShape(Self.shape)
         .glassEffect(.regular, in: Self.shape)
         .padding(.leading, isShown ? 0 : Self.trafficLightsWidth)
-    }
-}
-
-/// The button in a panel's header that hides it.
-private struct HidePanelButton: View {
-    let systemImage: String
-    let help: String
-    let hide: () -> Void
-
-    var body: some View {
-        Button(action: hide) {
-            Image(systemName: systemImage).frame(width: 26, height: 26).contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.turgaiMuted)
-        .help(help)
     }
 }
 
@@ -286,22 +272,15 @@ private struct ObjectsButton: View {
     }
 }
 
-/// The left panel, Slack's way, on one surface: a row for the window's traffic lights and, just after
-/// them, the button that hides the panel, where the one that shows it again is; then the spaces on a
-/// rail, a hairline, and the shown space's heading, New conversation in it, and its conversations.
+/// The left panel, Slack's way, on one surface: a row for the window's traffic lights and the button
+/// that hides it; then the spaces on a rail, a hairline, and the shown space's heading, New
+/// conversation in it, and its conversations.
 private struct SidebarView: View {
     let store: StoreOf<SidebarFeature>
-    let hide: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 0) {
-                HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
-                    .frame(width: SidebarGlass.buttonSize, height: SidebarGlass.buttonSize)
-                Spacer(minLength: 0)
-            }
-            .padding(.leading, SidebarGlass.trafficLightsWidth)
-            .frame(height: SidebarGlass.buttonSize)
+            Color.clear.frame(height: SidebarGlass.buttonSize)
             HStack(spacing: 0) {
                 SpaceRail(store: store)
                 Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 8)
