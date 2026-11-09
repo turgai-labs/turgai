@@ -34,7 +34,6 @@ The turn is kept twice under two ids, and the message three times. Your design n
 - **Past steps can't be found.** Live, everything says Turgai's id. Afterwards, the steps are under Hail's.
 - **A crash is recovered twice.** Turgai tells Hail to close a turn a crash cut off (`interruptedTurns: .close`, `TurgaiAppService.swift:504`), and the conversation's own `.resume` asks the same message again (`Conversation.resumeAfterReplay`). Hail then records an interrupted turn and a second turn, while the conversation records one.
 - **Old steps disappear.** Past turns are read from the agent's working history, which compaction folds into a summary (`AgentHistory.folding`). After compaction, the ⓘ would go even with matching ids, though Hail's journal still has every step.
-- **Two transcripts.** What people say only to each other (`said`) stays in the conversation and never reaches the agent. That may be wanted, but it's decided nowhere: it just falls out of the split.
 
 ## The design
 
@@ -68,8 +67,3 @@ One owner per fact, and one id for one turn.
 3. `AgentSpawnConfig` stops setting `interruptedTurns: .close` for conversation agents.
 
 **Data:** conversations' and their agents' journals reset, as with any changed stored shape until data is kept (see `data-compatibility-plan.md`).
-
-## Open questions
-
-1. Should the agent hear what people say only to each other in its conversation? Today it doesn't, because the split decides it, not the product.
-2. Does the conversation keep its own history list of messages and replies (`ConversationState.history`), or is that a read side over its journal? It's state today, kept to answer `history(for:)`.
