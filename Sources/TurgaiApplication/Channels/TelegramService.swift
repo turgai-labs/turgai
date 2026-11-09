@@ -250,7 +250,7 @@ enum TelegramDelivery {
         switch event {
         case .reply(let reply):
             switch reply {
-            case .userMessage(_, let turnID, _, _, _, _):
+            case .userMessage(_, let turnID, _, _, _, _, _):
                 turnID
             case .started(_, let turnID),
                 .phase(_, let turnID, _),
@@ -258,7 +258,7 @@ enum TelegramDelivery {
                 .step(_, let turnID, _),
                 .partial(_, let turnID, _),
                 .keepAlive(_, let turnID, _),
-                .finished(_, let turnID, _),
+                .finished(_, let turnID, _, _),
                 .completed(_, let turnID):
                 turnID
             case .failed(_, let turnID, _):

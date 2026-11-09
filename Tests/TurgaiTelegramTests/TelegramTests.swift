@@ -632,7 +632,8 @@ struct TelegramTests {
                 .finished(
                     conversationID: conversationID,
                     turnID: turnID,
-                    text: "abcdef"
+                    text: "abcdef",
+                    at: Date(timeIntervalSince1970: 1)
                 )))
 
         #expect(
@@ -724,7 +725,8 @@ struct TelegramTests {
                 .finished(
                     conversationID: conversationID,
                     turnID: turnID,
-                    text: "done"
+                    text: "done",
+                    at: Date(timeIntervalSince1970: 1)
                 )))
 
         #expect(await recorder.sentActions == ["typing", "typing"])

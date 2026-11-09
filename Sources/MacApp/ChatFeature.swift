@@ -20,7 +20,7 @@ struct ChatFeature {
         /// Tool or provider narration, such as the tool being used.
         var activity: String?
         /// The reply so far, while it's typed.
-        var partial: Message?
+        var partial: ReplySoFar?
     }
 
     @ObservableState
@@ -58,19 +58,58 @@ struct ChatFeature {
         var marked: ParticipantSummary?
         /// The reply whose turn is shown beside it: none while none is.
         var shownTurn: MessageID?
+        /// When its messages last changed: what their times are said against.
+        var today = Date.distantPast
 
-        /// The messages, as the conversation shows them.
         /// What was said, then the reply being typed: its row stays the same once it's said, so it
-        /// isn't drawn again.
+        /// isn't drawn again. Each says when it was said, and who said it while more than one person
+        /// is in it, or has said something in it.
         var shown: [ShownMessage] {
-            let typed = turn?.partial.flatMap { partial in messages.contains { $0.id == partial.id } ? nil : partial }
-            return (messages + (typed.map { [$0] } ?? [])).map { message in
-                let turn = message.role == .assistant ? turns[id: TurnID(rawValue: message.id.rawValue)] : nil
-                return ShownMessage(
-                    message: message,
-                    someoneElse: message.author.flatMap { $0.kind == .person && $0.id != you ? $0.name : nil },
-                    turn: turn,
-                    showsTurn: turn != nil && shownTurn == message.id)
+            let named =
+                participants.filter { $0.kind == .person }.count > 1 || messages.contains { whose($0) == .someoneElse }
+            let said = messages.map { message in
+                let whose = whose(message)
+                let name = whose == .yours ? "You" : message.author?.name
+                return shown(
+                    message.id, whose: whose, text: message.text, name: named ? name : nil,
+                    when: Self.when(message.at, today: today))
+            }
+            guard let typed = turn?.partial, !messages.contains(where: { $0.id == typed.id }) else { return said }
+            let typing = shown(
+                typed.id, whose: .agent, text: typed.text, name: named ? typed.author?.name : nil, when: "typing…")
+            return said + [typing]
+        }
+
+        /// Whose `message` is, as it's drawn.
+        private func whose(_ message: Message) -> Whose {
+            switch (message.role, message.author) {
+            case (.assistant, _): .agent
+            case (.user, let author?) where author.kind == .person && author.id != you: .someoneElse
+            case (.user, _): .yours
+            }
+        }
+
+        /// The message `id`, with the agent's turn that made it, when it's a reply of the agent's.
+        private func shown(_ id: MessageID, whose: Whose, text: String, name: String?, when: String) -> ShownMessage {
+            let turn = whose == .agent ? turns[id: TurnID(rawValue: id.rawValue)] : nil
+            let caption = ((name.map { [$0] } ?? []) + [when]).joined(separator: " · ")
+            return ShownMessage(
+                id: id, whose: whose, text: text, caption: caption, turn: turn,
+                showsTurn: turn != nil && shownTurn == id)
+        }
+
+        /// When `at` was, as a caption says it on `today`: its time that day, its weekday and time in
+        /// the six days before, its date and time before that.
+        static func when(_ at: Date, today: Date) -> String {
+            let calendar = Calendar.current
+            let day = calendar.startOfDay(for: at)
+            switch calendar.dateComponents([.day], from: day, to: calendar.startOfDay(for: today)).day {
+            case 0:
+                return at.formatted(date: .omitted, time: .shortened)
+            case let days? where (1...6).contains(days):
+                return at.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+            default:
+                return at.formatted(.dateTime.day().month(.abbreviated).hour().minute())
             }
         }
 
@@ -400,6 +439,7 @@ struct ChatFeature {
             state.you = you
             state.turn = status == .running ? Turn() : nil
         case .history(_, let messages):
+            state.today = now
             state.messages = messages
         case .messageAccepted(_, _, let message):
             state.pending.removeAll { $0.id == message.id }
@@ -412,8 +452,8 @@ struct ChatFeature {
             state.turn = Turn(phase: phase, activity: state.turn?.activity, partial: state.turn?.partial)
         case .turnStatus(_, _, let activity):
             state.turn = Turn(phase: state.turn?.phase, activity: activity, partial: state.turn?.partial)
-        case .turnPartial(_, _, let message):
-            state.turn = Turn(phase: .typing, activity: state.turn?.activity, partial: message)
+        case .turnPartial(_, _, let reply):
+            state.turn = Turn(phase: .typing, activity: state.turn?.activity, partial: reply)
         case .turnCompleted(_, let turnID, let message):
             state.turn = nil
             append(message, to: &state)
@@ -440,21 +480,30 @@ struct ChatFeature {
 
     private func append(_ message: Message, to state: inout State) {
         guard !state.messages.contains(where: { $0.id == message.id }) else { return }
+        state.today = now
         state.messages.append(message)
     }
 }
 
 /// A message, as the conversation shows it.
 struct ShownMessage: Equatable, Identifiable {
-    let message: Message
-    /// Who wrote it, when that's a person other than you.
-    let someoneElse: String?
+    let id: MessageID
+    let whose: Whose
+    let text: String
+    /// Who said it, when that's shown, and when: `Ann · 14:03`.
+    let caption: String
     /// The agent's turn that made it, when it's a reply of the agent's.
     let turn: TurnRecord?
     /// Its turn is shown beside it.
     let showsTurn: Bool
+}
 
-    var id: MessageID { message.id }
+/// Whose a message is, as it's drawn.
+enum Whose: Equatable {
+    case yours
+    /// A person's other than you.
+    case someoneElse
+    case agent
 }
 
 /// A suggestion for the `@` being typed, as it's shown: whether Return picks it, and whether

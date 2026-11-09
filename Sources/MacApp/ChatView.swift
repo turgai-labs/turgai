@@ -63,41 +63,45 @@ private struct ConversationHeader: View {
 }
 
 /// A message, as the web stamps them: yours on the right in yellow, the agent's on the left in blue,
-/// someone else's on the left in coral with their name. Its background leans by `lean`; its text
-/// doesn't. What's `beside` it sits just after its end.
+/// someone else's on the left in coral; over it, its caption, when it has one. Its background leans
+/// by `lean`; its text doesn't. What's `beside` it sits just after its end.
 private struct Bubble<Beside: View>: View {
-    let role: MessageRole
+    let whose: Whose
     let text: String
     let lean: Lean
-    /// Who wrote it, when that's someone else.
-    var someoneElse: String? = nil
+    var caption: String? = nil
     @ViewBuilder var beside: Beside
 
     var body: some View {
-        switch role {
-        case .user where someoneElse != nil:
-            VStack(alignment: .leading, spacing: 2) {
-                Text(someoneElse ?? "").font(.caption.weight(.semibold))
-                Text(text).textSelection(.enabled)
+        VStack(alignment: whose == .yours ? .trailing : .leading, spacing: 4) {
+            if let caption {
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(Color.turgaiMuted)
+                    .padding(.horizontal, 4)
             }
-            .modifier(Stamp(color: .bubbleSomeoneElse, ink: .inkOnSignal, lean: lean))
-            .frame(maxWidth: 520, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        case .user:
-            Text(text)
-                .textSelection(.enabled)
-                .modifier(Stamp(color: .bubbleYours, ink: .inkOnSignal, lean: lean))
-                .frame(maxWidth: 520, alignment: .trailing)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        case .assistant:
-            Text(Self.markdown(text))
-                .textSelection(.enabled)
-                .modifier(Stamp(color: .bubbleAgent, ink: .white, lean: lean))
-                .overlay(alignment: .bottomTrailing) {
-                    beside.alignmentGuide(.trailing) { $0[.leading] - 8 }
-                }
-                .frame(maxWidth: 560, alignment: .leading)
+            switch whose {
+            case .someoneElse:
+                Text(text)
+                    .textSelection(.enabled)
+                    .modifier(Stamp(color: .bubbleSomeoneElse, ink: .inkOnSignal, lean: lean))
+                    .frame(maxWidth: 520, alignment: .leading)
+            case .yours:
+                Text(text)
+                    .textSelection(.enabled)
+                    .modifier(Stamp(color: .bubbleYours, ink: .inkOnSignal, lean: lean))
+                    .frame(maxWidth: 520, alignment: .trailing)
+            case .agent:
+                Text(Self.markdown(text))
+                    .textSelection(.enabled)
+                    .modifier(Stamp(color: .bubbleAgent, ink: .white, lean: lean))
+                    .overlay(alignment: .bottomTrailing) {
+                        beside.alignmentGuide(.trailing) { $0[.leading] - 8 }
+                    }
+                    .frame(maxWidth: 560, alignment: .leading)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: whose == .yours ? .trailing : .leading)
     }
 
     private static func markdown(_ text: String) -> AttributedString {
@@ -109,8 +113,8 @@ private struct Bubble<Beside: View>: View {
 }
 
 extension Bubble where Beside == EmptyView {
-    init(role: MessageRole, text: String, lean: Lean) {
-        self.init(role: role, text: text, lean: lean) { EmptyView() }
+    init(whose: Whose, text: String, lean: Lean) {
+        self.init(whose: whose, text: text, lean: lean) { EmptyView() }
     }
 }
 
@@ -283,7 +287,7 @@ private struct MessageList: View {
                 .transition(.scale(scale: 0.78).combined(with: .opacity))
             }
             ForEach(store.pending) { (request: SendMessageRequest) in
-                Bubble(role: .user, text: request.text, lean: request.id.lean).opacity(0.55)
+                Bubble(whose: .yours, text: request.text, lean: request.id.lean).opacity(0.55)
             }
             if let working = store.working {
                 Working(activity: working)
@@ -347,9 +351,7 @@ private struct MessageRow: View {
     let dismissTurn: () -> Void
 
     var body: some View {
-        Bubble(
-            role: shown.message.role, text: shown.message.text, lean: shown.id.lean, someoneElse: shown.someoneElse
-        ) {
+        Bubble(whose: shown.whose, text: shown.text, lean: shown.id.lean, caption: shown.caption) {
             if let turn = shown.turn {
                 Button(action: showTurn) {
                     Image(systemName: "info.circle")
@@ -365,6 +367,5 @@ private struct MessageRow: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: shown.message.role == .assistant ? .leading : .trailing)
     }
 }

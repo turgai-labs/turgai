@@ -24,28 +24,18 @@ struct ChatLiveActivityClear: HTML, Sendable {
     }
 }
 
-struct ChatLiveMessage: HTML, Sendable {
-    let message: Message
-    let turnID: TurnID?
-    let liveUpdate: Bool
-
-    init(message: Message, turnID: TurnID?, liveUpdate: Bool = false) {
-        self.message = message
-        self.turnID = turnID
-        self.liveUpdate = liveUpdate
-    }
+/// A turn's reply, in the place shown for the turn: what's typed so far, or what it said.
+struct ChatLiveReply: HTML, Sendable {
+    let turnID: TurnID
+    let content: ChatLiveMessageBody
 
     var body: some HTML {
-        let id =
-            turnID.map { "turn-\($0.rawValue.uuidString)" }
-            ?? "message-\(message.id.rawValue.uuidString)"
-        let liveUpdateClass = liveUpdate ? " chat-message-live-update" : ""
         div(
-            .id(id),
-            .class("chat-message \(Self.kind(of: message))\(liveUpdateClass)"),
+            .id("turn-\(turnID.rawValue.uuidString)"),
+            .class("chat-message chat-message-assistant chat-message-live-update"),
             .hx.swapOOB(.outerHTML)
         ) {
-            ChatLiveMessageBody(message: message)
+            content
         }
     }
 }
@@ -63,14 +53,26 @@ extension HTML {
 }
 
 struct ChatLiveMessageBody: HTML, Sendable {
-    let message: Message
+    /// Who wrote it, when it's a person the viewer is shown the name of.
+    let author: String?
+    let text: String
+
+    init(message: Message) {
+        self.author = message.role == .user ? message.author?.name : nil
+        self.text = message.text
+    }
+
+    init(reply: ReplySoFar) {
+        self.author = nil
+        self.text = reply.text
+    }
 
     var body: some HTML {
-        if message.role == .user, let author = message.author {
-            div(.class("chat-message-author")) { author.name }
+        if let author {
+            div(.class("chat-message-author")) { author }
         }
         div(.class("chat-message-content markdown-body")) {
-            HTMLRaw(MarkdownRenderer.html(from: message.text))
+            HTMLRaw(MarkdownRenderer.html(from: text))
         }
     }
 }
@@ -144,7 +146,7 @@ struct ChatLiveError: HTML, Sendable {
 
     var body: some HTML {
         ChatLiveAppendedMessage(
-            message: Message(id: .init(), role: .assistant, text: message)
+            message: Message(id: .init(), role: .assistant, text: message, at: Date())
         )
     }
 }
@@ -234,27 +236,31 @@ enum ChatLiveFragment {
         ChatLiveActivity(text: text).render()
     }
 
-    static func partial(_ message: Message, turnID: TurnID) -> String {
-        ChatLiveMessage(message: message, turnID: turnID, liveUpdate: true).render()
+    static func partial(_ reply: ReplySoFar, turnID: TurnID) -> String {
+        ChatLiveReply(turnID: turnID, content: ChatLiveMessageBody(reply: reply)).render()
     }
 
-    static func appendedPartial(_ message: Message, turnID: TurnID) -> String {
-        ChatLiveEmptyClear().render()
-            + div(.hx.swapOOB(.beforeEnd, "#chat-messages-content")) {
-                let id = "turn-\(turnID.rawValue.uuidString)"
-                div(.id(id), .class("chat-message chat-message-assistant")) {
-                    ChatLiveMessageBody(message: message)
-                }
-            }.render()
+    static func appendedPartial(_ reply: ReplySoFar, turnID: TurnID) -> String {
+        appended(ChatLiveMessageBody(reply: reply), turnID: turnID)
     }
 
     static func completed(_ message: Message, turnID: TurnID) -> String {
-        ChatLiveMessage(message: message, turnID: turnID, liveUpdate: true).render()
+        ChatLiveReply(turnID: turnID, content: ChatLiveMessageBody(message: message)).render()
             + ChatLiveActivityClear().render()
     }
 
     static func appendedCompleted(_ message: Message, turnID: TurnID) -> String {
-        appendedPartial(message, turnID: turnID) + ChatLiveActivityClear().render()
+        appended(ChatLiveMessageBody(message: message), turnID: turnID) + ChatLiveActivityClear().render()
+    }
+
+    /// `content` as a turn's reply, after the messages.
+    private static func appended(_ content: ChatLiveMessageBody, turnID: TurnID) -> String {
+        ChatLiveEmptyClear().render()
+            + div(.hx.swapOOB(.beforeEnd, "#chat-messages-content")) {
+                div(.id("turn-\(turnID.rawValue.uuidString)"), .class("chat-message chat-message-assistant")) {
+                    content
+                }
+            }.render()
     }
 
     static func failed(_ message: String) -> String {

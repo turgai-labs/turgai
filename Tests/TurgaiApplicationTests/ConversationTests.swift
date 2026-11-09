@@ -55,7 +55,8 @@ struct ConversationTests {
 
         let reply = PendingConversationReply(
             turnID: first.turnID,
-            reply: ConversationReply("answer")!
+            reply: ConversationReply("answer")!,
+            at: Date(timeIntervalSince1970: 2)
         )
         record.apply(.replyQueued(reply))
         #expect(record.inbox.status == .idle)
@@ -134,7 +135,10 @@ struct ConversationTests {
                 text: "plan dinner", receivedAt: Date(timeIntervalSince1970: 1)),
             turnID: TurnID(), agentRole: agent.rawValue)
         record.apply(.inbox(.turnStarted(asked)))
-        record.apply(.replyQueued(PendingConversationReply(turnID: asked.turnID, reply: ConversationReply("pasta")!)))
+        record.apply(
+            .replyQueued(
+                PendingConversationReply(
+                    turnID: asked.turnID, reply: ConversationReply("pasta")!, at: Date(timeIntervalSince1970: 2))))
         #expect(record.history.map(\.author) == [.person(.ann), .agent(agent)])
     }
 
@@ -181,7 +185,10 @@ struct ConversationTests {
         )
         record.apply(.inbox(.turnStarted(message)))
         record.apply(
-            .inbox(.turnFailed(message.turnID, ConversationFailure(kind: .model, message: "unavailable")))
+            .inbox(
+                .turnFailed(
+                    message.turnID, ConversationFailure(kind: .model, message: "unavailable"),
+                    at: Date(timeIntervalSince1970: 2)))
         )
 
         #expect(!record.requiresRecovery)
@@ -191,7 +198,8 @@ struct ConversationTests {
     func recoveryFindsQueuedRepliesInAConversationJournal() {
         let reply = PendingConversationReply(
             turnID: TurnID(),
-            reply: ConversationReply("answer")!
+            reply: ConversationReply("answer")!,
+            at: Date(timeIntervalSince1970: 2)
         )
         let journal = ConversationJournal(
             conversationID: conversationID,

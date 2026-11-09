@@ -514,10 +514,13 @@ public enum ConversationCompletion: Hashable, Codable, Sendable {
 public struct PendingConversationReply: Hashable, Codable, Sendable {
     public let turnID: TurnID
     public let reply: ConversationReply
+    /// When the agent said it.
+    public let at: Date
 
-    public init(turnID: TurnID, reply: ConversationReply) {
+    public init(turnID: TurnID, reply: ConversationReply, at: Date) {
         self.turnID = turnID
         self.reply = reply
+        self.at = at
     }
 
     public var text: String {
@@ -680,16 +683,19 @@ public struct ConversationHistoryEntry: Hashable, Codable, Sendable, Identifiabl
     public let author: Participant?
     /// Who it was said to: none for no one in particular.
     public let to: Set<Participant>
+    /// When it was said.
+    public let at: Date
 
     public init(
         id: String, role: ConversationHistoryRole, text: String, author: Participant? = nil,
-        to: Set<Participant> = []
+        to: Set<Participant> = [], at: Date
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.author = author
         self.to = to
+        self.at = at
     }
 }
 
@@ -727,7 +733,7 @@ public struct AgentInbox: Hashable, Codable, Sendable {
             guard activeTurnID == turnID else { return self }
             next.activeMessage = nil
             next.status = .idle
-        case .turnFailed(let turnID, let failure):
+        case .turnFailed(let turnID, let failure, _):
             guard activeTurnID == turnID else { return self }
             next.activeMessage = nil
             next.status = .failed(failure)
@@ -769,7 +775,8 @@ public enum AgentInboxEvent: Hashable, Codable, Sendable {
     case queued(PendingConversationMessage)
     case turnStarted(PendingConversationMessage)
     case turnCompleted(TurnID)
-    case turnFailed(TurnID, ConversationFailure)
+    /// The turn failed, `at` then.
+    case turnFailed(TurnID, ConversationFailure, at: Date)
 }
 
 public struct ConversationState: Hashable, Codable, Sendable {
@@ -830,12 +837,13 @@ public struct ConversationState: Hashable, Codable, Sendable {
             switch event {
             case .queued(let pending), .turnStarted(let pending):
                 appendUserMessage(pending.message)
-            case .turnFailed(let turnID, let failure) where inbox.activeTurnID == turnID:
+            case .turnFailed(let turnID, let failure, let at) where inbox.activeTurnID == turnID:
                 appendHistory(
                     ConversationHistoryEntry(
                         id: "failure:\(turnID.rawValue.uuidString)",
                         role: .assistant,
-                        text: failure.message
+                        text: failure.message,
+                        at: at
                     )
                 )
             case .turnFailed, .turnCompleted:
@@ -856,7 +864,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
                     id: "reply:\(pending.turnID.rawValue.uuidString)",
                     role: .assistant,
                     text: pending.text,
-                    author: agent.map(Participant.agent)
+                    author: agent.map(Participant.agent),
+                    at: pending.at
                 )
             )
 
@@ -972,7 +981,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
                 role: .user,
                 text: message.text,
                 author: .person(message.userID),
-                to: message.to
+                to: message.to,
+                at: message.receivedAt
             )
         )
     }
@@ -1017,14 +1027,16 @@ public enum ReplyPhase: String, Hashable, Codable, Sendable {
 }
 
 public enum ReplyEvent: Hashable, Codable, Sendable {
-    /// A person's message, as it's taken: with the turn that answers it, if one does.
+    /// A person's message, as it's taken: with the turn that answers it, if one does, and when it
+    /// came.
     case userMessage(
         conversationID: ConversationID,
         turnID: TurnID?,
         messageID: MessageID,
         text: String,
         author: UserID,
-        to: Set<Participant>
+        to: Set<Participant>,
+        at: Date
     )
     case started(conversationID: ConversationID, turnID: TurnID)
     case phase(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)
@@ -1033,7 +1045,8 @@ public enum ReplyEvent: Hashable, Codable, Sendable {
     case step(conversationID: ConversationID, turnID: TurnID, step: ReplyStep)
     case partial(conversationID: ConversationID, turnID: TurnID, text: String)
     case keepAlive(conversationID: ConversationID, turnID: TurnID, phase: ReplyPhase)
-    case finished(conversationID: ConversationID, turnID: TurnID, text: String)
+    /// The reply, said `at` then.
+    case finished(conversationID: ConversationID, turnID: TurnID, text: String, at: Date)
     case completed(conversationID: ConversationID, turnID: TurnID)
     case failed(conversationID: ConversationID, turnID: TurnID?, message: String)
 }
@@ -1042,9 +1055,9 @@ extension ReplyEvent {
     /// The conversation it happened in.
     public var conversationID: ConversationID {
         switch self {
-        case .userMessage(let conversation, _, _, _, _, _), .started(let conversation, _),
+        case .userMessage(let conversation, _, _, _, _, _, _), .started(let conversation, _),
             .phase(let conversation, _, _), .status(let conversation, _, _), .step(let conversation, _, _),
-            .partial(let conversation, _, _), .keepAlive(let conversation, _, _), .finished(let conversation, _, _),
+            .partial(let conversation, _, _), .keepAlive(let conversation, _, _), .finished(let conversation, _, _, _),
             .completed(let conversation, _), .failed(let conversation, _, _):
             conversation
         }
@@ -1149,9 +1162,11 @@ public enum ConversationAction: Sendable {
     /// An admin answered `request`: the turn that waited for it continues, as `turnID`, with the
     /// answer, on behalf of whoever asked.
     case answered(AccessRequest, AccessAnswer, turnID: TurnID, at: Date)
-    case modelCompleted(turnID: TurnID, completion: ConversationCompletion)
+    /// The model finished the turn `at` then.
+    case modelCompleted(turnID: TurnID, completion: ConversationCompletion, at: Date)
     case replyDelivered(turnID: TurnID)
-    case modelFailed(turnID: TurnID, failure: ConversationFailure)
+    /// The model failed the turn `at` then.
+    case modelFailed(turnID: TurnID, failure: ConversationFailure, at: Date)
     case reset
     case resume
 }
@@ -1229,13 +1244,13 @@ extension ConversationDecision {
                 in: state.applying([answered]))
             return ConversationDecision(events: [answered] + continued.events, effects: continued.effects)
 
-        case .modelCompleted(let turnID, let completion):
+        case .modelCompleted(let turnID, let completion, let at):
             guard state.inbox.activeTurnID == turnID else { return ConversationDecision() }
             var events: [ConversationEvent] = []
             var effects: [ConversationEffect] = []
             switch completion {
             case .reply(let reply):
-                events.append(.replyQueued(PendingConversationReply(turnID: turnID, reply: reply)))
+                events.append(.replyQueued(PendingConversationReply(turnID: turnID, reply: reply, at: at)))
             case .void:
                 effects.append(.publish(.reply(.completed(conversationID: state.conversationID, turnID: turnID))))
             }
@@ -1247,12 +1262,12 @@ extension ConversationDecision {
             guard state.pendingReplies.contains(where: { $0.turnID == turnID }) else { return ConversationDecision() }
             return ConversationDecision(events: [.replyDelivered(turnID)])
 
-        case .modelFailed(let turnID, let failure):
+        case .modelFailed(let turnID, let failure, let at):
             guard state.inbox.activeTurnID == turnID else { return ConversationDecision() }
             // A message already waiting is the person's next word: it starts now, as after a reply.
             let next = startingNext(in: state)
             return ConversationDecision(
-                events: [.inbox(.turnFailed(turnID, failure))] + next.events, effects: next.effects)
+                events: [.inbox(.turnFailed(turnID, failure, at: at))] + next.events, effects: next.effects)
 
         case .reset:
             let cancel = state.inbox.activeTurnID.map { [ConversationEffect.cancelModel($0)] } ?? []

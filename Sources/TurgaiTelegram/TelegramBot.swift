@@ -148,7 +148,7 @@ public actor TelegramConnection {
             logger.debug(
                 "Telegram turn started",
                 metadata: ["conversation": "\(conversationID.stableKey)", "turn": "\(turnID.rawValue)"])
-        case .reply(.finished(let conversationID, let turnID, _)):
+        case .reply(.finished(let conversationID, let turnID, _, _)):
             logger.debug(
                 "Sending Telegram answer",
                 metadata: ["conversation": "\(conversationID.stableKey)", "turn": "\(turnID.rawValue)"])

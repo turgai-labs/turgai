@@ -1044,7 +1044,8 @@ public distributed actor Conversation {
                 .finished(
                     conversationID: conversationID,
                     turnID: pendingReply.turnID,
-                    text: pendingReply.text
+                    text: pendingReply.text,
+                    at: pendingReply.at
                 )
             )
 
@@ -1075,11 +1076,12 @@ public distributed actor Conversation {
     private func action(for event: ConversationModelEvent) -> ConversationAction {
         switch event {
         case .completed(let turnID, let completion):
-            return .modelCompleted(turnID: turnID, completion: completion)
+            return .modelCompleted(turnID: turnID, completion: completion, at: Date())
         case .failed(let turnID, let kind, let message):
             return .modelFailed(
                 turnID: turnID,
-                failure: ConversationFailure(kind: kind, message: message)
+                failure: ConversationFailure(kind: kind, message: message),
+                at: Date()
             )
         }
     }
@@ -1124,7 +1126,8 @@ public distributed actor Conversation {
                     messageID: message.id,
                     text: message.text,
                     author: message.userID,
-                    to: message.to
+                    to: message.to,
+                    at: message.receivedAt
                 )
             )
         )

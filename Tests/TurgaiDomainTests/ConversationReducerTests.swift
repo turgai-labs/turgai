@@ -15,6 +15,8 @@ struct ConversationReducerTests {
     )
     private let participantID = ParticipantID("user-1")
     private let person = UserID.telegram(1)
+    /// When the model answers, in these turns.
+    private let replied = Date(timeIntervalSince1970: 3)
 
     /// What `action` comes to, as the conversation runs it: its events applied, and its effects.
     private func step(
@@ -45,7 +47,7 @@ struct ConversationReducerTests {
         #expect(state.awaiting[request.id]?.message == asked)
         // The same request again is the same wait.
         #expect(ConversationDecision(.awaiting(request.id), in: state).events.isEmpty)
-        state = step(state, .modelCompleted(turnID: turn, completion: .void)).0
+        state = step(state, .modelCompleted(turnID: turn, completion: .void, at: replied)).0
 
         let next = TurnID()
         let (continued, effects) = step(
@@ -180,7 +182,8 @@ struct ConversationReducerTests {
             queued,
             .modelCompleted(
                 turnID: firstTurnID,
-                completion: .reply(makeReply("first answer"))
+                completion: .reply(makeReply("first answer")),
+                at: replied
             )
         )
 
@@ -220,7 +223,8 @@ struct ConversationReducerTests {
             running,
             .modelCompleted(
                 turnID: turnID,
-                completion: .reply(makeReply("answer"))
+                completion: .reply(makeReply("answer")),
+                at: replied
             )
         )
         let (duplicate, effects) = step(
@@ -252,7 +256,8 @@ struct ConversationReducerTests {
             running,
             .modelCompleted(
                 turnID: turnID,
-                completion: .reply(makeReply("hello"))
+                completion: .reply(makeReply("hello")),
+                at: replied
             )
         )
 
@@ -261,7 +266,8 @@ struct ConversationReducerTests {
             completed.pendingReplies == [
                 PendingConversationReply(
                     turnID: turnID,
-                    reply: ConversationReply("hello")!
+                    reply: ConversationReply("hello")!,
+                    at: replied
                 )
             ])
         #expect(effects.isEmpty)
@@ -288,7 +294,7 @@ struct ConversationReducerTests {
 
         let (completed, effects) = step(
             running,
-            .modelCompleted(turnID: turnID, completion: .void)
+            .modelCompleted(turnID: turnID, completion: .void, at: replied)
         )
 
         #expect(completed.inbox.status == .idle)
@@ -368,7 +374,8 @@ struct ConversationReducerTests {
             running,
             .modelCompleted(
                 turnID: staleTurnID,
-                completion: .reply(makeReply("stale"))
+                completion: .reply(makeReply("stale")),
+                at: replied
             )
         )
 
@@ -390,7 +397,7 @@ struct ConversationReducerTests {
             .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
         )
         let failure = ConversationFailure(kind: .model, message: "Ollama unavailable")
-        let (next, effects) = step(queued, .modelFailed(turnID: makeTurnID(1), failure: failure))
+        let (next, effects) = step(queued, .modelFailed(turnID: makeTurnID(1), failure: failure, at: replied))
 
         #expect(next.inbox.status == .running(makeTurnID(2)))
         #expect(next.inbox.pendingMessages.isEmpty)
@@ -400,7 +407,7 @@ struct ConversationReducerTests {
                 return false
             }))
 
-        let (failed, failureEffects) = step(next, .modelFailed(turnID: makeTurnID(2), failure: failure))
+        let (failed, failureEffects) = step(next, .modelFailed(turnID: makeTurnID(2), failure: failure, at: replied))
         #expect(failed.inbox.status == .failed(failure))
         #expect(failureEffects.isEmpty)
     }

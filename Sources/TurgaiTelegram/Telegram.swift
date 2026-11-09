@@ -473,7 +473,7 @@ public actor TelegramEventPublisher {
             case .status(let conversationID, _, _):
                 try await sendTypingAction(for: conversationID)
 
-            case .finished(let conversationID, let turnID, let text):
+            case .finished(let conversationID, let turnID, let text, _):
                 let chatID = try chatID(for: conversationID)
                 let replyTo = replyParameters(
                     conversationID: conversationID,

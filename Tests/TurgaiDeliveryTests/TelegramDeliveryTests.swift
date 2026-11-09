@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import TurgaiDomain
 import TurgaiTelegram
@@ -28,7 +29,8 @@ func terminalSuppressesRateLimitedPreviewRetry() {
             .finished(
                 conversationID: conversationID,
                 turnID: turnID,
-                text: "done"
+                text: "done",
+                at: Date(timeIntervalSince1970: 1)
             )
         )
     )
@@ -103,7 +105,8 @@ func terminalDuringPreviewRetryDoesNotPoisonNextTurn() {
             .finished(
                 conversationID: conversationID,
                 turnID: firstTurnID,
-                text: "first answer"
+                text: "first answer",
+                at: Date(timeIntervalSince1970: 1)
             )
         )
     )

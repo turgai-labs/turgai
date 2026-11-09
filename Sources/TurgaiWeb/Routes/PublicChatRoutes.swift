@@ -967,7 +967,7 @@ extension TurgaiModels.Message {
     /// a person.
     fileprivate func shown(to viewer: TurgaiDomain.UserID) -> Self {
         guard let author, author.kind == .person, author.id != viewer.key else {
-            return Self(id: id, role: role, text: text)
+            return Self(id: id, role: role, text: text, at: at)
         }
         return self
     }
@@ -1123,7 +1123,8 @@ private func publicAPIMessages(
                 role: entry.role == .user ? .user : .assistant,
                 text: entry.text,
                 author: author,
-                to: entry.to.map(ParticipantRef.init)
+                to: entry.to.map(ParticipantRef.init),
+                at: entry.at
             ))
     }
     return messages
@@ -1135,7 +1136,7 @@ private func author(
     of event: OutboundEvent, answeredBy agent: AgentProfileID, names: ParticipantNames
 ) async throws -> ParticipantSummary? {
     switch event {
-    case .reply(.userMessage(_, _, _, _, let person, _)): try await names.summary(of: .person(person))
+    case .reply(.userMessage(_, _, _, _, let person, _, _)): try await names.summary(of: .person(person))
     case .reply(.partial), .reply(.finished): try await names.summary(of: .agent(agent))
     default: nil
     }
@@ -1265,7 +1266,7 @@ private func send(
                 break
             }
             // Taken with no turn to answer it: said only to people, it's done.
-            if case .reply(.userMessage(_, nil, let id, _, _, _)) = delivery.event,
+            if case .reply(.userMessage(_, nil, let id, _, _, _, _)) = delivery.event,
                 id.rawValue == input.id.rawValue
             {
                 terminalEvent = event
@@ -1289,6 +1290,7 @@ private func send(
     }
 
     let messageReceipt = ConversationInputReceipt()
+    let receivedAt = Date()
     await session.input.send(
         ConversationInputDelivery(
             input: .message(
@@ -1298,7 +1300,7 @@ private func send(
                     participantID: .init(channel: turgaiChannel, rawValue: person.key),
                     userID: person,
                     text: text,
-                    receivedAt: Date(),
+                    receivedAt: receivedAt,
                     to: to
                 ),
                 turnID: .init()
@@ -1317,7 +1319,7 @@ private func send(
             payload: .messageAccepted(
                 conversationID: conversation.publicID,
                 turnID: nil,
-                message: .init(id: input.id, role: .user, text: text)
+                message: .init(id: input.id, role: .user, text: text, at: receivedAt)
             )
         )
     session.input.finish()
@@ -1369,7 +1371,7 @@ private actor HTMLChatSocketWriter {
     func write(_ event: OutboundEvent) async throws {
         // Another person's message is shown with their name.
         var author: ParticipantSummary?
-        if case .reply(.userMessage(_, _, _, _, let person, _)) = event, person != viewer {
+        if case .reply(.userMessage(_, _, _, _, let person, _, _)) = event, person != viewer {
             author = try await names.summary(of: .person(person))
         }
         guard let fragment = fragment(for: event, author: author) else { return }
@@ -1382,9 +1384,9 @@ private actor HTMLChatSocketWriter {
         switch event {
         case .reply(let reply):
             switch reply {
-            case .userMessage(_, _, let messageID, let text, _, _):
+            case .userMessage(_, _, let messageID, let text, _, _, let at):
                 return ChatLiveFragment.accepted(
-                    .init(id: .init(rawValue: messageID.rawValue), role: .user, text: text, author: author)
+                    .init(id: .init(rawValue: messageID.rawValue), role: .user, text: text, author: author, at: at)
                 )
             case .started:
                 return ChatLiveFragment.started()
@@ -1398,18 +1400,16 @@ private actor HTMLChatSocketWriter {
                 return nil
             case .partial(_, let turnID, let text):
                 let id = turnID.rawValue
-                let message = TurgaiModels.Message(
-                    id: .init(rawValue: id), role: .assistant, text: text
-                )
+                let reply = ReplySoFar(id: .init(rawValue: id), text: text)
                 if activeTurns.insert(id).inserted {
-                    return ChatLiveFragment.appendedPartial(message, turnID: .init(rawValue: id))
+                    return ChatLiveFragment.appendedPartial(reply, turnID: .init(rawValue: id))
                 } else {
-                    return ChatLiveFragment.partial(message, turnID: .init(rawValue: id))
+                    return ChatLiveFragment.partial(reply, turnID: .init(rawValue: id))
                 }
-            case .finished(_, let turnID, let text):
+            case .finished(_, let turnID, let text, let at):
                 let id = turnID.rawValue
                 let message = TurgaiModels.Message(
-                    id: .init(rawValue: id), role: .assistant, text: text
+                    id: .init(rawValue: id), role: .assistant, text: text, at: at
                 )
                 let fragment =
                     activeTurns.remove(id) == nil
@@ -1590,7 +1590,7 @@ private struct PublicChatEvent: Sendable {
         author: ParticipantSummary?
     ) -> TurgaiModels.ChatEvent {
         switch reply {
-        case .userMessage(_, let turnID, let messageID, let text, _, let to):
+        case .userMessage(_, let turnID, let messageID, let text, _, let to, let at):
             return .init(
                 payload: .messageAccepted(
                     conversationID: publicConversationID,
@@ -1600,7 +1600,8 @@ private struct PublicChatEvent: Sendable {
                         role: .user,
                         text: text,
                         author: author,
-                        to: to.map(ParticipantRef.init)
+                        to: to.map(ParticipantRef.init),
+                        at: at
                     )
                 )
             )
@@ -1645,15 +1646,10 @@ private struct PublicChatEvent: Sendable {
                 payload: .turnPartial(
                     conversationID: publicConversationID,
                     turnID: .init(rawValue: turnID.rawValue),
-                    message: .init(
-                        id: .init(rawValue: turnID.rawValue),
-                        role: .assistant,
-                        text: text,
-                        author: author
-                    )
+                    reply: .init(id: .init(rawValue: turnID.rawValue), text: text, author: author)
                 )
             )
-        case .finished(_, let turnID, let text):
+        case .finished(_, let turnID, let text, let at):
             return .init(
                 payload: .turnCompleted(
                     conversationID: publicConversationID,
@@ -1662,7 +1658,8 @@ private struct PublicChatEvent: Sendable {
                         id: .init(rawValue: turnID.rawValue),
                         role: .assistant,
                         text: text,
-                        author: author
+                        author: author,
+                        at: at
                     )
                 )
             )

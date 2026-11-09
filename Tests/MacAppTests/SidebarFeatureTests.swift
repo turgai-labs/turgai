@@ -307,7 +307,7 @@ struct ChatOpeningTests {
         let trip = ConversationID(rawValue: "trip")
         var state = ChatFeature.State(connection: .connected(botID: BotID(rawValue: "conversation")))
         state.conversationID = dinner
-        state.messages = [Message(id: MessageID(), role: .user, text: "pasta?")]
+        state.messages = [Message(id: MessageID(), role: .user, text: "pasta?", at: Date(timeIntervalSince1970: 1))]
         let store = TestStore(initialState: state) {
             ChatFeature()
         } withDependencies: {
@@ -322,7 +322,7 @@ struct ChatOpeningTests {
         }
         #expect(sent.value == [.open(conversationID: trip)])
 
-        let late = Message(id: MessageID(), role: .user, text: "late")
+        let late = Message(id: MessageID(), role: .user, text: "late", at: Date(timeIntervalSince1970: 2))
         await store.send(.received(ChatEvent(payload: .messageAccepted(conversationID: dinner, turnID: nil, message: late))))
 
         let changed = Conversation(id: dinner, botID: BotID(rawValue: "conversation"), spaceID: "turgai")
@@ -396,6 +396,7 @@ struct MentionTests {
         } withDependencies: {
             $0.chat.send = { _ in }
             $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 2))
             $0.server.participants = { _, _ in [bob, cat] }
         }
         await store.send(.mentioned(cat)) {
@@ -409,11 +410,12 @@ struct MentionTests {
             $0.to = []
             $0.pending = [request]
         }
-        let taken = Message(id: request.id, role: .user, text: "@cat")
+        let taken = Message(id: request.id, role: .user, text: "@cat", at: Date(timeIntervalSince1970: 1))
         let accepted = ChatEvent(
             payload: .messageAccepted(conversationID: ConversationID(rawValue: "dinner"), turnID: nil, message: taken))
         await store.send(.received(accepted)) {
             $0.pending = []
+            $0.today = Date(timeIntervalSince1970: 2)
             $0.messages = [taken]
         }
         await store.receive(\.participantsLoaded) { $0.participants = [bob, cat] }

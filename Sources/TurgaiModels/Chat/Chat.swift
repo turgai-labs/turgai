@@ -170,15 +170,33 @@ public struct Message: Codable, Equatable, Sendable, Identifiable {
     public let author: ParticipantSummary?
     /// Who it was said to: none for no one in particular.
     public let to: [ParticipantRef]
+    /// When it was said.
+    public let at: Date
 
     public init(
-        id: MessageID, role: MessageRole, text: String, author: ParticipantSummary? = nil, to: [ParticipantRef] = []
+        id: MessageID, role: MessageRole, text: String, author: ParticipantSummary? = nil, to: [ParticipantRef] = [],
+        at: Date
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.author = author
         self.to = to
+        self.at = at
+    }
+}
+
+/// An agent's reply while it's typed: what's written so far, under the id it's said with.
+public struct ReplySoFar: Codable, Equatable, Sendable, Identifiable {
+    public let id: MessageID
+    public let text: String
+    /// The agent typing it.
+    public let author: ParticipantSummary?
+
+    public init(id: MessageID, text: String, author: ParticipantSummary? = nil) {
+        self.id = id
+        self.text = text
+        self.author = author
     }
 }
 
@@ -392,7 +410,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case turnPartial(
             conversationID: ConversationID,
             turnID: TurnID,
-            message: Message
+            reply: ReplySoFar
         )
         case turnCompleted(
             conversationID: ConversationID,
@@ -474,7 +492,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case type, conversationID, botID, turnID, you
-        case status, phase, activity, message, messages, error
+        case status, phase, activity, message, messages, error, reply
         case request, requestID, answer
         case turns, step, conversation
         case ref, memory
@@ -524,7 +542,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             payload = .turnPartial(
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
                 turnID: try values.decode(TurnID.self, forKey: .turnID),
-                message: try values.decode(Message.self, forKey: .message)
+                reply: try values.decode(ReplySoFar.self, forKey: .reply)
             )
         case .turnCompleted:
             payload = .turnCompleted(
@@ -615,8 +633,11 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             try values.encode(conversationID, forKey: .conversationID)
             try values.encode(turnID, forKey: .turnID)
             try values.encode(activity, forKey: .activity)
-        case .turnPartial(let conversationID, let turnID, let message),
-            .turnCompleted(let conversationID, let turnID, let message):
+        case .turnPartial(let conversationID, let turnID, let reply):
+            try values.encode(conversationID, forKey: .conversationID)
+            try values.encode(turnID, forKey: .turnID)
+            try values.encode(reply, forKey: .reply)
+        case .turnCompleted(let conversationID, let turnID, let message):
             try values.encode(conversationID, forKey: .conversationID)
             try values.encode(turnID, forKey: .turnID)
             try values.encode(message, forKey: .message)

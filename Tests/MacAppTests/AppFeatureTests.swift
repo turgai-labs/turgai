@@ -278,6 +278,7 @@ struct ChatFeatureTests {
         } withDependencies: {
             $0.chat.send = { request in sent.withValue { $0.append(request) } }
             $0.uuid = .incrementing
+            $0.date = .constant(Date(timeIntervalSince1970: 2))
         }
 
         let request = SendMessageRequest(id: MessageID(rawValue: UUID(0)), text: "hi")
@@ -287,7 +288,7 @@ struct ChatFeatureTests {
         }
         #expect(sent.value == [.message(request)])
 
-        let accepted = Message(id: request.id, role: .user, text: "hi")
+        let accepted = Message(id: request.id, role: .user, text: "hi", at: Date(timeIntervalSince1970: 1))
         await store.send(
             .received(
                 ChatEvent(
@@ -296,6 +297,7 @@ struct ChatFeatureTests {
             )
         ) {
             $0.pending = []
+            $0.today = Date(timeIntervalSince1970: 2)
             $0.messages = [accepted]
         }
     }
@@ -345,50 +347,91 @@ struct ChatFeatureTests {
 
 @MainActor
 struct ShownMessageTests {
-    /// A person's message other than yours says who wrote it; an agent's reply has the turn that
-    /// made it, shown beside it once its ⓘ is tapped.
+    /// 9 November 2026 at `hour`:`minute`, or `days` before.
+    private func on(hour: Int, minute: Int = 0, daysBefore days: Int = 0) -> Date {
+        let day = Calendar.current.date(
+            from: DateComponents(year: 2026, month: 11, day: 9, hour: hour, minute: minute))!
+        return Calendar.current.date(byAdding: .day, value: -days, to: day)!
+    }
+
+    /// With more than one person in it, each message says who said it, you as You, and when; an
+    /// agent's reply has the turn that made it, shown beside it once its ⓘ is tapped.
     @Test
-    func aMessageShowsWhoWroteItAndTheTurnThatMadeIt() {
+    func eachMessageSaysWhoSaidItAndWhen() {
         let ann = ParticipantSummary(kind: .person, id: "account-ann", name: "ann")
         let bob = ParticipantSummary(kind: .person, id: "account-bob", name: "bob")
+        let turgai = ParticipantSummary(kind: .agent, id: "turgai", name: "Turgai")
         let reply = MessageID(rawValue: UUID(2))
-        let turn = TurnRecord(
-            id: TurnID(rawValue: reply.rawValue), message: "pasta?", startedAt: Date(timeIntervalSince1970: 0))
+        let at = on(hour: 14, minute: 3)
+        let turn = TurnRecord(id: TurnID(rawValue: reply.rawValue), message: "pasta?", startedAt: at)
         var state = ChatFeature.State(
+            participants: [ann, bob, turgai],
             you: "account-ann",
             messages: [
-                Message(id: MessageID(rawValue: UUID(0)), role: .user, text: "pasta?", author: ann),
-                Message(id: MessageID(rawValue: UUID(1)), role: .user, text: "yes", author: bob),
-                Message(id: reply, role: .assistant, text: "Here's one."),
+                Message(id: MessageID(rawValue: UUID(0)), role: .user, text: "pasta?", author: ann, at: at),
+                Message(id: MessageID(rawValue: UUID(1)), role: .user, text: "yes", author: bob, at: at),
+                Message(id: reply, role: .assistant, text: "Here's one.", author: turgai, at: at),
             ],
             turns: [turn])
+        state.today = on(hour: 18)
 
-        #expect(state.shown.map(\.someoneElse) == [nil, "bob", nil])
+        let time = at.formatted(date: .omitted, time: .shortened)
+        #expect(state.shown.map(\.whose) == [.yours, .someoneElse, .agent])
+        #expect(state.shown.map(\.caption) == ["You · \(time)", "bob · \(time)", "Turgai · \(time)"])
         #expect(state.shown.map(\.turn) == [nil, nil, turn])
         #expect(state.shown.map(\.showsTurn) == [false, false, false])
         state.shownTurn = reply
         #expect(state.shown.map(\.showsTurn) == [false, false, true])
+
+        // Only you and the agent: no one's named.
+        state.participants = [ann, turgai]
+        state.messages.remove(at: 1)
+        #expect(state.shown.map(\.caption) == [time, time])
     }
 
-    /// The reply being typed is the last message shown, under the id it's said with: once it's
-    /// said, it's the same message, there once. Before it's typed, what the agent does shows instead.
+    /// A time today says only the time; in the six days before, its weekday too; before that, its
+    /// date.
+    @Test
+    func aTimeSaysAsMuchOfItsDayAsItNeeds() {
+        let today = on(hour: 18)
+        let earlier = on(hour: 9)
+        let monday = on(hour: 9, daysBefore: 3)
+        let lastWeek = on(hour: 9, daysBefore: 10)
+
+        #expect(ChatFeature.State.when(earlier, today: today) == earlier.formatted(date: .omitted, time: .shortened))
+        #expect(
+            ChatFeature.State.when(monday, today: today)
+                == monday.formatted(.dateTime.weekday(.abbreviated).hour().minute()))
+        #expect(
+            ChatFeature.State.when(lastWeek, today: today)
+                == lastWeek.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
+    }
+
+    /// The reply being typed is the last message shown, under the id it's said with, typing until
+    /// it's said: then it's the same message, there once, saying when. Before it's typed, what the
+    /// agent does shows instead.
     @Test
     func theReplyBeingTypedIsTheMessageItBecomes() {
-        let question = Message(id: MessageID(rawValue: UUID(0)), role: .user, text: "pasta?")
+        let asked = on(hour: 14)
+        let question = Message(id: MessageID(rawValue: UUID(0)), role: .user, text: "pasta?", at: asked)
         let reply = MessageID(rawValue: UUID(1))
         var state = ChatFeature.State(messages: [question], turn: ChatFeature.Turn())
+        state.today = on(hour: 18)
         #expect(state.working == "Thinking…")
         state.turn = ChatFeature.Turn(activity: "Using search…")
         #expect(state.working == "Using search…")
 
-        state.turn = ChatFeature.Turn(phase: .typing, partial: Message(id: reply, role: .assistant, text: "Here"))
+        state.turn = ChatFeature.Turn(phase: .typing, partial: ReplySoFar(id: reply, text: "Here"))
         #expect(state.shown.map(\.id) == [question.id, reply])
-        #expect(state.shown.last?.message.text == "Here")
+        #expect(state.shown.last?.text == "Here")
+        #expect(state.shown.last?.caption == "typing…")
         #expect(state.working == nil)
 
-        state.messages.append(Message(id: reply, role: .assistant, text: "Here's one."))
+        let said = on(hour: 14, minute: 1)
+        state.messages.append(Message(id: reply, role: .assistant, text: "Here's one.", at: said))
         #expect(state.shown.map(\.id) == [question.id, reply])
-        #expect(state.shown.last?.message.text == "Here's one.")
+        #expect(state.shown.last?.text == "Here's one.")
+        #expect(state.shown.last?.caption == said.formatted(date: .omitted, time: .shortened))
     }
 }
 
