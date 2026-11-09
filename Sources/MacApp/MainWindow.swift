@@ -283,7 +283,7 @@ private struct SidebarView: View {
             Color.clear.frame(height: SidebarGlass.buttonSize)
             HStack(spacing: 0) {
                 SpaceRail(store: store)
-                Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 8)
+                Rectangle().fill(Color.turgaiInk.opacity(0.15)).frame(width: 1).padding(.vertical, 8)
                 ConversationColumn(store: store)
             }
         }
@@ -399,7 +399,7 @@ private struct ConversationColumn: View {
             .padding(.top, 10)
             .padding(.bottom, 8)
             // The column's head, ruled as the rail is: the conversations scroll under it here.
-            Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(height: 1)
+            Rectangle().fill(Color.turgaiInk.opacity(0.15)).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(store.entries) { (entry: SidebarFeature.Entry) in
