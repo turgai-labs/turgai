@@ -585,7 +585,11 @@ struct SidebarFeature {
             let space = state.spaces[index]
             let changed = SpaceSummary(id: id, name: space.name, role: space.role, status: status, kind: space.kind)
             state.spaces[index] = changed
-            return .send(.delegate(.spaceChanged(changed)))
+            // Archived while it's shown, it's off the rail: the rail's first is shown instead.
+            guard status == .archived, id == state.shownSpace?.id, let next = state.spaceChoices.first else {
+                return .send(.delegate(.spaceChanged(changed)))
+            }
+            return .concatenate(.send(.delegate(.spaceChanged(changed))), .send(.spaceSwitched(next.id)))
 
         case .spacesTapped:
             state.dialog = .choosingSpace(ChoosingSpace())

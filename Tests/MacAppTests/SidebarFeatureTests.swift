@@ -314,9 +314,9 @@ struct SidebarFeatureTests {
         #expect(started.value == ["work"])
     }
 
-    /// An admin archives the space shown, asked first: it's off the rail, still in the Spaces list,
-    /// and read only, its menu offering only to use it again; Turgai's own isn't offered. With
-    /// nothing left in it, it shows no conversation.
+    /// An admin archives the space shown, asked first: it's off the rail, and the rail's first is
+    /// shown instead. Still in the Spaces list, it opens read only, its menu offering only to use it
+    /// again; Turgai's own isn't offered. With nothing left in it, it shows no conversation.
     @Test
     func anAdminArchivesASpace() async {
         let asks = LockIsolated<[ChatAsk]>([])
@@ -326,7 +326,10 @@ struct SidebarFeatureTests {
         var state = SidebarFeature.State()
         state.session = session
         state.spaces = [ours, family]
-        state.conversations = [.init(id: dinner.id, title: "plan dinner", spaceID: "family", people: 1)]
+        state.conversations = [
+            .init(id: dinner.id, title: "plan dinner", spaceID: "family", people: 1),
+            .init(id: trip.id, title: "trip", spaceID: "turgai", people: 1),
+        ]
         state.selected = dinner.id
         state.shownSpaceID = "family"
         state.peopleCounts = ["family": 1, "turgai": 1]
@@ -343,9 +346,16 @@ struct SidebarFeatureTests {
         await store.send(.alert(.presented(.archiveConfirmed("family")))) { $0.alert = nil }
         await store.receive(\.spaceStatusChanged) { $0.spaces = [ours, archived] }
         await store.receive(\.delegate, .spaceChanged(archived))
+        await store.receive(\.spaceSwitched) { $0.shownSpaceID = "turgai" }
+        await store.receive(\.selected) { $0.selected = self.trip.id }
+        await store.receive(\.delegate, .open(trip.id))
         #expect(asks.value == [.archiveSpace("family")])
         #expect(store.state.spaceChoices.map(\.id) == ["turgai"])
         #expect(store.state.spaceSections.map(\.title) == ["Active", "Archived"])
+
+        await store.send(.spaceSwitched("family")) { $0.shownSpaceID = "family" }
+        await store.receive(\.selected) { $0.selected = self.dinner.id }
+        await store.receive(\.delegate, .open(dinner.id))
         #expect(store.state.shownSpaceDetail == "Archived · 1 person")
         #expect(store.state.newConversationHelp == nil)
         #expect(store.state.shownSpaceMenu == [.unarchive])
@@ -356,7 +366,7 @@ struct SidebarFeatureTests {
         }
         await store.send(.alert(.presented(.deleteConfirmed(dinner.id)))) { $0.alert = nil }
         await store.receive(\.conversationLeft) {
-            $0.conversations = []
+            $0.conversations.remove(id: self.dinner.id)
             $0.selected = nil
         }
         await store.receive(\.delegate, .close(archived))
