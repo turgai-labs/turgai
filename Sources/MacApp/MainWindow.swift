@@ -290,8 +290,9 @@ private struct SidebarView: View {
     }
 }
 
-/// Every space the person is in: a tile each with its initial, in its color, the shown one bordered,
-/// and dotted when something's new in it; + makes or joins one. It scrolls when there are many.
+/// Every space the person is in: a tile each with its initial, in its color, the shown one filled
+/// in, the others outlined, and dotted when something's new in it; + makes or joins one. It scrolls
+/// when there are many.
 private struct SpaceRail: View {
     let store: StoreOf<SidebarFeature>
 
@@ -329,14 +330,9 @@ private struct SpaceTile: View {
 
     var body: some View {
         Button(action: pick) {
-            SpaceMark(initial: choice.initial, hue: choice.hue, lean: choice.lean)
+            SpaceMark(initial: choice.initial, hue: choice.hue, lean: choice.lean, fill: choice.fill)
         }
         .buttonStyle(.plain)
-        .overlay {
-            if choice.isShown {
-                StampBorder(lean: choice.lean)
-            }
-        }
         .overlay(alignment: .topTrailing) {
             if choice.unread {
                 Circle().fill(Color.turgaiAccent).frame(width: 8, height: 8)
@@ -349,18 +345,25 @@ private struct SpaceTile: View {
     }
 }
 
-/// A space's mark: its initial on a stamp of its color.
+/// A space's mark: its initial on a stamp of its color, or, outlined, in its deep shade inside the
+/// stamp's outline.
 private struct SpaceMark: View {
     let initial: String
     let hue: SpaceHue
     let lean: Lean
+    let fill: StampFill
 
     var body: some View {
         Text(initial)
             .font(.system(size: 14, weight: .heavy))
-            .foregroundStyle(hue.ink)
+            .foregroundStyle(fill == .filled ? hue.ink : hue.deep)
             .frame(width: 30, height: 30)
-            .background(StampBackground(color: hue.color, lean: lean))
+            .background {
+                switch fill {
+                case .filled: StampBackground(color: hue.color, lean: lean)
+                case .outlined: StampOutline(color: hue.deep, lean: lean)
+                }
+            }
             .contentShape(.rect)
     }
 }

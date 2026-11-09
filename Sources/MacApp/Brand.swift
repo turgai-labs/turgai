@@ -10,8 +10,11 @@ extension Color {
     static let signalCoral = Color(light: 0xEF5B4D, dark: 0xFF8175)
     static let signalYellow = Color(light: 0xF4C542, dark: 0xF7D66B)
     static let signalBlue = Color(light: 0x2864E8, dark: 0x79A7FF)
-    /// What's shown now, and nothing else: no space, message or link is this color.
-    static let turgaiActive = Color(light: 0x6D4AFF, dark: 0xA48CFF)
+    /// Each signal's deep shade, for its lines and text on the surface: dark enough to read in the
+    /// light theme, the signal itself in the dark one.
+    static let signalCoralDeep = Color(light: 0xB8402F, dark: 0xFF8175)
+    static let signalYellowDeep = Color(light: 0x8C6A00, dark: 0xF7D66B)
+    static let signalBlueDeep = Color(light: 0x1747AD, dark: 0x79A7FF)
 
     /// A message's background, as the web's: its signal color, 78% of it over the surface.
     static let bubbleYours = Color(light: 0xF6D26C, dark: 0xC4AF5E)
@@ -93,6 +96,15 @@ extension SpaceHue {
         }
     }
 
+    /// Its lines and text on the surface: its deep shade.
+    var deep: Color {
+        switch self {
+        case .coral: .signalCoralDeep
+        case .yellow: .signalYellowDeep
+        case .blue: .signalBlueDeep
+        }
+    }
+
     /// Text on a stamp of it: the light theme's ink on coral and yellow, white on blue.
     var ink: Color {
         switch self {
@@ -102,15 +114,15 @@ extension SpaceHue {
     }
 }
 
-/// A border in the active color just outside the edge of a stamp leaning by `lean`: what's shown.
-struct StampBorder: View {
+/// A stamp's outline, leaning by `lean`, in `color`: a stamp not filled in.
+struct StampOutline: View {
+    let color: Color
     let lean: Lean
 
     var body: some View {
         GeometryReader { geometry in
-            RoundedRectangle(cornerRadius: 5)
-                .strokeBorder(Color.turgaiActive, lineWidth: 2)
-                .padding(-2)
+            RoundedRectangle(cornerRadius: 3)
+                .strokeBorder(color, lineWidth: 1.5)
                 .rotationEffect(lean.angle(across: geometry.size.width))
         }
     }

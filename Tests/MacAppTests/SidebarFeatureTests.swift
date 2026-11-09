@@ -260,6 +260,7 @@ struct SidebarFeatureTests {
         #expect(state.spaceChoices.map(\.initial) == ["T", "F", "W"])
         #expect(state.spaceChoices.map(\.unread) == [true, false, false])
         #expect(state.spaceChoices.map(\.isShown) == [false, true, false])
+        #expect(state.spaceChoices.map(\.fill) == [.outlined, .filled, .outlined])
         #expect(state.shownSpaceMenu == .init(rename: "Rename “Family”…", invite: "Invite People…"))
         #expect(state.newConversationHelp == "New conversation in Family")
         #expect(state.shownSpaceName == "Family")

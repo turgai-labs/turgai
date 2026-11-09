@@ -96,7 +96,7 @@ private actor ChatSocket {
                         guard case .string(let text) = try await task.receive() else { continue }
                         let event = try JSONDecoder().decode(ChatEvent.self, from: Data(text.utf8))
                         if case .reply(let ref, let reply) = event.payload {
-                            await self.answer(ref, with: .success(reply))
+                            self.answer(ref, with: .success(reply))
                         } else {
                             continuation.yield(event)
                         }
@@ -105,7 +105,7 @@ private actor ChatSocket {
                 } catch {
                     continuation.finish(throwing: error)
                 }
-                await self.ended(task)
+                self.ended(task)
             }
             continuation.onTermination = { _ in
                 receiving.cancel()
@@ -134,10 +134,10 @@ private actor ChatSocket {
                 do {
                     try await self.send(.push(ref: ref, ask: ask))
                 } catch {
-                    await self.answer(ref, with: .failure(error))
+                    self.answer(ref, with: .failure(error))
                 }
                 try? await Task.sleep(for: Self.replyTimeout)
-                await self.answer(ref, with: .failure(ChatSocketError.noReply))
+                self.answer(ref, with: .failure(ChatSocketError.noReply))
             }
         }
     }

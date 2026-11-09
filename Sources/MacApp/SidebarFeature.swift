@@ -15,6 +15,12 @@ enum SpaceHue: CaseIterable, Equatable {
     }
 }
 
+/// How a stamp is drawn: filled with its color, for what's shown, or only its outline.
+enum StampFill: Equatable {
+    case filled
+    case outlined
+}
+
 /// The window's sidebar, Slack's way: every space the person is in, on a rail; the one shown, the
 /// open conversation's, with its conversations, the one something was last said in first; the one
 /// open; and which have something new since they were last open.
@@ -51,6 +57,9 @@ struct SidebarFeature {
         let unread: Bool
 
         var id: String { space.id }
+        /// How its tile is drawn: filled in while it's shown, as the open conversation's row is;
+        /// an outline otherwise.
+        var fill: StampFill { isShown ? .filled : .outlined }
         /// What its tile says: the first letter of its name.
         var initial: String { space.name.prefix(1).uppercased() }
         var hue: SpaceHue { SpaceHue(name: space.name) }
