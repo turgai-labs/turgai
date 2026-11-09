@@ -100,14 +100,14 @@ extension SpaceHue {
     }
 }
 
-/// A border along the edge of a stamp leaning by `lean`: what's picked.
+/// A white border just inside the edge of a stamp leaning by `lean`: what's picked.
 struct StampBorder: View {
     let lean: Lean
 
     var body: some View {
         GeometryReader { geometry in
             RoundedRectangle(cornerRadius: 3)
-                .strokeBorder(Color.turgaiInk, lineWidth: 2)
+                .strokeBorder(.white, lineWidth: 2)
                 .rotationEffect(lean.angle(across: geometry.size.width))
         }
     }
