@@ -9,7 +9,7 @@ You send "What's the weather?" in the Mac app.
 1. **The edge** makes a turn id, `539be24d`, and sends the message to the conversation (`PublicChatRoutes.say`, `turnID: .init()`).
 2. **The conversation** journals `inbox(.turnStarted)` with the message and the turn id, then asks its agent participant to answer (`ConversationDecision(.receive, in:)`).
 3. **The agent participant** hands the message to Hail (`HailConversationPeer.run`).
-4. **Hail's agent** opens a turn of its own, `a840aa0c` (`Agent.run`, `case .received: TurnID()`), journals `history.received` with it, and tells the caller only that the input was received: the `received` run update has no id.
+4. **Hail's agent** opens a turn of its own, `a840aa0c` (`Agent.run`, `case .received: TurnID()`), and journals `history.received` with it. What it tells the caller has no id: not the `received` run update, and later not the reply.
 5. **Hail** runs the model and journals each step: `history.called`, `history.resulted`.
 6. **The participant** passes each step on live, in its scope, under `539be24d` (`AgentParticipant.follow` → `publishLive(.step)`).
 7. **Hail** journals `history.replied` and closes its turn.
@@ -29,7 +29,7 @@ You reopen it later. The app gets past turns from Hail's history (`Conversation.
 
 **The agent owns how it worked**, and its turns: it names them, as now.
 
-**What comes back carries the agent's id.** The `received` run update says which turn it opened, as the journal's `history.received` already does. The participant learns it at the start of its call and keeps it in scope, so a reply and a failure both name the agent's turn, and so do the steps before a failure.
+**One run is one turn, and says so where it starts and where it ends.** The `received` run update says which turn it opened, as the journal's `history.received` already does; the reply (`responseRecorded`) and the failure (`runFailed`) say which turn they end. The participant takes the id from what came back, keeping nothing in between.
 
 **The conversation keeps the link** with whatever ends its turn: the reply (`replyQueued`) or the failure (`turnFailed`) says which agent turn it came from. That's the conversation's own fact.
 
@@ -41,13 +41,13 @@ You reopen it later. The app gets past turns from Hail's history (`Conversation.
 
 **Hail**, committed, merged into `turgai-integration`, pushed, then norby's pin moved:
 
-1. `AgentRunEvent.received` carries the turn's id.
+1. `AgentRunEvent`'s `received`, `responseRecorded`, and `runFailed` carry the turn's id.
 2. A turns projection over the agent's journal, by turn id, with each turn's input, steps, and outcome, compacted or not.
 
 **Turgai:**
 
-1. `HailModelEvent.started` carries the agent's turn id, mapped from `received`.
-2. `AgentParticipant` keeps it in the call's scope, and passes it with the completion or the failure (`ConversationModelEvent`).
+1. `HailResponse` carries the agent's turn id, from `responseRecorded`; a failure carries it from `runFailed`, when the agent had opened a turn.
+2. `AgentParticipant` passes it with the completion or the failure (`ConversationModelEvent`).
 3. `PendingConversationReply` keeps the agent's turn id; the inbox's `turnFailed` keeps it when the agent had opened one, and none when the turn failed before it did.
 4. `ConversationTurns` reads Hail's projection and gives each turn the conversation's id, through those links.
 
