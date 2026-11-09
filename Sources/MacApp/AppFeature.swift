@@ -203,124 +203,127 @@ struct AppFeature {
         Scope(state: \.profile, action: \.profile) {
             ProfileFeature()
         }
-        Reduce { state, action in
-            switch action {
-            // The sidebar says what the chat shows; the chat's connection says how the sidebar changes.
-            case .sidebar(.delegate(.open(let id))):
-                return .send(.chat(.open(id, in: state.sidebar.space(of: id))))
-            case .chat(.delegate(.conversationJoined(let conversation))):
-                return .send(.sidebar(.conversationJoined(conversation)))
-            case .chat(.delegate(.conversationSaid(let conversation))):
-                return .send(.sidebar(.conversationSaid(conversation)))
-            case .chat(.delegate(.conversationTitled(let conversation))):
-                return .send(.sidebar(.conversationTitled(conversation)))
-            case .chat(.delegate(.conversationLeft(let id))):
-                return .send(.sidebar(.conversationLeft(id)))
-            case .chat(.delegate(.memoryChanged)):
-                return .send(.profile(.memoryChanged))
-            case .chat(.delegate(.connected)):
-                return .send(.profile(.connected))
+        Reduce(relay)
+    }
 
-            case .profile(.signOutTapped):
-                guard case .signedIn = state.account else { return .none }
-                return signOut(&state, notice: nil)
+    /// What `action` does to the app beyond its features' own: what one says to another.
+    private func relay(_ state: inout State, _ action: Action) -> Effect<Action> {
+        switch action {
+        // The sidebar says what the chat shows; the chat's connection says how the sidebar changes.
+        case .sidebar(.delegate(.open(let id))):
+            return .send(.chat(.open(id, in: state.sidebar.space(of: id))))
+        case .chat(.delegate(.conversationJoined(let conversation))):
+            return .send(.sidebar(.conversationJoined(conversation)))
+        case .chat(.delegate(.conversationSaid(let conversation))):
+            return .send(.sidebar(.conversationSaid(conversation)))
+        case .chat(.delegate(.conversationTitled(let conversation))):
+            return .send(.sidebar(.conversationTitled(conversation)))
+        case .chat(.delegate(.conversationLeft(let id))):
+            return .send(.sidebar(.conversationLeft(id)))
+        case .chat(.delegate(.memoryChanged)):
+            return .send(.profile(.memoryChanged))
+        case .chat(.delegate(.connected)):
+            return .send(.profile(.connected))
 
-            case .binding, .sidebar, .chat, .objects, .profile:
-                return .none
+        case .profile(.signOutTapped):
+            guard case .signedIn = state.account else { return .none }
+            return signOut(&state, notice: nil)
 
-            case .sidebarToggled:
-                state.showsSidebar.toggle()
-                return .none
+        case .binding, .sidebar, .chat, .objects, .profile:
+            return .none
 
-            case .appeared:
-                return .merge(
-                    .run { send in await send(.sessionLoaded(sessions.load())) },
-                    // Keep watching, so the app also notices when the server stops.
-                    .run { send in
-                        while true {
-                            let connection: Connection =
-                                switch try? await server.status().setup {
-                                case .complete: .ready
-                                case .pending: .setupPending
-                                case nil: .unreachable
-                                }
-                            await send(.checked(connection))
-                            try await clock.sleep(for: .seconds(2))
-                        }
-                    }
-                )
+        case .sidebarToggled:
+            state.showsSidebar.toggle()
+            return .none
 
-            case .checked(let connection):
-                state.connection = connection
-                return .none
-
-            case .sessionLoaded(let session):
-                guard let session, session.expiresAt > now else {
-                    state.account = .signedOut
-                    return .run { _ in sessions.clear() }
-                }
-                state.account = .signedIn(session)
-                // The app's one connection, open while they're signed in, whatever window shows.
-                return .merge(expire(session), .send(.chat(.connect(session))))
-
-            case .openSetupTapped:
-                return .run { _ in await openURL(LocalServer.baseURL) }
-
-            case .modeChanged(let mode):
-                state.login.mode = mode
-                state.login.notice = nil
-                return .none
-
-            case .submitTapped:
-                guard state.account == .signedOut, state.login.progress == .editing,
-                    !state.login.username.isEmpty, !state.login.password.isEmpty
-                else { return .none }
-                if state.login.mode == .register, let problem = state.login.registrationProblem {
-                    state.login.notice = problem
-                    return .none
-                }
-                state.login.progress = .submitting
-                state.login.notice = nil
-                let submit =
-                    switch state.login.mode {
-                    case .signIn: server.signIn
-                    case .register: server.register
-                    }
-                return .run { [username = state.login.username, password = state.login.password] send in
-                    do {
-                        await send(.submitFinished(.success(try await submit(username, password))))
-                    } catch let error as AccountError {
-                        await send(.submitFinished(.failure(error)))
-                    } catch {
-                        await send(.submitFinished(.failure(.unavailable(error.localizedDescription))))
+        case .appeared:
+            return .merge(
+                .run { send in await send(.sessionLoaded(sessions.load())) },
+                // Keep watching, so the app also notices when the server stops.
+                .run { send in
+                    while true {
+                        let connection: Connection =
+                            switch try? await server.status().setup {
+                            case .complete: .ready
+                            case .pending: .setupPending
+                            case nil: .unreachable
+                            }
+                        await send(.checked(connection))
+                        try await clock.sleep(for: .seconds(2))
                     }
                 }
+            )
 
-            case .submitFinished(.success(let session)):
-                state.account = .signedIn(session)
-                state.login = LoginForm()
-                return .merge(
-                    .run { _ in sessions.save(session) },
-                    expire(session),
-                    .send(.chat(.connect(session)))
-                )
+        case .checked(let connection):
+            state.connection = connection
+            return .none
 
-            case .submitFinished(.failure(let error)):
-                state.login.progress = .editing
-                state.login.password = ""
-                state.login.notice =
-                    switch (error, state.login.mode) {
-                    case (.rejected, .signIn): .invalidCredentials
-                    case (.rejected, .register): .usernameUnavailable
-                    case (.unavailable(let reason), _): .unavailable(reason)
-                    }
-                return .none
-
-            case .sessionExpired(let session):
-                guard state.account == .signedIn(session) else { return .none }
-                return signOut(&state, notice: .sessionEnded)
-
+        case .sessionLoaded(let session):
+            guard let session, session.expiresAt > now else {
+                state.account = .signedOut
+                return .run { _ in sessions.clear() }
             }
+            state.account = .signedIn(session)
+            // The app's one connection, open while they're signed in, whatever window shows.
+            return .merge(expire(session), .send(.chat(.connect(session))))
+
+        case .openSetupTapped:
+            return .run { _ in await openURL(LocalServer.baseURL) }
+
+        case .modeChanged(let mode):
+            state.login.mode = mode
+            state.login.notice = nil
+            return .none
+
+        case .submitTapped:
+            guard state.account == .signedOut, state.login.progress == .editing,
+                !state.login.username.isEmpty, !state.login.password.isEmpty
+            else { return .none }
+            if state.login.mode == .register, let problem = state.login.registrationProblem {
+                state.login.notice = problem
+                return .none
+            }
+            state.login.progress = .submitting
+            state.login.notice = nil
+            let submit =
+                switch state.login.mode {
+                case .signIn: server.signIn
+                case .register: server.register
+                }
+            return .run { [username = state.login.username, password = state.login.password] send in
+                do {
+                    await send(.submitFinished(.success(try await submit(username, password))))
+                } catch let error as AccountError {
+                    await send(.submitFinished(.failure(error)))
+                } catch {
+                    await send(.submitFinished(.failure(.unavailable(error.localizedDescription))))
+                }
+            }
+
+        case .submitFinished(.success(let session)):
+            state.account = .signedIn(session)
+            state.login = LoginForm()
+            return .merge(
+                .run { _ in sessions.save(session) },
+                expire(session),
+                .send(.chat(.connect(session)))
+            )
+
+        case .submitFinished(.failure(let error)):
+            state.login.progress = .editing
+            state.login.password = ""
+            state.login.notice =
+                switch (error, state.login.mode) {
+                case (.rejected, .signIn): .invalidCredentials
+                case (.rejected, .register): .usernameUnavailable
+                case (.unavailable(let reason), _): .unavailable(reason)
+                }
+            return .none
+
+        case .sessionExpired(let session):
+            guard state.account == .signedIn(session) else { return .none }
+            return signOut(&state, notice: .sessionEnded)
+
         }
     }
 
@@ -347,5 +350,17 @@ struct AppFeature {
             await send(.sessionExpired(session))
         }
         .cancellable(id: CancelID.expiry, cancelInFlight: true)
+    }
+}
+
+extension AppFeature {
+    /// The app's store, from its first state, with the runtime's `objects`.
+    @MainActor
+    static func store(objects: ObjectsClient) -> StoreOf<AppFeature> {
+        Store(initialState: State()) {
+            AppFeature()
+        } withDependencies: {
+            $0.objects = objects
+        }
     }
 }

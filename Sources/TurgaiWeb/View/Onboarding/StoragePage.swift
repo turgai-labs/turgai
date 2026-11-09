@@ -70,20 +70,31 @@ struct StoragePage: HTMLDocument, Sendable {
                     )
                 },
             ) {
-                section(.class("setup-content")) {
-                    div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "A home for memory" }
-                        h1 { "Give memory a home." }
-                        p(.class("lede")) {
-                            "Choose where Turgai keeps its memory and history. The local option is the simplest place to begin."
-                        }
-                        div(.class("setup-form-area")) {
-                            if let error { p(.class("error")) { error } }
-                            StorageForm(values: values, directory: directory)
-                            p(.class("hint storage-restart-note")) {
-                                "Turgai will start using this home when setup is complete."
-                            }
-                        }
+                StorageContent(values: values, directory: directory, error: error)
+            }
+        }
+    }
+}
+
+/// The storage step's copy and its form, with what went wrong, when something did.
+private struct StorageContent: HTML, Sendable {
+    let values: StorageFormValues
+    let directory: URL
+    let error: String?
+
+    var body: some HTML {
+        section(.class("setup-content")) {
+            div(.class("setup-copy")) {
+                p(.class("eyebrow")) { "A home for memory" }
+                h1 { "Give memory a home." }
+                p(.class("lede")) {
+                    "Choose where Turgai keeps its memory and history. The local option is the simplest place to begin."
+                }
+                div(.class("setup-form-area")) {
+                    if let error { p(.class("error")) { error } }
+                    StorageForm(values: values, directory: directory)
+                    p(.class("hint storage-restart-note")) {
+                        "Turgai will start using this home when setup is complete."
                     }
                 }
             }

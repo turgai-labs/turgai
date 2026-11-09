@@ -70,16 +70,21 @@ struct NoChannels: HTML, Sendable {
 struct ChannelRow: HTML, Sendable {
     let channel: ChannelListItem
 
+    /// Whether it's running, in a word.
+    private var status: String { channel.enabled ? "Active" : "Paused" }
+    /// Whether its bot's token is set.
+    private var token: String { channel.hasToken ? "Token set" : "No token" }
+
     var body: some HTML {
         div(.class("channel-row")) {
             div(.class("channel-row-main")) {
                 div(.class("channel-row-heading")) {
                     div(.class("channel-name")) { channel.label }
-                    span(.class("detail-status")) { channel.enabled ? "Active" : "Paused" }
+                    span(.class("detail-status")) { status }
                 }
                 div(.class("channel-meta")) {
                     span { "Telegram" }
-                    span { channel.hasToken ? "Token set" : "No token" }
+                    span { token }
                     if let botName = channel.botName { span { "Bot: \(botName)" } }
                 }
             }

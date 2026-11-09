@@ -48,32 +48,12 @@ struct TurgaiToolsPage: HTMLDocument, Sendable {
                 header: PageHeader(user: user, navigation: .active(.tools)),
                 footer: PageFooter { EmptyFooterContent() }
             ) {
-                section(.class("page-intro")) {
-                    div {
-                        p(.class("eyebrow")) { "Your capabilities" }
-                        h1 { "Tools" }
-                        p(.class("lede")) {
-                            "Give your bots useful abilities, one clear step at a time."
-                        }
-                    }
-                    if case .administrator = user {
-                        a(.href("/tools/new"), .class("button button-accent add-tool-link")) { "+ New tool" }
-                    }
-                }
+                ToolsIntro(user: user)
                 if let error {
                     p(.class("error page-error")) { error }
                 }
                 if documents.isEmpty {
-                    div(.class("empty-state")) {
-                        p(.class("eyebrow")) { "A blank canvas" }
-                        h2 { "Start with one useful ability." }
-                        p(.class("section-intro")) {
-                            "Fetch information, run a script, or ask another bot to take on one focused piece of thinking."
-                        }
-                        if case .administrator = user {
-                            a(.href("/tools/new"), .class("text-link")) { "New tool →" }
-                        }
-                    }
+                    NoTools(user: user)
                 } else {
                     section(.class("tools-list")) {
                         for document in documents {
@@ -84,6 +64,44 @@ struct TurgaiToolsPage: HTMLDocument, Sendable {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// What tools are, and New tool for an administrator.
+private struct ToolsIntro: HTML, Sendable {
+    let user: AuthenticatedUser
+
+    var body: some HTML {
+        section(.class("page-intro")) {
+            div {
+                p(.class("eyebrow")) { "Your capabilities" }
+                h1 { "Tools" }
+                p(.class("lede")) {
+                    "Give your bots useful abilities, one clear step at a time."
+                }
+            }
+            if case .administrator = user {
+                a(.href("/tools/new"), .class("button button-accent add-tool-link")) { "+ New tool" }
+            }
+        }
+    }
+}
+
+/// What there is with no tools yet: the first to make, for an administrator.
+private struct NoTools: HTML, Sendable {
+    let user: AuthenticatedUser
+
+    var body: some HTML {
+        div(.class("empty-state")) {
+            p(.class("eyebrow")) { "A blank canvas" }
+            h2 { "Start with one useful ability." }
+            p(.class("section-intro")) {
+                "Fetch information, run a script, or ask another bot to take on one focused piece of thinking."
+            }
+            if case .administrator = user {
+                a(.href("/tools/new"), .class("text-link")) { "New tool →" }
             }
         }
     }

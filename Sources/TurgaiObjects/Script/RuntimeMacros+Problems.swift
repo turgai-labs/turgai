@@ -30,84 +30,100 @@ extension RuntimeMacros {
                 variable.bindings.allSatisfy({ $0.accessorBlock == nil }),
                 let binding = variable.bindings.first
             else { continue }
-            let written = binding.typeAnnotation.map {
-                ($0.type.as(OptionalTypeSyntax.self)?.wrappedType ?? $0.type).trimmedDescription
-            }
-            let property = binding.pattern.trimmedDescription
-            // It follows what its property holds, and is given nothing else.
-            if attribute.arguments != nil {
-                problems.append(
-                    CodeProblem(
-                        line: line(variable), span: attribute.trimmedDescription,
-                        "@\(subscribed) takes no arguments: it follows the object its property holds"))
-                continue
-            }
-            // What it follows, and the function each of its events calls: a Schedule or a Timer
-            // announces it's due, to the function its property names; an object announces its
-            // events, each to the function named like it.
-            let object: String
-            let handlers: [Handler]
-            if Self.isDue(written: written, value: binding.initializer?.value) {
-                object = property
-                let name = Schedule.handler(for: property)
-                handlers = [
-                    Handler(name: name, written: "\(name)(at: Date)") { parameters in
-                        parameters.count == 1 && parameters.first?.firstName.text == "at"
-                            && parameters.first?.type.trimmedDescription == "Date"
-                    }
-                ]
-            } else {
-                // An object that exists, which it holds: as written, or as made.
-                let made = binding.initializer?.value.as(FunctionCallExprSyntax.self)?.calledExpression.as(
-                    DeclReferenceExprSyntax.self)?.baseName.text
-                guard let type = [written, made].compactMap({ $0 }).first(where: { objects[$0] != nil }),
-                    let followed = objects[type]
-                else {
-                    let held =
-                        written ?? binding.initializer?.value.trimmedDescription ?? binding.pattern.trimmedDescription
-                    problems.append(
-                        CodeProblem(
-                            line: line(variable), span: variable.trimmedDescription,
-                            "@\(subscribed) should hold the object that sends the events, while `\(held)` is no object"))
-                    continue
+            problems += Self.problems(
+                of: variable, binding: binding, attribute: attribute, in: script, objects: objects, methods: methods,
+                lines: lines)
+        }
+        return problems
+    }
+
+    /// What's wrong with the `@Subscribed` property `variable`, bound by `binding`: what it holds,
+    /// and the functions in `methods` its events call.
+    private static func problems(
+        of variable: VariableDeclSyntax, binding: PatternBindingSyntax, attribute: AttributeSyntax, in script: Script,
+        objects: [String: DeclaredActor], methods: [FunctionDeclSyntax], lines: SourceLocationConverter
+    ) -> [CodeProblem] {
+        func line(_ node: some SyntaxProtocol) -> Int {
+            lines.location(for: node.positionAfterSkippingLeadingTrivia).line
+        }
+        var problems: [CodeProblem] = []
+        let written = binding.typeAnnotation.map {
+            ($0.type.as(OptionalTypeSyntax.self)?.wrappedType ?? $0.type).trimmedDescription
+        }
+        let property = binding.pattern.trimmedDescription
+        // It follows what its property holds, and is given nothing else.
+        if attribute.arguments != nil {
+            problems.append(
+                CodeProblem(
+                    line: line(variable), span: attribute.trimmedDescription,
+                    "@\(subscribed) takes no arguments: it follows the object its property holds"))
+            return problems
+        }
+        // What it follows, and the function each of its events calls: a Schedule or a Timer
+        // announces it's due, to the function its property names; an object announces its
+        // events, each to the function named like it.
+        let object: String
+        let handlers: [Handler]
+        if Self.isDue(written: written, value: binding.initializer?.value) {
+            object = property
+            let name = Schedule.handler(for: property)
+            handlers = [
+                Handler(name: name, written: "\(name)(at: Date)") { parameters in
+                    parameters.count == 1 && parameters.first?.firstName.text == "at"
+                        && parameters.first?.type.trimmedDescription == "Date"
                 }
-                guard !followed.events.isEmpty else {
-                    problems.append(
-                        CodeProblem(
-                            line: line(variable), span: variable.trimmedDescription,
-                            "@\(subscribed) should hold an object that announces events, while `\(type)` announces none"))
-                    continue
-                }
-                object = script.uses.ids(of: type).first?.rawValue ?? type
-                let owner = followed.name
-                // Each takes its event's value, and nothing else.
-                handlers = followed.events.keys.sorted().map { event in
-                    Handler(name: DynamicObject.handler(for: event), written: handler(of: event, in: owner)) {
-                        parameters in
-                        parameters.count == 1 && parameters.first?.firstName.text == "_"
-                            && parameters.first?.type.trimmedDescription == "\(owner).\(event)"
-                    }
-                }
-            }
-            let handling = methods.filter { method in handlers.contains { $0.name == method.name.text } }
-            guard !handling.isEmpty else {
+            ]
+        } else {
+            // An object that exists, which it holds: as written, or as made.
+            let made = binding.initializer?.value.as(FunctionCallExprSyntax.self)?.calledExpression.as(
+                DeclReferenceExprSyntax.self)?.baseName.text
+            guard let type = [written, made].compactMap({ $0 }).first(where: { objects[$0] != nil }),
+                let followed = objects[type]
+            else {
+                let held =
+                    written ?? binding.initializer?.value.trimmedDescription ?? binding.pattern.trimmedDescription
                 problems.append(
                     CodeProblem(
                         line: line(variable), span: variable.trimmedDescription,
-                        "no function handles the events of \(object): \(handlers.map(\.written).joined(separator: ", "))"
-                    ))
-                continue
+                        "@\(subscribed) should hold the object that sends the events, while `\(held)` is no object"))
+                return problems
             }
-            for method in handling {
-                guard let handler = handlers.first(where: { $0.name == method.name.text }),
-                    !handler.takes(method.signature.parameterClause.parameters)
-                else { continue }
+            guard !followed.events.isEmpty else {
                 problems.append(
                     CodeProblem(
-                        line: line(method.name),
-                        span: "func \(method.name.text)\(method.signature.parameterClause.trimmedDescription)",
-                        "the event of \(object) calls \(handler.written)"))
+                        line: line(variable), span: variable.trimmedDescription,
+                        "@\(subscribed) should hold an object that announces events, while `\(type)` announces none"))
+                return problems
             }
+            object = script.uses.ids(of: type).first?.rawValue ?? type
+            let owner = followed.name
+            // Each takes its event's value, and nothing else.
+            handlers = followed.events.keys.sorted().map { event in
+                Handler(name: DynamicObject.handler(for: event), written: handler(of: event, in: owner)) {
+                    parameters in
+                    parameters.count == 1 && parameters.first?.firstName.text == "_"
+                        && parameters.first?.type.trimmedDescription == "\(owner).\(event)"
+                }
+            }
+        }
+        let handling = methods.filter { method in handlers.contains { $0.name == method.name.text } }
+        guard !handling.isEmpty else {
+            problems.append(
+                CodeProblem(
+                    line: line(variable), span: variable.trimmedDescription,
+                    "no function handles the events of \(object): \(handlers.map(\.written).joined(separator: ", "))"
+                ))
+            return problems
+        }
+        for method in handling {
+            guard let handler = handlers.first(where: { $0.name == method.name.text }),
+                !handler.takes(method.signature.parameterClause.parameters)
+            else { continue }
+            problems.append(
+                CodeProblem(
+                    line: line(method.name),
+                    span: "func \(method.name.text)\(method.signature.parameterClause.trimmedDescription)",
+                    "the event of \(object) calls \(handler.written)"))
         }
         return problems
     }

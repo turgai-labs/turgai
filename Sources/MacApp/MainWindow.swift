@@ -19,35 +19,64 @@ struct MainWindow: View {
         ZStack {
             WorkingField(hue: store.sidebar.shownSpaceHue)
             // The conversation keeps clear of the panel; the field runs under it.
-            ChatView(
-                title: store.sidebar.openTitle, store: store.scope(state: \.chat, action: \.chat)
-            )
-            // Only the panel's room: what's in the conversation keeps its own margins.
-            .safeAreaPadding(.leading, store.showsSidebar ? Self.sidebarWidth + Self.gap : 0)
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) { ObjectsButton() }
-                ToolbarItem(placement: .primaryAction) {
-                    AccountButton(initial: store.profile.initial, name: store.profile.me?.name)
-                }
-                // A stamp of its own, not on the toolbar's glass.
-                .sharedBackgroundVisibility(.hidden)
-            }
-            GeometryReader { geometry in
-                SidebarGlass(
-                    isShown: store.showsSidebar, size: CGSize(width: Self.sidebarWidth, height: geometry.size.height),
-                    store: store.scope(state: \.sidebar, action: \.sidebar)
-                ) {
-                    store.send(.sidebarToggled, animation: .panelMorph)
-                }
-            }
-            .padding(Self.gap)
-            // From the window's top, as the system's own sidebars are: the traffic lights sit in it.
-            .ignoresSafeArea(.container, edges: .top)
+            ChatView(title: store.sidebar.openTitle, store: chat)
+                // Only the panel's room: what's in the conversation keeps its own margins.
+                .safeAreaPadding(.leading, chatInset)
+                .toolbar { WindowToolbar(initial: store.profile.initial, name: store.profile.me?.name) }
+            LeftPanel(store: store, width: Self.sidebarWidth)
+                .padding(Self.gap)
+                // From the window's top, as the system's own sidebars are: the traffic lights sit in it.
+                .ignoresSafeArea(.container, edges: .top)
         }
-        .modifier(SidebarDialogs(store: store.scope(state: \.sidebar, action: \.sidebar)))
+        .modifier(SidebarDialogs(store: sidebar))
         .task(id: session) {
             store.send(.sidebar(.appeared(session)))
             store.send(.profile(.appeared(session)))
+        }
+    }
+
+    private var chat: StoreOf<ChatFeature> {
+        store.scope(state: \.chat, action: \.chat)
+    }
+
+    private var sidebar: StoreOf<SidebarFeature> {
+        store.scope(state: \.sidebar, action: \.sidebar)
+    }
+
+    /// How far the conversation keeps from the window's leading edge: the panel's room, when it's
+    /// shown.
+    private var chatInset: CGFloat {
+        store.showsSidebar ? Self.sidebarWidth + Self.gap : 0
+    }
+}
+
+/// The window's toolbar: the objects, and who's signed in.
+private struct WindowToolbar: ToolbarContent {
+    let initial: String
+    /// Their name, once it's read.
+    let name: String?
+
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) { ObjectsButton() }
+        ToolbarItem(placement: .primaryAction) { AccountButton(initial: initial, name: name) }
+            // A stamp of its own, not on the toolbar's glass.
+            .sharedBackgroundVisibility(.hidden)
+    }
+}
+
+/// The left panel's glass, as tall as the window and `width` wide when shown.
+private struct LeftPanel: View {
+    let store: StoreOf<AppFeature>
+    let width: CGFloat
+
+    var body: some View {
+        GeometryReader { geometry in
+            SidebarGlass(
+                isShown: store.showsSidebar, size: CGSize(width: width, height: geometry.size.height),
+                store: store.scope(state: \.sidebar, action: \.sidebar)
+            ) {
+                store.send(.sidebarToggled, animation: .panelMorph)
+            }
         }
     }
 }

@@ -139,7 +139,7 @@ struct EvalNode: Sendable {
     }
 
     func stop() {
-        try? system.shutdown()
+        _ = try? system.shutdown()
         try? FileManager.default.removeItem(at: workspace)
     }
 }

@@ -19,13 +19,6 @@ import TurgaiDomain
 struct TurgaiFetchStageFields: HTML, Sendable {
     let step: TurgaiWorkflowStepDraft
 
-    private var hasConnectionOptions: Bool {
-        step.method.uppercased() != "GET"
-            || !step.allowedHosts.trimmed().isEmpty
-            || !step.headers.trimmed().isEmpty
-            || !step.body.trimmed().isEmpty
-    }
-
     var body: some HTML {
         div(
             .class("stage-kind-panel"),
@@ -41,57 +34,66 @@ struct TurgaiFetchStageFields: HTML, Sendable {
                 )
                 p(.class("hint")) { "Use {{input}} to bring in a value from the Inputs section." }
             }
-            details(.class("stage-details")) {
-                summary(.class("stage-details-summary")) {
-                    hasConnectionOptions
-                        ? "Connection options (configured)"
-                        : "Connection options (optional)"
+            FetchConnectionOptions(step: step)
+        }
+    }
+}
+
+/// A fetch's connection options, folded: its method, the websites it may reach, its headers and its
+/// body.
+private struct FetchConnectionOptions: HTML, Sendable {
+    let step: TurgaiWorkflowStepDraft
+
+    /// The HTTP methods it can use, each its own label.
+    private static let methods: [(String, String)] = ["GET", "POST", "PUT", "PATCH", "DELETE"].map { ($0, $0) }
+
+    /// What the folded options say of themselves: whether any is set.
+    private var heading: String {
+        let configured =
+            step.method.uppercased() != "GET"
+            || !step.allowedHosts.trimmed().isEmpty
+            || !step.headers.trimmed().isEmpty
+            || !step.body.trimmed().isEmpty
+        return configured ? "Connection options (configured)" : "Connection options (optional)"
+    }
+
+    var body: some HTML {
+        details(.class("stage-details")) {
+            summary(.class("stage-details-summary")) { heading }
+            div(.class("builder-grid builder-grid-two")) {
+                label(.class("form-field")) {
+                    span(.class("field-label")) { "Method" }
+                    TurgaiSelect(name: "stageMethod", value: step.method, options: Self.methods)
                 }
-                div(.class("builder-grid builder-grid-two")) {
-                    label(.class("form-field")) {
-                        span(.class("field-label")) { "Method" }
-                        TurgaiSelect(
-                            name: "stageMethod",
-                            value: step.method,
-                            options: [
-                                ("GET", "GET"),
-                                ("POST", "POST"),
-                                ("PUT", "PUT"),
-                                ("PATCH", "PATCH"),
-                                ("DELETE", "DELETE"),
-                            ]
-                        )
-                    }
-                    label(.class("form-field")) {
-                        span(.class("field-label")) { "Allowed websites" }
-                        input(
-                            .type(.text),
-                            .name("stageAllowedHosts"),
-                            .value(step.allowedHosts),
-                            .placeholder("api.example.com, weather.example.com")
-                        )
-                        p(.class("hint")) { "Leave empty to use the bot's usual network access." }
-                    }
-                    label(.class("form-field")) {
-                        span(.class("field-label")) { "Headers" }
-                        textarea(
-                            .name("stageHeaders"),
-                            .init(name: "rows", value: "2"),
-                            .placeholder("Authorization: Bearer {{token}}")
-                        ) {
-                            step.headers
-                        }
-                    }
+                label(.class("form-field")) {
+                    span(.class("field-label")) { "Allowed websites" }
+                    input(
+                        .type(.text),
+                        .name("stageAllowedHosts"),
+                        .value(step.allowedHosts),
+                        .placeholder("api.example.com, weather.example.com")
+                    )
+                    p(.class("hint")) { "Leave empty to use the bot's usual network access." }
                 }
-                label(.class("form-field builder-wide-field")) {
-                    span(.class("field-label")) { "Request body" }
+                label(.class("form-field")) {
+                    span(.class("field-label")) { "Headers" }
                     textarea(
-                        .name("stageBody"),
-                        .init(name: "rows", value: "3"),
-                        .placeholder("Optional request body")
+                        .name("stageHeaders"),
+                        .init(name: "rows", value: "2"),
+                        .placeholder("Authorization: Bearer {{token}}")
                     ) {
-                        step.body
+                        step.headers
                     }
+                }
+            }
+            label(.class("form-field builder-wide-field")) {
+                span(.class("field-label")) { "Request body" }
+                textarea(
+                    .name("stageBody"),
+                    .init(name: "rows", value: "3"),
+                    .placeholder("Optional request body")
+                ) {
+                    step.body
                 }
             }
         }

@@ -114,7 +114,7 @@ public struct ObjectModule: Sendable {
 
         override func visit(_ node: FunctionDeclSyntax) -> DeclSyntax {
             var function = node
-            function.attributes = AttributeListSyntax(node.attributes.filter { !ObjectModule.isRuntimeMacro($0) })
+            function.attributes = node.attributes.filter { !ObjectModule.isRuntimeMacro($0) }
             // Its line and indent, which an attribute taken away took with it.
             function.leadingTrivia = node.leadingTrivia
             if function.body == nil {

@@ -275,7 +275,7 @@ public distributed actor DynamicObjects {
     /// The object held here as `identity`: a reference, resolved once.
     private func object(_ identity: ObjectIdentity) async throws -> DynamicObject {
         if let object = resolved[identity] { return object }
-        guard let entry = state.entries.first(where: { $0.identity == identity }) else {
+        guard state.entries.contains(where: { $0.identity == identity }) else {
             throw DynamicObjectsError.unknownObject(identity)
         }
         let object = try await DynamicObject.resolve(on: actorSystem, identity: identity)

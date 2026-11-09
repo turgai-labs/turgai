@@ -14,12 +14,7 @@ public struct TurgaiScenes: Scene {
     public init() {
         let runtime = Runtime()
         _runtime = State(initialValue: runtime)
-        _app = State(
-            initialValue: Store(initialState: AppFeature.State()) {
-                AppFeature()
-            } withDependencies: {
-                $0.objects = runtime.objects
-            })
+        _app = State(initialValue: AppFeature.store(objects: runtime.objects))
     }
 
     public var body: some Scene {

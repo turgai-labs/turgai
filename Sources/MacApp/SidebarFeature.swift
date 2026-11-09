@@ -288,211 +288,214 @@ struct SidebarFeature {
     @Dependency(\.pasteboard) var pasteboard
 
     var body: some ReducerOf<Self> {
-        Reduce { state, action in
-            switch action {
-            case .appeared(let session):
-                state.session = session
-                return .run { send in
-                    do {
-                        await send(.loaded(try await server.spaces(session), try await server.conversations(session)))
-                    } catch {
-                        await send(.failed("Couldn't read your conversations."))
-                    }
+        Reduce(update)
+    }
+
+    /// What `action` does to the sidebar, and what it asks for.
+    private func update(_ state: inout State, _ action: Action) -> Effect<Action> {
+        switch action {
+        case .appeared(let session):
+            state.session = session
+            return .run { send in
+                do {
+                    await send(.loaded(try await server.spaces(session), try await server.conversations(session)))
+                } catch {
+                    await send(.failed("Couldn't read your conversations."))
                 }
+            }
 
-            case .loaded(let spaces, let conversations):
-                state.spaces = spaces
-                state.conversations = IdentifiedArray(
-                    uniqueElements: conversations.map { Row(id: $0.id, title: $0.title, spaceID: $0.spaceID) })
-                state.error = nil
-                if let selected = state.selected, state.conversations[id: selected] != nil { return .none }
-                // The latest is shown first; with none, a new one in Turgai's own space.
-                if let latest = state.conversations.first {
-                    return .send(.selected(latest.id))
-                }
-                return start(in: nil, as: state.session)
+        case .loaded(let spaces, let conversations):
+            state.spaces = spaces
+            state.conversations = IdentifiedArray(
+                uniqueElements: conversations.map { Row(id: $0.id, title: $0.title, spaceID: $0.spaceID) })
+            state.error = nil
+            if let selected = state.selected, state.conversations[id: selected] != nil { return .none }
+            // The latest is shown first; with none, a new one in Turgai's own space.
+            if let latest = state.conversations.first {
+                return .send(.selected(latest.id))
+            }
+            return start(in: nil, as: state.session)
 
-            case .failed(let why):
-                state.error = why
-                return .none
+        case .failed(let why):
+            state.error = why
+            return .none
 
-            case .selected(let id):
-                state.selected = id
-                state.conversations[id: id]?.unread = false
-                return .merge(.send(.delegate(.open(id))), countPeople(in: state.shownSpace, of: state))
+        case .selected(let id):
+            state.selected = id
+            state.conversations[id: id]?.unread = false
+            return .merge(.send(.delegate(.open(id))), countPeople(in: state.shownSpace, of: state))
 
-            case .peopleCounted(let space, let count):
-                state.peopleCounts[space] = count
-                return .none
+        case .peopleCounted(let space, let count):
+            state.peopleCounts[space] = count
+            return .none
 
-            case .spaceSwitched(let space):
-                guard space != state.shownSpace?.id else { return .none }
-                if let latest = state.conversations.first(where: { $0.spaceID == space }) {
-                    return .send(.selected(latest.id))
-                }
-                return start(in: space, as: state.session)
+        case .spaceSwitched(let space):
+            guard space != state.shownSpace?.id else { return .none }
+            if let latest = state.conversations.first(where: { $0.spaceID == space }) {
+                return .send(.selected(latest.id))
+            }
+            return start(in: space, as: state.session)
 
-            case .newConversationTapped:
-                return start(in: state.shownSpace?.id, as: state.session)
+        case .newConversationTapped:
+            return start(in: state.shownSpace?.id, as: state.session)
 
-            case .started(let conversation):
-                state.conversations.insert(
-                    Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID), at: 0)
-                return .send(.selected(conversation.id))
+        case .started(let conversation):
+            state.conversations.insert(
+                Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID), at: 0)
+            return .send(.selected(conversation.id))
 
-            case .conversationJoined(let conversation):
-                // A new one comes first, marked; one listed already is only called as it's called now.
-                guard state.conversations[id: conversation.id] == nil else {
-                    state.conversations[id: conversation.id]?.title = conversation.title
-                    return .none
-                }
-                state.conversations.insert(
-                    Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID, unread: true),
-                    at: 0)
-                return .none
-
-            case .conversationSaid(let conversation):
-                // To the top, as the latest; marked when it isn't the one open.
-                let unread = conversation.id != state.selected
-                state.conversations.remove(id: conversation.id)
-                state.conversations.insert(
-                    Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID, unread: unread),
-                    at: 0)
-                return .none
-
-            case .conversationTitled(let conversation):
+        case .conversationJoined(let conversation):
+            // A new one comes first, marked; one listed already is only called as it's called now.
+            guard state.conversations[id: conversation.id] == nil else {
                 state.conversations[id: conversation.id]?.title = conversation.title
                 return .none
-
-            case .conversationLeft(let id):
-                state.conversations.remove(id: id)
-                guard state.selected == id else { return .none }
-                state.selected = nil
-                if let next = state.conversations.first { return .send(.selected(next.id)) }
-                return .none
-
-            case .renameConversationTapped(let id):
-                state.dialog = .renaming(
-                    Renaming(subject: .conversation(id), name: state.conversations[id: id]?.title ?? ""))
-                return .none
-
-            case .renameShownSpaceTapped:
-                guard let space = state.shownSpace else { return .none }
-                state.dialog = .renaming(Renaming(subject: .space(space.id), name: space.name))
-                return .none
-
-            case .inviteTapped:
-                guard let space = state.shownSpace, let session = state.session else { return .none }
-                state.dialog = .inviting(Inviting(spaceName: space.name))
-                return .run { send in
-                    do {
-                        await send(.inviteMade(try await server.makeInvite(session, space.id)))
-                    } catch {
-                        await send(.inviteFailed)
-                    }
-                }
-
-            case .inviteMade(let offer):
-                guard case .inviting(var inviting) = state.dialog else { return .none }
-                inviting.link = offer.link
-                state.dialog = .inviting(inviting)
-                return .none
-
-            case .inviteFailed:
-                guard case .inviting(var inviting) = state.dialog else { return .none }
-                inviting.problem = "Couldn't make an invite. Try again."
-                state.dialog = .inviting(inviting)
-                return .none
-
-            case .copyInviteTapped:
-                guard case .inviting(let inviting) = state.dialog, let link = inviting.link else { return .none }
-                return .run { _ in await pasteboard.copy(link) }
-
-            case .addSpaceTapped:
-                state.dialog = .addingSpace(AddingSpace())
-                return .none
-
-            case .nameChanged(let name):
-                state.dialog?.name = name
-                return .none
-
-            case .linkChanged(let link):
-                guard case .addingSpace(var adding) = state.dialog else { return .none }
-                adding.link = link
-                adding.problem = nil
-                state.dialog = .addingSpace(adding)
-                return .none
-
-            case .dialogPresented(let presented):
-                if !presented { state.dialog = nil }
-                return .none
-
-            case .renameConfirmed:
-                guard case .renaming(let renaming) = state.dialog, let session = state.session else { return .none }
-                state.dialog = nil
-                let name = renaming.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty else { return .none }
-                return .run { send in
-                    do {
-                        switch renaming.subject {
-                        case .conversation(let id):
-                            try await server.titleConversation(session, id, name)
-                            await send(.renamed(id, title: name))
-                        case .space(let id):
-                            await send(.spaceRenamed(try await server.renameSpace(session, id, name)))
-                        }
-                    } catch {
-                        await send(.failed("Couldn't save the name."))
-                    }
-                }
-
-            case .makeSpaceTapped:
-                guard case .addingSpace(let adding) = state.dialog, adding.canMake, let session = state.session
-                else { return .none }
-                let name = adding.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                return .run { send in
-                    do {
-                        await send(.spaceAdded(try await server.makeSpace(session, name)))
-                    } catch {
-                        await send(.addingFailed("Couldn't make the space."))
-                    }
-                }
-
-            case .joinTapped:
-                guard case .addingSpace(let adding) = state.dialog, let invite = adding.invite,
-                    let session = state.session
-                else { return .none }
-                return .run { send in
-                    do {
-                        await send(.spaceAdded(try await server.joinSpace(session, invite)))
-                    } catch {
-                        await send(.addingFailed("That link didn't work: it may be used up or out of date."))
-                    }
-                }
-
-            case .spaceAdded(let space):
-                state.dialog = nil
-                if !state.spaces.contains(where: { $0.id == space.id }) { state.spaces.append(space) }
-                return .send(.spaceSwitched(space.id))
-
-            case .addingFailed(let why):
-                guard case .addingSpace(var adding) = state.dialog else { return .none }
-                adding.problem = why
-                state.dialog = .addingSpace(adding)
-                return .none
-
-            case .renamed(let id, let title):
-                state.conversations[id: id]?.title = title
-                return .none
-
-            case .spaceRenamed(let space):
-                guard let index = state.spaces.firstIndex(where: { $0.id == space.id }) else { return .none }
-                state.spaces[index] = space
-                return .none
-
-            case .delegate:
-                return .none
             }
+            state.conversations.insert(
+                Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID, unread: true),
+                at: 0)
+            return .none
+
+        case .conversationSaid(let conversation):
+            // To the top, as the latest; marked when it isn't the one open.
+            let unread = conversation.id != state.selected
+            state.conversations.remove(id: conversation.id)
+            state.conversations.insert(
+                Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID, unread: unread),
+                at: 0)
+            return .none
+
+        case .conversationTitled(let conversation):
+            state.conversations[id: conversation.id]?.title = conversation.title
+            return .none
+
+        case .conversationLeft(let id):
+            state.conversations.remove(id: id)
+            guard state.selected == id else { return .none }
+            state.selected = nil
+            if let next = state.conversations.first { return .send(.selected(next.id)) }
+            return .none
+
+        case .renameConversationTapped(let id):
+            state.dialog = .renaming(
+                Renaming(subject: .conversation(id), name: state.conversations[id: id]?.title ?? ""))
+            return .none
+
+        case .renameShownSpaceTapped:
+            guard let space = state.shownSpace else { return .none }
+            state.dialog = .renaming(Renaming(subject: .space(space.id), name: space.name))
+            return .none
+
+        case .inviteTapped:
+            guard let space = state.shownSpace, let session = state.session else { return .none }
+            state.dialog = .inviting(Inviting(spaceName: space.name))
+            return .run { send in
+                do {
+                    await send(.inviteMade(try await server.makeInvite(session, space.id)))
+                } catch {
+                    await send(.inviteFailed)
+                }
+            }
+
+        case .inviteMade(let offer):
+            guard case .inviting(var inviting) = state.dialog else { return .none }
+            inviting.link = offer.link
+            state.dialog = .inviting(inviting)
+            return .none
+
+        case .inviteFailed:
+            guard case .inviting(var inviting) = state.dialog else { return .none }
+            inviting.problem = "Couldn't make an invite. Try again."
+            state.dialog = .inviting(inviting)
+            return .none
+
+        case .copyInviteTapped:
+            guard case .inviting(let inviting) = state.dialog, let link = inviting.link else { return .none }
+            return .run { _ in await pasteboard.copy(link) }
+
+        case .addSpaceTapped:
+            state.dialog = .addingSpace(AddingSpace())
+            return .none
+
+        case .nameChanged(let name):
+            state.dialog?.name = name
+            return .none
+
+        case .linkChanged(let link):
+            guard case .addingSpace(var adding) = state.dialog else { return .none }
+            adding.link = link
+            adding.problem = nil
+            state.dialog = .addingSpace(adding)
+            return .none
+
+        case .dialogPresented(let presented):
+            if !presented { state.dialog = nil }
+            return .none
+
+        case .renameConfirmed:
+            guard case .renaming(let renaming) = state.dialog, let session = state.session else { return .none }
+            state.dialog = nil
+            let name = renaming.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return .none }
+            return .run { send in
+                do {
+                    switch renaming.subject {
+                    case .conversation(let id):
+                        try await server.titleConversation(session, id, name)
+                        await send(.renamed(id, title: name))
+                    case .space(let id):
+                        await send(.spaceRenamed(try await server.renameSpace(session, id, name)))
+                    }
+                } catch {
+                    await send(.failed("Couldn't save the name."))
+                }
+            }
+
+        case .makeSpaceTapped:
+            guard case .addingSpace(let adding) = state.dialog, adding.canMake, let session = state.session
+            else { return .none }
+            let name = adding.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return .run { send in
+                do {
+                    await send(.spaceAdded(try await server.makeSpace(session, name)))
+                } catch {
+                    await send(.addingFailed("Couldn't make the space."))
+                }
+            }
+
+        case .joinTapped:
+            guard case .addingSpace(let adding) = state.dialog, let invite = adding.invite,
+                let session = state.session
+            else { return .none }
+            return .run { send in
+                do {
+                    await send(.spaceAdded(try await server.joinSpace(session, invite)))
+                } catch {
+                    await send(.addingFailed("That link didn't work: it may be used up or out of date."))
+                }
+            }
+
+        case .spaceAdded(let space):
+            state.dialog = nil
+            if !state.spaces.contains(where: { $0.id == space.id }) { state.spaces.append(space) }
+            return .send(.spaceSwitched(space.id))
+
+        case .addingFailed(let why):
+            guard case .addingSpace(var adding) = state.dialog else { return .none }
+            adding.problem = why
+            state.dialog = .addingSpace(adding)
+            return .none
+
+        case .renamed(let id, let title):
+            state.conversations[id: id]?.title = title
+            return .none
+
+        case .spaceRenamed(let space):
+            guard let index = state.spaces.firstIndex(where: { $0.id == space.id }) else { return .none }
+            state.spaces[index] = space
+            return .none
+
+        case .delegate:
+            return .none
         }
     }
 

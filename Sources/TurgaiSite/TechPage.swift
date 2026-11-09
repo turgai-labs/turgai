@@ -720,28 +720,34 @@ private struct TechIntro: HTML {
 private struct TechNight: HTML {
     var body: some HTML {
         section(.class("tech-night")) {
-            // built like the idea page's last page: the sticker, the big line, then what it means and the way in
-            div(.class("tech-end")) {
-                ComingSoon()
-                p(.class("big")) {
-                    "Start small."
-                    br()
-                    span(.class("flag")) { "Keep adding." }
-                }
-                div(.class("close")) {
-                    p(.class("belief")) {
-                        "An agent, a rule and a part of your product are built and changed in the same way, and new ones join while the rest keeps running."
-                    }
-                    p { "Turgai is in early alpha. If you’d like to know more or see it running, write to us." }
-                    div(.class("cta")) {
-                        a(.class("button button-accent"), .href("mailto:hello@turg.ai")) { "Write to us" }
-                        a(.class("button button-secondary"), .href("../")) { "Back to the idea" }
-                    }
-                }
-            }
+            TechEnd()
             footer(.class("tech-footer")) {
                 span { "Turgai · Apache 2.0 · early development" }
                 span { "Turgai means skylark." }
+            }
+        }
+    }
+}
+
+/// Built like the idea page's last page: the sticker, the big line, then what it means and the way in.
+private struct TechEnd: HTML {
+    var body: some HTML {
+        div(.class("tech-end")) {
+            ComingSoon()
+            p(.class("big")) {
+                "Start small."
+                br()
+                span(.class("flag")) { "Keep adding." }
+            }
+            div(.class("close")) {
+                p(.class("belief")) {
+                    "An agent, a rule and a part of your product are built and changed in the same way, and new ones join while the rest keeps running."
+                }
+                p { "Turgai is in early alpha. If you’d like to know more or see it running, write to us." }
+                div(.class("cta")) {
+                    a(.class("button button-accent"), .href("mailto:hello@turg.ai")) { "Write to us" }
+                    a(.class("button button-secondary"), .href("../")) { "Back to the idea" }
+                }
             }
         }
     }

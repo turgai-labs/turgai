@@ -442,11 +442,17 @@ let package = Package(
 // Every async function runs on its caller's executor unless it says otherwise, as Swift 6.2's
 // approachable concurrency has it: what an actor owns stays on that actor.
 for target in package.targets where target.type != .binary {
-    target.swiftSettings = (target.swiftSettings ?? []) + [
-        .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
-        .unsafeFlags([
-            "-Xfrontend", "-warn-long-function-bodies=100",
-            "-Xfrontend", "-warn-long-expression-type-checking=100",
-        ]),
-    ]
+    target.swiftSettings = (target.swiftSettings ?? []) + [.enableUpcomingFeature("NonisolatedNonsendingByDefault")]
+}
+
+// What's slow to type-check, said where it slows the app's build: tests, whose expectations are
+// macros each, aren't held to it.
+for target in package.targets where target.type != .binary && target.type != .test {
+    target.swiftSettings =
+        (target.swiftSettings ?? []) + [
+            .unsafeFlags([
+                "-Xfrontend", "-warn-long-function-bodies=100",
+                "-Xfrontend", "-warn-long-expression-type-checking=100",
+            ])
+        ]
 }
