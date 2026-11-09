@@ -100,15 +100,14 @@ extension SpaceHue {
     }
 }
 
-/// A ring around a stamp leaning by `lean`, a little apart from it: what's picked.
-struct StampOutline: View {
+/// A border along the edge of a stamp leaning by `lean`: what's picked.
+struct StampBorder: View {
     let lean: Lean
 
     var body: some View {
         GeometryReader { geometry in
-            RoundedRectangle(cornerRadius: 5)
-                .stroke(Color.turgaiInk, lineWidth: 2)
-                .padding(-4)
+            RoundedRectangle(cornerRadius: 3)
+                .strokeBorder(Color.turgaiInk, lineWidth: 2)
                 .rotationEffect(lean.angle(across: geometry.size.width))
         }
     }

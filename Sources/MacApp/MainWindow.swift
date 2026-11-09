@@ -310,14 +310,14 @@ private struct SidebarView: View {
     }
 }
 
-/// Every space the person is in: a tile each with its initial, in its color, the shown one ringed,
+/// Every space the person is in: a tile each with its initial, in its color, the shown one bordered,
 /// and dotted when something's new in it; + makes or joins one. It scrolls when there are many.
 private struct SpaceRail: View {
     let store: StoreOf<SidebarFeature>
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: 8) {
                 ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
                     SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
                 }
@@ -352,7 +352,7 @@ private struct SpaceTile: View {
         .buttonStyle(.plain)
         .overlay {
             if choice.isShown {
-                StampOutline(lean: choice.lean)
+                StampBorder(lean: choice.lean)
             }
         }
         .overlay(alignment: .topTrailing) {
