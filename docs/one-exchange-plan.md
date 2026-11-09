@@ -29,7 +29,9 @@ You reopen it later. The app gets past turns from Hail's history (`Conversation.
 
 **The agent owns how it worked**, and its turns: it names them, as now.
 
-**One run is one turn, and says so where it starts and where it ends.** The `received` run update says which turn it opened, as the journal's `history.received` already does; the reply (`responseRecorded`) and the failure (`runFailed`) say which turn they end. The participant takes the id from what came back, keeping nothing in between.
+**One run is one turn, and says so where it starts and where it ends.** The `received` run update says which turn it opened, as the journal's `history.received` already does; the reply (`responseRecorded`) and the failure (`runFailed`) say which turn they end.
+
+**The run keeps the id it was told, for its own call.** Not every turn ends through the agent: a cancelled call ends in `CancellationError`, and an agent lost mid-turn ends in an error on the caller's side, after the agent opened the turn and recorded steps. So the id seen on `received` stays in the call (`HailConversationPeer.run`, a local that ends with it, not actor state), and whatever ends the turn takes it from there: a reply, the agent's failure, a thrown error, a cancellation.
 
 **The conversation keeps the link** with whatever ends its turn: the reply (`replyQueued`) or the failure (`turnFailed`) says which agent turn it came from. That's the conversation's own fact.
 
@@ -46,7 +48,7 @@ You reopen it later. The app gets past turns from Hail's history (`Conversation.
 
 **Turgai:**
 
-1. `HailResponse` carries the agent's turn id, from `responseRecorded`; a failure carries it from `runFailed`, when the agent had opened a turn.
+1. `HailConversationPeer.run` keeps the agent's turn id from `received` for the call, and gives it with what ends the turn: `HailResponse` on a reply, and on any failure or cancellation once the agent had opened a turn.
 2. `AgentParticipant` passes it with the completion or the failure (`ConversationModelEvent`).
 3. `PendingConversationReply` keeps the agent's turn id; the inbox's `turnFailed` keeps it when the agent had opened one, and none when the turn failed before it did.
 4. `ConversationTurns` reads Hail's projection and gives each turn the conversation's id, through those links.
