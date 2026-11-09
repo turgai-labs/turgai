@@ -4,9 +4,9 @@ import TurgaiModels
 
 /// The main window, once someone is signed in: Turgai's field behind everything, the open
 /// conversation over it, and a glass panel on the left, from the window's top, the traffic lights
-/// in its corner and the button that hides it at its top right, with the person's spaces on a rail and
-/// the shown space's conversations. Hidden, its glass shrinks into a button beside the traffic
-/// lights that brings it back, and grows out of it again. The objects open in a window of their own.
+/// in its corner and the button that hides it just after them, with the person's spaces on a rail
+/// and the shown space's conversations. Hidden, its glass shrinks into a button in the same place
+/// that brings it back, and grows out of it again. The objects open in a window of their own.
 struct MainWindow: View {
     let session: Session
     @Bindable var store: StoreOf<AppFeature>
@@ -202,8 +202,8 @@ private struct SidebarGlass: View {
     let toggle: () -> Void
 
     /// How much of the window's top left the traffic lights take, with room after them.
-    private static let trafficLightsWidth: CGFloat = 86
-    private static let buttonSize: CGFloat = 32
+    static let trafficLightsWidth: CGFloat = 86
+    static let buttonSize: CGFloat = 32
     private static let shape = RoundedRectangle(cornerRadius: 16)
 
     var body: some View {
@@ -286,9 +286,9 @@ private struct ObjectsButton: View {
     }
 }
 
-/// The left panel, Slack's way, on one surface: a row for the window's traffic lights, the button
-/// that hides the panel at its other end; then the spaces on a rail, a hairline, and the shown
-/// space's heading, New conversation in it, and its conversations.
+/// The left panel, Slack's way, on one surface: a row for the window's traffic lights and, just after
+/// them, the button that hides the panel, where the one that shows it again is; then the spaces on a
+/// rail, a hairline, and the shown space's heading, New conversation in it, and its conversations.
 private struct SidebarView: View {
     let store: StoreOf<SidebarFeature>
     let hide: () -> Void
@@ -296,11 +296,12 @@ private struct SidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Spacer(minLength: 0)
                 HidePanelButton(systemImage: "sidebar.left", help: "Hide conversations", hide: hide)
+                    .frame(width: SidebarGlass.buttonSize, height: SidebarGlass.buttonSize)
+                Spacer(minLength: 0)
             }
-            .padding(.trailing, 10)
-            .frame(height: 32)
+            .padding(.leading, SidebarGlass.trafficLightsWidth)
+            .frame(height: SidebarGlass.buttonSize)
             HStack(spacing: 0) {
                 SpaceRail(store: store)
                 Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 8)
