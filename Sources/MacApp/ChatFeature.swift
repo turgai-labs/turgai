@@ -61,9 +61,9 @@ struct ChatFeature {
         /// When its messages last changed: what their times are said against.
         var today = Date.distantPast
 
-        /// What was said, then the reply being typed: its row stays the same once it's said, so it
-        /// isn't drawn again. Each says when it was said, and who said it while more than one person
-        /// is in it, or has said something in it.
+        /// What was said, the reply being typed, then what you've sent that isn't taken yet: a
+        /// message's row stays the same once it's said, so it isn't drawn again. Each says when it
+        /// was said, and who said it while more than one person is in it, or has said something in it.
         var shown: [ShownMessage] {
             let named =
                 participants.filter { $0.kind == .person }.count > 1 || messages.contains { whose($0) == .someoneElse }
@@ -72,12 +72,21 @@ struct ChatFeature {
                 let name = whose == .yours ? "You" : message.author?.name
                 return shown(
                     message.id, whose: whose, text: message.text, name: named ? name : nil,
-                    when: Self.when(message.at, today: today))
+                    when: Self.when(message.at, today: today), delivery: .said)
             }
-            guard let typed = turn?.partial, !messages.contains(where: { $0.id == typed.id }) else { return said }
-            let typing = shown(
-                typed.id, whose: .agent, text: typed.text, name: named ? typed.author?.name : nil, when: "typing…")
-            return said + [typing]
+            let typing = turn?.partial.flatMap { typed in
+                messages.contains { $0.id == typed.id }
+                    ? nil
+                    : shown(
+                        typed.id, whose: .agent, text: typed.text, name: named ? typed.author?.name : nil,
+                        when: "typing…", delivery: .said)
+            }
+            let sending = pending.filter { request in !messages.contains { $0.id == request.id } }.map { request in
+                shown(
+                    request.id, whose: .yours, text: request.text, name: named ? "You" : nil, when: "sending…",
+                    delivery: .sending)
+            }
+            return said + (typing.map { [$0] } ?? []) + sending
         }
 
         /// Whose `message` is, as it's drawn.
@@ -90,11 +99,13 @@ struct ChatFeature {
         }
 
         /// The message `id`, with the agent's turn that made it, when it's a reply of the agent's.
-        private func shown(_ id: MessageID, whose: Whose, text: String, name: String?, when: String) -> ShownMessage {
+        private func shown(
+            _ id: MessageID, whose: Whose, text: String, name: String?, when: String, delivery: Delivery
+        ) -> ShownMessage {
             let turn = whose == .agent ? turns[id: TurnID(rawValue: id.rawValue)] : nil
             let caption = ((name.map { [$0] } ?? []) + [when]).joined(separator: " · ")
             return ShownMessage(
-                id: id, whose: whose, text: text, caption: caption, turn: turn,
+                id: id, whose: whose, text: text, caption: caption, delivery: delivery, turn: turn,
                 showsTurn: turn != nil && shownTurn == id)
         }
 
@@ -441,6 +452,8 @@ struct ChatFeature {
         case .history(_, let messages):
             state.today = now
             state.messages = messages
+            // Taken while the connection was away: it's said now.
+            state.pending.removeAll { request in messages.contains { $0.id == request.id } }
         case .messageAccepted(_, _, let message):
             state.pending.removeAll { $0.id == message.id }
             append(message, to: &state)
@@ -492,10 +505,18 @@ struct ShownMessage: Equatable, Identifiable {
     let text: String
     /// Who said it, when that's shown, and when: `Ann · 14:03`.
     let caption: String
+    let delivery: Delivery
     /// The agent's turn that made it, when it's a reply of the agent's.
     let turn: TurnRecord?
     /// Its turn is shown beside it.
     let showsTurn: Bool
+}
+
+/// Whether a message is said, or still on its way.
+enum Delivery: Equatable {
+    case said
+    /// Sent, but not yet taken by the conversation.
+    case sending
 }
 
 /// Whose a message is, as it's drawn.

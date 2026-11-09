@@ -266,6 +266,31 @@ struct ChatFeatureTests {
         #expect(abs(600 * sin(long.radians) - 6) < 0.001)
     }
 
+    /// A message taken while the connection was away is said once history has it: it's sending no
+    /// more.
+    @Test
+    func historyEndsSendingWhatItHas() async {
+        let request = SendMessageRequest(id: MessageID(rawValue: UUID(0)), text: "hi")
+        let taken = Message(id: request.id, role: .user, text: "hi", at: Date(timeIntervalSince1970: 1))
+        let store = TestStore(
+            initialState: ChatFeature.State(
+                connection: .connected(botID: BotID(rawValue: "turgai")), conversationID: ConversationID(rawValue: "c"),
+                pending: [request])
+        ) {
+            ChatFeature()
+        } withDependencies: {
+            $0.date = .constant(Date(timeIntervalSince1970: 2))
+        }
+
+        await store.send(
+            .received(ChatEvent(payload: .history(conversationID: ConversationID(rawValue: "c"), messages: [taken])))
+        ) {
+            $0.today = Date(timeIntervalSince1970: 2)
+            $0.messages = [taken]
+            $0.pending = []
+        }
+    }
+
     @Test
     func sentMessageIsPendingUntilAccepted() async {
         let sent = LockIsolated<[ChatCommand]>([])
@@ -387,6 +412,24 @@ struct ShownMessageTests {
         state.participants = [ann, turgai]
         state.messages.remove(at: 1)
         #expect(state.shown.map(\.caption) == [time, time])
+    }
+
+    /// A message you send is shown at once, faded and sending, and stays the same row once it's
+    /// said, then saying when.
+    @Test
+    func aMessageYouSendIsTheRowItBecomes() {
+        let request = SendMessageRequest(id: MessageID(rawValue: UUID(0)), text: "hi")
+        var state = ChatFeature.State(pending: [request])
+        state.today = on(hour: 18)
+        #expect(state.shown.map(\.id) == [request.id])
+        #expect(state.shown.map(\.delivery) == [.sending])
+        #expect(state.shown.map(\.caption) == ["sending…"])
+
+        let said = on(hour: 14)
+        state.messages = [Message(id: request.id, role: .user, text: "hi", at: said)]
+        #expect(state.shown.map(\.id) == [request.id])
+        #expect(state.shown.map(\.delivery) == [.said])
+        #expect(state.shown.map(\.caption) == [said.formatted(date: .omitted, time: .shortened)])
     }
 
     /// A time today says only the time; in the six days before, its weekday too; before that, its

@@ -63,23 +63,22 @@ private struct ConversationHeader: View {
 }
 
 /// A message, as the web stamps them: yours on the right in yellow, the agent's on the left in blue,
-/// someone else's on the left in coral; over it, its caption, when it has one. Its background leans
+/// someone else's on the left in coral; over it, its caption; faded while it's on its way. Its background leans
 /// by `lean`; its text doesn't. What's `beside` it sits just after its end.
 private struct Bubble<Beside: View>: View {
     let whose: Whose
     let text: String
     let lean: Lean
-    var caption: String? = nil
+    let caption: String
+    let delivery: Delivery
     @ViewBuilder var beside: Beside
 
     var body: some View {
         VStack(alignment: whose == .yours ? .trailing : .leading, spacing: 4) {
-            if let caption {
-                Text(caption)
-                    .font(.caption)
-                    .foregroundStyle(Color.turgaiMuted)
-                    .padding(.horizontal, 4)
-            }
+            Text(caption)
+                .font(.caption)
+                .foregroundStyle(Color.turgaiMuted)
+                .padding(.horizontal, 4)
             switch whose {
             case .someoneElse:
                 Text(text)
@@ -101,6 +100,7 @@ private struct Bubble<Beside: View>: View {
                     .frame(maxWidth: 560, alignment: .leading)
             }
         }
+        .opacity(delivery == .sending ? 0.55 : 1)
         .frame(maxWidth: .infinity, alignment: whose == .yours ? .trailing : .leading)
     }
 
@@ -109,12 +109,6 @@ private struct Bubble<Beside: View>: View {
             markdown: text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(text)
-    }
-}
-
-extension Bubble where Beside == EmptyView {
-    init(whose: Whose, text: String, lean: Lean) {
-        self.init(whose: whose, text: text, lean: lean) { EmptyView() }
     }
 }
 
@@ -270,7 +264,7 @@ private struct ParticipantIcon: View {
     }
 }
 
-/// The conversation: what was said and the reply being typed, what's sent but not yet taken, and
+/// The conversation: what was said, the reply being typed and what's sent but not yet taken, and
 /// what the agent is doing before it types. A new message stamps in, as on the web, unless motion is
 /// reduced.
 private struct MessageList: View {
@@ -285,9 +279,6 @@ private struct MessageList: View {
                     dismissTurn: { store.send(.turnDismissed) }
                 )
                 .transition(.scale(scale: 0.78).combined(with: .opacity))
-            }
-            ForEach(store.pending) { (request: SendMessageRequest) in
-                Bubble(whose: .yours, text: request.text, lean: request.id.lean).opacity(0.55)
             }
             if let working = store.working {
                 Working(activity: working)
@@ -351,7 +342,10 @@ private struct MessageRow: View {
     let dismissTurn: () -> Void
 
     var body: some View {
-        Bubble(whose: shown.whose, text: shown.text, lean: shown.id.lean, caption: shown.caption) {
+        Bubble(
+            whose: shown.whose, text: shown.text, lean: shown.id.lean, caption: shown.caption,
+            delivery: shown.delivery
+        ) {
             if let turn = shown.turn {
                 Button(action: showTurn) {
                     Image(systemName: "info.circle")
