@@ -29,9 +29,9 @@ You reopen it later. The app gets past turns from Hail's history (`Conversation.
 
 **The agent owns how it worked**, and its turns: it names them, as now.
 
-**One run is one turn, and says so where it starts and where it ends.** The `received` run update says which turn it opened, as the journal's `history.received` already does; the reply (`responseRecorded`) and the failure (`runFailed`) say which turn they end.
+**Every update of a run says which turn it's of.** One stream is one run today, but streams merge: several agents in one conversation, a watcher following several, one feed of many turns. Updates that name their turn can be routed and patched by it, as the chat socket's events are by `conversationID` and `turnID`. The agent makes the turn's id before its loop starts, so every update carries it, from `runStarted` to the reply or the failure: an envelope, `AgentRunUpdate { turn, event }`, not a field on each case.
 
-**The run keeps the id it was told, for its own call.** Not every turn ends through the agent: a cancelled call ends in `CancellationError`, and an agent lost mid-turn ends in an error on the caller's side, after the agent opened the turn and recorded steps. So the id seen on `received` stays in the call (`HailConversationPeer.run`, a local that ends with it, not actor state), and whatever ends the turn takes it from there: a reply, the agent's failure, a thrown error, a cancellation.
+**The run keeps the last id it was told, for its own call.** Not every turn ends through the agent: a cancelled call ends in `CancellationError`, and an agent lost mid-turn ends in an error on the caller's side, after the agent opened the turn and recorded steps. So the id stays in the call (`HailConversationPeer.run`, a local that ends with it, not actor state), and whatever ends the turn takes it from there: a reply, the agent's failure, a thrown error, a cancellation.
 
 **The conversation keeps the link** with whatever ends its turn: the reply (`replyQueued`) or the failure (`turnFailed`) says which agent turn it came from. That's the conversation's own fact.
 
@@ -43,7 +43,7 @@ You reopen it later. The app gets past turns from Hail's history (`Conversation.
 
 **Hail**, committed, merged into `turgai-integration`, pushed, then norby's pin moved:
 
-1. `AgentRunEvent`'s `received`, `responseRecorded`, and `runFailed` carry the turn's id.
+1. A run's updates come as `AgentRunUpdate { turn, event }`, every one naming its turn.
 2. A turns projection over the agent's journal, by turn id, with each turn's input, steps, and outcome, compacted or not.
 
 **Turgai:**
