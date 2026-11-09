@@ -32,6 +32,14 @@ public enum ChatAsk: Equatable, Sendable {
     case forgetMemory
     /// What they say remembered from now on, or not.
     case setRemembering(MemorySummary.Remembering)
+    /// The space with this id archived, by one of its admins.
+    case archiveSpace(String)
+    /// The space with this id in use again, by one of its admins.
+    case unarchiveSpace(String)
+    /// The conversation off the asker's list: they no longer read it, and the rest stay in it.
+    case leaveConversation(ConversationID)
+    /// The conversation deleted for everyone: by the only person in it, or an admin of its space.
+    case deleteConversation(ConversationID)
 }
 
 /// The answer to a push.
@@ -52,6 +60,10 @@ extension ChatAsk {
         case memory
         case forgetMemory = "memory.forget"
         case setRemembering = "memory.remembering"
+        case archiveSpace = "space.archive"
+        case unarchiveSpace = "space.unarchive"
+        case leaveConversation = "conversation.leave"
+        case deleteConversation = "conversation.delete"
     }
 
     var name: Name {
@@ -61,6 +73,10 @@ extension ChatAsk {
         case .memory: .memory
         case .forgetMemory: .forgetMemory
         case .setRemembering: .setRemembering
+        case .archiveSpace: .archiveSpace
+        case .unarchiveSpace: .unarchiveSpace
+        case .leaveConversation: .leaveConversation
+        case .deleteConversation: .deleteConversation
         }
     }
 }

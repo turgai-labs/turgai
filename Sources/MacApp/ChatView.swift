@@ -290,7 +290,8 @@ private struct MessageList: View {
     }
 }
 
-/// The composer, and what went wrong above it if something did. Typing changes only this.
+/// The composer, and what went wrong above it if something did; or, where nothing new is said,
+/// why. Typing changes only this.
 private struct BottomBar: View {
     let store: StoreOf<ChatFeature>
 
@@ -304,7 +305,18 @@ private struct BottomBar: View {
                     .padding(.vertical, 8)
                     .glassEffect(.regular, in: .capsule)
             }
-            Composer(store: store)
+            switch store.writing {
+            case .composer:
+                Composer(store: store)
+            case .closed(let why):
+                Text(why)
+                    .font(.callout)
+                    .foregroundStyle(Color.turgaiMuted)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            }
         }
         // Glass floats as far from the window's edges as the panel and the headline do; the
         // messages keep wider margins.

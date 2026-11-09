@@ -23,10 +23,12 @@ public enum SpaceDirectoryError: Error, Equatable, Sendable {
     case invalidEntry
 }
 
-/// What one of a space's events changes in the directory: what the space is called, or who's in
-/// it and with what role. Each leaves the directory as it is when it's kept a second time.
+/// What one of a space's events changes in the directory: what the space is called, whether it's in
+/// use, or who's in it and with what role. Each leaves the directory as it is when it's kept a
+/// second time.
 public enum SpaceDirectoryChange: Hashable, Sendable {
     case named(SpaceID, SpaceName)
+    case status(SpaceID, SpaceStatus)
     case member(SpaceID, UserID, SpaceRole)
     case left(SpaceID, UserID)
 
@@ -36,6 +38,8 @@ public enum SpaceDirectoryChange: Hashable, Sendable {
         case .named(let name): self = .named(space, name)
         case .joined(let person, let role), .roleChanged(let person, let role): self = .member(space, person, role)
         case .left(let person): self = .left(space, person)
+        case .archived: self = .status(space, .archived)
+        case .unarchived: self = .status(space, .active)
         case .asked, .answered, .spent, .invited, .inviteUsed, .inviteTakenBack: return nil
         }
     }
@@ -101,6 +105,13 @@ private struct SpaceDirectoryTables: Sendable {
                 name  TEXT NOT NULL
             ) WITHOUT ROWID
             """,
+            // A space that isn't in use: one with no row is.
+            """
+            CREATE TABLE IF NOT EXISTS space_status (
+                space  TEXT NOT NULL PRIMARY KEY,
+                status TEXT NOT NULL CHECK (status IN ('active', 'archived'))
+            ) WITHOUT ROWID
+            """,
             // A person's spaces, by when they joined: the offset of the event they joined in.
             """
             CREATE TABLE IF NOT EXISTS space_members (
@@ -125,17 +136,19 @@ private struct SpaceDirectoryTables: Sendable {
     func spaces(of person: UserID) async throws -> [SpaceListing] {
         try await connection.query(
             """
-            SELECT space_members.space, name, role FROM space_members
+            SELECT space_members.space, name, role, COALESCE(status, 'active') AS status FROM space_members
             JOIN space_names ON space_names.space = space_members.space
+            LEFT JOIN space_status ON space_status.space = space_members.space
             WHERE person = ? ORDER BY joined_at
             """,
             [.text(person.key)]
         ).map { row in
             guard let space = row.column("space")?.string.flatMap(UUID.init(uuidString:)),
                 let name = row.column("name")?.string.flatMap(SpaceName.init),
-                let role = row.column("role")?.string.flatMap(SpaceRole.init(rawValue:))
+                let role = row.column("role")?.string.flatMap(SpaceRole.init(rawValue:)),
+                let status = row.column("status")?.string.flatMap(SpaceStatus.init(rawValue:))
             else { throw SpaceDirectoryError.invalidEntry }
-            return SpaceListing(id: SpaceID(rawValue: space), name: name, role: role)
+            return SpaceListing(id: SpaceID(rawValue: space), name: name, role: role, status: status)
         }
     }
 
@@ -155,6 +168,13 @@ private struct SpaceDirectoryTables: Sendable {
                 ON CONFLICT (space) DO UPDATE SET name = excluded.name
                 """,
                 [.text(space.rawValue.uuidString), .text(name.rawValue)])
+        case .status(let space, let status)?:
+            _ = try await connection.query(
+                """
+                INSERT INTO space_status (space, status) VALUES (?, ?)
+                ON CONFLICT (space) DO UPDATE SET status = excluded.status
+                """,
+                [.text(space.rawValue.uuidString), .text(status.rawValue)])
         case .member(let space, let person, let role)?:
             _ = try await connection.query(
                 """
@@ -184,12 +204,15 @@ private struct SpaceDirectoryTables: Sendable {
 /// The directory of ``SpaceDirectoryStorage/test``.
 private actor MemorySpaceDirectory {
     private var names: [SpaceID: SpaceName] = [:]
+    private var statuses: [SpaceID: SpaceStatus] = [:]
     private var members: [UserID: [SpaceID: (role: SpaceRole, joinedAt: Offset)]] = [:]
     private(set) var offset = Offset.start
 
     func spaces(of person: UserID) -> [SpaceListing] {
         (members[person] ?? [:]).sorted { $0.value.joinedAt < $1.value.joinedAt }.compactMap { space, member in
-            names[space].map { SpaceListing(id: space, name: $0, role: member.role) }
+            names[space].map {
+                SpaceListing(id: space, name: $0, role: member.role, status: statuses[space] ?? .active)
+            }
         }
     }
 
@@ -197,6 +220,8 @@ private actor MemorySpaceDirectory {
         switch change {
         case .named(let space, let name)?:
             names[space] = name
+        case .status(let space, let status)?:
+            statuses[space] = status
         case .member(let space, let person, let role)?:
             members[person, default: [:]][space] = (role, members[person]?[space]?.joinedAt ?? offset)
         case .left(let space, let person)?:

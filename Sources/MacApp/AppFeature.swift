@@ -212,13 +212,17 @@ struct AppFeature {
         // The sidebar says what the chat shows; the chat's connection says how the sidebar changes.
         case .sidebar(.delegate(.open(let id))):
             return .send(.chat(.open(id, in: state.sidebar.space(of: id))))
+        case .sidebar(.delegate(.close(let space))):
+            return .send(.chat(.close(in: space)))
+        case .sidebar(.delegate(.spaceChanged(let space))):
+            return .send(.chat(.spaceChanged(space)))
         case .chat(.delegate(.conversationJoined(let conversation))):
             return .send(.sidebar(.conversationJoined(conversation)))
         case .chat(.delegate(.conversationSaid(let conversation))):
             return .send(.sidebar(.conversationSaid(conversation)))
         case .chat(.delegate(.conversationTitled(let conversation))):
             return .send(.sidebar(.conversationTitled(conversation)))
-        case .chat(.delegate(.conversationLeft(let id))):
+        case .chat(.delegate(.conversationLeft(let id))), .chat(.delegate(.conversationDeleted(let id))):
             return .send(.sidebar(.conversationLeft(id)))
         case .chat(.delegate(.memoryChanged)):
             return .send(.profile(.memoryChanged))

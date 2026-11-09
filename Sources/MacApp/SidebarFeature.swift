@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import SwiftUI
 import TurgaiModels
 
 /// A space's color, one of the brand's signals, worked out from its name: the same name has the
@@ -21,9 +22,10 @@ enum StampFill: Equatable {
     case outlined
 }
 
-/// The window's sidebar, Slack's way: every space the person is in, on a rail; the one shown, the
-/// open conversation's, with its conversations, the one something was last said in first; the one
-/// open; and which have something new since they were last open.
+/// The window's sidebar, Slack's way: the spaces in use the person is in, on a rail, the one
+/// something was last said in first, and every space, archived ones too, in a list; the one shown,
+/// with its conversations, the one something was last said in first; the one open; and which have
+/// something new since they were last open.
 @Reducer
 struct SidebarFeature {
     /// A conversation, as the sidebar lists it.
@@ -31,8 +33,25 @@ struct SidebarFeature {
         let id: ConversationID
         var title: String?
         let spaceID: String
+        /// How many people are in it.
+        var people: Int
         /// Something was said in it since it was last open.
         var unread = false
+
+        /// `conversation`, as it's listed.
+        init(_ conversation: Conversation, unread: Bool = false) {
+            self.init(
+                id: conversation.id, title: conversation.title, spaceID: conversation.spaceID,
+                people: conversation.people, unread: unread)
+        }
+
+        init(id: ConversationID, title: String? = nil, spaceID: String, people: Int, unread: Bool = false) {
+            self.id = id
+            self.title = title
+            self.spaceID = spaceID
+            self.people = people
+            self.unread = unread
+        }
 
         /// What it's called where it's shown: its title, or else that it's new.
         var shownTitle: String { title ?? "New conversation" }
@@ -45,6 +64,8 @@ struct SidebarFeature {
         let title: String
         let unread: Bool
         let isOpen: Bool
+        /// What its menu offers.
+        let menu: [ConversationMenuItem]
 
         /// How its stamp leans while it's open.
         var lean: Lean { Lean(seed: id.rawValue) }
@@ -67,6 +88,62 @@ struct SidebarFeature {
         var lean: Lean { Lean(seed: space.id) }
     }
 
+    /// What a conversation's menu offers: renaming it while its space is in use; leaving it while
+    /// others are in it; deleting it, for everyone, when they're the only one in it, or an admin of
+    /// its space.
+    enum ConversationMenuItem: Hashable, Identifiable {
+        case rename
+        case leave
+        case delete
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .rename: "Rename…"
+            case .leave: "Leave"
+            case .delete: "Delete…"
+            }
+        }
+
+        var role: ButtonRole? { self == .delete ? .destructive : nil }
+    }
+
+    /// What the shown space's menu offers its admins: inviting people to it, renaming it, and
+    /// archiving it, while it's in use, Turgai's own staying in use; using it again, once it's
+    /// archived.
+    enum SpaceMenuItem: Hashable, Identifiable {
+        case invite
+        /// Renaming it, called `name` now.
+        case rename(name: String)
+        case archive(name: String)
+        case unarchive
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .invite: "Invite People…"
+            case .rename(let name): "Rename “\(name)”…"
+            case .archive(let name): "Archive “\(name)”…"
+            case .unarchive: "Unarchive"
+            }
+        }
+    }
+
+    /// Spaces in the Spaces list under one heading: those in use, or those archived.
+    struct SpaceSection: Equatable, Identifiable {
+        let title: String
+        let choices: [SpaceChoice]
+
+        var id: String { title }
+    }
+
+    /// The Spaces list, with what's written to find one.
+    struct ChoosingSpace: Equatable {
+        var search = ""
+    }
+
     /// The dialog open over the window, with what's written in it.
     enum Dialog: Equatable {
         /// A conversation's or a space's new name.
@@ -75,14 +152,16 @@ struct SidebarFeature {
         case addingSpace(AddingSpace)
         /// An invite to a space, its link to give someone.
         case inviting(Inviting)
+        /// Every space, to pick one.
+        case choosingSpace(ChoosingSpace)
 
-        /// What's written for a name in it: nothing in an invite.
+        /// What's written for a name in it: nothing in an invite or the Spaces list.
         var name: String {
             get {
                 switch self {
                 case .renaming(let renaming): renaming.name
                 case .addingSpace(let adding): adding.name
-                case .inviting: ""
+                case .inviting, .choosingSpace: ""
                 }
             }
             set {
@@ -93,7 +172,7 @@ struct SidebarFeature {
                 case .addingSpace(var adding):
                     adding.name = newValue
                     self = .addingSpace(adding)
-                case .inviting:
+                case .inviting, .choosingSpace:
                     break
                 }
             }
@@ -109,12 +188,6 @@ struct SidebarFeature {
 
         /// What the dialog is called.
         var title: String { "Invite people to \(spaceName)" }
-    }
-
-    /// What the shown space's menu offers its admins: renaming it, and inviting people to it.
-    struct SpaceMenu: Equatable {
-        let rename: String
-        let invite: String
     }
 
     /// A conversation's or a space's new name, being written.
@@ -156,12 +229,16 @@ struct SidebarFeature {
         var spaces: [SpaceSummary] = []
         var conversations: IdentifiedArrayOf<Row> = []
         var selected: ConversationID?
+        /// The space shown: the open conversation's, or the one picked; the first before either.
+        var shownSpaceID: String?
         /// What went wrong reading or starting conversations, when something did.
         var error: String?
         /// How many people each space has, by its id, once they're counted.
         var peopleCounts: [String: Int] = [:]
         /// The dialog open, while one is.
         var dialog: Dialog?
+        /// Asking whether to archive a space or delete a conversation, while it asks.
+        @Presents var alert: AlertState<Action.Alert>?
 
         var hasDialog: Bool { dialog != nil }
         /// What's written for a name in the dialog.
@@ -170,10 +247,14 @@ struct SidebarFeature {
         var link: String {
             if case .addingSpace(let adding) = dialog { adding.link } else { "" }
         }
+        /// What's written to find a space in the Spaces list.
+        var search: String {
+            if case .choosingSpace(let choosing) = dialog { choosing.search } else { "" }
+        }
 
-        /// What the open conversation is called.
+        /// What the open conversation is called: nothing while none is.
         var openTitle: String {
-            selected.flatMap { conversations[id: $0]?.shownTitle } ?? "New conversation"
+            selected.map { conversations[id: $0]?.shownTitle ?? "New conversation" } ?? ""
         }
 
         /// The space `id` is in, as it's listed.
@@ -181,16 +262,25 @@ struct SidebarFeature {
             conversations[id: id].flatMap { row in spaces.first { $0.id == row.spaceID } }
         }
 
-        /// The space shown: the open conversation's, or the first before one is open.
+        /// The space shown: the open conversation's, or the one picked; the first before either.
         var shownSpace: SpaceSummary? {
-            selected.flatMap(space(of:)) ?? spaces.first
+            shownSpaceID.flatMap { id in spaces.first { $0.id == id } } ?? spaces.first
         }
 
         /// The shown space's conversations, the one something was last said in first.
         var entries: [Entry] {
-            conversations.filter { $0.spaceID == shownSpace?.id }.map {
-                Entry(id: $0.id, title: $0.shownTitle, unread: $0.unread, isOpen: $0.id == selected)
+            let space = shownSpace
+            return conversations.filter { $0.spaceID == space?.id }.map { row in
+                Entry(
+                    id: row.id, title: row.shownTitle, unread: row.unread, isOpen: row.id == selected,
+                    menu: Self.menu(of: row, in: space))
             }
+        }
+
+        /// What `row`'s menu offers in `space`.
+        private static func menu(of row: Row, in space: SpaceSummary?) -> [ConversationMenuItem] {
+            (space?.status == .archived ? [] : [.rename]) + (row.people > 1 ? [.leave] : [])
+                + (row.people <= 1 || space?.role == .admin ? [.delete] : [])
         }
 
         /// What the panel is headed: the shown space's name, or Spaces before they're read.
@@ -199,18 +289,51 @@ struct SidebarFeature {
         /// The shown space's color, as its tile on the rail has it.
         var shownSpaceHue: SpaceHue { SpaceHue(name: shownSpace?.name ?? "") }
 
-        /// What the shown space is, under its name: a space, and how many people are in it once
-        /// they're counted.
+        /// What the shown space is, under its name: a space, or an archived one, and how many
+        /// people are in it once they're counted.
         var shownSpaceDetail: String {
+            let kind = shownSpace?.status == .archived ? "Archived" : "Space"
             switch shownSpace.flatMap({ peopleCounts[$0.id] }) {
-            case nil: "Space"
-            case 1?: "Space · 1 person"
-            case let count?: "Space · \(count) people"
+            case nil: return kind
+            case 1?: return "\(kind) · 1 person"
+            case let count?: return "\(kind) · \(count) people"
             }
         }
 
-        /// Every space, for the rail.
+        /// The spaces in use, for the rail, the one something was last said in first.
         var spaceChoices: [SpaceChoice] {
+            choices(of: spacesByLatest.filter { $0.status == .active })
+        }
+
+        /// The spaces the Spaces list shows: those in use, then those archived, each the one
+        /// something was last said in first, and only those whose names have what's written to find
+        /// one.
+        var spaceSections: [SpaceSection] {
+            let search = search.trimmingCharacters(in: .whitespacesAndNewlines)
+            let found = spacesByLatest.filter { search.isEmpty || $0.name.localizedStandardContains(search) }
+            return [
+                SpaceSection(title: "Active", choices: choices(of: found.filter { $0.status == .active })),
+                SpaceSection(title: "Archived", choices: choices(of: found.filter { $0.status == .archived })),
+            ].filter { !$0.choices.isEmpty }
+        }
+
+        /// What the Spaces list says when no space has what's written: none while some do.
+        var spacesNote: String? {
+            spaceSections.isEmpty ? "No space is called “\(search)”." : nil
+        }
+
+        /// The spaces, the one something was last said in first; those with nothing in them last,
+        /// as they're listed.
+        private var spacesByLatest: [SpaceSummary] {
+            let latest = Dictionary(
+                conversations.enumerated().map { ($1.spaceID, $0) }, uniquingKeysWith: min)
+            return spaces.enumerated().sorted {
+                (latest[$0.element.id] ?? .max, $0.offset) < (latest[$1.element.id] ?? .max, $1.offset)
+            }.map(\.element)
+        }
+
+        /// `spaces` as tiles, marked when they're shown, or something's new in them.
+        private func choices(of spaces: [SpaceSummary]) -> [SpaceChoice] {
             spaces.map { space in
                 SpaceChoice(
                     space: space, isShown: space.id == shownSpace?.id,
@@ -218,16 +341,25 @@ struct SidebarFeature {
             }
         }
 
-        /// What renaming the shown space says, when its person is one of its admins: none otherwise.
-        var shownSpaceMenu: SpaceMenu? {
-            shownSpace.flatMap {
-                $0.role == .admin ? SpaceMenu(rename: "Rename “\($0.name)”…", invite: "Invite People…") : nil
+        /// What the shown space's menu offers, when its person is one of its admins: nothing
+        /// otherwise.
+        var shownSpaceMenu: [SpaceMenuItem] {
+            guard let space = shownSpace, space.role == .admin else { return [] }
+            switch (space.status, space.kind) {
+            case (.active, .made): return [.invite, .rename(name: space.name), .archive(name: space.name)]
+            case (.active, .turgaisOwn): return [.invite, .rename(name: space.name)]
+            case (.archived, _): return [.unarchive]
             }
         }
 
-        /// What New conversation says it does.
-        var newConversationHelp: String {
-            shownSpace.map { "New conversation in \($0.name)" } ?? "New conversation"
+        /// What New conversation says it does: none while the shown space is archived, where it
+        /// isn't offered.
+        var newConversationHelp: String? {
+            switch shownSpace {
+            case nil: "New conversation"
+            case let space? where space.status == .archived: nil
+            case let space?: "New conversation in \(space.name)"
+            }
         }
     }
 
@@ -250,13 +382,22 @@ struct SidebarFeature {
         case conversationSaid(Conversation)
         /// `conversation` is called something else.
         case conversationTitled(Conversation)
+        /// They're no longer in the conversation: they left it, or it was deleted.
         case conversationLeft(ConversationID)
-        /// Rename… on a conversation.
-        case renameConversationTapped(ConversationID)
-        /// Rename… on the space shown.
-        case renameShownSpaceTapped
-        /// Invite People… on the space shown: an invite to it is made.
-        case inviteTapped
+        /// Something picked from a conversation's menu.
+        case conversationMenuPicked(ConversationID, ConversationMenuItem)
+        /// Something picked from the shown space's menu.
+        case spaceMenuPicked(SpaceMenuItem)
+        /// The space `id` is in use, or archived, now.
+        case spaceStatusChanged(String, SpaceSummary.Status)
+        case alert(PresentationAction<Alert>)
+        /// Spaces on the rail, or ⌘K: every space, to pick one.
+        case spacesTapped
+        case searchChanged(String)
+        /// A space picked in the Spaces list: it's shown.
+        case spacePicked(String)
+        /// Return in the Spaces list: the first space found is shown.
+        case searchSubmitted
         case inviteMade(SpaceInviteOffer)
         case inviteFailed
         /// Copy in the invite: its link is copied.
@@ -278,17 +419,28 @@ struct SidebarFeature {
         case addingFailed(String)
         case delegate(Delegate)
 
+        enum Alert: Equatable {
+            case archiveConfirmed(String)
+            case deleteConfirmed(ConversationID)
+        }
+
         enum Delegate: Equatable {
             /// The window should show `id`.
             case open(ConversationID)
+            /// The window should show no conversation, in `space`, which has none to show.
+            case close(SpaceSummary)
+            /// A space is as `space` says now.
+            case spaceChanged(SpaceSummary)
         }
     }
 
     @Dependency(\.server) var server
+    @Dependency(\.chat) var chat
     @Dependency(\.pasteboard) var pasteboard
 
     var body: some ReducerOf<Self> {
         Reduce(update)
+            .ifLet(\.$alert, action: \.alert)
     }
 
     /// What `action` does to the sidebar, and what it asks for.
@@ -306,8 +458,7 @@ struct SidebarFeature {
 
         case .loaded(let spaces, let conversations):
             state.spaces = spaces
-            state.conversations = IdentifiedArray(
-                uniqueElements: conversations.map { Row(id: $0.id, title: $0.title, spaceID: $0.spaceID) })
+            state.conversations = IdentifiedArray(uniqueElements: conversations.map { Row($0) })
             state.error = nil
             if let selected = state.selected, state.conversations[id: selected] != nil { return .none }
             // The latest is shown first; with none, a new one in Turgai's own space.
@@ -322,26 +473,31 @@ struct SidebarFeature {
 
         case .selected(let id):
             state.selected = id
+            state.shownSpaceID = state.conversations[id: id]?.spaceID ?? state.shownSpaceID
             state.conversations[id: id]?.unread = false
+            state.error = nil
             return .merge(.send(.delegate(.open(id))), countPeople(in: state.shownSpace, of: state))
 
         case .peopleCounted(let space, let count):
             state.peopleCounts[space] = count
             return .none
 
-        case .spaceSwitched(let space):
-            guard space != state.shownSpace?.id else { return .none }
-            if let latest = state.conversations.first(where: { $0.spaceID == space }) {
+        case .spaceSwitched(let id):
+            guard id != state.shownSpace?.id, let space = state.spaces.first(where: { $0.id == id }) else {
+                return .none
+            }
+            state.shownSpaceID = id
+            if let latest = state.conversations.first(where: { $0.spaceID == id }) {
                 return .send(.selected(latest.id))
             }
-            return start(in: space, as: state.session)
+            return openNothing(in: space, &state)
 
         case .newConversationTapped:
+            guard state.shownSpace?.status != .archived else { return .none }
             return start(in: state.shownSpace?.id, as: state.session)
 
         case .started(let conversation):
-            state.conversations.insert(
-                Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID), at: 0)
+            state.conversations.insert(Row(conversation), at: 0)
             return .send(.selected(conversation.id))
 
         case .conversationJoined(let conversation):
@@ -350,18 +506,14 @@ struct SidebarFeature {
                 state.conversations[id: conversation.id]?.title = conversation.title
                 return .none
             }
-            state.conversations.insert(
-                Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID, unread: true),
-                at: 0)
+            state.conversations.insert(Row(conversation, unread: true), at: 0)
             return .none
 
         case .conversationSaid(let conversation):
             // To the top, as the latest; marked when it isn't the one open.
             let unread = conversation.id != state.selected
             state.conversations.remove(id: conversation.id)
-            state.conversations.insert(
-                Row(id: conversation.id, title: conversation.title, spaceID: conversation.spaceID, unread: unread),
-                at: 0)
+            state.conversations.insert(Row(conversation, unread: unread), at: 0)
             return .none
 
         case .conversationTitled(let conversation):
@@ -369,23 +521,29 @@ struct SidebarFeature {
             return .none
 
         case .conversationLeft(let id):
-            state.conversations.remove(id: id)
-            guard state.selected == id else { return .none }
+            // The next in its space opens in its place.
+            guard let row = state.conversations.remove(id: id), state.selected == id else { return .none }
             state.selected = nil
-            if let next = state.conversations.first { return .send(.selected(next.id)) }
-            return .none
+            if let next = state.conversations.first(where: { $0.spaceID == row.spaceID }) {
+                return .send(.selected(next.id))
+            }
+            guard let space = state.spaces.first(where: { $0.id == row.spaceID }) else { return .none }
+            return openNothing(in: space, &state)
 
-        case .renameConversationTapped(let id):
+        case .conversationMenuPicked(let id, .rename):
             state.dialog = .renaming(
                 Renaming(subject: .conversation(id), name: state.conversations[id: id]?.title ?? ""))
             return .none
 
-        case .renameShownSpaceTapped:
-            guard let space = state.shownSpace else { return .none }
-            state.dialog = .renaming(Renaming(subject: .space(space.id), name: space.name))
+        case .conversationMenuPicked(let id, .leave):
+            return perform(.leaveConversation(id), then: .conversationLeft(id), otherwise: "Couldn't leave it.")
+
+        case .conversationMenuPicked(let id, .delete):
+            guard let row = state.conversations[id: id] else { return .none }
+            state.alert = .delete(row)
             return .none
 
-        case .inviteTapped:
+        case .spaceMenuPicked(.invite):
             guard let space = state.shownSpace, let session = state.session else { return .none }
             state.dialog = .inviting(Inviting(spaceName: space.name))
             return .run { send in
@@ -395,6 +553,56 @@ struct SidebarFeature {
                     await send(.inviteFailed)
                 }
             }
+
+        case .spaceMenuPicked(.rename):
+            guard let space = state.shownSpace else { return .none }
+            state.dialog = .renaming(Renaming(subject: .space(space.id), name: space.name))
+            return .none
+
+        case .spaceMenuPicked(.archive):
+            guard let space = state.shownSpace else { return .none }
+            state.alert = .archive(space)
+            return .none
+
+        case .spaceMenuPicked(.unarchive):
+            guard let space = state.shownSpace else { return .none }
+            return perform(
+                .unarchiveSpace(space.id), then: .spaceStatusChanged(space.id, .active),
+                otherwise: "Couldn't unarchive it.")
+
+        case .alert(.presented(.archiveConfirmed(let id))):
+            return perform(
+                .archiveSpace(id), then: .spaceStatusChanged(id, .archived), otherwise: "Couldn't archive it.")
+
+        case .alert(.presented(.deleteConfirmed(let id))):
+            return perform(.deleteConversation(id), then: .conversationLeft(id), otherwise: "Couldn't delete it.")
+
+        case .alert:
+            return .none
+
+        case .spaceStatusChanged(let id, let status):
+            guard let index = state.spaces.firstIndex(where: { $0.id == id }) else { return .none }
+            let space = state.spaces[index]
+            let changed = SpaceSummary(id: id, name: space.name, role: space.role, status: status, kind: space.kind)
+            state.spaces[index] = changed
+            return .send(.delegate(.spaceChanged(changed)))
+
+        case .spacesTapped:
+            state.dialog = .choosingSpace(ChoosingSpace())
+            return .none
+
+        case .searchChanged(let search):
+            guard case .choosingSpace = state.dialog else { return .none }
+            state.dialog = .choosingSpace(ChoosingSpace(search: search))
+            return .none
+
+        case .spacePicked(let id):
+            state.dialog = nil
+            return .send(.spaceSwitched(id))
+
+        case .searchSubmitted:
+            guard let first = state.spaceSections.first?.choices.first else { return .none }
+            return .send(.spacePicked(first.id))
 
         case .inviteMade(let offer):
             guard case .inviting(var inviting) = state.dialog else { return .none }
@@ -509,6 +717,33 @@ struct SidebarFeature {
         }
     }
 
+    /// What `space`, with no conversation of theirs left in it, shows: a new one while it's in use;
+    /// none once it's archived, where nothing new is said.
+    private func openNothing(in space: SpaceSummary, _ state: inout State) -> Effect<Action> {
+        switch space.status {
+        case .active:
+            return start(in: space.id, as: state.session)
+        case .archived:
+            state.selected = nil
+            return .send(.delegate(.close(space)))
+        }
+    }
+
+    /// `ask` pushed on the connection, then `done`; what it was refused for, or `otherwise`, when it
+    /// wasn't done.
+    private func perform(_ ask: ChatAsk, then done: Action, otherwise: String) -> Effect<Action> {
+        .run { send in
+            do {
+                try await chat.perform(ask)
+                await send(done)
+            } catch ChatSocketError.failed(let error) {
+                await send(.failed(error.message))
+            } catch {
+                await send(.failed(otherwise))
+            }
+        }
+    }
+
     /// A new conversation in `space`, or Turgai's own, started for `session`'s person.
     private func start(in space: String?, as session: Session?) -> Effect<Action> {
         guard let session else { return .none }
@@ -518,6 +753,31 @@ struct SidebarFeature {
             } catch {
                 await send(.failed("Couldn't start a conversation."))
             }
+        }
+    }
+}
+
+extension AlertState where Action == SidebarFeature.Action.Alert {
+    static func archive(_ space: SpaceSummary) -> Self {
+        AlertState {
+            TextState("Archive “\(space.name)”?")
+        } actions: {
+            ButtonState(role: .destructive, action: .archiveConfirmed(space.id)) { TextState("Archive") }
+            ButtonState(role: .cancel) { TextState("Cancel") }
+        } message: {
+            TextState(
+                "Its conversations can still be read, and nothing new is said in them. Its admins can unarchive it.")
+        }
+    }
+
+    static func delete(_ row: SidebarFeature.Row) -> Self {
+        AlertState {
+            TextState("Delete “\(row.shownTitle)”?")
+        } actions: {
+            ButtonState(role: .destructive, action: .deleteConfirmed(row.id)) { TextState("Delete") }
+            ButtonState(role: .cancel) { TextState("Cancel") }
+        } message: {
+            TextState("It's deleted for everyone in it, and can't be brought back.")
         }
     }
 }

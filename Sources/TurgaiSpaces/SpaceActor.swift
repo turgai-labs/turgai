@@ -162,6 +162,21 @@ public distributed actor Space {
         }
     }
 
+    /// It archived, as its admin `person` asks.
+    public distributed func archive(by person: UserID) async throws {
+        try await changing { for event in try state.archiving(by: person) { try await emit(event: event) } }
+    }
+
+    /// It in use again, as its admin `person` asks.
+    public distributed func unarchive(by person: UserID) async throws {
+        try await changing { for event in try state.unarchiving(by: person) { try await emit(event: event) } }
+    }
+
+    /// Whether it's in use.
+    public distributed func status() -> SpaceStatus {
+        state.status
+    }
+
     /// `person` leaving it.
     public distributed func leave(_ person: UserID) async throws {
         try await changing { for event in try state.leaving(person) { try await emit(event: event) } }
@@ -170,7 +185,7 @@ public distributed actor Space {
     /// It as `person`'s list shows it: none when it has no name, or they're not in it.
     public distributed func listing(for person: UserID) -> SpaceListing? {
         guard let name = state.name, let role = state.role(of: person) else { return nil }
-        return SpaceListing(id: state.id, name: name, role: role)
+        return SpaceListing(id: state.id, name: name, role: role, status: state.status)
     }
 
     /// Who's in it, each with their role, as `person`, one of them, sees them: guests aren't among

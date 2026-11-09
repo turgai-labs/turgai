@@ -76,7 +76,7 @@ public actor TurgaiWebChatBridge {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
-        return Spaces(actorSystem: runtime.actorSystem)
+        return Spaces(actorSystem: runtime.actorSystem, turgaisOwn: runtime.turgaiSpace)
     }
 
     /// Every Telegram channel there is, in the order they were made.
@@ -212,6 +212,15 @@ public actor TurgaiWebChatBridge {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
         try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID).leave(person)
+    }
+
+    /// The conversation `conversationID` deleted by `person`: by the only one in it, or an admin of
+    /// its space.
+    public func delete(_ conversationID: ConversationID, by person: TurgaiDomain.UserID) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await Conversation.resolve(on: runtime.actorSystem, conversationID: conversationID).delete(by: person)
     }
 
     /// The conversation `conversationID` called `title`, as `person` titles it: refused unless

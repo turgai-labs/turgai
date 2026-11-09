@@ -30,6 +30,10 @@ public enum SpaceEvent: Hashable, Codable, Sendable {
     case inviteUsed(SpaceInviteID, by: UserID)
     /// An admin took the invite back.
     case inviteTakenBack(SpaceInviteID)
+    /// An admin archived it: it's kept to be read, and nothing new happens in it.
+    case archived(by: UserID)
+    /// An admin brought it back into use.
+    case unarchived(by: UserID)
 }
 
 /// A space a person is in, as their list shows it: what it's called, and the role they have.
@@ -37,11 +41,13 @@ public struct SpaceListing: Hashable, Codable, Sendable {
     public let id: SpaceID
     public let name: SpaceName
     public let role: SpaceRole
+    public let status: SpaceStatus
 
-    public init(id: SpaceID, name: SpaceName, role: SpaceRole) {
+    public init(id: SpaceID, name: SpaceName, role: SpaceRole, status: SpaceStatus) {
         self.id = id
         self.name = name
         self.role = role
+        self.status = status
     }
 }
 
@@ -59,6 +65,10 @@ public enum SpaceRefusal: Error, Equatable, Codable, Sendable, CustomStringConve
     case lastAdmin
     /// No invite like it works: it was used, taken back, or ran out, or there never was one.
     case inviteDoesNotWork
+    /// It's archived: it's read, and nothing new happens in it.
+    case archived
+    /// It's Turgai's own, where every account is: it stays in use.
+    case turgaisOwn
 
     public var description: String {
         switch self {
@@ -68,6 +78,8 @@ public enum SpaceRefusal: Error, Equatable, Codable, Sendable, CustomStringConve
         case .notInIt: "You're not in this space."
         case .lastAdmin: "You're its last admin: make someone else an admin first."
         case .inviteDoesNotWork: "This invite doesn't work: it's been used, taken back, or has run out."
+        case .archived: "This space is archived: what's in it can be read, and nothing new happens in it."
+        case .turgaisOwn: "Turgai's own space stays in use: it can't be archived."
         }
     }
 }
@@ -89,6 +101,8 @@ public struct SpaceState: Hashable, Codable, Sendable {
     public private(set) var requests: [AccessRequestID: AccessRequest]
     /// Who asked each: the one what it allows once goes to.
     public private(set) var askers: [AccessRequestID: Asker]
+    /// Whether it's in use.
+    public private(set) var status: SpaceStatus = .active
 
     public init(id: SpaceID) {
         self.id = id
@@ -203,10 +217,23 @@ public struct SpaceState: Hashable, Codable, Sendable {
         return name == self.name ? [] : [.named(name)]
     }
 
-    /// `invite` open, as its admin made it.
+    /// `invite` open, as its admin made it: refused while it's archived.
     public func inviting(_ invite: SpaceInvite) throws(SpaceRefusal) -> [SpaceEvent] {
         guard members[invite.by] == .admin else { throw .onlyAdmins }
+        guard status == .active else { throw .archived }
         return [.invited(invite)]
+    }
+
+    /// It archived by its admin `person`: none when it is already.
+    public func archiving(by person: UserID) throws(SpaceRefusal) -> [SpaceEvent] {
+        guard members[person] == .admin else { throw .onlyAdmins }
+        return status == .archived ? [] : [.archived(by: person)]
+    }
+
+    /// It in use again, as its admin `person` asks: none when it is already.
+    public func unarchiving(by person: UserID) throws(SpaceRefusal) -> [SpaceEvent] {
+        guard members[person] == .admin else { throw .onlyAdmins }
+        return status == .active ? [] : [.unarchived(by: person)]
     }
 
     /// The invite `id` taken back by its admin `person`: none when it's spent already.
@@ -221,6 +248,7 @@ public struct SpaceState: Hashable, Codable, Sendable {
         -> [SpaceEvent]
     {
         guard !person.isGuest else { throw .guestsStayOut }
+        guard status == .active else { throw .archived }
         guard let invite = invites.values.first(where: { $0.hash == hash }), invite.works(at: now) else {
             throw .inviteDoesNotWork
         }
@@ -312,6 +340,10 @@ public struct SpaceState: Hashable, Codable, Sendable {
             next.invites[invite.id] = invite
         case .inviteUsed(let id, _), .inviteTakenBack(let id):
             next.invites[id] = nil
+        case .archived:
+            next.status = .archived
+        case .unarchived:
+            next.status = .active
         }
         return next
     }

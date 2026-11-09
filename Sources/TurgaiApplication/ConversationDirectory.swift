@@ -33,12 +33,15 @@ public struct ConversationListing: Hashable, Codable, Sendable {
     public let agent: AgentProfileID
     /// Its title, or else the first line of the first thing said in it: none until either.
     public let title: String?
+    /// How many people are in it.
+    public let people: Int
 
-    public init(id: ConversationID, space: SpaceID, agent: AgentProfileID, title: String?) {
+    public init(id: ConversationID, space: SpaceID, agent: AgentProfileID, title: String?, people: Int) {
         self.id = id
         self.space = space
         self.agent = agent
         self.title = title
+        self.people = people
     }
 }
 
@@ -53,6 +56,8 @@ public enum ConversationNotice: Hashable, Codable, Sendable {
     case titled(ConversationListing)
     /// They're no longer in it.
     case left(ConversationID)
+    /// It was deleted: no one is in it any more.
+    case deleted(ConversationID)
 }
 
 /// Where a person's notices are told: one for each of their open connections.
@@ -81,6 +86,8 @@ public enum ConversationDirectoryChange: Hashable, Sendable {
     /// Something was said in it: `firstLine` is the first line of a person's words, none for its
     /// agent's.
     case said(ConversationID, firstLine: String?)
+    /// It was deleted: it's in no one's list.
+    case deleted(ConversationID)
 
     /// The first line `message` has, as long as a title can be.
     private static func firstLine(of message: InboundMessage) -> String? {
@@ -101,6 +108,7 @@ public enum ConversationDirectoryChange: Hashable, Sendable {
         case .said(let message):
             self = .said(conversation, firstLine: Self.firstLine(of: message))
         case .replyQueued: self = .said(conversation, firstLine: nil)
+        case .deleted: self = .deleted(conversation)
         case .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyDelivered, .reset, .noted,
             .unnoted:
             return nil
@@ -213,7 +221,9 @@ private struct ConversationDirectoryTables: Sendable {
     func conversations(of person: UserID) async throws -> [ConversationListing] {
         try await connection.query(
             """
-            SELECT conversation_listings.conversation, space, agent, COALESCE(title, first_line) AS called
+            SELECT conversation_listings.conversation, space, agent, COALESCE(title, first_line) AS called,
+            (SELECT COUNT(*) FROM conversation_people AS others
+             WHERE others.conversation = conversation_listings.conversation) AS people
             FROM conversation_people
             JOIN conversation_listings ON conversation_listings.conversation = conversation_people.conversation
             WHERE person = ? AND agent IS NOT NULL ORDER BY latest DESC
@@ -226,7 +236,7 @@ private struct ConversationDirectoryTables: Sendable {
             else { throw ConversationDirectoryError.invalidEntry }
             return ConversationListing(
                 id: conversation, space: SpaceID(rawValue: space), agent: AgentProfileID(agent),
-                title: row.column("called")?.string)
+                title: row.column("called")?.string, people: row.column("people")?.integer ?? 0)
         }
     }
 
@@ -243,7 +253,10 @@ private struct ConversationDirectoryTables: Sendable {
     func listing(of conversation: ConversationID) async throws -> ConversationListing? {
         try await connection.query(
             """
-            SELECT space, agent, COALESCE(title, first_line) AS called FROM conversation_listings
+            SELECT space, agent, COALESCE(title, first_line) AS called,
+            (SELECT COUNT(*) FROM conversation_people AS others
+             WHERE others.conversation = conversation_listings.conversation) AS people
+            FROM conversation_listings
             WHERE conversation = ? AND agent IS NOT NULL
             """,
             [.text(conversation.stableKey)]
@@ -253,7 +266,7 @@ private struct ConversationDirectoryTables: Sendable {
             else { throw ConversationDirectoryError.invalidEntry }
             return ConversationListing(
                 id: conversation, space: SpaceID(rawValue: space), agent: AgentProfileID(agent),
-                title: row.column("called")?.string)
+                title: row.column("called")?.string, people: row.column("people")?.integer ?? 0)
         }
     }
 
@@ -312,7 +325,16 @@ private struct ConversationDirectoryTables: Sendable {
                 SET first_line = COALESCE(first_line, ?), latest = MAX(latest, ?)
                 WHERE conversation = ?
                 """,
-                [firstLine.map(SQLiteData.text) ?? .null, .integer(Int(offset.rawValue)), .text(conversation.stableKey)])
+                [
+                    firstLine.map(SQLiteData.text) ?? .null, .integer(Int(offset.rawValue)),
+                    .text(conversation.stableKey),
+                ])
+        case .deleted(let conversation)?:
+            // Kept again, it deletes nothing more: the offset is kept after both.
+            _ = try await connection.query(
+                "DELETE FROM conversation_people WHERE conversation = ?", [.text(conversation.stableKey)])
+            _ = try await connection.query(
+                "DELETE FROM conversation_listings WHERE conversation = ?", [.text(conversation.stableKey)])
         case nil:
             break
         }
@@ -345,7 +367,8 @@ private actor MemoryConversationDirectory {
             .compactMap { id, listing in
                 listing.agent.map {
                     ConversationListing(
-                        id: id, space: listing.space, agent: $0, title: listing.title?.rawValue ?? listing.firstLine)
+                        id: id, space: listing.space, agent: $0, title: listing.title?.rawValue ?? listing.firstLine,
+                        people: people(in: id).count)
                 }
             }
     }
@@ -357,7 +380,8 @@ private actor MemoryConversationDirectory {
     func listing(of conversation: ConversationID) -> ConversationListing? {
         guard let listing = listings[conversation], let agent = listing.agent else { return nil }
         return ConversationListing(
-            id: conversation, space: listing.space, agent: agent, title: listing.title?.rawValue ?? listing.firstLine)
+            id: conversation, space: listing.space, agent: agent, title: listing.title?.rawValue ?? listing.firstLine,
+            people: people(in: conversation).count)
     }
 
     func people(in conversation: ConversationID) -> [UserID] {
@@ -381,6 +405,9 @@ private actor MemoryConversationDirectory {
         case .said(let conversation, let firstLine)?:
             if listings[conversation]?.firstLine == nil { listings[conversation]?.firstLine = firstLine }
             if let latest = listings[conversation]?.latest { listings[conversation]?.latest = max(latest, offset) }
+        case .deleted(let conversation)?:
+            listings[conversation] = nil
+            for person in people.keys { people[person]?.remove(conversation) }
         case nil:
             break
         }
@@ -440,9 +467,9 @@ public distributed actor ConversationDirectory: ClusterSingleton {
         listeners = listeners.filter { !$0.value.isEmpty }
     }
 
-    /// The people `change` touches told about it, now that it's kept: a listener that can't be
-    /// told is let go.
-    private func tell(about change: ConversationDirectoryChange?) async throws {
+    /// The people `change` touches told about it, now that it's kept, `deletedFrom` the people a
+    /// deletion took it from: a listener that can't be told is let go.
+    private func tell(about change: ConversationDirectoryChange?, deletedFrom: [UserID]) async throws {
         guard !listeners.isEmpty, let change else { return }
         let notices: [(UserID, ConversationNotice)]
         switch change {
@@ -459,6 +486,8 @@ public distributed actor ConversationDirectory: ClusterSingleton {
             notices = try await storage.people(conversation).map { ($0, .said(listing)) }
         case .left(let conversation, .person(let person)):
             notices = [(person, .left(conversation))]
+        case .deleted(let conversation):
+            notices = deletedFrom.map { ($0, .deleted(conversation)) }
         case .started, .left(_, .agent):
             notices = []
         }
@@ -483,8 +512,11 @@ public distributed actor ConversationDirectory: ClusterSingleton {
                 throw ConversationDirectoryError.notAConversation(envelope.persistenceID)
             }
             let change = ConversationDirectoryChange(envelope.event, in: conversation)
+            // Who was in what's deleted, read before keeping it takes them away.
+            let deletedFrom: [UserID] =
+                if case .deleted(let deleted)? = change { try await storage.people(deleted) } else { [] }
             try await storage.keep(change, envelope.offset)
-            try await self.whenLocal { try await $0.tell(about: change) }
+            try await self.whenLocal { try await $0.tell(about: change, deletedFrom: deletedFrom) }
         }
         let journal = journal
         let refreshInterval = refreshInterval

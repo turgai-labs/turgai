@@ -245,6 +245,29 @@ struct SpaceTests {
         #expect(throws: SpaceRefusal.alreadyMade) { try space.making(named: SpaceName("Work")!, admins: [.bob]) }
     }
 
+    /// Only its admins archive a space, and use it again; archived, no one is invited or joins.
+    @Test func onlyAnAdminArchivesASpace() throws {
+        var space = SpaceState(id: SpaceID())
+        space = space.applying(try space.making(named: SpaceName("Family")!, by: .ann))
+        space = space.applying([.joined(.bob, as: .member)])
+        let token = SpaceInviteToken.new()
+        space = space.applying(try space.inviting(SpaceInvite(hash: token.hash, by: .ann, lifetime: .untilUsed)))
+
+        #expect(throws: SpaceRefusal.onlyAdmins) { try space.archiving(by: .bob) }
+        space = space.applying(try space.archiving(by: .ann))
+        #expect(space.status == .archived)
+        #expect(try space.archiving(by: .ann).isEmpty)
+        #expect(throws: SpaceRefusal.archived) {
+            try space.inviting(SpaceInvite(hash: SpaceInviteToken.new().hash, by: .ann, lifetime: .untilUsed))
+        }
+        #expect(throws: SpaceRefusal.archived) { try space.joining(with: token.hash, as: .dad, at: Date()) }
+
+        #expect(throws: SpaceRefusal.onlyAdmins) { try space.unarchiving(by: .bob) }
+        space = space.applying(try space.unarchiving(by: .ann))
+        #expect(space.status == .active)
+        #expect(try space.unarchiving(by: .ann).isEmpty)
+    }
+
     /// Anyone in it may leave, but its last admin, and no one leaves a space they're not in.
     @Test func theLastAdminStays() throws {
         var space = SpaceState(id: SpaceID())

@@ -21,7 +21,8 @@ struct ConversationStartTests {
     @Test func anAppsConversationStartsInASpaceItsFirstPersonIsIn() async throws {
         try await withClusterSystem("start", store: MemoryEventStore(), hostsVirtualActors: true, people: []) {
             system in
-            let family = try await Spaces(actorSystem: system).make(named: SpaceName("Family")!, by: .ann)
+            let family = try await Spaces(actorSystem: system, turgaisOwn: SpaceID()).make(
+                named: SpaceName("Family")!, by: .ann)
             let chat = try await Conversation.resolve(
                 on: system,
                 conversationID: ConversationID(channel: ChannelID("turgai"), externalAddress: .init(UUID().uuidString)))
@@ -45,7 +46,7 @@ struct ConversationStartTests {
     /// space can't be added. Its space's people are seen by those in it.
     @Test func someoneInItsSpaceIsAdded() async throws {
         try await withClusterSystem("add", store: MemoryEventStore(), hostsVirtualActors: true, people: []) { system in
-            let spaces = Spaces(actorSystem: system)
+            let spaces = Spaces(actorSystem: system, turgaisOwn: SpaceID())
             let family = try await spaces.make(named: SpaceName("Family")!, by: .ann)
             let (_, token) = try await spaces.invite(to: family.id, by: .ann, for: .untilUsed)
             _ = try await spaces.join(family.id, with: token, as: .bob)
@@ -66,7 +67,7 @@ struct ConversationStartTests {
     /// A message said only to people in it starts no turn: it's kept, and they read it.
     @Test func aMessageToPeopleStartsNoTurn() async throws {
         try await withClusterSystem("said", store: MemoryEventStore(), hostsVirtualActors: true, people: []) { system in
-            let spaces = Spaces(actorSystem: system)
+            let spaces = Spaces(actorSystem: system, turgaisOwn: SpaceID())
             let family = try await spaces.make(named: SpaceName("Family")!, by: .ann)
             let (_, token) = try await spaces.invite(to: family.id, by: .ann, for: .untilUsed)
             _ = try await spaces.join(family.id, with: token, as: .bob)
@@ -102,7 +103,9 @@ struct ConversationStartTests {
             #expect(start.agent == conversation)
             #expect(try await chat.reading(by: .cat) == start)
             let space = try await Space.resolve(on: system, id: start.space)
-            #expect(try await space.listing(for: .ann) == SpaceListing(id: start.space, name: SpaceName("Family")!, role: .admin))
+            #expect(
+                try await space.listing(for: .ann)
+                    == SpaceListing(id: start.space, name: SpaceName("Family")!, role: .admin, status: .active))
             #expect(try await space.listing(for: .dad)?.role == .admin)
             #expect(try await space.listing(for: .bob)?.role == .member)
             #expect(try await space.listing(for: .cat)?.role == .member)

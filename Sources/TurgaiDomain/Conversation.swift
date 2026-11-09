@@ -605,6 +605,12 @@ public enum ConversationRefusal: Error, Equatable, Codable, Sendable, CustomStri
     case oneAgentForNow
     /// Someone a message is said to isn't in it.
     case addresseeNotInIt
+    /// It was deleted: no one reads it any more.
+    case deleted
+    /// Others are in it: only its space's admins delete it for everyone, and anyone leaves it.
+    case othersAreInIt
+    /// Its space is archived: what's in it is read, and nothing new is said.
+    case spaceArchived
 
     public var description: String {
         switch self {
@@ -614,6 +620,9 @@ public enum ConversationRefusal: Error, Equatable, Codable, Sendable, CustomStri
         case .guestsStayOut: "A guest can't add anyone to a conversation, or be added to one."
         case .oneAgentForNow: "This conversation has its agent: for now, a conversation has one."
         case .addresseeNotInIt: "Someone it's said to isn't in this conversation."
+        case .deleted: "This conversation was deleted."
+        case .othersAreInIt: "Others are in this conversation: only its space's admins can delete it. You can leave it."
+        case .spaceArchived: "This conversation's space is archived: it can be read, and nothing new is said in it."
         }
     }
 }
@@ -639,6 +648,8 @@ public enum ConversationEvent: Codable, Sendable, Equatable {
     case replyQueued(PendingConversationReply)
     case replyDelivered(TurnID)
     case reset
+    /// One of its people deleted it: no one reads it any more.
+    case deleted(by: UserID)
     /// Something was noted from `message` for its author's memory: it's marked until it's unmarked.
     case noted(NotedMessage)
     /// The noted message's mark was taken off.
@@ -793,6 +804,12 @@ public enum AgentInboxEvent: Hashable, Codable, Sendable {
     case turnFailed(TurnID, ConversationFailure, agentTurn: AgentTurnID?, at: Date)
 }
 
+/// Whether a conversation goes on, or was deleted.
+public enum ConversationLife: String, Hashable, Codable, Sendable {
+    case open
+    case deleted
+}
+
 public struct ConversationState: Hashable, Codable, Sendable {
     public let conversationID: ConversationID
     /// The space it started in: none until it has. It never changes after.
@@ -809,6 +826,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public internal(set) var history: [ConversationHistoryEntry]
     /// Which of its turns each of the agent's turns was: how what the agent did is found again.
     public internal(set) var agentTurns: [AgentTurnID: TurnID] = [:]
+    /// Whether it goes on.
+    public internal(set) var life: ConversationLife = .open
     /// The message marked as noted for its author's memory, until its mark is taken off.
     public internal(set) var noted: NotedMessage?
 
@@ -896,6 +915,11 @@ public struct ConversationState: Hashable, Codable, Sendable {
             history.removeAll(keepingCapacity: true)
             agentTurns.removeAll(keepingCapacity: true)
 
+        case .deleted:
+            life = .deleted
+            inbox = inbox.emptied()
+            pendingReplies.removeAll(keepingCapacity: true)
+
         case .noted(let message):
             noted = message
 
@@ -956,6 +980,14 @@ public struct ConversationState: Hashable, Codable, Sendable {
         history.contains { $0.id == "message:\(message.id.rawValue.uuidString)" } ? [] : [.said(message)]
     }
 
+    /// It deleted by `person`, one of its people, who has `role` in its space: by the only one
+    /// in it, or by an admin of its space. Anyone else leaves it.
+    public func deleting(by person: UserID, role: SpaceRole?) throws(ConversationRefusal) -> [ConversationEvent] {
+        _ = try reading(by: person)
+        guard people == [person] || role == .admin else { throw .othersAreInIt }
+        return [.deleted(by: person)]
+    }
+
     /// `person` leaving it: refused unless they're one of its people. Its agent stays.
     public func leaving(_ person: UserID) throws(ConversationRefusal) -> [ConversationEvent] {
         _ = try reading(by: person)
@@ -976,10 +1008,11 @@ public struct ConversationState: Hashable, Codable, Sendable {
         self.title == nil ? [.titled(title)] : []
     }
 
-    /// It as `person` reads it or writes in it: refused when it hasn't started, or they're not one
-    /// of its people.
+    /// It as `person` reads it or writes in it: refused when it hasn't started, was deleted, or
+    /// they're not one of its people.
     public func reading(by person: UserID) throws(ConversationRefusal) -> ConversationOutline {
         guard let space else { throw .notStarted }
+        guard life == .open else { throw .deleted }
         guard participants.contains(.person(person)) else { throw .notInIt }
         return ConversationOutline(space: space, participants: participants)
     }

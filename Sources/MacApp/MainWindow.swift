@@ -82,12 +82,15 @@ private struct LeftPanel: View {
 }
 
 /// The sidebar's dialog, over the whole window, so it shows whatever's hidden: renaming a
-/// conversation or a space, or adding a space.
+/// conversation or a space, adding a space, inviting people, or every space to pick one; and
+/// asking before a space is archived or a conversation deleted.
 private struct SidebarDialogs: ViewModifier {
     @Bindable var store: StoreOf<SidebarFeature>
 
     func body(content: Content) -> some View {
-        content.sheet(isPresented: $store.hasDialog.sending(\.dialogPresented)) {
+        content.alert($store.scope(state: \.alert, action: \.alert)).sheet(
+            isPresented: $store.hasDialog.sending(\.dialogPresented)
+        ) {
             switch store.dialog {
             case .renaming(let renaming)?:
                 RenameSheet(
@@ -102,6 +105,11 @@ private struct SidebarDialogs: ViewModifier {
                 InviteSheet(
                     inviting: inviting, copy: { store.send(.copyInviteTapped) },
                     done: { store.send(.dialogPresented(false)) })
+            case .choosingSpace?:
+                SpacesSheet(
+                    sections: store.spaceSections, note: store.spacesNote,
+                    search: $store.search.sending(\.searchChanged), pick: { store.send(.spacePicked($0)) },
+                    submit: { store.send(.searchSubmitted) }, done: { store.send(.dialogPresented(false)) })
             case nil:
                 EmptyView()
             }
@@ -203,8 +211,71 @@ private struct InviteSheet: View {
     }
 }
 
-/// The View menu's items: the conversations panel, with the shortcut it had, and the objects'
-/// window.
+/// Every space the person is in, those in use, then those archived, to find one by its name and
+/// show it.
+private struct SpacesSheet: View {
+    let sections: [SidebarFeature.SpaceSection]
+    /// What it says when no space is found: none while some are.
+    let note: String?
+    @Binding var search: String
+    let pick: (String) -> Void
+    /// Return in the search: the first found is shown.
+    let submit: () -> Void
+    let done: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Spaces").font(.headline)
+            TextField("Find a space", text: $search).onSubmit(submit)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(sections) { (section: SidebarFeature.SpaceSection) in
+                        Text(section.title)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.turgaiMuted)
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                        ForEach(section.choices) { (choice: SidebarFeature.SpaceChoice) in
+                            SpaceListRow(choice: choice) { pick(choice.id) }
+                        }
+                    }
+                    if let note {
+                        Text(note).foregroundStyle(Color.turgaiMuted).padding(.top, 8)
+                    }
+                }
+            }
+            .frame(height: 300)
+            HStack {
+                Spacer()
+                Button("Done", action: done).keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+    }
+}
+
+/// A space in the Spaces list: its mark and its name.
+private struct SpaceListRow: View {
+    let choice: SidebarFeature.SpaceChoice
+    let pick: () -> Void
+
+    var body: some View {
+        Button(action: pick) {
+            HStack(spacing: 10) {
+                SpaceMark(initial: choice.initial, hue: choice.hue, lean: choice.lean, fill: choice.fill)
+                Text(choice.space.name).lineLimit(1).foregroundStyle(Color.turgaiInk)
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 3)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// The View menu's items: the conversations panel, with the shortcut it had, every space, and the
+/// objects' window.
 struct PanelCommands: Commands {
     let store: StoreOf<AppFeature>
     @Environment(\.openWindow) private var openWindow
@@ -213,6 +284,8 @@ struct PanelCommands: Commands {
         CommandGroup(replacing: .sidebar) {
             Button(store.sidebarCommand) { store.send(.sidebarToggled, animation: .panelMorph) }
                 .keyboardShortcut("s", modifiers: [.control, .command])
+            Button("Spaces…") { store.send(.sidebar(.spacesTapped)) }
+                .keyboardShortcut("k", modifiers: .command)
             Button("Objects") { openWindow(id: WindowID.objects) }
                 .keyboardShortcut("o", modifiers: [.option, .command])
         }
@@ -319,36 +392,52 @@ private struct SidebarView: View {
     }
 }
 
-/// Every space the person is in: a tile each with its initial, in its color, the shown one filled
-/// in, the others outlined, and dotted when something's new in it; + makes or joins one. It scrolls
-/// when there are many.
+/// The spaces in use the person is in, the one something was last said in first: a tile each with
+/// its initial, in its color, the shown one filled in, the others outlined, and dotted when
+/// something's new in it. They scroll when there are many; under them, always there, + makes or
+/// joins one, and Spaces lists every space, archived ones too.
 private struct SpaceRail: View {
     let store: StoreOf<SidebarFeature>
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
-                    SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 8) {
+                    ForEach(store.spaceChoices) { (choice: SidebarFeature.SpaceChoice) in
+                        SpaceTile(choice: choice) { store.send(.spaceSwitched(choice.id)) }
+                    }
                 }
-                Button {
-                    store.send(.addSpaceTapped)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.turgaiMuted)
-                        .frame(width: 30, height: 30)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .help("Make or join a space")
+                // The rail's width, so what's drawn just outside a tile isn't cut off.
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
             }
-            // The rail's width, so what's drawn just outside a tile isn't cut off.
-            .frame(maxWidth: .infinity)
+            .scrollIndicators(.never)
+            VStack(spacing: 4) {
+                RailButton(symbol: "plus", help: "Make or join a space") { store.send(.addSpaceTapped) }
+                RailButton(symbol: "square.grid.2x2", help: "All spaces (⌘K)") { store.send(.spacesTapped) }
+            }
             .padding(.vertical, 10)
         }
-        .scrollIndicators(.never)
         .frame(width: 50)
+    }
+}
+
+/// A button under the rail's tiles: its symbol, quiet.
+private struct RailButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.turgaiMuted)
+                .frame(width: 30, height: 30)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 }
 
@@ -397,8 +486,9 @@ private struct SpaceMark: View {
     }
 }
 
-/// The shown space's name and New conversation in it, ruled off from its conversations, the latest
-/// first, a dot marking one with something new. A conversation renames from its menu.
+/// The shown space's name and New conversation in it, while it's in use, ruled off from its
+/// conversations, the latest first, a dot marking one with something new. A conversation renames,
+/// is left or is deleted from its menu.
 private struct ConversationColumn: View {
     let store: StoreOf<SidebarFeature>
 
@@ -407,20 +497,22 @@ private struct ConversationColumn: View {
             // New conversation on the name's line, not between it and what's under it.
             HStack(alignment: .top, spacing: 8) {
                 SpaceHeading(
-                    name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
-                    rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
+                    name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu
+                ) { store.send(.spaceMenuPicked($0)) }
                 Spacer(minLength: 0)
-                Button {
-                    store.send(.newConversationTapped)
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                        .contentShape(.rect)
+                if let help = store.newConversationHelp {
+                    Button {
+                        store.send(.newConversationTapped)
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.turgaiAccent)
+                    .help(help)
                 }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.turgaiAccent)
-                .help(store.newConversationHelp)
             }
             // On the conversations' names' edge: the list's 8 and a line's 10.
             .padding(.leading, 18)
@@ -434,7 +526,11 @@ private struct ConversationColumn: View {
                     ForEach(store.entries) { (entry: SidebarFeature.Entry) in
                         ConversationLine(entry: entry, hue: store.shownSpaceHue) { store.send(.selected(entry.id)) }
                             .contextMenu {
-                                Button("Rename…") { store.send(.renameConversationTapped(entry.id)) }
+                                ForEach(entry.menu) { (item: SidebarFeature.ConversationMenuItem) in
+                                    Button(item.title, role: item.role) {
+                                        store.send(.conversationMenuPicked(entry.id, item))
+                                    }
+                                }
                             }
                     }
                 }
@@ -481,22 +577,22 @@ private struct ConversationLine: View {
 }
 
 /// The shown space, heading its conversations: its name over what it is; for its admins, the name
-/// is a menu that invites people to it and renames it.
+/// is a menu that invites people to it, renames it, and archives it, or unarchives it.
 private struct SpaceHeading: View {
     let name: String
     /// What it is and who's in it.
     let detail: String
-    /// What its menu offers, when its person is one of its admins: none otherwise.
-    let menu: SidebarFeature.SpaceMenu?
-    let rename: () -> Void
-    let invite: () -> Void
+    /// What its menu offers, when its person is one of its admins: nothing otherwise.
+    let menu: [SidebarFeature.SpaceMenuItem]
+    let pick: (SidebarFeature.SpaceMenuItem) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
-            if let menu {
+            if !menu.isEmpty {
                 Menu {
-                    Button(menu.invite, action: invite)
-                    Button(menu.rename, action: rename)
+                    ForEach(menu) { (item: SidebarFeature.SpaceMenuItem) in
+                        Button(item.title) { pick(item) }
+                    }
                 } label: {
                     HStack(spacing: 4) {
                         SpaceName(name: name)

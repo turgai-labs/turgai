@@ -30,7 +30,7 @@ struct ChatFeature {
         var session: Session?
         /// The conversation it shows: none until the window opens one.
         var conversationID: ConversationID?
-        /// The space it's in, as it was when it was opened.
+        /// The space it's in, as it was when it was opened, and as it's changed since.
         var space: SpaceSummary?
         /// Who's in it: its agent and its people.
         var participants: [ParticipantSummary] = []
@@ -146,6 +146,14 @@ struct ChatFeature {
             }
         }
 
+        /// What's under the messages: the composer, or, once its space is archived, that nothing new
+        /// is said in it.
+        var writing: Writing {
+            space?.status == .archived
+                ? .closed("This space is archived: its conversations can be read, and nothing new is said in them.")
+                : .composer
+        }
+
         /// Something's typed, and there's a connection to send it on.
         var canSend: Bool {
             guard case .connected = connection else { return false }
@@ -192,6 +200,10 @@ struct ChatFeature {
         case connect(Session)
         /// Show `id`, in `space`, instead of the conversation shown before.
         case open(ConversationID, in: SpaceSummary?)
+        /// Show no conversation, in `space`, which has none to show.
+        case close(in: SpaceSummary)
+        /// A space is as `space` says now.
+        case spaceChanged(SpaceSummary)
         case participantsLoaded([ParticipantSummary])
         case spacePeopleLoaded([SpacePerson])
         /// ⓘ beside a reply: its turn is shown.
@@ -222,6 +234,7 @@ struct ChatFeature {
             case conversationSaid(Conversation)
             case conversationTitled(Conversation)
             case conversationLeft(ConversationID)
+            case conversationDeleted(ConversationID)
             /// What's remembered about them changed.
             case memoryChanged
             /// The connection is open, again or for the first time: what's joined is joined again.
@@ -291,6 +304,15 @@ struct ChatFeature {
                     loadSpacePeople(of: space, as: state.session)
                 )
 
+            case .close(let space):
+                state = State(connection: state.connection, session: state.session, space: space)
+                return .none
+
+            case .spaceChanged(let space):
+                guard state.space?.id == space.id else { return .none }
+                state.space = space
+                return .none
+
             case .participantsLoaded(let participants):
                 state.participants = participants
                 return .none
@@ -346,6 +368,8 @@ struct ChatFeature {
                     return .send(.delegate(.conversationTitled(conversation)))
                 case .conversationLeft(let id):
                     return .send(.delegate(.conversationLeft(id)))
+                case .conversationDeleted(let id):
+                    return .send(.delegate(.conversationDeleted(id)))
                 case .memoryChanged:
                     return .send(.delegate(.memoryChanged))
                 case .reply:
@@ -485,7 +509,8 @@ struct ChatFeature {
             state.accessRequests.remove(id: id)
         case .notice(_, _, let error):
             state.error = error
-        case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft, .memoryChanged, .reply:
+        case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft, .conversationDeleted,
+            .memoryChanged, .reply:
             // Passed on to the window before this, or not the conversation's.
             break
         }
@@ -517,6 +542,12 @@ enum Delivery: Equatable {
     case said
     /// Sent, but not yet taken by the conversation.
     case sending
+}
+
+/// What's under a conversation's messages: the composer, or why nothing new is said in it.
+enum Writing: Equatable {
+    case composer
+    case closed(String)
 }
 
 /// Whose a message is, as it's drawn.
@@ -620,7 +651,8 @@ extension ChatEvent {
         case .ready(let id, _, _, _), .history(let id, _), .messageAccepted(let id, _, _), .turnStarted(let id, _),
             .turnPhase(let id, _, _), .turnStatus(let id, _, _), .turnPartial(let id, _, _),
             .turnCompleted(let id, _, _), .accessRequested(let id, _), .accessAnswered(let id, _, _),
-            .turns(let id, _), .turnStep(let id, _, _), .conversationLeft(let id), .turnFailed(let id, _, _):
+            .turns(let id, _), .turnStep(let id, _, _), .conversationLeft(let id), .conversationDeleted(let id),
+            .turnFailed(let id, _, _):
             id
         case .notice(let id, _, _):
             id

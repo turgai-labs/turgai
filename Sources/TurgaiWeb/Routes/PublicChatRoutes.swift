@@ -235,7 +235,11 @@ extension TurgaiMainWebApp {
                         let open = await shown.conversation?.domainID == conversation
                         let id = TurgaiModels.ConversationID(rawValue: conversation.externalAddress.rawValue)
                         payload = open ? nil : .conversationLeft(conversationID: id)
-                    case .joined, .said, .titled, .left:
+                    case .deleted(let conversation) where conversation.channel == turgaiChannel:
+                        // The open one too: what it showed is gone.
+                        let id = TurgaiModels.ConversationID(rawValue: conversation.externalAddress.rawValue)
+                        payload = .conversationDeleted(conversationID: id)
+                    case .joined, .said, .titled, .left, .deleted:
                         payload = nil
                     }
                     guard let payload else { return }
@@ -375,7 +379,7 @@ extension TurgaiMainWebApp {
             return try publicAPIResponse(
                 TurgaiModels.Conversation(
                     id: .init(rawValue: conversationID.externalAddress.rawValue), botID: .init(rawValue: profile.id),
-                    spaceID: startedIn.rawValue.uuidString),
+                    spaceID: startedIn.rawValue.uuidString, people: 1),
                 status: .created
             )
         }
@@ -536,7 +540,7 @@ extension TurgaiMainWebApp {
 
         spaces.get { request, _ in
             try await answering(request) { person, spaces in
-                try publicAPIResponse(try await spaces.list(for: person).map(SpaceSummary.init))
+                try publicAPIResponse(try await spaces.list(for: person).map { SpaceSummary($0, in: spaces) })
             }
         }
 
@@ -545,7 +549,7 @@ extension TurgaiMainWebApp {
                 let input = try await body(MakeSpaceRequest.self, of: request, context: context)
                 guard let name = SpaceName(input.name) else { return nameRequired() }
                 return try publicAPIResponse(
-                    SpaceSummary(try await spaces.make(named: name, by: person)), status: .created)
+                    SpaceSummary(try await spaces.make(named: name, by: person), in: spaces), status: .created)
             }
         }
 
@@ -554,7 +558,8 @@ extension TurgaiMainWebApp {
                 guard let space = spaceID(in: context) else { return noSuchSpace() }
                 let input = try await body(RenameSpaceRequest.self, of: request, context: context)
                 guard let name = SpaceName(input.name) else { return nameRequired() }
-                return try publicAPIResponse(SpaceSummary(try await spaces.rename(space, to: name, by: person)))
+                let renamed = try await spaces.rename(space, to: name, by: person)
+                return try publicAPIResponse(SpaceSummary(renamed, in: spaces))
             }
         }
 
@@ -629,7 +634,8 @@ extension TurgaiMainWebApp {
                 guard let space = spaceID(in: context) else { return noSuchSpace() }
                 let input = try await body(JoinSpaceRequest.self, of: request, context: context)
                 return try publicAPIResponse(
-                    SpaceSummary(try await spaces.join(space, with: SpaceInviteToken(input.token), as: person)))
+                    SpaceSummary(
+                        try await spaces.join(space, with: SpaceInviteToken(input.token), as: person), in: spaces))
             }
         }
     }
@@ -718,7 +724,9 @@ private struct APIConversation: Sendable {
     var publicID: TurgaiModels.ConversationID { .init(rawValue: domainID.externalAddress.rawValue) }
 
     var info: TurgaiModels.Conversation {
-        .init(id: publicID, botID: .init(rawValue: agent.rawValue), spaceID: outline.space.rawValue.uuidString)
+        .init(
+            id: publicID, botID: .init(rawValue: agent.rawValue), spaceID: outline.space.rawValue.uuidString,
+            people: outline.participants.count { if case .person = $0 { true } else { false } })
     }
 }
 
@@ -801,10 +809,36 @@ private func answer(
         case .setRemembering(let remembering):
             try await bridge.setRemembering(Remembering(remembering), for: person)
             return .ok
+        case .archiveSpace(let space):
+            guard let id = UUID(uuidString: space) else { return .failed(notASpace) }
+            _ = try await bridge.spaces().archive(SpaceID(rawValue: id), by: person)
+            return .ok
+        case .unarchiveSpace(let space):
+            guard let id = UUID(uuidString: space) else { return .failed(notASpace) }
+            _ = try await bridge.spaces().unarchive(SpaceID(rawValue: id), by: person)
+            return .ok
+        case .leaveConversation(let conversation):
+            try await bridge.leave(domainID(of: conversation), as: person)
+            return .ok
+        case .deleteConversation(let conversation):
+            try await bridge.delete(domainID(of: conversation), by: person)
+            return .ok
         }
+    } catch let refusal as SpaceRefusal {
+        return .failed(TurgaiModels.ChatError(code: "refused", message: refusal.description))
+    } catch let refusal as ConversationRefusal {
+        return .failed(TurgaiModels.ChatError(code: "refused", message: refusal.description))
     } catch {
         return .failed(TurgaiModels.ChatError(code: "push_failed", message: "That didn't work. Try again."))
     }
+}
+
+/// What a push names no space by.
+private let notASpace = TurgaiModels.ChatError(code: "not_a_space", message: "There's no such space.")
+
+/// The conversation an app calls `id`, as Turgai's apps' conversations are kept.
+private func domainID(of id: TurgaiModels.ConversationID) -> TurgaiDomain.ConversationID {
+    TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(id.rawValue))
 }
 
 private actor ShownConversation {
@@ -909,6 +943,11 @@ private func conversationRefused(_ refusal: ConversationRefusal) -> Response {
         publicAPIErrorResponse(status: .conflict, code: "one_agent_for_now", message: refusal.description)
     case .addresseeNotInIt:
         publicAPIErrorResponse(status: .badRequest, code: "addressee_not_in_it", message: refusal.description)
+    case .deleted: conversationNotFound()
+    case .othersAreInIt:
+        publicAPIErrorResponse(status: .forbidden, code: "others_are_in_it", message: refusal.description)
+    case .spaceArchived:
+        publicAPIErrorResponse(status: .conflict, code: "space_archived", message: refusal.description)
     }
 }
 
@@ -1027,15 +1066,20 @@ private func spaceRefused(_ refusal: SpaceRefusal) -> Response {
         case .notInIt: (.notFound, "not_in_it")
         case .lastAdmin: (.conflict, "last_admin")
         case .inviteDoesNotWork: (.conflict, "invite_does_not_work")
+        case .archived: (.conflict, "archived")
+        case .turgaisOwn: (.conflict, "turgais_own")
         }
     return publicAPIErrorResponse(status: status, code: code, message: refusal.description)
 }
 
 extension SpaceSummary {
-    fileprivate init(_ listing: SpaceListing) {
+    /// `listing`, one of `spaces`, as the API gives it.
+    fileprivate init(_ listing: SpaceListing, in spaces: Spaces) {
         self.init(
             id: listing.id.rawValue.uuidString, name: listing.name.rawValue,
-            role: listing.role == .admin ? .admin : .member)
+            role: listing.role == .admin ? .admin : .member,
+            status: listing.status == .archived ? .archived : .active,
+            kind: listing.id == spaces.turgaisOwn ? .turgaisOwn : .made)
     }
 }
 
@@ -1779,6 +1823,6 @@ extension TurgaiModels.Conversation {
     fileprivate init(_ listing: ConversationListing) {
         self.init(
             id: .init(rawValue: listing.id.externalAddress.rawValue), botID: .init(rawValue: listing.agent.rawValue),
-            title: listing.title, spaceID: listing.space.rawValue.uuidString)
+            title: listing.title, spaceID: listing.space.rawValue.uuidString, people: listing.people)
     }
 }

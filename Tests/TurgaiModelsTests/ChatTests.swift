@@ -86,7 +86,11 @@ struct ChatTests {
     @Test
     func pushesAndRepliesRoundTrip() throws {
         let ref = PushRef(rawValue: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!)
-        for ask in [ChatAsk.join(.memory), .leave(.memory), .memory, .forgetMemory, .setRemembering(.off)] {
+        let dinner = ConversationID(rawValue: "dinner")
+        for ask in [
+            ChatAsk.join(.memory), .leave(.memory), .memory, .forgetMemory, .setRemembering(.off),
+            .archiveSpace("family"), .unarchiveSpace("family"), .leaveConversation(dinner), .deleteConversation(dinner),
+        ] {
             let push = ChatCommand.push(ref: ref, ask: ask)
             #expect(try JSONDecoder().decode(ChatCommand.self, from: JSONEncoder().encode(push)) == push)
         }
@@ -105,5 +109,8 @@ struct ChatTests {
         let changed = ChatEvent(payload: .memoryChanged)
         #expect(try JSONDecoder().decode(ChatEvent.self, from: JSONEncoder().encode(changed)) == changed)
         #expect(changed.type.rawValue == "memory.changed")
+        let deleted = ChatEvent(payload: .conversationDeleted(conversationID: dinner))
+        #expect(try JSONDecoder().decode(ChatEvent.self, from: JSONEncoder().encode(deleted)) == deleted)
+        #expect(deleted.type.rawValue == "conversation.deleted")
     }
 }

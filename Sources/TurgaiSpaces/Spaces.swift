@@ -11,9 +11,12 @@ import TurgaiDomain
 /// inviting someone, joining with an invite, and leaving.
 public struct Spaces: Sendable {
     private let actorSystem: ClusterSystem
+    /// Turgai's own space, where every account is: it stays in use.
+    public let turgaisOwn: SpaceID
 
-    public init(actorSystem: ClusterSystem) {
+    public init(actorSystem: ClusterSystem, turgaisOwn: SpaceID) {
         self.actorSystem = actorSystem
+        self.turgaisOwn = turgaisOwn
     }
 
     /// A new space called `name`, with `person` its first admin.
@@ -34,6 +37,21 @@ public struct Spaces: Sendable {
     public func rename(_ id: SpaceID, to name: SpaceName, by person: UserID) async throws -> SpaceListing {
         let space = try await Space.resolve(on: actorSystem, id: id)
         try await space.rename(to: name, by: person)
+        return try await listing(of: space, for: person)
+    }
+
+    /// The space `id` archived, as its admin `person` asks: refused for Turgai's own.
+    public func archive(_ id: SpaceID, by person: UserID) async throws -> SpaceListing {
+        guard id != turgaisOwn else { throw SpaceRefusal.turgaisOwn }
+        let space = try await Space.resolve(on: actorSystem, id: id)
+        try await space.archive(by: person)
+        return try await listing(of: space, for: person)
+    }
+
+    /// The space `id` in use again, as its admin `person` asks.
+    public func unarchive(_ id: SpaceID, by person: UserID) async throws -> SpaceListing {
+        let space = try await Space.resolve(on: actorSystem, id: id)
+        try await space.unarchive(by: person)
         return try await listing(of: space, for: person)
     }
 

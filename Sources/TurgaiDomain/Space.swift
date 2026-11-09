@@ -4,6 +4,12 @@
     import Foundation
 #endif
 
+/// Whether a space is in use. Archived, it's kept to be read, and nothing new happens in it.
+public enum SpaceStatus: String, Hashable, Codable, Sendable {
+    case active
+    case archived
+}
+
 /// What a person may do in a space.
 public enum SpaceRole: String, Hashable, Codable, Sendable {
     /// Takes part, and uses what the space has.

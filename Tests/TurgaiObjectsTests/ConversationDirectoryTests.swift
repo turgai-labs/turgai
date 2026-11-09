@@ -15,6 +15,9 @@ import TurgaiSpaces
 /// The conversation directory: each person's list, kept from the conversations' own events.
 @Suite
 struct ConversationDirectoryTests {
+    /// The agent answering in these conversations.
+    private let agent = AgentProfileID("conversation")
+
     /// A person's list has the conversations they're in, each called its title once it has one;
     /// one they left is off it, and each channel's are known.
     @Test func aPersonsListFollowsTheConversationsTheyreIn() async throws {
@@ -23,7 +26,8 @@ struct ConversationDirectoryTests {
             _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
                 ConversationDirectory(actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
             }
-            let family = try await Spaces(actorSystem: system).make(named: SpaceName("Family")!, by: .ann)
+            let family = try await Spaces(actorSystem: system, turgaisOwn: SpaceID()).make(
+                named: SpaceName("Family")!, by: .ann)
             func started(_ address: String) async throws -> (ConversationID, Conversation) {
                 let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init(address))
                 let conversation = try await Conversation.resolve(on: system, conversationID: id)
@@ -35,13 +39,15 @@ struct ConversationDirectoryTests {
             try await trip.title(ConversationTitle("Trip")!, by: .ann)
 
             let annsList = Set([
-                ConversationListing(id: dinnerID, space: family.id, agent: AgentProfileID("conversation"), title: nil),
-                ConversationListing(id: tripID, space: family.id, agent: AgentProfileID("conversation"), title: "Trip"),
+                ConversationListing(id: dinnerID, space: family.id, agent: agent, title: nil, people: 1),
+                ConversationListing(id: tripID, space: family.id, agent: agent, title: "Trip", people: 1),
             ])
             #expect(try await Set(list(of: .ann, on: system) { Set($0) == annsList }) == annsList)
 
             try await dinner.leave(.ann)
-            let afterLeaving = [ConversationListing(id: tripID, space: family.id, agent: AgentProfileID("conversation"), title: "Trip")]
+            let afterLeaving = [
+                ConversationListing(id: tripID, space: family.id, agent: agent, title: "Trip", people: 1)
+            ]
             #expect(try await list(of: .ann, on: system) { $0 == afterLeaving } == afterLeaving)
 
             let onTurgai = try await system.singleton
@@ -64,7 +70,8 @@ struct ConversationDirectoryTests {
             try await system.singleton.proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
                 .follow(.ann, with: listener)
 
-            let family = try await Spaces(actorSystem: system).make(named: SpaceName("Family")!, by: .ann)
+            let family = try await Spaces(actorSystem: system, turgaisOwn: SpaceID()).make(
+                named: SpaceName("Family")!, by: .ann)
             let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("dinner"))
             let dinner = try await Conversation.resolve(on: system, conversationID: id)
             try await dinner.start(in: family.id, agent: AgentProfileID("conversation"), by: .ann)
@@ -76,11 +83,42 @@ struct ConversationDirectoryTests {
                 told.append(notice)
                 if case .left = notice { break }
             }
-            let listed = ConversationListing(id: id, space: family.id, agent: AgentProfileID("conversation"), title: nil)
-            let titled = ConversationListing(id: id, space: family.id, agent: AgentProfileID("conversation"), title: "Dinner")
+            let listed = ConversationListing(id: id, space: family.id, agent: agent, title: nil, people: 1)
+            let titled = ConversationListing(id: id, space: family.id, agent: agent, title: "Dinner", people: 1)
             #expect(told.first == .joined(listed))
             #expect(told.contains(.titled(titled)))
             #expect(told.last == .left(id))
+        }
+    }
+
+    /// A conversation its only person deletes is off their list, and they're told; one with others
+    /// in it only an admin of its space deletes.
+    @Test func aDeletedConversationIsOffTheList() async throws {
+        let store = MemoryEventStore()
+        try await withClusterSystem("deleting", store: store, hostsVirtualActors: true, people: []) { system in
+            _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
+                ConversationDirectory(
+                    actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
+            }
+            let (notices, telling) = AsyncStream<ConversationNotice>.makeStream()
+            let listener = ConversationNoticeListener(actorSystem: system) { telling.yield($0) }
+            try await system.singleton.proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+                .follow(.ann, with: listener)
+
+            let spaces = Spaces(actorSystem: system, turgaisOwn: SpaceID())
+            let family = try await spaces.make(named: SpaceName("Family")!, by: .ann)
+            let (_, token) = try await spaces.invite(to: family.id, by: .ann, for: .untilUsed)
+            _ = try await spaces.join(family.id, with: token, as: .bob)
+            let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("dinner"))
+            let dinner = try await Conversation.resolve(on: system, conversationID: id)
+            try await dinner.start(in: family.id, agent: AgentProfileID("conversation"), by: .bob)
+            try await dinner.add(.person(.ann), by: .bob)
+            await #expect(throws: ConversationRefusal.othersAreInIt) { try await dinner.delete(by: .bob) }
+            try await dinner.delete(by: .ann)
+
+            for await notice in notices where notice == .deleted(id) { break }
+            #expect(try await list(of: .ann, on: system) { $0.isEmpty }.isEmpty)
+            #expect(try await list(of: .bob, on: system) { $0.isEmpty }.isEmpty)
         }
     }
 
@@ -108,16 +146,16 @@ struct ConversationDirectoryTests {
         for (index, change) in changes.enumerated() { try await directory.keep(change, Offset(Int64(index + 1))) }
         #expect(
             try await directory.conversations(.ann) == [
-                ConversationListing(id: dinner, space: space, agent: a, title: "plan dinner"),
-                ConversationListing(id: trip, space: space, agent: a, title: nil),
+                ConversationListing(id: dinner, space: space, agent: a, title: "plan dinner", people: 1),
+                ConversationListing(id: trip, space: space, agent: a, title: nil, people: 1),
             ])
 
         try await directory.keep(.said(trip, firstLine: nil), Offset(9))
         try await directory.keep(.titled(dinner, ConversationTitle("Dinner")!), Offset(10))
         #expect(
             try await directory.conversations(.ann) == [
-                ConversationListing(id: trip, space: space, agent: a, title: nil),
-                ConversationListing(id: dinner, space: space, agent: a, title: "Dinner"),
+                ConversationListing(id: trip, space: space, agent: a, title: nil, people: 1),
+                ConversationListing(id: dinner, space: space, agent: a, title: "Dinner", people: 1),
             ])
     }
 

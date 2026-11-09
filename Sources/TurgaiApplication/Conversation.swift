@@ -101,7 +101,7 @@ private enum PublishEvent: Sendable {
             self = .said(message)
         case .started, .joined, .left, .titled, .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered,
             .replyQueued,
-            .replyDelivered, .reset, .noted, .unnoted:
+            .replyDelivered, .reset, .deleted, .noted, .unnoted:
             return nil
         }
     }
@@ -330,10 +330,10 @@ public distributed actor Conversation {
     )
 
     /// What the conversation directory is kept from: how it started, who's in it, what it's called,
-    /// and each time something's said in it.
+    /// each time something's said in it, and its deletion.
     public let tagging = Tagging<ConversationEvent> { event in
         switch event {
-        case .started, .joined, .left, .titled, .said, .inbox(.queued), .inbox(.turnStarted), .replyQueued:
+        case .started, .joined, .left, .titled, .said, .inbox(.queued), .inbox(.turnStarted), .replyQueued, .deleted:
             [.conversation]
         case .inbox(.turnCompleted), .inbox(.turnFailed), .awaiting, .answered, .replyDelivered, .reset, .noted,
             .unnoted:
@@ -431,7 +431,9 @@ public distributed actor Conversation {
     public distributed func start(in space: SpaceID, agent: AgentProfileID, by person: TurgaiDomain.UserID)
         async throws
     {
-        _ = try await Space.resolve(on: actorSystem, id: space).scope(of: person)
+        let home = try await Space.resolve(on: actorSystem, id: space)
+        _ = try await home.scope(of: person)
+        guard try await home.status() == .active else { throw SpaceRefusal.archived }
         try await changing {
             for event in try state.starting(in: space, answeredBy: agent, by: person) { try await emit(event: event) }
         }
@@ -468,6 +470,16 @@ public distributed actor Conversation {
     /// they're one of its people.
     public distributed func leave(_ person: TurgaiDomain.UserID) async throws {
         try await changing { for event in try state.leaving(person) { try await emit(event: event) } }
+    }
+
+    /// It deleted by `person`, one of its people: by the only one in it, or by an admin of its
+    /// space. Its agent stops what it's doing, and no one reads it any more.
+    public distributed func delete(by person: TurgaiDomain.UserID) async throws {
+        let role = try? await space().scope(of: person).role
+        try await changing {
+            for event in try state.deleting(by: person, role: role) { try await emit(event: event) }
+        }
+        for participant in participants.values { try? await participant.cancel() }
     }
 
     /// It called `title`, as `person`, one of its people, titles it.
@@ -585,6 +597,8 @@ public distributed actor Conversation {
         guard message.conversationID == conversationID else {
             throw ConversationActorError.conversationMismatch
         }
+        // Its space archived, it's read, and nothing new is said in it.
+        guard try await space().status() == .active else { throw ConversationRefusal.spaceArchived }
 
         guard try state.answers(message) else {
             // Said to others in it: kept and shown to them, with no turn.

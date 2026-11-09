@@ -24,14 +24,20 @@ enum ChatSocketError: Error, Equatable {
     case closed
     /// It didn't come in time.
     case noReply
-    /// It came, but said it failed, or wasn't what was asked for.
+    /// It came, and said it couldn't be done, and why.
+    case failed(ChatError)
+    /// It came, but wasn't what was asked for.
     case refused
 }
 
 extension ChatClient {
     /// `ask` done: throws when it wasn't.
     func perform(_ ask: ChatAsk) async throws {
-        guard try await self.ask(ask) == .ok else { throw ChatSocketError.refused }
+        switch try await self.ask(ask) {
+        case .ok: return
+        case .failed(let error): throw ChatSocketError.failed(error)
+        case .memory: throw ChatSocketError.refused
+        }
     }
 
     /// What's remembered about the person, and whether they're remembered.
@@ -124,7 +130,9 @@ private actor ChatSocket {
         switch ask {
         case .join(let topic): joined.insert(topic)
         case .leave(let topic): joined.remove(topic)
-        case .memory, .forgetMemory, .setRemembering: break
+        case .memory, .forgetMemory, .setRemembering, .archiveSpace, .unarchiveSpace, .leaveConversation,
+            .deleteConversation:
+            break
         }
         let ref = PushRef()
         return try await withCheckedThrowingContinuation { continuation in

@@ -8,12 +8,13 @@ import TurgaiModels
 @MainActor
 struct SidebarFeatureTests {
     let session = Session(token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
-    let turgai = SpaceSummary(id: "turgai", name: "Turgai", role: .member)
+    let turgai = SpaceSummary(id: "turgai", name: "Turgai", role: .member, status: .active, kind: .turgaisOwn)
     let dinner = Conversation(
         id: ConversationID(rawValue: "dinner"), botID: BotID(rawValue: "conversation"), title: "plan dinner",
-        spaceID: "turgai")
+        spaceID: "turgai", people: 1)
     let trip = Conversation(
-        id: ConversationID(rawValue: "trip"), botID: BotID(rawValue: "conversation"), title: "trip", spaceID: "turgai")
+        id: ConversationID(rawValue: "trip"), botID: BotID(rawValue: "conversation"), title: "trip", spaceID: "turgai",
+        people: 1)
 
     /// The latest conversation is opened as the window shows.
     @Test
@@ -28,11 +29,14 @@ struct SidebarFeatureTests {
         await store.receive(\.loaded) {
             $0.spaces = [self.turgai]
             $0.conversations = [
-                .init(id: self.dinner.id, title: "plan dinner", spaceID: "turgai"),
-                .init(id: self.trip.id, title: "trip", spaceID: "turgai"),
+                .init(id: self.dinner.id, title: "plan dinner", spaceID: "turgai", people: 1),
+                .init(id: self.trip.id, title: "trip", spaceID: "turgai", people: 1),
             ]
         }
-        await store.receive(\.selected) { $0.selected = self.dinner.id }
+        await store.receive(\.selected) {
+            $0.selected = self.dinner.id
+            $0.shownSpaceID = "turgai"
+        }
         await store.receive(\.delegate, .open(dinner.id))
         await store.finish()
     }
@@ -54,9 +58,12 @@ struct SidebarFeatureTests {
         await store.send(.appeared(session)) { $0.session = self.session }
         await store.receive(\.loaded) { $0.spaces = [self.turgai] }
         await store.receive(\.started) {
-            $0.conversations = [.init(id: self.dinner.id, title: "plan dinner", spaceID: "turgai")]
+            $0.conversations = [.init(id: self.dinner.id, title: "plan dinner", spaceID: "turgai", people: 1)]
         }
-        await store.receive(\.selected) { $0.selected = self.dinner.id }
+        await store.receive(\.selected) {
+            $0.selected = self.dinner.id
+            $0.shownSpaceID = "turgai"
+        }
         await store.receive(\.delegate, .open(dinner.id))
         await store.finish()
         #expect(started.value == [nil])
@@ -67,21 +74,22 @@ struct SidebarFeatureTests {
     func aChangedConversationComesFirstMarked() async {
         var state = SidebarFeature.State()
         state.conversations = [
-            .init(id: dinner.id, title: "plan dinner", spaceID: "turgai"),
-            .init(id: trip.id, title: "trip", spaceID: "turgai"),
+            .init(id: dinner.id, title: "plan dinner", spaceID: "turgai", people: 1),
+            .init(id: trip.id, title: "trip", spaceID: "turgai", people: 1),
         ]
         state.selected = dinner.id
         let store = TestStore(initialState: state) { SidebarFeature() }
 
-        let changed = Conversation(id: trip.id, botID: trip.botID, title: "trip to Rome", spaceID: "turgai")
+        let changed = Conversation(id: trip.id, botID: trip.botID, title: "trip to Rome", spaceID: "turgai", people: 1)
         await store.send(.conversationSaid(changed)) {
             $0.conversations = [
-                .init(id: self.trip.id, title: "trip to Rome", spaceID: "turgai", unread: true),
-                .init(id: self.dinner.id, title: "plan dinner", spaceID: "turgai"),
+                .init(id: self.trip.id, title: "trip to Rome", spaceID: "turgai", people: 1, unread: true),
+                .init(id: self.dinner.id, title: "plan dinner", spaceID: "turgai", people: 1),
             ]
         }
         await store.send(.selected(trip.id)) {
             $0.selected = self.trip.id
+            $0.shownSpaceID = "turgai"
             $0.conversations[id: self.trip.id]?.unread = false
         }
         await store.receive(\.delegate, .open(trip.id))
@@ -95,20 +103,20 @@ struct SidebarFeatureTests {
         var state = SidebarFeature.State()
         state.session = session
         state.spaces = [turgai]
-        state.conversations = [.init(id: dinner.id, title: "plan dinner", spaceID: "turgai")]
+        state.conversations = [.init(id: dinner.id, title: "plan dinner", spaceID: "turgai", people: 1)]
         let store = TestStore(initialState: state) {
             SidebarFeature()
         } withDependencies: {
             $0.server.titleConversation = { _, _, title in titled.withValue { $0.append(title) } }
         }
 
-        await store.send(.renameConversationTapped(dinner.id)) {
+        await store.send(.conversationMenuPicked(dinner.id, .rename)) {
             $0.dialog = .renaming(.init(subject: .conversation(self.dinner.id), name: "plan dinner"))
         }
         await store.send(.nameChanged(" Dinner ")) { $0.dialog?.name = " Dinner " }
         await store.send(.renameConfirmed) { $0.dialog = nil }
         await store.receive(\.renamed) { $0.conversations[id: self.dinner.id]?.title = "Dinner" }
-        await store.send(.renameConversationTapped(dinner.id)) {
+        await store.send(.conversationMenuPicked(dinner.id, .rename)) {
             $0.dialog = .renaming(.init(subject: .conversation(self.dinner.id), name: "Dinner"))
         }
         await store.send(.nameChanged(" ")) { $0.dialog?.name = " " }
@@ -120,14 +128,14 @@ struct SidebarFeatureTests {
     /// that isn't one can't be joined, and one that doesn't work says so, the dialog still open.
     @Test
     func aSpaceIsMadeOrJoined() async {
-        let family = SpaceSummary(id: "family", name: "Family", role: .admin)
+        let family = SpaceSummary(id: "family", name: "Family", role: .admin, status: .active, kind: .made)
         let space = "8F3C1E2A-4B5D-4E6F-8A9B-0C1D2E3F4A5B"
-        let work = SpaceSummary(id: space, name: "Work", role: .member)
+        let work = SpaceSummary(id: space, name: "Work", role: .member, status: .active, kind: .made)
         let joined = LockIsolated<[SpaceInviteLink]>([])
         var state = SidebarFeature.State()
         state.session = session
         state.spaces = [turgai]
-        state.conversations = [.init(id: dinner.id, title: "plan dinner", spaceID: "family")]
+        state.conversations = [.init(id: dinner.id, title: "plan dinner", spaceID: "family", people: 1)]
         let store = TestStore(initialState: state) {
             SidebarFeature()
         } withDependencies: {
@@ -147,7 +155,7 @@ struct SidebarFeatureTests {
             $0.dialog = nil
             $0.spaces = [self.turgai, family]
         }
-        await store.receive(\.spaceSwitched)
+        await store.receive(\.spaceSwitched) { $0.shownSpaceID = "family" }
         await store.receive(\.selected) { $0.selected = self.dinner.id }
         await store.receive(\.delegate, .open(dinner.id))
 
@@ -175,11 +183,14 @@ struct SidebarFeatureTests {
             $0.dialog = nil
             $0.spaces = [self.turgai, family, work]
         }
-        await store.receive(\.spaceSwitched)
+        await store.receive(\.spaceSwitched) { $0.shownSpaceID = space }
         await store.receive(\.started) {
-            $0.conversations.insert(.init(id: self.trip.id, title: "trip", spaceID: "turgai"), at: 0)
+            $0.conversations.insert(.init(id: self.trip.id, title: "trip", spaceID: "turgai", people: 1), at: 0)
         }
-        await store.receive(\.selected) { $0.selected = self.trip.id }
+        await store.receive(\.selected) {
+            $0.selected = self.trip.id
+            $0.shownSpaceID = "turgai"
+        }
         await store.receive(\.delegate, .open(trip.id))
         await store.finish()
         #expect(joined.value.map(\.token) == ["bad", "good"])
@@ -188,7 +199,7 @@ struct SidebarFeatureTests {
     /// Invite People… makes a link to the shown space, shown to copy; one that can't be made says so.
     @Test
     func anInviteIsMadeAndCopied() async {
-        let family = SpaceSummary(id: "family", name: "Family", role: .admin)
+        let family = SpaceSummary(id: "family", name: "Family", role: .admin, status: .active, kind: .made)
         let link = "turgai://join/8F3C1E2A-4B5D-4E6F-8A9B-0C1D2E3F4A5B/abc"
         let copied = LockIsolated<[String]>([])
         let makes = LockIsolated(0)
@@ -206,13 +217,13 @@ struct SidebarFeatureTests {
             $0.pasteboard.copy = { text in copied.withValue { $0.append(text) } }
         }
 
-        await store.send(.inviteTapped) { $0.dialog = .inviting(.init(spaceName: "Family")) }
+        await store.send(.spaceMenuPicked(.invite)) { $0.dialog = .inviting(.init(spaceName: "Family")) }
         await store.receive(\.inviteMade) { $0.dialog = .inviting(.init(spaceName: "Family", link: link)) }
         await store.send(.copyInviteTapped)
         #expect(copied.value == [link])
         await store.send(.dialogPresented(false)) { $0.dialog = nil }
 
-        await store.send(.inviteTapped) { $0.dialog = .inviting(.init(spaceName: "Family")) }
+        await store.send(.spaceMenuPicked(.invite)) { $0.dialog = .inviting(.init(spaceName: "Family")) }
         await store.receive(\.inviteFailed) {
             $0.dialog = .inviting(.init(spaceName: "Family", problem: "Couldn't make an invite. Try again."))
         }
@@ -224,47 +235,52 @@ struct SidebarFeatureTests {
     func aTitleOrAJoinChangesOnlyWhatItSays() async {
         var state = SidebarFeature.State()
         state.conversations = [
-            .init(id: dinner.id, title: "plan dinner", spaceID: "turgai"),
-            .init(id: trip.id, title: "trip", spaceID: "turgai"),
+            .init(id: dinner.id, title: "plan dinner", spaceID: "turgai", people: 1),
+            .init(id: trip.id, title: "trip", spaceID: "turgai", people: 1),
         ]
         state.selected = dinner.id
         let store = TestStore(initialState: state) { SidebarFeature() }
 
-        let rome = Conversation(id: trip.id, botID: trip.botID, title: "Rome", spaceID: "turgai")
+        let rome = Conversation(id: trip.id, botID: trip.botID, title: "Rome", spaceID: "turgai", people: 1)
         await store.send(.conversationTitled(rome)) { $0.conversations[id: self.trip.id]?.title = "Rome" }
         await store.send(.conversationJoined(rome))
-        let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "turgai")
+        let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "turgai", people: 1)
         await store.send(.conversationJoined(lunch)) {
-            $0.conversations.insert(.init(id: lunch.id, title: nil, spaceID: "turgai", unread: true), at: 0)
+            $0.conversations.insert(.init(id: lunch.id, title: nil, spaceID: "turgai", people: 1, unread: true), at: 0)
         }
     }
 
-    /// The sidebar shows the open conversation's space; its rail has every space, dotted where
-    /// something's new; switching opens a space's latest conversation, or starts one in a space
-    /// with none; New conversation starts one in the space shown.
+    /// The sidebar shows the open conversation's space; its rail has every space in use, the one
+    /// something was last said in first, dotted where something's new; switching opens a space's
+    /// latest conversation, or starts one in a space with none; New conversation starts one in the
+    /// space shown.
     @Test
     func theRailShowsOneSpaceAtATime() async {
-        let family = SpaceSummary(id: "family", name: "Family", role: .admin)
-        let work = SpaceSummary(id: "work", name: "Work", role: .member)
+        let family = SpaceSummary(id: "family", name: "Family", role: .admin, status: .active, kind: .made)
+        let work = SpaceSummary(id: "work", name: "Work", role: .member, status: .active, kind: .made)
         let started = LockIsolated<[String?]>([])
         var state = SidebarFeature.State()
         state.session = session
         state.spaces = [turgai, family, work]
         state.conversations = [
-            .init(id: dinner.id, title: "plan dinner", spaceID: "family"),
-            .init(id: trip.id, title: nil, spaceID: "turgai", unread: true),
+            .init(id: dinner.id, title: "plan dinner", spaceID: "family", people: 1),
+            .init(id: trip.id, title: nil, spaceID: "turgai", people: 1, unread: true),
         ]
         state.selected = dinner.id
+        state.shownSpaceID = "family"
         #expect(state.shownSpace == family)
-        #expect(state.entries == [.init(id: dinner.id, title: "plan dinner", unread: false, isOpen: true)])
-        #expect(state.spaceChoices.map(\.initial) == ["T", "F", "W"])
-        #expect(state.spaceChoices.map(\.unread) == [true, false, false])
-        #expect(state.spaceChoices.map(\.isShown) == [false, true, false])
-        #expect(state.spaceChoices.map(\.fill) == [.outlined, .filled, .outlined])
-        #expect(state.shownSpaceMenu == .init(rename: "Rename “Family”…", invite: "Invite People…"))
+        #expect(
+            state.entries == [
+                .init(id: dinner.id, title: "plan dinner", unread: false, isOpen: true, menu: [.rename, .delete])
+            ])
+        #expect(state.spaceChoices.map(\.initial) == ["F", "T", "W"])
+        #expect(state.spaceChoices.map(\.unread) == [false, true, false])
+        #expect(state.spaceChoices.map(\.isShown) == [true, false, false])
+        #expect(state.spaceChoices.map(\.fill) == [.filled, .outlined, .outlined])
+        #expect(state.shownSpaceMenu == [.invite, .rename(name: "Family"), .archive(name: "Family")])
         #expect(state.newConversationHelp == "New conversation in Family")
         #expect(state.shownSpaceName == "Family")
-        #expect(state.spaceChoices.map(\.hue) == [.blue, .yellow, .blue])
+        #expect(state.spaceChoices.map(\.hue) == [.yellow, .blue, .blue])
         #expect(state.shownSpaceHue == .yellow)
         #expect(state.shownSpaceDetail == "Space")
         state.peopleCounts["family"] = 1
@@ -272,7 +288,7 @@ struct SidebarFeatureTests {
         state.peopleCounts["family"] = 3
         #expect(state.shownSpaceDetail == "Space · 3 people")
 
-        let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "work")
+        let lunch = Conversation(id: ConversationID(rawValue: "lunch"), botID: trip.botID, spaceID: "work", people: 1)
         let store = TestStore(initialState: state) {
             SidebarFeature()
         } withDependencies: {
@@ -282,18 +298,156 @@ struct SidebarFeatureTests {
             }
         }
         await store.send(.spaceSwitched("family"))
-        await store.send(.spaceSwitched("turgai"))
+        await store.send(.spaceSwitched("turgai")) { $0.shownSpaceID = "turgai" }
         await store.receive(\.selected) {
             $0.selected = self.trip.id
             $0.conversations[id: self.trip.id]?.unread = false
         }
         await store.receive(\.delegate, .open(trip.id))
-        await store.send(.spaceSwitched("work"))
-        await store.receive(\.started) { $0.conversations.insert(.init(id: lunch.id, spaceID: "work"), at: 0) }
+        await store.send(.spaceSwitched("work")) { $0.shownSpaceID = "work" }
+        await store.receive(\.started) {
+            $0.conversations.insert(.init(id: lunch.id, spaceID: "work", people: 1), at: 0)
+        }
         await store.receive(\.selected) { $0.selected = lunch.id }
         await store.receive(\.delegate, .open(lunch.id))
         await store.finish()
         #expect(started.value == ["work"])
+    }
+
+    /// An admin archives the space shown, asked first: it's off the rail, still in the Spaces list,
+    /// and read only, its menu offering only to use it again; Turgai's own isn't offered. With
+    /// nothing left in it, it shows no conversation.
+    @Test
+    func anAdminArchivesASpace() async {
+        let asks = LockIsolated<[ChatAsk]>([])
+        let family = SpaceSummary(id: "family", name: "Family", role: .admin, status: .active, kind: .made)
+        let archived = SpaceSummary(id: "family", name: "Family", role: .admin, status: .archived, kind: .made)
+        let ours = SpaceSummary(id: "turgai", name: "Turgai", role: .admin, status: .active, kind: .turgaisOwn)
+        var state = SidebarFeature.State()
+        state.session = session
+        state.spaces = [ours, family]
+        state.conversations = [.init(id: dinner.id, title: "plan dinner", spaceID: "family", people: 1)]
+        state.selected = dinner.id
+        state.shownSpaceID = "family"
+        state.peopleCounts = ["family": 1, "turgai": 1]
+        let store = TestStore(initialState: state) {
+            SidebarFeature()
+        } withDependencies: {
+            $0.chat.ask = { ask in
+                asks.withValue { $0.append(ask) }
+                return .ok
+            }
+        }
+
+        await store.send(.spaceMenuPicked(.archive(name: "Family"))) { $0.alert = .archive(family) }
+        await store.send(.alert(.presented(.archiveConfirmed("family")))) { $0.alert = nil }
+        await store.receive(\.spaceStatusChanged) { $0.spaces = [ours, archived] }
+        await store.receive(\.delegate, .spaceChanged(archived))
+        #expect(asks.value == [.archiveSpace("family")])
+        #expect(store.state.spaceChoices.map(\.id) == ["turgai"])
+        #expect(store.state.spaceSections.map(\.title) == ["Active", "Archived"])
+        #expect(store.state.shownSpaceDetail == "Archived · 1 person")
+        #expect(store.state.newConversationHelp == nil)
+        #expect(store.state.shownSpaceMenu == [.unarchive])
+        #expect(store.state.entries.map(\.menu) == [[.delete]])
+
+        await store.send(.conversationMenuPicked(dinner.id, .delete)) {
+            $0.alert = .delete(.init(id: self.dinner.id, title: "plan dinner", spaceID: "family", people: 1))
+        }
+        await store.send(.alert(.presented(.deleteConfirmed(dinner.id)))) { $0.alert = nil }
+        await store.receive(\.conversationLeft) {
+            $0.conversations = []
+            $0.selected = nil
+        }
+        await store.receive(\.delegate, .close(archived))
+        #expect(store.state.openTitle == "")
+
+        await store.send(.spaceMenuPicked(.unarchive))
+        await store.receive(\.spaceStatusChanged) { $0.spaces = [ours, family] }
+        await store.receive(\.delegate, .spaceChanged(family))
+        #expect(asks.value == [.archiveSpace("family"), .deleteConversation(dinner.id), .unarchiveSpace("family")])
+
+        var turgais = SidebarFeature.State()
+        turgais.spaces = [ours]
+        #expect(turgais.shownSpaceMenu == [.invite, .rename(name: "Turgai")])
+    }
+
+    /// Leaving or deleting the conversation open opens the next in its space; what's refused says
+    /// why. Others in it, a member only leaves it.
+    @Test
+    func leavingOrDeletingOpensTheNext() async {
+        let family = SpaceSummary(id: "family", name: "Family", role: .member, status: .active, kind: .made)
+        let lunch = ConversationID(rawValue: "lunch")
+        let refused = LockIsolated(true)
+        var state = SidebarFeature.State()
+        state.session = session
+        state.spaces = [family]
+        state.conversations = [
+            .init(id: dinner.id, title: "plan dinner", spaceID: "family", people: 1),
+            .init(id: lunch, title: "lunch", spaceID: "family", people: 3),
+        ]
+        state.selected = dinner.id
+        state.shownSpaceID = "family"
+        state.peopleCounts = ["family": 3]
+        #expect(state.entries.map(\.menu) == [[.rename, .delete], [.rename, .leave]])
+        let store = TestStore(initialState: state) {
+            SidebarFeature()
+        } withDependencies: {
+            $0.chat.ask = { _ in
+                refused.value ? .failed(ChatError(code: "refused", message: "Not now.")) : .ok
+            }
+        }
+
+        await store.send(.conversationMenuPicked(lunch, .leave))
+        await store.receive(\.failed) { $0.error = "Not now." }
+        refused.setValue(false)
+        await store.send(.conversationMenuPicked(dinner.id, .delete)) {
+            $0.alert = .delete(.init(id: self.dinner.id, title: "plan dinner", spaceID: "family", people: 1))
+        }
+        await store.send(.alert(.presented(.deleteConfirmed(dinner.id)))) { $0.alert = nil }
+        await store.receive(\.conversationLeft) {
+            $0.conversations.remove(id: self.dinner.id)
+            $0.selected = nil
+        }
+        await store.receive(\.selected) {
+            $0.selected = lunch
+            $0.error = nil
+        }
+        await store.receive(\.delegate, .open(lunch))
+        await store.finish()
+    }
+
+    /// Spaces, or ⌘K, lists every space, those in use first; what's written finds them by name, and
+    /// Return shows the first found.
+    @Test
+    func theSpacesListFindsASpace() async {
+        let work = SpaceSummary(id: "work", name: "Work", role: .member, status: .archived, kind: .made)
+        var state = SidebarFeature.State()
+        state.session = session
+        state.spaces = [turgai, work]
+        state.conversations = [
+            .init(id: dinner.id, title: "plan dinner", spaceID: "turgai", people: 1),
+            .init(id: trip.id, title: "trip", spaceID: "work", people: 1),
+        ]
+        state.selected = dinner.id
+        state.shownSpaceID = "turgai"
+        state.peopleCounts = ["turgai": 1, "work": 1]
+        let store = TestStore(initialState: state) { SidebarFeature() }
+
+        await store.send(.spacesTapped) { $0.dialog = .choosingSpace(.init()) }
+        #expect(store.state.spaceSections.map(\.title) == ["Active", "Archived"])
+        await store.send(.searchChanged("wo")) { $0.dialog = .choosingSpace(.init(search: "wo")) }
+        #expect(store.state.spaceSections.map { $0.choices.map(\.id) } == [["work"]])
+        await store.send(.searchChanged("home")) { $0.dialog = .choosingSpace(.init(search: "home")) }
+        #expect(store.state.spacesNote == "No space is called “home”.")
+        await store.send(.searchSubmitted)
+        await store.send(.searchChanged("WO")) { $0.dialog = .choosingSpace(.init(search: "WO")) }
+        await store.send(.searchSubmitted)
+        await store.receive(\.spacePicked) { $0.dialog = nil }
+        await store.receive(\.spaceSwitched) { $0.shownSpaceID = "work" }
+        await store.receive(\.selected) { $0.selected = self.trip.id }
+        await store.receive(\.delegate, .open(trip.id))
+        await store.finish()
     }
 }
 
@@ -315,7 +469,7 @@ struct ChatOpeningTests {
             $0.chat.send = { command in sent.withValue { $0.append(command) } }
         }
 
-        let turgai = SpaceSummary(id: "turgai", name: "Turgai", role: .member)
+        let turgai = SpaceSummary(id: "turgai", name: "Turgai", role: .member, status: .active, kind: .turgaisOwn)
         await store.send(.open(trip, in: turgai)) {
             $0.conversationID = trip
             $0.space = turgai
@@ -326,7 +480,7 @@ struct ChatOpeningTests {
         let late = Message(id: MessageID(), role: .user, text: "late", at: Date(timeIntervalSince1970: 2))
         await store.send(.received(ChatEvent(payload: .messageAccepted(conversationID: dinner, turnID: nil, message: late))))
 
-        let changed = Conversation(id: dinner, botID: BotID(rawValue: "conversation"), spaceID: "turgai")
+        let changed = Conversation(id: dinner, botID: BotID(rawValue: "conversation"), spaceID: "turgai", people: 1)
         await store.send(.received(ChatEvent(payload: .conversationSaid(conversation: changed))))
         await store.receive(\.delegate, .conversationSaid(changed))
     }

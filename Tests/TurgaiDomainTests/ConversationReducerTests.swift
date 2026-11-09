@@ -67,6 +67,25 @@ struct ConversationReducerTests {
             ConversationDecision(.answered(request, .no, turnID: TurnID(), at: Date()), in: continued).events.isEmpty)
     }
 
+    /// The only one in a conversation, or an admin of its space, deletes it; anyone else may only
+    /// leave it. Deleted, no one reads it.
+    @Test
+    func theOnlyOneOrAnAdminDeletesIt() throws {
+        let other = UserID.telegram(2)
+        var state = ConversationState(conversationID: conversationID)
+        state = state.applying(try state.starting(in: SpaceID(), answeredBy: AgentProfileID("a"), by: person))
+        #expect(throws: ConversationRefusal.notInIt) { try state.deleting(by: other, role: .admin) }
+
+        let alone = state
+        #expect(try alone.deleting(by: person, role: .member) == [.deleted(by: person)])
+
+        state = state.applying([.joined(.person(other))])
+        #expect(throws: ConversationRefusal.othersAreInIt) { try state.deleting(by: person, role: .member) }
+        state = state.applying(try state.deleting(by: other, role: .admin))
+        #expect(throws: ConversationRefusal.deleted) { try state.reading(by: person) }
+        #expect(throws: ConversationRefusal.deleted) { try state.leaving(person) }
+    }
+
     /// What `/link` asks for, however the code is typed.
     @Test
     func linkAsksForWhatsGiven() {

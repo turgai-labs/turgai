@@ -15,21 +15,38 @@ public struct Me: Codable, Hashable, Sendable {
     }
 }
 
-/// A space the signed-in person is in, as their list shows it: what it's called, and their role.
+/// A space the signed-in person is in, as their list shows it: what it's called, their role,
+/// whether it's in use, and whose it is.
 public struct SpaceSummary: Codable, Hashable, Sendable, Identifiable {
     public enum Role: String, Codable, Hashable, Sendable {
         case admin
         case member
     }
 
+    /// Whether it's in use. Archived, what's in it is read, and nothing new happens in it.
+    public enum Status: String, Codable, Hashable, Sendable {
+        case active
+        case archived
+    }
+
+    /// Whose it is: Turgai's own, where every account is and which stays in use, or one made.
+    public enum Kind: String, Codable, Hashable, Sendable {
+        case turgaisOwn
+        case made
+    }
+
     public let id: String
     public let name: String
     public let role: Role
+    public let status: Status
+    public let kind: Kind
 
-    public init(id: String, name: String, role: Role) {
+    public init(id: String, name: String, role: Role, status: Status, kind: Kind) {
         self.id = id
         self.name = name
         self.role = role
+        self.status = status
+        self.kind = kind
     }
 }
 
