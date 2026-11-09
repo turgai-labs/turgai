@@ -283,7 +283,7 @@ private struct SidebarView: View {
             Color.clear.frame(height: SidebarGlass.buttonSize)
             HStack(spacing: 0) {
                 SpaceRail(store: store)
-                Rectangle().fill(Color.turgaiInk.opacity(0.15)).frame(width: 1).padding(.vertical, 8)
+                Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 8)
                 ConversationColumn(store: store)
             }
         }
@@ -368,38 +368,13 @@ private struct SpaceMark: View {
     }
 }
 
-/// The shown space's name and New conversation in it, ruled off from its conversations, the latest
-/// first, a dot marking one with something new. A conversation renames from its menu.
+/// The shown space's name and New conversation in it, on a bar its conversations scroll under, the
+/// latest first, a dot marking one with something new. A conversation renames from its menu.
 private struct ConversationColumn: View {
     let store: StoreOf<SidebarFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // New conversation on the name's line, not between it and what's under it.
-            HStack(alignment: .top, spacing: 8) {
-                SpaceHeading(
-                    name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
-                    rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
-                Spacer(minLength: 0)
-                Button {
-                    store.send(.newConversationTapped)
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.turgaiAccent)
-                .help(store.newConversationHelp)
-            }
-            // On the conversations' names' edge: the list's 8 and a line's 10.
-            .padding(.leading, 18)
-            .padding(.trailing, 10)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
-            // The column's head, ruled as the rail is: the conversations scroll under it here.
-            Rectangle().fill(Color.turgaiInk.opacity(0.15)).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(store.entries) { (entry: SidebarFeature.Entry) in
@@ -410,8 +385,36 @@ private struct ConversationColumn: View {
                     }
                 }
                 .padding(.horizontal, 8)
-                .padding(.top, 8)
+                .padding(.top, 4)
                 .padding(.bottom, 12)
+            }
+            // The conversations scroll under the heading, as a sidebar's do under its footer.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                // New conversation on the name's line, not between it and what's under it.
+                HStack(alignment: .top, spacing: 8) {
+                    SpaceHeading(
+                        name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
+                        rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
+                    Spacer(minLength: 0)
+                    Button {
+                        store.send(.newConversationTapped)
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.turgaiAccent)
+                    .help(store.newConversationHelp)
+                }
+                // On the conversations' names' edge: the list's 8 and a line's 10.
+                .padding(.leading, 18)
+                .padding(.trailing, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+                // A bar's material, behind the heading only: not up past the traffic lights.
+                .background(.bar, ignoresSafeAreaEdges: [])
             }
             if let error = store.error {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
