@@ -272,21 +272,70 @@ private struct ObjectsButton: View {
     }
 }
 
-/// The left panel, Slack's way, on one surface: a row for the window's traffic lights and the button
-/// that hides it; then the spaces on a rail, a hairline, and the shown space's heading, New
-/// conversation in it, and its conversations.
+/// The left panel, Slack's way, on one surface: the spaces on a rail, a hairline, and the shown
+/// space's conversations, scrolling under its top, a matte band across it with the window's traffic
+/// lights, the button that hides the panel, and the shown space's heading.
 private struct SidebarView: View {
+    let store: StoreOf<SidebarFeature>
+
+    var body: some View {
+        HStack(spacing: 0) {
+            SpaceRail(store: store)
+            Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 8)
+            ConversationColumn(store: store)
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            PanelTop(store: store)
+        }
+    }
+}
+
+/// The panel's top, on a matte band across it: a row for the traffic lights and the button that
+/// hides the panel, then the shown space's heading, over its conversations, and New conversation in
+/// it.
+private struct PanelTop: View {
     let store: StoreOf<SidebarFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Color.clear.frame(height: SidebarGlass.buttonSize)
-            HStack(spacing: 0) {
-                SpaceRail(store: store)
-                Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(width: 1).padding(.vertical, 8)
-                ConversationColumn(store: store)
+            HStack(spacing: 8) {
+                SpaceHeading(
+                    name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
+                    rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
+                Spacer(minLength: 0)
+                Button {
+                    store.send(.newConversationTapped)
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 26, height: 26)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.turgaiAccent)
+                .help(store.newConversationHelp)
             }
+            // Over the conversations, past the rail and its hairline.
+            .padding(.leading, SpaceRail.width + 1 + 14)
+            .padding(.trailing, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
         }
+        .background(PanelMatte())
+    }
+}
+
+/// Matte, as the panel's top is: what's under it blurred, the panel's canvas over that, and a
+/// hairline under it.
+private struct PanelMatte: View {
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay(Color.turgaiCanvas.opacity(0.7))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(height: 1)
+            }
     }
 }
 
@@ -295,6 +344,8 @@ private struct SidebarView: View {
 /// when there are many.
 private struct SpaceRail: View {
     let store: StoreOf<SidebarFeature>
+
+    static let width: CGFloat = 50
 
     var body: some View {
         ScrollView {
@@ -319,7 +370,7 @@ private struct SpaceRail: View {
             .padding(.vertical, 10)
         }
         .scrollIndicators(.never)
-        .frame(width: 50)
+        .frame(width: Self.width)
     }
 }
 
@@ -368,8 +419,8 @@ private struct SpaceMark: View {
     }
 }
 
-/// The shown space's name and New conversation in it, over its conversations, the latest first, a
-/// dot marking one with something new. A conversation renames from its menu.
+/// The shown space's conversations, the latest first, a dot marking one with something new. A
+/// conversation renames from its menu.
 private struct ConversationColumn: View {
     let store: StoreOf<SidebarFeature>
 
@@ -385,34 +436,9 @@ private struct ConversationColumn: View {
                     }
                 }
                 .padding(.horizontal, 8)
+                .padding(.top, 8)
                 .padding(.bottom, 12)
             }
-            // The conversations scroll under the heading, on frosted matte, not cut at its edge.
-            .safeAreaBar(edge: .top) {
-                HStack(spacing: 8) {
-                    SpaceHeading(
-                        name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
-                        rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
-                    Spacer(minLength: 0)
-                    Button {
-                        store.send(.newConversationTapped)
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 14, weight: .semibold))
-                            .frame(width: 26, height: 26)
-                            .contentShape(.rect)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.turgaiAccent)
-                    .help(store.newConversationHelp)
-                }
-                .padding(.leading, 14)
-                .padding(.trailing, 10)
-                .padding(.top, 10)
-                .padding(.bottom, 8)
-                .background(.thickMaterial)
-            }
-            .scrollEdgeEffectHidden(true, for: .top)
             if let error = store.error {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
             }
