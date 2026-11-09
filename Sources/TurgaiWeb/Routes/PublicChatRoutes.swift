@@ -837,8 +837,17 @@ private func writeOpened(
                 conversationID: conversation.publicID, botID: .init(rawValue: conversation.agent.rawValue),
                 status: publicConversationStatus(status), you: person.key)))
     try await writer.write(.init(payload: .history(conversationID: conversation.publicID, messages: history)))
-    // The agent's turns, step by step; the chat works without them.
-    let turns = (try? await bridge.conversationTurns(of: conversation.domainID, askedBy: person)) ?? []
+    // The agent's turns, step by step; the chat works without them, and says why they're missing.
+    let turns: [ConversationTurn]
+    do {
+        turns = try await bridge.conversationTurns(of: conversation.domainID, askedBy: person)
+    } catch {
+        try await writer.write(
+            publicAPIErrorEvent(
+                conversationID: conversation.publicID, code: "turns_unavailable",
+                message: "Couldn't read what the agent did: \(error)"))
+        return
+    }
     try await writer.write(
         .init(payload: .turns(conversationID: conversation.publicID, turns: turns.map(TurnRecord.init))))
 }
