@@ -26,6 +26,9 @@ public distributed actor AgentParticipant {
     private let peer: HailConversationPeer
     /// The turn it's running, if one is.
     private var running: (turnID: TurgaiDomain.TurnID, task: Task<Void, Never>)?
+    /// The agent's turn each of its turns opened, until it ends: what a failure or a cancellation
+    /// links to, as a reply does on its own.
+    private var agentTurns: [TurgaiDomain.TurnID: AgentTurnID] = [:]
     /// The turn the agent is running, as what it does in it shows it.
     private var followedTurn: FollowedTurn?
     /// The request naming the conversation, while one runs.
@@ -61,7 +64,7 @@ public distributed actor AgentParticipant {
                 await participant.whenLocal { $0.followedPhase() } ?? .thinking
             },
             complete: { completion in
-                await participant.whenLocal { $0.ended(request.turnID) }
+                _ = await participant.whenLocal { $0.ended(request.turnID) }
                 try? await conversation?.modelEvent(.completed(turnID: request.turnID, completion: completion))
             },
             operation: {
@@ -89,7 +92,7 @@ public distributed actor AgentParticipant {
                     await $0.remember(request, answered: response.reply.text, with: agentModel)
                     $0.nameIfUntitled(after: request, answered: response.reply.text, with: agentModel)
                 }
-                return .reply(response.reply)
+                return .reply(response.reply, agentTurn: response.agentTurn)
             }
         )
 
@@ -109,9 +112,9 @@ public distributed actor AgentParticipant {
                 failure = Self.modelFailure(for: error)
                 Self.log(String(describing: error), of: request, on: actorSystem)
             }
-            await participant.whenLocal { $0.ended(request.turnID) }
+            let agentTurn = await participant.whenLocal { $0.ended(request.turnID) } ?? nil
             try? await conversation?.modelEvent(
-                .failed(turnID: request.turnID, kind: failure.kind, message: failure.message))
+                .failed(turnID: request.turnID, kind: failure.kind, message: failure.message, agentTurn: agentTurn))
         }
         running = (request.turnID, task)
     }
@@ -122,25 +125,23 @@ public distributed actor AgentParticipant {
         running = nil
     }
 
-    /// The agent's past turns, step by step.
-    distributed func turns() async throws -> [ConversationTurn] {
-        try ConversationTurns.turns(of: try await peer.history())
-    }
-
     /// What the agent holds in its context now.
     distributed func contextSnapshot() async throws -> AgentContextSnapshot {
         try await peer.contextSnapshot()
     }
 
-    private func ended(_ turnID: TurgaiDomain.TurnID) {
+    /// The turn `turnID` ended: the agent's turn it opened, if it did.
+    private func ended(_ turnID: TurgaiDomain.TurnID) -> AgentTurnID? {
         if running?.turnID == turnID { running = nil }
+        return agentTurns.removeValue(forKey: turnID)
     }
 
     // MARK: Following the agent's turn
 
     /// One thing the agent did in the turn `turnID`, shown as part of it.
     private func follow(_ event: HailModelEvent, of turnID: TurgaiDomain.TurnID) async {
-        if case .started = event {
+        if case .started(let agentTurn) = event {
+            agentTurns[turnID] = agentTurn
             followedTurn = FollowedTurn(id: turnID)
             return
         }

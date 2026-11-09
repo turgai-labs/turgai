@@ -21,21 +21,32 @@ extension AgentReply.PartiallyGenerated: Codable {}
 
 public struct HailResponse: Hashable, Sendable {
     public let reply: ConversationReply
+    /// The agent's turn that made it.
+    public let agentTurn: AgentTurnID
 
     public var content: String {
         reply.text
     }
 
-    /// The agent's reply, which says something: an empty one is an error.
-    public init(_ reply: AgentReply) throws(HailAdapterError) {
+    /// The agent's reply, from its turn `agentTurn`, which says something: an empty one is an error.
+    public init(_ reply: AgentReply, of agentTurn: AgentTurnID) throws(HailAdapterError) {
         guard let reply = ConversationReply(reply.text) else {
             throw .emptyResponse
         }
         self.reply = reply
+        self.agentTurn = agentTurn
     }
 
-    public init(reply: ConversationReply) {
+    public init(reply: ConversationReply, agentTurn: AgentTurnID) {
         self.reply = reply
+        self.agentTurn = agentTurn
+    }
+}
+
+extension AgentTurnID {
+    /// The agent's turn `turn`, as Turgai keeps it.
+    public init(_ turn: Hail.TurnID) {
+        self.init(rawValue: turn.rawValue)
     }
 }
 
@@ -76,7 +87,8 @@ struct HailConversationInput: ConvertibleToGeneratedContent, Codable, Sendable {
 /// What an agent does in a turn, translated into values that can be consumed by the application
 /// layer. Hail's own run events stay inside this target.
 public enum HailModelEvent: Sendable {
-    case started
+    /// The agent opened its turn `agentTurn` for the call.
+    case started(AgentTurnID)
     case status(String)
     /// The reply so far, whole: it replaces what was shown before.
     case reply(String)
@@ -116,10 +128,10 @@ public enum HailRunMapper {
     }
 
     /// What the agent did in a turn, as the turn's call brought it back.
-    public static func map(_ update: AgentRunEvent<AgentReply>) -> [HailModelEvent] {
-        switch update {
+    public static func map(_ update: AgentRunUpdate<AgentReply>) -> [HailModelEvent] {
+        switch update.event {
         case .runStarted:
-            [.started]
+            [.started(AgentTurnID(update.turn))]
         case .runCompleted, .runFailed:
             [.completed]
         case .status(let message, _):
@@ -149,12 +161,10 @@ public struct HailConversationPeer: Sendable {
         @Sendable (ConversationTurnRequest, _ events: @escaping @Sendable (HailModelEvent) async -> Void) async throws
         -> HailResponse
     public typealias ContextHandler = @Sendable () async throws -> AgentContextSnapshot
-    public typealias HistoryHandler = @Sendable () async throws -> AgentHistory
     public typealias DeactivationHandler = @Sendable () async throws -> Void
 
     private let runHandler: RunHandler
     private let contextHandler: ContextHandler
-    private let historyHandler: HistoryHandler
     private let deactivationHandler: DeactivationHandler
 
     public init(
@@ -162,12 +172,10 @@ public struct HailConversationPeer: Sendable {
         context: @escaping ContextHandler = {
             throw HailAdapterError.contextUnavailable
         },
-        history: @escaping HistoryHandler = { AgentHistory() },
         deactivate: @escaping DeactivationHandler = {}
     ) {
         self.runHandler = run
         self.contextHandler = context
-        self.historyHandler = history
         self.deactivationHandler = deactivate
     }
 
@@ -181,11 +189,6 @@ public struct HailConversationPeer: Sendable {
 
     public func contextSnapshot() async throws -> AgentContextSnapshot {
         try await contextHandler()
-    }
-
-    /// The agent's history: its turns since the last compaction, and the summary before them.
-    public func history() async throws -> AgentHistory {
-        try await historyHandler()
     }
 
     public func deactivate() async throws {
@@ -230,10 +233,12 @@ public struct HailAgentAdapter: Sendable {
                 // Attachments stay ids, got when the model asks for one. What the agent does comes
                 // back through the turn's own call, the reply so far among it.
                 let stream = AgentStream<AgentReply>(actorSystem: actorSystem)
-                let following = Task<AgentReply?, Never> {
-                    var reply: AgentReply?
+                let following = Task<(AgentReply, AgentTurnID)?, Never> {
+                    var reply: (AgentReply, AgentTurnID)?
                     for await update in stream.updates {
-                        if case .responseRecorded(let content, _) = update { reply = content }
+                        if case .responseRecorded(let content, _) = update.event {
+                            reply = (content, AgentTurnID(update.turn))
+                        }
                         for event in HailRunMapper.map(update) { await events(event) }
                     }
                     return reply
@@ -246,14 +251,11 @@ public struct HailAgentAdapter: Sendable {
                     throw error
                 }
                 stream.finish()
-                guard let reply = await following.value else { throw HailAdapterError.emptyResponse }
-                return try HailResponse(reply)
+                guard let (reply, agentTurn) = await following.value else { throw HailAdapterError.emptyResponse }
+                return try HailResponse(reply, of: agentTurn)
             },
             context: {
                 try await self.agent(for: conversationID).contextSnapshot
-            },
-            history: {
-                try await self.agent(for: conversationID).history()
             },
             deactivate: {
                 try await self.deactivate(for: conversationID)

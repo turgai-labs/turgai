@@ -30,7 +30,9 @@ public enum ConversationModelEvent: Codable, Sendable, Equatable {
     case failed(
         turnID: TurgaiDomain.TurnID,
         kind: ConversationFailureKind,
-        message: String
+        message: String,
+        /// The agent's turn it failed in, when the agent had opened one.
+        agentTurn: AgentTurnID?
     )
 }
 
@@ -510,12 +512,10 @@ public distributed actor Conversation {
         return try await change()
     }
 
-    /// The agent's past turns, step by step, as `person` asks for them.
-    public distributed func turns(askedBy person: TurgaiDomain.UserID) async throws -> [ConversationTurn] {
+    /// Where its past turns are, as `person` asks for them: refused unless they're one of its people.
+    public distributed func agentTurns(askedBy person: TurgaiDomain.UserID) throws -> ConversationAgentTurns {
         _ = try state.reading(by: person)
-        let participant = try await participant(for: try agent())
-        let scope = try await space().scope(of: person)
-        return try await CallChain.$current.withValue(.start(scope, in: conversationID)) { try await participant.turns() }
+        return ConversationAgentTurns(agents: Array(state.agents), links: state.agentTurns)
     }
 
     public distributed func addConnection(_ connection: ConversationConnection) async throws {
@@ -979,7 +979,8 @@ public distributed actor Conversation {
                 .failed(
                     turnID: request.turnID,
                     kind: .model,
-                    message: "The selected agent configuration could not be activated."
+                    message: "The selected agent configuration could not be activated.",
+                    agentTurn: nil
                 )
             )
         }
@@ -1077,10 +1078,11 @@ public distributed actor Conversation {
         switch event {
         case .completed(let turnID, let completion):
             return .modelCompleted(turnID: turnID, completion: completion, at: Date())
-        case .failed(let turnID, let kind, let message):
+        case .failed(let turnID, let kind, let message, let agentTurn):
             return .modelFailed(
                 turnID: turnID,
                 failure: ConversationFailure(kind: kind, message: message),
+                agentTurn: agentTurn,
                 at: Date()
             )
         }

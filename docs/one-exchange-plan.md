@@ -1,6 +1,6 @@
 # One exchange, one record
 
-Proposed, not agreed. A message and the agent's reply to it are kept by the conversation and by the agent, each under its own turn id, and nothing links the two. The missing ⓘ on past replies comes from that. This plan links them, without passing ids down: the agent says which of its turns answered, and the conversation keeps that with the reply.
+Agreed and built. A message and the agent's reply to it are kept by the conversation and by the agent, each under its own turn id, and nothing links the two. The missing ⓘ on past replies comes from that. This plan links them, without passing ids down: the agent says which of its turns answered, and the conversation keeps that with the reply.
 
 ## One exchange today
 

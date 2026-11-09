@@ -56,6 +56,7 @@ struct ConversationTests {
         let reply = PendingConversationReply(
             turnID: first.turnID,
             reply: ConversationReply("answer")!,
+            agentTurn: AgentTurnID(rawValue: "agent-turn"),
             at: Date(timeIntervalSince1970: 2)
         )
         record.apply(.replyQueued(reply))
@@ -138,7 +139,8 @@ struct ConversationTests {
         record.apply(
             .replyQueued(
                 PendingConversationReply(
-                    turnID: asked.turnID, reply: ConversationReply("pasta")!, at: Date(timeIntervalSince1970: 2))))
+                    turnID: asked.turnID, reply: ConversationReply("pasta")!,
+                    agentTurn: AgentTurnID(rawValue: "agent-turn"), at: Date(timeIntervalSince1970: 2))))
         #expect(record.history.map(\.author) == [.person(.ann), .agent(agent)])
     }
 
@@ -187,7 +189,7 @@ struct ConversationTests {
         record.apply(
             .inbox(
                 .turnFailed(
-                    message.turnID, ConversationFailure(kind: .model, message: "unavailable"),
+                    message.turnID, ConversationFailure(kind: .model, message: "unavailable"), agentTurn: nil,
                     at: Date(timeIntervalSince1970: 2)))
         )
 
@@ -199,6 +201,7 @@ struct ConversationTests {
         let reply = PendingConversationReply(
             turnID: TurnID(),
             reply: ConversationReply("answer")!,
+            agentTurn: AgentTurnID(rawValue: "agent-turn"),
             at: Date(timeIntervalSince1970: 2)
         )
         let journal = ConversationJournal(

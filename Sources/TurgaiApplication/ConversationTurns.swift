@@ -4,41 +4,30 @@ import Hail
 import TurgaiDomain
 import TurgaiHail
 
-/// The agent's history as turns, for watching what it did. Turns a compaction folded into the
-/// summary are no longer there.
+/// What an agent did in a conversation's turns, read from the agent's journal: every turn, a
+/// compaction or not, under the conversation's own ids.
 public enum ConversationTurns {
-    public static func turns(of history: AgentHistory) throws(ForeignTurn) -> [ConversationTurn] {
-        var turns: [ConversationTurn] = []
-        for turn in history.closed { turns.append(try closed(turn)) }
-        if let turn = history.open { turns.append(try open(turn)) }
-        return turns
-    }
-
-    /// A turn in the agent's history that isn't one of the conversation's: its ID isn't one
-    /// Turgai gave it.
-    public struct ForeignTurn: Error, Sendable, CustomStringConvertible {
-        public let id: Hail.TurnID
-        public var description: String { "The agent's turn \(id) isn't one of the conversation's." }
-    }
-
-    /// The conversation's turn a Hail turn is: Turgai starts each with its own ID.
-    private static func id(of turn: Hail.TurnID) throws(ForeignTurn) -> TurgaiDomain.TurnID {
-        guard let id = UUID(uuidString: turn.rawValue) else { throw ForeignTurn(id: turn) }
-        return TurgaiDomain.TurnID(rawValue: id)
-    }
-
-    private static func closed(_ turn: AgentHistory.ClosedTurn) throws(ForeignTurn) -> ConversationTurn {
-        ConversationTurn(
-            id: try id(of: turn.id), message: text(turn.input.content), startedAt: turn.input.at,
-            steps: turn.steps.map(step),
-            outcome: outcome(turn.outcome))
-    }
-
-    private static func open(_ turn: AgentHistory.OpenTurn) throws(ForeignTurn) -> ConversationTurn {
-        ConversationTurn(
-            id: try id(of: turn.id), message: text(turn.input.content), startedAt: turn.input.at,
-            steps: turn.steps.map(step),
-            outcome: .running)
+    /// The turns `events` tell that `links` names, each as the conversation's turn it was. One with
+    /// no link, as a rerun after a restart leaves, wasn't one of the conversation's turns.
+    public static func turns(
+        from events: [AgentEvent], links: [AgentTurnID: TurgaiDomain.TurnID]
+    ) throws(AgentHistory.InvalidEvent) -> [ConversationTurn] {
+        let history = try AgentHistory(journal: events)
+        let closed = history.closed.compactMap { turn in
+            links[AgentTurnID(turn.id)].map { id in
+                ConversationTurn(
+                    id: id, message: text(turn.input.content), startedAt: turn.input.at, steps: turn.steps.map(step),
+                    outcome: outcome(turn.outcome))
+            }
+        }
+        let open = history.open.flatMap { turn in
+            links[AgentTurnID(turn.id)].map { id in
+                ConversationTurn(
+                    id: id, message: text(turn.input.content), startedAt: turn.input.at, steps: turn.steps.map(step),
+                    outcome: .running)
+            }
+        }
+        return closed + (open.map { [$0] } ?? [])
     }
 
     private static func step(_ step: AgentHistory.Step) -> ReplyStep {

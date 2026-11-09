@@ -1,4 +1,5 @@
 import DistributedCluster
+import EventSourcing
 import TurgaiDomain
 import TurgaiObjects
 import TurgaiPeople
@@ -50,6 +51,7 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
     private let telegramFiles: TelegramFiles
     private let endpoints: AgentModelEndpointFactory
     private let linking: PersonLinking
+    private let journal: any EventStore
     private var lifecycle: Lifecycle = .awaitingStart
 
     public init(
@@ -57,13 +59,15 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
         secrets: ChannelSecretStore,
         telegramFiles: TelegramFiles,
         endpoints: AgentModelEndpointFactory,
-        linking: PersonLinking
+        linking: PersonLinking,
+        journal: any EventStore
     ) {
         self.agentProfiles = agentProfiles
         self.secrets = secrets
         self.telegramFiles = telegramFiles
         self.endpoints = endpoints
         self.linking = linking
+        self.journal = journal
     }
 
     public func start(_ system: ClusterSystem) async throws {
@@ -73,7 +77,8 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
                 connections: TurgaiConnections(
                     actorSystem: system,
                     agentProfiles: agentProfiles,
-                    linking: linking
+                    linking: linking,
+                    journal: journal
                 ),
                 telegramFiles: telegramFiles,
                 objectCatalog: await ObjectCatalog(actorSystem: system),

@@ -1,8 +1,10 @@
 import AsyncAlgorithms
 import DistributedCluster
+import EventSourcing
 import Hail
 import ServiceLifecycle
 import TurgaiDomain
+import TurgaiHail
 import TurgaiMemory
 import TurgaiPeople
 
@@ -218,6 +220,8 @@ public actor TurgaiConnections: Service {
     private let actorSystem: ClusterSystem
     private let agentProfiles: TurgaiAgentProfileStore
     private let linking: PersonLinking
+    /// Where the agents keep what they did, read for their past turns.
+    private let journal: any EventStore
     private let connectionStream: AsyncStream<Connection>
     private let connectionContinuation: AsyncStream<Connection>.Continuation
     private let outboundConnections = OutboundConnections()
@@ -225,11 +229,13 @@ public actor TurgaiConnections: Service {
     public init(
         actorSystem: ClusterSystem,
         agentProfiles: TurgaiAgentProfileStore,
-        linking: PersonLinking
+        linking: PersonLinking,
+        journal: any EventStore
     ) {
         self.actorSystem = actorSystem
         self.agentProfiles = agentProfiles
         self.linking = linking
+        self.journal = journal
         (self.connectionStream, self.connectionContinuation) =
             AsyncStream<Connection>.makeStream()
     }
@@ -297,11 +303,20 @@ public actor TurgaiConnections: Service {
         try await Conversation.resolve(on: actorSystem, conversationID: conversationID).history(for: person)
     }
 
-    /// The agent's past turns in a conversation, step by step, as `person` asks for them.
+    /// The agents' past turns in a conversation, step by step, as `person` asks for them: read from
+    /// each agent's journal, under the conversation's ids.
     public func turns(
         of conversationID: ConversationID, askedBy person: TurgaiDomain.UserID
     ) async throws -> [ConversationTurn] {
-        try await Conversation.resolve(on: actorSystem, conversationID: conversationID).turns(askedBy: person)
+        let agentTurns = try await Conversation.resolve(on: actorSystem, conversationID: conversationID)
+            .agentTurns(askedBy: person)
+        var turns: [ConversationTurn] = []
+        for agent in agentTurns.agents {
+            let agentID = HailAgentAdapter.agentID(for: conversationID, role: agent.rawValue)
+            let events: [AgentEvent] = try await journal.eventsFor(id: agentID.rawValue)
+            turns += try ConversationTurns.turns(from: events, links: agentTurns.links)
+        }
+        return turns.sorted { $0.startedAt < $1.startedAt }
     }
 
     /// Whether a conversation's agent is answering, as `person` sees it: refused unless they're in it.

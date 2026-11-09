@@ -40,18 +40,37 @@ struct HailAdapterTests {
 
     @Test
     func emptyResponsesCannotCrossTheHailBoundary() {
-        #expect(throws: HailAdapterError.emptyResponse) { try HailResponse(AgentReply(text: "   ")) }
+        #expect(throws: HailAdapterError.emptyResponse) {
+            try HailResponse(AgentReply(text: "   "), of: AgentTurnID(rawValue: "agent-turn"))
+        }
         #expect(
             HailAgentAdapter.userFacingMessage(for: HailAdapterError.emptyResponse)
                 == "I couldn’t produce a reply to that message. Please try again."
         )
     }
 
+    /// The run's start names the agent's turn it opened, which a failure links to.
+    @Test
+    func theStartNamesTheAgentsTurn() {
+        let update = AgentRunUpdate<AgentReply>(
+            turn: Hail.TurnID("agent-turn"),
+            event: .runStarted(agentID: AgentID(role: Role("turgai"), contextID: AgentContextID("c")), at: Date()))
+
+        guard case .started(let agentTurn)? = HailRunMapper.map(update).first else {
+            Issue.record("Expected the start")
+            return
+        }
+        #expect(agentTurn == AgentTurnID(rawValue: "agent-turn"))
+    }
+
     @Test
     func mapsTheReplySoFarWithoutLeakingHailValues() throws {
-        let update = AgentRunEvent<AgentReply>.modelOutputPartialUpdated(
-            content: try AgentReply.PartiallyGenerated(try GeneratedContent(json: #"{"text":"hel"}"#)),
-            at: Date(timeIntervalSince1970: 1)
+        let update = AgentRunUpdate<AgentReply>(
+            turn: Hail.TurnID("agent-turn"),
+            event: .modelOutputPartialUpdated(
+                content: try AgentReply.PartiallyGenerated(try GeneratedContent(json: #"{"text":"hel"}"#)),
+                at: Date(timeIntervalSince1970: 1)
+            )
         )
 
         let events = HailRunMapper.map(update)
@@ -127,7 +146,7 @@ struct HailAdapterTests {
         let peer = HailConversationPeer(
             run: { request, events in
                 await events(.reply("partial"))
-                return try HailResponse(AgentReply(text: request.message.text))
+                return try HailResponse(AgentReply(text: request.message.text), of: AgentTurnID(rawValue: "agent-turn"))
             }
         )
         let request = ConversationTurnRequest(

@@ -33,7 +33,7 @@ struct RecordedTurn: Sendable {
             var turn = RecordedTurn()
             var requested: [String: String] = [:]
             for await update in stream.updates {
-                switch update {
+                switch update.event {
                 case .toolRequested(let call, _):
                     requested[call.id] = call.arguments.jsonString
                     turn.calls.append(

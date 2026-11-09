@@ -225,7 +225,8 @@ struct TurgaiAppService: Service, Sendable {
                 secrets: channelSecrets,
                 telegramFiles: telegramFiles,
                 endpoints: endpointFactory,
-                linking: linking
+                linking: linking,
+                journal: eventStore
             )
 
             // Nodes find each other through the cluster daemon, as in swift-chat.

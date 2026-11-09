@@ -116,6 +116,16 @@ public struct TurnID: Hashable, Codable, Sendable {
     }
 }
 
+/// One of the agent's turns, by the id its own history keeps it under: what a conversation's turn
+/// links to, to find what the agent did.
+public struct AgentTurnID: Hashable, Codable, Sendable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+}
+
 public struct ConversationID: Hashable, Codable, Sendable {
     public let channel: ChannelID
     public let externalAddress: ExternalConversationAddress
@@ -505,7 +515,8 @@ public struct ConversationReply: Hashable, Codable, Sendable {
 /// explicit domain outcome for work that intentionally has no reply; it is not
 /// the representation of an empty model string.
 public enum ConversationCompletion: Hashable, Codable, Sendable {
-    case reply(ConversationReply)
+    /// The agent's reply, from the turn of its own that made it.
+    case reply(ConversationReply, agentTurn: AgentTurnID)
     case `void`
 }
 
@@ -514,12 +525,15 @@ public enum ConversationCompletion: Hashable, Codable, Sendable {
 public struct PendingConversationReply: Hashable, Codable, Sendable {
     public let turnID: TurnID
     public let reply: ConversationReply
+    /// The agent's turn that made it.
+    public let agentTurn: AgentTurnID
     /// When the agent said it.
     public let at: Date
 
-    public init(turnID: TurnID, reply: ConversationReply, at: Date) {
+    public init(turnID: TurnID, reply: ConversationReply, agentTurn: AgentTurnID, at: Date) {
         self.turnID = turnID
         self.reply = reply
+        self.agentTurn = agentTurn
         self.at = at
     }
 
@@ -733,7 +747,7 @@ public struct AgentInbox: Hashable, Codable, Sendable {
             guard activeTurnID == turnID else { return self }
             next.activeMessage = nil
             next.status = .idle
-        case .turnFailed(let turnID, let failure, _):
+        case .turnFailed(let turnID, let failure, _, _):
             guard activeTurnID == turnID else { return self }
             next.activeMessage = nil
             next.status = .failed(failure)
@@ -775,8 +789,8 @@ public enum AgentInboxEvent: Hashable, Codable, Sendable {
     case queued(PendingConversationMessage)
     case turnStarted(PendingConversationMessage)
     case turnCompleted(TurnID)
-    /// The turn failed, `at` then.
-    case turnFailed(TurnID, ConversationFailure, at: Date)
+    /// The turn failed, `at` then: in the agent's turn `agentTurn`, when the agent had opened one.
+    case turnFailed(TurnID, ConversationFailure, agentTurn: AgentTurnID?, at: Date)
 }
 
 public struct ConversationState: Hashable, Codable, Sendable {
@@ -793,6 +807,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
     public internal(set) var awaiting: [AccessRequestID: PendingConversationMessage]
     public internal(set) var pendingReplies: [PendingConversationReply]
     public internal(set) var history: [ConversationHistoryEntry]
+    /// Which of its turns each of the agent's turns was: how what the agent did is found again.
+    public internal(set) var agentTurns: [AgentTurnID: TurnID] = [:]
     /// The message marked as noted for its author's memory, until its mark is taken off.
     public internal(set) var noted: NotedMessage?
 
@@ -837,7 +853,8 @@ public struct ConversationState: Hashable, Codable, Sendable {
             switch event {
             case .queued(let pending), .turnStarted(let pending):
                 appendUserMessage(pending.message)
-            case .turnFailed(let turnID, let failure, let at) where inbox.activeTurnID == turnID:
+            case .turnFailed(let turnID, let failure, let agentTurn, let at) where inbox.activeTurnID == turnID:
+                if let agentTurn { agentTurns[agentTurn] = turnID }
                 appendHistory(
                     ConversationHistoryEntry(
                         id: "failure:\(turnID.rawValue.uuidString)",
@@ -855,6 +872,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
             if !pendingReplies.contains(pending) {
                 pendingReplies.append(pending)
             }
+            agentTurns[pending.agentTurn] = pending.turnID
             // Said by the agent whose turn it was.
             let answering = inbox.activeMessage.flatMap { $0.turnID == pending.turnID ? $0.agentRole : nil }
             let agent = answering.map(AgentProfileID.init) ?? agents.first
@@ -876,6 +894,7 @@ public struct ConversationState: Hashable, Codable, Sendable {
             inbox = inbox.emptied()
             pendingReplies.removeAll(keepingCapacity: true)
             history.removeAll(keepingCapacity: true)
+            agentTurns.removeAll(keepingCapacity: true)
 
         case .noted(let message):
             noted = message
@@ -1065,6 +1084,18 @@ extension ReplyEvent {
 }
 
 /// One past turn of the agent: the message that started it, what it did, and how it ended.
+/// Where a conversation's past turns are: its agents, whose journals keep what each did, and which
+/// of its turns each of their turns was.
+public struct ConversationAgentTurns: Hashable, Codable, Sendable {
+    public let agents: [AgentProfileID]
+    public let links: [AgentTurnID: TurnID]
+
+    public init(agents: [AgentProfileID], links: [AgentTurnID: TurnID]) {
+        self.agents = agents
+        self.links = links
+    }
+}
+
 public struct ConversationTurn: Hashable, Codable, Sendable {
     public enum Outcome: Hashable, Codable, Sendable {
         case running
@@ -1165,8 +1196,8 @@ public enum ConversationAction: Sendable {
     /// The model finished the turn `at` then.
     case modelCompleted(turnID: TurnID, completion: ConversationCompletion, at: Date)
     case replyDelivered(turnID: TurnID)
-    /// The model failed the turn `at` then.
-    case modelFailed(turnID: TurnID, failure: ConversationFailure, at: Date)
+    /// The model failed the turn `at` then, in the agent's turn `agentTurn` when it had opened one.
+    case modelFailed(turnID: TurnID, failure: ConversationFailure, agentTurn: AgentTurnID?, at: Date)
     case reset
     case resume
 }
@@ -1249,8 +1280,9 @@ extension ConversationDecision {
             var events: [ConversationEvent] = []
             var effects: [ConversationEffect] = []
             switch completion {
-            case .reply(let reply):
-                events.append(.replyQueued(PendingConversationReply(turnID: turnID, reply: reply, at: at)))
+            case .reply(let reply, let agentTurn):
+                events.append(
+                    .replyQueued(PendingConversationReply(turnID: turnID, reply: reply, agentTurn: agentTurn, at: at)))
             case .void:
                 effects.append(.publish(.reply(.completed(conversationID: state.conversationID, turnID: turnID))))
             }
@@ -1262,12 +1294,13 @@ extension ConversationDecision {
             guard state.pendingReplies.contains(where: { $0.turnID == turnID }) else { return ConversationDecision() }
             return ConversationDecision(events: [.replyDelivered(turnID)])
 
-        case .modelFailed(let turnID, let failure, let at):
+        case .modelFailed(let turnID, let failure, let agentTurn, let at):
             guard state.inbox.activeTurnID == turnID else { return ConversationDecision() }
             // A message already waiting is the person's next word: it starts now, as after a reply.
             let next = startingNext(in: state)
             return ConversationDecision(
-                events: [.inbox(.turnFailed(turnID, failure, at: at))] + next.events, effects: next.effects)
+                events: [.inbox(.turnFailed(turnID, failure, agentTurn: agentTurn, at: at))] + next.events,
+                effects: next.effects)
 
         case .reset:
             let cancel = state.inbox.activeTurnID.map { [ConversationEffect.cancelModel($0)] } ?? []
