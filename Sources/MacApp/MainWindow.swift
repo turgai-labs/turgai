@@ -368,14 +368,15 @@ private struct SpaceMark: View {
     }
 }
 
-/// The shown space's name and New conversation in it, over its conversations, the latest first, a
-/// dot marking one with something new. A conversation renames from its menu.
+/// The shown space's name and New conversation in it, ruled off from its conversations, the latest
+/// first, a dot marking one with something new. A conversation renames from its menu.
 private struct ConversationColumn: View {
     let store: StoreOf<SidebarFeature>
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
+            // New conversation on the name's line, not between it and what's under it.
+            HStack(alignment: .top, spacing: 8) {
                 SpaceHeading(
                     name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
                     rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
@@ -392,10 +393,13 @@ private struct ConversationColumn: View {
                 .foregroundStyle(Color.turgaiAccent)
                 .help(store.newConversationHelp)
             }
-            .padding(.leading, 14)
+            // On the conversations' names' edge: the list's 8 and a line's 10.
+            .padding(.leading, 18)
             .padding(.trailing, 10)
             .padding(.top, 10)
             .padding(.bottom, 8)
+            // The column's head, ruled as the rail is: the conversations scroll under it here.
+            Rectangle().fill(Color.turgaiInk.opacity(0.08)).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(store.entries) { (entry: SidebarFeature.Entry) in
@@ -406,6 +410,7 @@ private struct ConversationColumn: View {
                     }
                 }
                 .padding(.horizontal, 8)
+                .padding(.top, 8)
                 .padding(.bottom, 12)
             }
             if let error = store.error {
