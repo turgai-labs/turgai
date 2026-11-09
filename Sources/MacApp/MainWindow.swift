@@ -375,27 +375,6 @@ private struct ConversationColumn: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                SpaceHeading(
-                    name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
-                    rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
-                Spacer(minLength: 0)
-                Button {
-                    store.send(.newConversationTapped)
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.turgaiAccent)
-                .help(store.newConversationHelp)
-            }
-            .padding(.leading, 14)
-            .padding(.trailing, 10)
-            .padding(.top, 10)
-            .padding(.bottom, 8)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
                     ForEach(store.entries) { (entry: SidebarFeature.Entry) in
@@ -408,6 +387,31 @@ private struct ConversationColumn: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 12)
             }
+            // The conversations scroll under the heading, frosted matte behind it, not cut at its edge.
+            .safeAreaBar(edge: .top) {
+                HStack(spacing: 8) {
+                    SpaceHeading(
+                        name: store.shownSpaceName, detail: store.shownSpaceDetail, menu: store.shownSpaceMenu,
+                        rename: { store.send(.renameShownSpaceTapped) }, invite: { store.send(.inviteTapped) })
+                    Spacer(minLength: 0)
+                    Button {
+                        store.send(.newConversationTapped)
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 14, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.turgaiAccent)
+                    .help(store.newConversationHelp)
+                }
+                .padding(.leading, 14)
+                .padding(.trailing, 10)
+                .padding(.top, 10)
+                .padding(.bottom, 8)
+            }
+            .scrollEdgeEffectStyle(.hard, for: .top)
             if let error = store.error {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
             }
