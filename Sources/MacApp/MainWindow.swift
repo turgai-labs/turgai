@@ -313,6 +313,8 @@ private struct SpaceRail: View {
                 .buttonStyle(.plain)
                 .help("Make or join a space")
             }
+            // The rail's width, so what's drawn just outside a tile isn't cut off.
+            .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
         }
         .scrollIndicators(.never)
