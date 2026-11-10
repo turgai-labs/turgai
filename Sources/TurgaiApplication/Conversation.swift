@@ -36,16 +36,11 @@ public enum ConversationModelEvent: Codable, Sendable, Equatable {
     )
 }
 
-/// Someone in a conversation who's shown what happens in it.
-public protocol ConversationListener: DistributedActor where ActorSystem == ClusterSystem {
-    distributed func receive(_ event: OutboundEvent) async throws
-}
-
 /// A node-local delivery endpoint held by a durable Conversation actor.
 ///
 /// It mirrors the connection actors used by Stagehand: connections and
 /// callbacks are transient, while the Conversation aggregate is durable.
-public distributed actor ConversationConnection: ConversationListener {
+public distributed actor ConversationConnection {
     public typealias ActorSystem = ClusterSystem
     public typealias EventHandler = @Sendable (OutboundEvent) async throws -> Void
 

@@ -23,29 +23,10 @@ public struct Account: Codable, Equatable, Sendable {
         case disabled
     }
 
-    public protocol User: Sendable {
-        var id: UUID { get }
-        var username: String { get }
-        var status: Status { get }
-    }
-
     public let id: UUID
     public let username: String
     public let status: Status
     public let role: Role
-
-    public var user: any Account.User {
-        switch role {
-        case .user: AccountUser(id: id, username: username, status: status)
-        case .member: Member(id: id, username: username, status: status)
-        case .administrator: Administrator(id: id, username: username, status: status)
-        }
-    }
-    public var administrator: Administrator? {
-        role == .administrator
-            ? Administrator(id: id, username: username, status: status)
-            : nil
-    }
 
     public init(
         id: UUID = UUID(),
@@ -58,24 +39,6 @@ public struct Account: Codable, Equatable, Sendable {
         self.status = status
         self.role = role
     }
-}
-
-public struct Member: Account.User, Codable, Equatable {
-    public let id: UUID
-    public let username: String
-    public let status: Account.Status
-}
-
-public struct AccountUser: Account.User, Codable, Equatable {
-    public let id: UUID
-    public let username: String
-    public let status: Account.Status
-}
-
-public struct Administrator: Account.User, Codable, Equatable {
-    public let id: UUID
-    public let username: String
-    public let status: Account.Status
 }
 
 public struct TurgaiSession: Codable, Equatable, Sendable {

@@ -17,7 +17,7 @@ struct TurgaiAuthTests {
             confirmation: challenge
         )
 
-        #expect(account.administrator != nil)
+        #expect(account.role == .administrator)
         #expect(try await auth.hasAdmin())
         await #expect(throws: TurgaiAuthError.setupAlreadyCompleted) {
             try await auth.bootstrap(
