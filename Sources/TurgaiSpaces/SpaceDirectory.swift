@@ -270,21 +270,20 @@ public distributed actor SpaceDirectory: ClusterSingleton {
     /// Follows the spaces' events while it's the cluster's directory: from where it read up to,
     /// and again from there whenever following them fails.
     public func activateSingleton() async {
-        let storage = storage
-        let projection = Projection<SpaceEvent>(tag: .space, offset: { try await storage.offset() }) { envelope in
-            try await storage.keep(
-                SpaceDirectoryChange(envelope.event, in: try Space.space(persistedAs: envelope.persistenceID)),
-                envelope.offset)
-        }
-        let journal = journal
-        let refreshInterval = refreshInterval
-        let log = actorSystem.log
         following = Task {
-            await projection.runRestarting(on: journal, refreshInterval: refreshInterval) { error in
-                log.error(
-                    "The space directory failed to follow the spaces' events; it starts again shortly",
-                    metadata: ["error": .string(String(describing: error))])
-            }
+            await Projection<SpaceEvent>(tag: .space).runRestarting(
+                on: journal, refreshInterval: refreshInterval,
+                offset: { try await self.storage.offset() },
+                process: { envelope in
+                    try await self.storage.keep(
+                        SpaceDirectoryChange(envelope.event, in: try Space.space(persistedAs: envelope.persistenceID)),
+                        envelope.offset)
+                },
+                failed: { error in
+                    self.actorSystem.log.error(
+                        "The space directory failed to follow the spaces' events; it starts again shortly",
+                        metadata: ["error": .string(String(describing: error))])
+                })
         }
     }
 

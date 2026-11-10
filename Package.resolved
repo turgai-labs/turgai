@@ -1,5 +1,5 @@
 {
-  "originHash" : "43a48ab9bbff8de8ec2c3bcd67b7c2f50c58030d2d4f7789502749aca510c2fb",
+  "originHash" : "fbf4f2840995d8807a76bb427a8ac69aca6a046879327a4eafb816bed0a19029",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -25,7 +25,7 @@
       "location" : "https://github.com/akbashev/cluster-durable-workflows.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "2ad79b0889f58719c5c9f93fb794a9febe99bdd1"
+        "revision" : "3720956de64aedc9a333f254e23d1d7b1bcef8a9"
       }
     },
     {
@@ -34,7 +34,7 @@
       "location" : "https://github.com/akbashev/cluster-event-sourcing.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "63684c3c62881076865638c63419191811792e33"
+        "revision" : "c85a6e7de34c53ca3d42b61d077873b9de1a1015"
       }
     },
     {
@@ -43,7 +43,7 @@
       "location" : "https://github.com/akbashev/cluster-virtual-actors.git",
       "state" : {
         "branch" : "stable-references",
-        "revision" : "9c07ff249b70af3ad507e15dc2464755b001c09b"
+        "revision" : "0d8c6549043215d61b9d42e661832534f6923c66"
       }
     },
     {
@@ -70,7 +70,7 @@
       "location" : "https://github.com/akbashev/discoverable-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "e802eed5455c37b1103294e7bd0f9a938b48aef4"
+        "revision" : "f2022e538d54371db918f944650fc6f746034afc"
       }
     },
     {
@@ -79,7 +79,7 @@
       "location" : "https://github.com/turgai-labs/doppel.git",
       "state" : {
         "branch" : "main",
-        "revision" : "bcaf9ea32b545d569f8d684a2554a852f27e5aee"
+        "revision" : "20deb657378ca8c628a948a71d3cd3862174dcce"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "f1f8c3ad48c6c677bd4c7e580cc5a9b301b87415"
+        "revision" : "088f8cfad4f5ef8044ae1dd35e5ddd41365f2747"
       }
     },
     {
@@ -178,7 +178,7 @@
       "location" : "https://github.com/akbashev/postgres-event-store.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "4ae0b95326dce77238c01ad610b3f873274463b1"
+        "revision" : "7fd9f74418b4fb571af1854cc22a082a534ac442"
       }
     },
     {
@@ -196,7 +196,7 @@
       "location" : "https://github.com/turgai-labs/sqlite-event-store.git",
       "state" : {
         "branch" : "main",
-        "revision" : "42b5cc90930aaa8bde755aff6d46b4eec035ff69"
+        "revision" : "05ac5be6d1806d275323e2a282a963611bf7e0ac"
       }
     },
     {

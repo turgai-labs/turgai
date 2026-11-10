@@ -339,28 +339,24 @@ public distributed actor MemoryPasses: ClusterSingleton {
             actorSystem.log.error(
                 "What's unread for memory couldn't be read", metadata: ["error": .string(String(describing: error))])
         }
-        let storage = storage
-        let projection = Projection<UserEvent>(
-            tag: .memory, offset: { try await storage.offset() },
-            process: { envelope in
-                guard let person = User.userID(persistenceID: envelope.persistenceID) else {
-                    throw UnreadMemoryError.notAPerson(envelope.persistenceID)
-                }
-                let change = UnreadMemoryChange(envelope.event, of: person)
-                try await storage.keep(change, envelope.offset)
-                await self.whenLocal {
-                    $0.follow(change)
-                    await $0.tell(person, about: envelope.event)
-                }
-            })
-        let journal = journal
-        let log = actorSystem.log
         following = Task {
-            await projection.runRestarting(on: journal) { error in
-                log.error(
-                    "Memory passes failed to follow the memory events; they start again shortly",
-                    metadata: ["error": .string(String(describing: error))])
-            }
+            await Projection<UserEvent>(tag: .memory).runRestarting(
+                on: journal,
+                offset: { try await self.storage.offset() },
+                process: { envelope in
+                    guard let person = User.userID(persistenceID: envelope.persistenceID) else {
+                        throw UnreadMemoryError.notAPerson(envelope.persistenceID)
+                    }
+                    let change = UnreadMemoryChange(envelope.event, of: person)
+                    try await self.storage.keep(change, envelope.offset)
+                    self.follow(change)
+                    await self.tell(person, about: envelope.event)
+                },
+                failed: { error in
+                    self.actorSystem.log.error(
+                        "Memory passes failed to follow the memory events; they start again shortly",
+                        metadata: ["error": .string(String(describing: error))])
+                })
         }
     }
 
@@ -387,7 +383,7 @@ public distributed actor MemoryPasses: ClusterSingleton {
     private func schedule(_ unread: UnreadConversation) {
         let key = UnreadKey(person: unread.person, conversation: unread.conversation)
         passes[key]?.cancel()
-        passes[key] = Task { await self.whenLocal { await $0.read(unread) } }
+        passes[key] = Task { await self.read(unread) }
     }
 
     /// Reads `unread` once it's due, with the model of the agent that heard it, tried again after

@@ -505,29 +505,30 @@ public distributed actor ConversationDirectory: ClusterSingleton {
     /// Follows the conversations' events while it's the cluster's directory: from where it read up
     /// to, and again from there whenever following them fails.
     public func activateSingleton() async {
-        let storage = storage
-        let projection = Projection<ConversationEvent>(tag: .conversation, offset: { try await storage.offset() }) {
-            envelope in
-            guard let conversation = ConversationPersistenceID(rawValue: envelope.persistenceID)?.conversationID else {
-                throw ConversationDirectoryError.notAConversation(envelope.persistenceID)
-            }
-            let change = ConversationDirectoryChange(envelope.event, in: conversation)
-            // Who was in what's deleted, read before keeping it takes them away.
-            let deletedFrom: [UserID] =
-                if case .deleted(let deleted)? = change { try await storage.people(deleted) } else { [] }
-            try await storage.keep(change, envelope.offset)
-            try await self.whenLocal { try await $0.tell(about: change, deletedFrom: deletedFrom) }
-        }
-        let journal = journal
-        let refreshInterval = refreshInterval
-        let log = actorSystem.log
         following = Task {
-            await projection.runRestarting(on: journal, refreshInterval: refreshInterval) { error in
-                log.error(
-                    "The conversation directory failed to follow the conversations' events; it starts again shortly",
-                    metadata: ["error": .string(String(describing: error))])
-            }
+            await Projection<ConversationEvent>(tag: .conversation).runRestarting(
+                on: journal, refreshInterval: refreshInterval,
+                offset: { try await self.storage.offset() },
+                process: { envelope in try await self.keep(envelope) },
+                failed: { error in
+                    self.actorSystem.log.error(
+                        "The conversation directory failed to follow the conversations' events; it starts again shortly",
+                        metadata: ["error": .string(String(describing: error))])
+                })
         }
+    }
+
+    /// The change `envelope`'s event makes kept, and the people it touches told.
+    private func keep(_ envelope: EventEnvelope<ConversationEvent>) async throws {
+        guard let conversation = ConversationPersistenceID(rawValue: envelope.persistenceID)?.conversationID else {
+            throw ConversationDirectoryError.notAConversation(envelope.persistenceID)
+        }
+        let change = ConversationDirectoryChange(envelope.event, in: conversation)
+        // Who was in what's deleted, read before keeping it takes them away.
+        let deletedFrom: [UserID] =
+            if case .deleted(let deleted)? = change { try await storage.people(deleted) } else { [] }
+        try await storage.keep(change, envelope.offset)
+        try await tell(about: change, deletedFrom: deletedFrom)
     }
 
     public func passivateSingleton() async {

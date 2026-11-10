@@ -450,7 +450,9 @@ struct SidebarFeature {
             state.session = session
             return .run { send in
                 do {
-                    await send(.loaded(try await server.spaces(session), try await server.conversations(session)))
+                    let spaces = try await server.spaces(session)
+                    let conversations = try await server.conversations(session)
+                    await send(.loaded(spaces, conversations))
                 } catch {
                     await send(.failed("Couldn't read your conversations."))
                 }
