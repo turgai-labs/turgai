@@ -45,7 +45,7 @@ private struct ConversationHeader: View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
                 Text(title)
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.headline)
                     .tracking(-0.3)
                     .lineLimit(1)
                     .foregroundStyle(Color.turgaiInk)
@@ -172,7 +172,7 @@ private struct Composer: View {
                 Button {
                     store.send(.sendTapped)
                 } label: {
-                    Image(systemName: "arrow.up").font(.system(size: 16, weight: .bold))
+                    Image(systemName: "arrow.up").font(.title3.weight(.bold))
                 }
                 .buttonStyle(SendStampStyle())
                 .keyboardShortcut(.return, modifiers: .command)

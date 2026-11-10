@@ -119,6 +119,7 @@ public distributed actor Timers {
         }
         guard DueInChatError.mayChange(madeBy: timer.ownerID, chain) else { throw DueInChatError.notTheirs(name) }
         try await actorSystem.workflows.cancel(type: TimerWorkflow.self, options: WorkflowOptions(id: id))
+        await actorSystem.tellTasks(in: chain.scope.space, .ended(.timer(id)))
         return TimerInChat(name: timer.name, date: timer.date, then: timer.then)
     }
 
@@ -133,13 +134,14 @@ public distributed actor Timers {
                 throw DueInChatError.notTheirs(name)
             }
             try await workflows.cancel(type: TimerWorkflow.self, options: WorkflowOptions(id: id))
+            await actorSystem.tellTasks(in: chain.scope.space, .ended(.timer(id)))
         }
         let timer = ChatTimer(name: name, date: date, then: then, ownerID: chain.scope.person, conversationID: chat)
+        let id = ChatTimer.id(in: chat, named: name, at: date)
         try await workflows.start(
-            type: TimerWorkflow.self,
-            options: WorkflowOptions(
-                id: ChatTimer.id(in: chat, named: name, at: date), retryPolicy: ChatSchedule.retryPolicy),
+            type: TimerWorkflow.self, options: WorkflowOptions(id: id, retryPolicy: ChatSchedule.retryPolicy),
             input: timer)
+        await actorSystem.tellTasks(in: chain.scope.space, .kept(KeptTask(timer, id: id)))
         return TimerInChat(name: name, date: date, then: then)
     }
 

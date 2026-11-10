@@ -274,8 +274,10 @@ private struct ConversationDirectoryTables: Sendable {
         try await connection.query(
             "SELECT person FROM conversation_people WHERE conversation = ?", [.text(conversation.stableKey)]
         ).map { row in
-            guard let person = row.column("person")?.string else { throw ConversationDirectoryError.invalidEntry }
-            return try UserID(key: person)
+            guard let person = row.column("person")?.string.flatMap({ try? UserID(key: $0) }) else {
+                throw ConversationDirectoryError.invalidEntry
+            }
+            return person
         }
     }
 

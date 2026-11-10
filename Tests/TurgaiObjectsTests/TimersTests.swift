@@ -31,6 +31,8 @@ struct TimersTests {
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
             let timers = try await Timers.resolve(on: node)
+            let (listener, heard) = try await listening(to: Self.space, on: node)
+            defer { _ = listener }
             let set = try await self.as(Self.ann) {
                 try await timers.after(name: "Tea", minutes: 30, then: .say(text: "Tea's ready"))
             }
@@ -57,6 +59,17 @@ struct TimersTests {
 
             _ = try await self.as(Self.ann) { try await timers.cancel(name: "tea") }
             #expect(try await self.as(Self.ann) { try await timers.list().chat }.isEmpty)
+
+            // Whoever follows the space's tasks is told it's set, then that it isn't due any more.
+            let id = ChatTimer.id(in: Self.chat, named: "tea", at: set.date)
+            #expect(
+                await heard.notices == [
+                    .kept(
+                        KeptTask(
+                            id: .timer(id), of: .chat(Self.chat, name: "tea", does: "says Tea's ready"),
+                            due: .timer(.at(set.date)), paused: false, maker: UserID.ann)),
+                    .ended(.timer(id)),
+                ])
         }
     }
 }

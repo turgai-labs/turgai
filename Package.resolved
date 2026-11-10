@@ -25,7 +25,7 @@
       "location" : "https://github.com/akbashev/cluster-durable-workflows.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "3720956de64aedc9a333f254e23d1d7b1bcef8a9"
+        "revision" : "8b224db1511e9bd75e5bd65b9081439d2b6df036"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "088f8cfad4f5ef8044ae1dd35e5ddd41365f2747"
+        "revision" : "a94d388ea5d4ad431ac58bf777abc8722a2e81d6"
       }
     },
     {

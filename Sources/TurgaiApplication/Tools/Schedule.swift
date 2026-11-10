@@ -116,6 +116,14 @@ public struct ScheduleActivities {
 }
 
 extension WhenDue {
+    /// What it does, as a person reads it: `says …`, `asks …`.
+    var described: String {
+        switch self {
+        case .say(let text): "says \(text)"
+        case .ask(let instruction): "asks \(instruction)"
+        }
+    }
+
     /// Does `then` in `conversation`, as the run `workflow` of something due there: says its
     /// text, or asks the chat's agent, as a message from `owner`.
     static func doing(
@@ -136,5 +144,21 @@ extension WhenDue {
                 message, turnID: TurgaiDomain.TurnID(rawValue: turgaiDeterministicUUID("turn:\(workflow.rawValue)")),
                 configuration: Conversation.TurnConfiguration(agentModel: nil))
         }
+    }
+}
+
+extension KeptTask {
+    /// `schedule`, a chat's, kept as `id`: paused, or not.
+    init(_ schedule: ChatSchedule, id: ScheduleID, paused: Bool) {
+        self.init(
+            id: .schedule(id), of: .chat(schedule.conversationID, name: schedule.name, does: schedule.then.described),
+            due: .schedule(schedule.schedule), paused: paused, maker: schedule.ownerID)
+    }
+
+    /// `timer`, a chat's, kept as `id`.
+    init(_ timer: ChatTimer, id: WorkflowID) {
+        self.init(
+            id: .timer(id), of: .chat(timer.conversationID, name: timer.name, does: timer.then.described),
+            due: .timer(.at(timer.date)), paused: false, maker: timer.ownerID)
     }
 }

@@ -107,11 +107,11 @@ public struct Conversation: Codable, Equatable, Sendable, Identifiable {
     /// Its title, or else the first line of the first thing said in it: none until either.
     public let title: String?
     /// The space it's in.
-    public let spaceID: String
+    public let spaceID: SpaceID
     /// How many people are in it.
     public let people: Int
 
-    public init(id: ConversationID, botID: BotID, title: String? = nil, spaceID: String, people: Int) {
+    public init(id: ConversationID, botID: BotID, title: String? = nil, spaceID: SpaceID, people: Int) {
         self.id = id
         self.botID = botID
         self.title = title
@@ -207,9 +207,9 @@ public struct ReplySoFar: Codable, Equatable, Sendable, Identifiable {
 /// Turgai's own.
 public struct CreateConversationRequest: Codable, Equatable, Sendable {
     public let botID: BotID?
-    public let spaceID: String?
+    public let spaceID: SpaceID?
 
-    public init(botID: BotID? = nil, spaceID: String? = nil) {
+    public init(botID: BotID? = nil, spaceID: SpaceID? = nil) {
         self.botID = botID
         self.spaceID = spaceID
     }
@@ -284,7 +284,7 @@ public enum ChatCommand: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case type, id, text, to, answer, conversationID
-        case ref, ask, topic, remembering, space
+        case ref, ask, topic, remembering, space, chat, name, change
     }
 
     public init(from decoder: Decoder) throws {
@@ -313,13 +313,21 @@ public enum ChatCommand: Codable, Equatable, Sendable {
                 case .forgetMemory: .forgetMemory
                 case .setRemembering:
                     .setRemembering(try values.decode(MemorySummary.Remembering.self, forKey: .remembering))
-                case .archiveSpace: .archiveSpace(try values.decode(String.self, forKey: .space))
-                case .unarchiveSpace: .unarchiveSpace(try values.decode(String.self, forKey: .space))
+                case .archiveSpace: .archiveSpace(try values.decode(SpaceID.self, forKey: .space))
+                case .unarchiveSpace: .unarchiveSpace(try values.decode(SpaceID.self, forKey: .space))
                 case .leaveConversation:
                     .leaveConversation(try values.decode(ConversationID.self, forKey: .conversationID))
                 case .deleteConversation:
                     .deleteConversation(try values.decode(ConversationID.self, forKey: .conversationID))
-                case .tasks: .tasks(space: try values.decode(String.self, forKey: .space))
+                case .changeSchedule:
+                    .changeSchedule(
+                        in: try values.decode(TaskListing.Chat.self, forKey: .chat),
+                        named: try values.decode(String.self, forKey: .name),
+                        try values.decode(ScheduleChange.self, forKey: .change))
+                case .cancelReminder:
+                    .cancelReminder(
+                        in: try values.decode(TaskListing.Chat.self, forKey: .chat),
+                        named: try values.decode(String.self, forKey: .name))
                 }
             self = .push(ref: try values.decode(PushRef.self, forKey: .ref), ask: ask)
         }
@@ -329,7 +337,7 @@ public enum ChatCommand: Codable, Equatable, Sendable {
     private static func topic(in values: KeyedDecodingContainer<CodingKeys>) throws -> ChatTopic {
         switch try values.decode(ChatTopic.Name.self, forKey: .topic) {
         case .memory: .memory
-        case .tasks: .tasks(space: try values.decode(String.self, forKey: .space))
+        case .tasks: .tasks(space: try values.decode(SpaceID.self, forKey: .space))
         }
     }
 
@@ -357,10 +365,17 @@ public enum ChatCommand: Codable, Equatable, Sendable {
                 try values.encode(topic.name, forKey: .topic)
                 if case .tasks(let space) = topic { try values.encode(space, forKey: .space) }
             case .setRemembering(let remembering): try values.encode(remembering, forKey: .remembering)
-            case .archiveSpace(let space), .unarchiveSpace(let space), .tasks(let space):
+            case .archiveSpace(let space), .unarchiveSpace(let space):
                 try values.encode(space, forKey: .space)
             case .leaveConversation(let conversation), .deleteConversation(let conversation):
                 try values.encode(conversation, forKey: .conversationID)
+            case .changeSchedule(let chat, let name, let change):
+                try values.encode(chat, forKey: .chat)
+                try values.encode(name, forKey: .name)
+                try values.encode(change, forKey: .change)
+            case .cancelReminder(let chat, let name):
+                try values.encode(chat, forKey: .chat)
+                try values.encode(name, forKey: .name)
             case .memory, .forgetMemory: break
             }
         }
@@ -389,7 +404,9 @@ public enum ChatEventKind: String, Codable, Sendable {
     case conversationDeleted = "conversation.deleted"
     case reply
     case memoryChanged = "memory.changed"
-    case tasksChanged = "tasks.changed"
+    case tasks
+    case taskKept = "task.kept"
+    case taskEnded = "task.ended"
 }
 
 public enum ConversationStatus: String, Codable, Sendable {
@@ -483,9 +500,13 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         /// What's remembered about the person changed, or whether they're remembered: to a connection
         /// that joined ``ChatTopic/memory``.
         case memoryChanged
-        /// What's due for the objects of the space with this id changed: to a connection that joined
-        /// ``ChatTopic/tasks``, for a space the person is in.
-        case tasksChanged(space: String)
+        /// The tasks of the space with this id the person may change, as they are as a connection
+        /// joins ``ChatTopic/tasks``: each change follows.
+        case tasks(space: SpaceID, tasks: [TaskListing])
+        /// One of them is kept due as it says now: new, or changed.
+        case taskKept(space: SpaceID, task: TaskListing)
+        /// The one with this id isn't due any more.
+        case taskEnded(space: SpaceID, id: TaskListing.ID)
 
         public var type: ChatEventKind {
             switch self {
@@ -510,7 +531,9 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             case .conversationDeleted: .conversationDeleted
             case .reply: .reply
             case .memoryChanged: .memoryChanged
-            case .tasksChanged: .tasksChanged
+            case .tasks: .tasks
+            case .taskKept: .taskKept
+            case .taskEnded: .taskEnded
             }
         }
     }
@@ -528,7 +551,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case status, phase, activity, message, messages, error, reply
         case request, requestID, answer
         case turns, step, conversation
-        case ref, memory, tasks, space
+        case ref, memory, tasks, task, id, space
     }
 
     public init(from decoder: Decoder) throws {
@@ -626,15 +649,24 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             let reply: ChatReply =
                 switch try values.decode(ChatReply.Status.self, forKey: .status) {
                 case .ok:
-                    try values.decodeIfPresent(MemorySummary.self, forKey: .memory).map(ChatReply.memory)
-                        ?? values.decodeIfPresent([TaskListing].self, forKey: .tasks).map(ChatReply.tasks) ?? .ok
+                    try values.decodeIfPresent(MemorySummary.self, forKey: .memory).map(ChatReply.memory) ?? .ok
                 case .failed: .failed(try values.decode(ChatError.self, forKey: .error))
                 }
             payload = .reply(ref: try values.decode(PushRef.self, forKey: .ref), reply: reply)
         case .memoryChanged:
             payload = .memoryChanged
-        case .tasksChanged:
-            payload = .tasksChanged(space: try values.decode(String.self, forKey: .space))
+        case .tasks:
+            payload = .tasks(
+                space: try values.decode(SpaceID.self, forKey: .space),
+                tasks: try values.decode([TaskListing].self, forKey: .tasks))
+        case .taskKept:
+            payload = .taskKept(
+                space: try values.decode(SpaceID.self, forKey: .space),
+                task: try values.decode(TaskListing.self, forKey: .task))
+        case .taskEnded:
+            payload = .taskEnded(
+                space: try values.decode(SpaceID.self, forKey: .space),
+                id: try values.decode(TaskListing.ID.self, forKey: .id))
         case .turnStep:
             payload = .turnStep(
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
@@ -715,17 +747,21 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             case .memory(let memory):
                 try values.encode(ChatReply.Status.ok, forKey: .status)
                 try values.encode(memory, forKey: .memory)
-            case .tasks(let tasks):
-                try values.encode(ChatReply.Status.ok, forKey: .status)
-                try values.encode(tasks, forKey: .tasks)
             case .failed(let error):
                 try values.encode(ChatReply.Status.failed, forKey: .status)
                 try values.encode(error, forKey: .error)
             }
         case .memoryChanged:
             break
-        case .tasksChanged(let space):
+        case .tasks(let space, let tasks):
             try values.encode(space, forKey: .space)
+            try values.encode(tasks, forKey: .tasks)
+        case .taskKept(let space, let task):
+            try values.encode(space, forKey: .space)
+            try values.encode(task, forKey: .task)
+        case .taskEnded(let space, let id):
+            try values.encode(space, forKey: .space)
+            try values.encode(id, forKey: .id)
         }
     }
 }

@@ -260,7 +260,8 @@ extension TurgaiMainWebApp {
                             switch command {
                             case .open(let id):
                                 guard
-                                    let conversation = try await apiConversation(id.rawValue, readBy: person, bridge: bridge)
+                                    let conversation = try await apiConversation(
+                                        id.rawValue, readBy: person, bridge: bridge)
                                 else {
                                     try await writer.write(
                                         publicAPIErrorEvent(
@@ -275,7 +276,8 @@ extension TurgaiMainWebApp {
                                     _ = await detached.wait()
                                 }
                                 await shown.show(conversation)
-                                try await writeOpened(conversation, for: person, on: writer, names: names, bridge: bridge)
+                                try await writeOpened(
+                                    conversation, for: person, on: writer, names: names, bridge: bridge)
                                 guard try await open(conversation, on: session) else {
                                     try await writer.write(
                                         publicAPIErrorEvent(
@@ -360,16 +362,16 @@ extension TurgaiMainWebApp {
                     message: "The requested bot does not exist or is disabled."
                 )
             }
-            let space: SpaceID?
+            let space: TurgaiDomain.SpaceID?
             if let written = input.spaceID {
-                guard let id = UUID(uuidString: written) else { return noSuchSpace() }
-                space = SpaceID(rawValue: id)
+                guard let id = TurgaiDomain.SpaceID(written) else { return noSuchSpace() }
+                space = id
             } else {
                 space = nil
             }
             let conversationID = TurgaiDomain.ConversationID(
                 channel: turgaiChannel, externalAddress: .init(UUID().uuidString))
-            let startedIn: SpaceID
+            let startedIn: TurgaiDomain.SpaceID
             do {
                 startedIn = try await dependencies.webChatBridge.startConversation(
                     conversationID, in: space, agent: AgentProfileID(profile.id), by: owner.person)
@@ -379,7 +381,7 @@ extension TurgaiMainWebApp {
             return try publicAPIResponse(
                 TurgaiModels.Conversation(
                     id: .init(rawValue: conversationID.externalAddress.rawValue), botID: .init(rawValue: profile.id),
-                    spaceID: startedIn.rawValue.uuidString, people: 1),
+                    spaceID: startedIn.api, people: 1),
                 status: .created
             )
         }
@@ -403,7 +405,8 @@ extension TurgaiMainWebApp {
             guard let title = ConversationTitle(input.title) else {
                 return publicAPIErrorResponse(
                     status: .badRequest, code: "invalid_title",
-                    message: "A conversation's title is some words, at most \(ConversationTitle.maximumLength) letters.")
+                    message: "A conversation's title is some words, at most \(ConversationTitle.maximumLength) letters."
+                )
             }
             try await dependencies.webChatBridge.title(conversation.domainID, title, by: owner.person)
             return Response(status: .noContent)
@@ -507,7 +510,8 @@ extension TurgaiMainWebApp {
         links.delete(":person") { request, context in
             guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
             guard let key = context.parameters.get("person"), let other = try? TurgaiDomain.UserID(key: key) else {
-                return publicAPIErrorResponse(status: .notFound, code: "not_linked", message: "No one like that is linked.")
+                return publicAPIErrorResponse(
+                    status: .notFound, code: "not_linked", message: "No one like that is linked.")
             }
             try await linking.unlink(person, from: other)
             return Response(status: .noContent)
@@ -588,7 +592,7 @@ extension TurgaiMainWebApp {
                 return try publicAPIResponse(
                     SpaceInviteOffer(
                         id: invite.id.rawValue.uuidString, token: token.rawValue,
-                        link: SpaceInviteLink(spaceID: space.rawValue.uuidString, token: token.rawValue).description,
+                        link: SpaceInviteLink(spaceID: space.api, token: token.rawValue).description,
                         expiresAt: invite.expiresAt),
                     status: .created)
             }
@@ -664,7 +668,6 @@ extension TurgaiMainWebApp {
             }
         }
 
-
         messages.post { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
             guard
@@ -725,7 +728,7 @@ private struct APIConversation: Sendable {
 
     var info: TurgaiModels.Conversation {
         .init(
-            id: publicID, botID: .init(rawValue: agent.rawValue), spaceID: outline.space.rawValue.uuidString,
+            id: publicID, botID: .init(rawValue: agent.rawValue), spaceID: outline.space.api,
             people: outline.participants.count { if case .person = $0 { true } else { false } })
     }
 }
@@ -773,7 +776,7 @@ private actor JoinedTopics {
 /// What a connection follows, its topic read: a space's tasks by the space's id.
 private enum Following {
     case memory
-    case tasks(SpaceID)
+    case tasks(TurgaiDomain.SpaceID)
 
     /// `topic`, read: none when the space it names isn't one.
     init?(_ topic: TurgaiModels.ChatTopic) {
@@ -781,8 +784,8 @@ private enum Following {
         case .memory:
             self = .memory
         case .tasks(let space):
-            guard let id = UUID(uuidString: space) else { return nil }
-            self = .tasks(SpaceID(rawValue: id))
+            guard let id = TurgaiDomain.SpaceID(space) else { return nil }
+            self = .tasks(id)
         }
     }
 }
@@ -800,10 +803,27 @@ private func follow(
         }
         return { try? await bridge.unfollowMemory(listener) }
     case .tasks(let space):
-        let listener = try await bridge.followObjectDues(in: space, of: person) {
-            try? await writer.write(.init(payload: .tasksChanged(space: space.rawValue.uuidString)))
+        // What the tasks are now goes first; each change follows it, in order.
+        let id = space.api
+        let (changes, change) = AsyncStream<TasksNotice>.makeStream()
+        let followed = try await bridge.followTasks(in: space, of: person) { change.yield($0) }
+        try? await writer.write(.init(payload: .tasks(space: id, tasks: followed.tasks.map(TaskListing.init))))
+        let forwarding = Task {
+            for await notice in changes {
+                switch notice {
+                case .kept(let task):
+                    try? await writer.write(.init(payload: .taskKept(space: id, task: TaskListing(task))))
+                case .ended(let task):
+                    try? await writer.write(.init(payload: .taskEnded(space: id, id: task.listed)))
+                }
+            }
         }
-        return { try? await bridge.unfollowObjectDues(listener) }
+        // Left, the listener goes with this, and isn't told anything more.
+        return { [listener = followed.listener] in
+            _ = listener
+            change.finish()
+            forwarding.cancel()
+        }
     }
 }
 
@@ -833,12 +853,12 @@ private func answer(
             try await bridge.setRemembering(Remembering(remembering), for: person)
             return .ok
         case .archiveSpace(let space):
-            guard let id = UUID(uuidString: space) else { return .failed(notASpace) }
-            _ = try await bridge.spaces().archive(SpaceID(rawValue: id), by: person)
+            guard let id = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
+            _ = try await bridge.spaces().archive(id, by: person)
             return .ok
         case .unarchiveSpace(let space):
-            guard let id = UUID(uuidString: space) else { return .failed(notASpace) }
-            _ = try await bridge.spaces().unarchive(SpaceID(rawValue: id), by: person)
+            guard let id = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
+            _ = try await bridge.spaces().unarchive(id, by: person)
             return .ok
         case .leaveConversation(let conversation):
             try await bridge.leave(domainID(of: conversation), as: person)
@@ -846,13 +866,18 @@ private func answer(
         case .deleteConversation(let conversation):
             try await bridge.delete(domainID(of: conversation), by: person)
             return .ok
-        case .tasks(let space):
-            guard let id = UUID(uuidString: space) else { return .failed(notASpace) }
-            return .tasks(
-                try await bridge.objects(withWorkIn: SpaceID(rawValue: id), listedTo: person).map { entry, work in
-                    TaskListing(entry, work: work)
-                })
+        case .changeSchedule(let chat, let name, let change):
+            guard let chat = TurgaiDomain.ConversationID(stableKey: chat.rawValue) else { return .failed(notAChat) }
+            try await bridge.changeSchedule(
+                TurgaiApplication.Conversation.TaskChange(change), named: name, in: chat, by: person)
+            return .ok
+        case .cancelReminder(let chat, let name):
+            guard let chat = TurgaiDomain.ConversationID(stableKey: chat.rawValue) else { return .failed(notAChat) }
+            try await bridge.cancelReminder(named: name, in: chat, by: person)
+            return .ok
         }
+    } catch let refusal as DueInChatError {
+        return .failed(TurgaiModels.ChatError(code: "refused", message: refusal.description))
     } catch let refusal as SpaceRefusal {
         return .failed(TurgaiModels.ChatError(code: "refused", message: refusal.description))
     } catch let refusal as ConversationRefusal {
@@ -864,6 +889,21 @@ private func answer(
 
 /// What a push names no space by.
 private let notASpace = TurgaiModels.ChatError(code: "not_a_space", message: "There's no such space.")
+
+/// What a push names no chat by.
+private let notAChat = TurgaiModels.ChatError(code: "not_a_chat", message: "There's no such chat.")
+
+extension TurgaiApplication.Conversation.TaskChange {
+    /// `change`, as the app asks for it.
+    fileprivate init(_ change: ScheduleChange) {
+        self =
+            switch change {
+            case .pause: .pause
+            case .resume: .resume
+            case .cancel: .cancel
+            }
+    }
+}
 
 /// The conversation an app calls `id`, as Turgai's apps' conversations are kept.
 private func domainID(of id: TurgaiModels.ConversationID) -> TurgaiDomain.ConversationID {
@@ -966,8 +1006,10 @@ private func say(
 private func conversationRefused(_ refusal: ConversationRefusal) -> Response {
     switch refusal {
     case .notStarted, .notInIt: conversationNotFound()
-    case .guestsStayOut: publicAPIErrorResponse(status: .forbidden, code: "guests_stay_out", message: refusal.description)
-    case .alreadyStarted: publicAPIErrorResponse(status: .conflict, code: "already_started", message: refusal.description)
+    case .guestsStayOut:
+        publicAPIErrorResponse(status: .forbidden, code: "guests_stay_out", message: refusal.description)
+    case .alreadyStarted:
+        publicAPIErrorResponse(status: .conflict, code: "already_started", message: refusal.description)
     case .oneAgentForNow:
         publicAPIErrorResponse(status: .conflict, code: "one_agent_for_now", message: refusal.description)
     case .addresseeNotInIt:
@@ -1062,7 +1104,8 @@ extension ParticipantSummary {
 
 /// The answer for a conversation the person can't read, or that isn't there.
 private func conversationNotFound() -> Response {
-    publicAPIErrorResponse(status: .notFound, code: "conversation_not_found", message: "The conversation does not exist.")
+    publicAPIErrorResponse(
+        status: .notFound, code: "conversation_not_found", message: "The conversation does not exist.")
 }
 
 /// The person a request is from: its signed-in account's.
@@ -1071,8 +1114,8 @@ private func signedInPerson(from request: Request, auth: TurgaiAuth) async -> Tu
 }
 
 /// The space a path names.
-private func spaceID(in context: BasicWebSocketRequestContext) -> SpaceID? {
-    context.parameters.get("space").flatMap(UUID.init(uuidString:)).map(SpaceID.init(rawValue:))
+private func spaceID(in context: BasicWebSocketRequestContext) -> TurgaiDomain.SpaceID? {
+    context.parameters.get("space").flatMap { TurgaiDomain.SpaceID(TurgaiModels.SpaceID(rawValue: $0)) }
 }
 
 private func noSuchSpace() -> Response {
@@ -1101,11 +1144,22 @@ private func spaceRefused(_ refusal: SpaceRefusal) -> Response {
     return publicAPIErrorResponse(status: status, code: code, message: refusal.description)
 }
 
+extension TurgaiDomain.SpaceID {
+    /// The space the API's `id` names: none when it names none.
+    fileprivate init?(_ id: TurgaiModels.SpaceID) {
+        guard let uuid = UUID(uuidString: id.rawValue) else { return nil }
+        self.init(rawValue: uuid)
+    }
+
+    /// What the API calls it.
+    fileprivate var api: TurgaiModels.SpaceID { TurgaiModels.SpaceID(rawValue: rawValue.uuidString) }
+}
+
 extension SpaceSummary {
     /// `listing`, one of `spaces`, as the API gives it.
     fileprivate init(_ listing: SpaceListing, in spaces: Spaces) {
         self.init(
-            id: listing.id.rawValue.uuidString, name: listing.name.rawValue,
+            id: listing.id.api, name: listing.name.rawValue,
             role: listing.role == .admin ? .admin : .member,
             status: listing.status == .archived ? .archived : .active,
             kind: listing.id == spaces.turgaisOwn ? .turgaisOwn : .made)
@@ -1198,7 +1252,8 @@ private func publicAPIMessages(
     var messages: [TurgaiModels.Message] = []
     for entry in history {
         let value = entry.id.split(separator: ":").last.map(String.init) ?? entry.id
-        let author: ParticipantSummary? = if let author = entry.author { try await names.summary(of: author) } else { nil }
+        let author: ParticipantSummary? =
+            if let author = entry.author { try await names.summary(of: author) } else { nil }
         messages.append(
             .init(
                 id: .init(rawValue: UUID(uuidString: value) ?? UUID()),
@@ -1837,17 +1892,40 @@ struct PublicAPIAuthorization<Context: RequestContext>: RouterMiddleware {
 }
 
 extension TaskListing {
-    /// The object `entry` lists, with `work`, what the runtime keeps due for it, as the API lists it.
-    fileprivate init(_ entry: ObjectEntry, work: [ObjectDueListing]) {
-        var schedules: [String: String] = [:]
-        var timers: [String: Date] = [:]
-        for listing in work {
-            switch listing.due {
-            case .schedule(let schedule): schedules[listing.property] = schedule.described
-            case .timer(let timer): timers[listing.property] = timer.date
-            }
+    /// `task`, as the API lists it.
+    fileprivate init(_ task: KeptTask) {
+        let title: String
+        let does: String?
+        switch task.of {
+        case .chat(_, let name, let what):
+            title = name
+            does = what
+        case .object(let object, let field):
+            title = "\(object) · \(field)"
+            does = nil
         }
-        self.init(object: ObjectListing(entry), schedules: schedules, timers: timers)
+        let when: When =
+            switch task.due {
+            case .schedule(let schedule): .repeating(schedule.described)
+            case .timer(let timer): .once(timer.date)
+            }
+        let kind: Kind =
+            switch (task.of, task.id) {
+            case (.chat(let chat, let name, _), .schedule): .schedule(in: Chat(rawValue: chat.stableKey), named: name)
+            case (.chat(let chat, let name, _), .timer): .reminder(in: Chat(rawValue: chat.stableKey), named: name)
+            case (.object, _): .object
+            }
+        self.init(id: task.id.listed, title: title, does: does, when: when, paused: task.paused, kind: kind)
+    }
+}
+
+extension KeptTask.ID {
+    /// How the API names it: its durable schedule's or timer's id.
+    fileprivate var listed: TaskListing.ID {
+        switch self {
+        case .schedule(let id): TaskListing.ID(rawValue: id.rawValue)
+        case .timer(let id): TaskListing.ID(rawValue: id.rawValue)
+        }
     }
 }
 
@@ -1867,6 +1945,6 @@ extension TurgaiModels.Conversation {
     fileprivate init(_ listing: ConversationListing) {
         self.init(
             id: .init(rawValue: listing.id.externalAddress.rawValue), botID: .init(rawValue: listing.agent.rawValue),
-            title: listing.title, spaceID: listing.space.rawValue.uuidString, people: listing.people)
+            title: listing.title, spaceID: listing.space.api, people: listing.people)
     }
 }

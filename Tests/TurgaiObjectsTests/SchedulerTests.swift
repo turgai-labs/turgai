@@ -31,6 +31,8 @@ struct SchedulerTests {
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
             let scheduler = try await Scheduler.resolve(on: node)
+            let (listener, heard) = try await listening(to: Self.space, on: node)
+            defer { _ = listener }
             let made = try await self.as(Self.ann) {
                 try await scheduler.every(
                     name: "Morning News", schedule: .daily(hour: 8, minute: 0, timeZone: "Europe/Berlin"),
@@ -56,6 +58,20 @@ struct SchedulerTests {
 
             _ = try await self.as(Self.ann) { try await scheduler.cancel(name: "morning-news") }
             #expect(try await self.as(Self.ann) { try await scheduler.list().chat }.isEmpty)
+
+            // Whoever follows the space's tasks is told each change as it's made.
+            let id = ChatSchedule.id(in: Self.chat, named: "morning-news")
+            func kept(paused: Bool) -> TasksNotice {
+                .kept(
+                    KeptTask(
+                        id: .schedule(id), of: .chat(Self.chat, name: "morning-news", does: "asks Tell me the news"),
+                        due: .schedule(.daily(hour: 8, minute: 0, timeZone: "Europe/Berlin")), paused: paused,
+                        maker: UserID.ann))
+            }
+            #expect(
+                await heard.notices == [
+                    kept(paused: false), kept(paused: true), kept(paused: false), .ended(.schedule(id)),
+                ])
         }
     }
 }

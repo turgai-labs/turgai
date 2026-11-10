@@ -254,8 +254,8 @@ struct TurgaiAppService: Service, Sendable {
             }
 
             try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
-            // The space, conversation and object due directories and the memory passes, one of each
-            // in the cluster, run here, beside the journal they read.
+            // The space and conversation directories and the memory passes, one of each in the
+            // cluster, run here, beside the journal they read.
             let spaceDirectory = spaceDirectory
             _ = try await system.singleton.host(SpaceDirectory.self, name: SpaceDirectory.singletonName) {
                 SpaceDirectory(actorSystem: $0, storage: spaceDirectory, journal: eventStore)
@@ -263,9 +263,6 @@ struct TurgaiAppService: Service, Sendable {
             let conversationDirectory = conversationDirectory
             _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
                 ConversationDirectory(actorSystem: $0, storage: conversationDirectory, journal: eventStore)
-            }
-            _ = try await system.singleton.host(ObjectDueDirectory.self, name: ObjectDueDirectory.singletonName) {
-                ObjectDueDirectory(actorSystem: $0, journal: eventStore)
             }
             let unreadMemory = unreadMemory
             _ = try await system.singleton.host(MemoryPasses.self, name: MemoryPasses.singletonName) {

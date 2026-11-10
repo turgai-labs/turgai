@@ -224,19 +224,21 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         // Its schedules and timers end with it, whether or not this activation kept them.
         let schedules = (try? shape(of: state.live.code))?.schedules ?? []
         let timers = (try? state.live.fields).map { timers(in: $0) } ?? [:]
+        let space = try? state.live.maker.space
         try await emit(event: try state.removing(by: try caller()))
         stop()
         rehub()
         refollow()
         if let workflows = workflows {
             for property in schedules {
-                try? await workflows.cancelSchedule(
-                    id: ObjectFiring.scheduleID(of: own, property), workflow: ObjectScheduleWorkflow.self)
+                let id = ObjectFiring.scheduleID(of: own, property)
+                try? await workflows.cancelSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
+                if let space { await actorSystem.tellTasks(in: space, .ended(.schedule(id))) }
             }
             for (property, timer) in timers {
-                try? await workflows.cancel(
-                    type: ObjectTimerWorkflow.self,
-                    options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: timer.date)))
+                let id = ObjectFiring.timerID(of: own, property, at: timer.date)
+                try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
+                if let space { await actorSystem.tellTasks(in: space, .ended(.timer(id))) }
             }
         }
     }
@@ -700,6 +702,12 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                         due: .schedule(schedule), place: place),
                     overlapPolicy: .skip)
                 scheduled[property] = schedule
+                await actorSystem.tellTasks(
+                    in: maker.space,
+                    .kept(
+                        KeptTask(
+                            id: .schedule(id), of: .object(own, field: property), due: .schedule(schedule),
+                            paused: false, maker: maker.person)))
             } catch {
                 actorSystem.log.warning(
                     "A dynamic object's schedule couldn't be kept",
@@ -707,26 +715,36 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             }
         }
         for property in scheduled.keys where wanted[property] == nil {
-            try? await workflows.cancelSchedule(
-                id: ObjectFiring.scheduleID(of: own, property), workflow: ObjectScheduleWorkflow.self)
+            let id = ObjectFiring.scheduleID(of: own, property)
+            try? await workflows.cancelSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
             scheduled[property] = nil
+            if let maker { await actorSystem.tellTasks(in: maker.space, .ended(.schedule(id))) }
         }
         // A timer is started for each date it's set to: one that fired, or runs, is left as it is.
         for (property, timer) in wantedTimers where timed[property] != timer {
             guard let maker else { continue }
             do {
                 if let before = timed[property] {
-                    try? await workflows.cancel(
-                        type: ObjectTimerWorkflow.self,
-                        options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: before.date)))
+                    let id = ObjectFiring.timerID(of: own, property, at: before.date)
+                    try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
+                    await actorSystem.tellTasks(in: maker.space, .ended(.timer(id)))
                 }
+                let id = ObjectFiring.timerID(of: own, property, at: timer.date)
                 try await workflows.start(
-                    type: ObjectTimerWorkflow.self,
-                    options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: timer.date)),
+                    type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id),
                     input: ObjectFiring(
                         object: own, property: property, maker: maker.person, space: maker.space,
                         due: .timer(timer), place: place))
                 timed[property] = timer
+                // A timer that's due already fires as it starts, and isn't one any more.
+                if timer.date > Date.now {
+                    await actorSystem.tellTasks(
+                        in: maker.space,
+                        .kept(
+                            KeptTask(
+                                id: .timer(id), of: .object(own, field: property), due: .timer(timer), paused: false,
+                                maker: maker.person)))
+                }
             } catch {
                 actorSystem.log.warning(
                     "A dynamic object's timer couldn't be kept",
@@ -734,10 +752,10 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             }
         }
         for (property, timer) in timed where wantedTimers[property] == nil {
-            try? await workflows.cancel(
-                type: ObjectTimerWorkflow.self,
-                options: WorkflowOptions(id: ObjectFiring.timerID(of: own, property, at: timer.date)))
+            let id = ObjectFiring.timerID(of: own, property, at: timer.date)
+            try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
             timed[property] = nil
+            if let maker { await actorSystem.tellTasks(in: maker.space, .ended(.timer(id))) }
         }
     }
 

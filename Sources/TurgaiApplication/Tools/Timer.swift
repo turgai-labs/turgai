@@ -75,6 +75,12 @@ public struct TimerActivities {
             input.then, in: input.conversationID, for: input.ownerID, as: input.participantID,
             directory: input.agentDirectoryID, run: context.workflowID, agentProfiles: agentProfiles,
             on: context.system)
+        // Due once: done, it isn't a timer any more.
+        let chat = try await Conversation.resolve(
+            on: context.system, conversationID: input.conversationID, agentDirectoryID: input.agentDirectoryID)
+        if let space = try await chat.spaceID {
+            await context.system.tellTasks(in: space, .ended(.timer(context.workflowID)))
+        }
         return DurableVoid()
     }
 }

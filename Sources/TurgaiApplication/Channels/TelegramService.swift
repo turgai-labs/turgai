@@ -304,7 +304,7 @@ public actor TelegramService: Service {
         self.round = round
     }
 
-    public func run() async throws {
+    public func run() async {
         _ = await cancelWhenGracefulShutdown {
             await withDiscardingTaskGroup { group in
                 var running: Set<UUID> = []

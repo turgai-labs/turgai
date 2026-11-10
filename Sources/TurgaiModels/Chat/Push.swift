@@ -18,8 +18,9 @@ public struct PushRef: Codable, Hashable, Sendable {
 public enum ChatTopic: Hashable, Sendable {
     /// What's remembered about the person, and whether they're remembered.
     case memory
-    /// What the runtime keeps due for the objects of the space with this id.
-    case tasks(space: String)
+    /// The tasks of the space with this id that the person may change: what they are as it's
+    /// joined, then each change.
+    case tasks(space: SpaceID)
 
     /// What it is, as the socket names it.
     enum Name: String, Codable {
@@ -48,16 +49,17 @@ public enum ChatAsk: Equatable, Sendable {
     /// What they say remembered from now on, or not.
     case setRemembering(MemorySummary.Remembering)
     /// The space with this id archived, by one of its admins.
-    case archiveSpace(String)
+    case archiveSpace(SpaceID)
     /// The space with this id in use again, by one of its admins.
-    case unarchiveSpace(String)
+    case unarchiveSpace(SpaceID)
     /// The conversation off the asker's list: they no longer read it, and the rest stay in it.
     case leaveConversation(ConversationID)
     /// The conversation deleted for everyone: by the only person in it, or an admin of its space.
     case deleteConversation(ConversationID)
-    /// The objects of the space with this id that the runtime keeps something due for, as the asker
-    /// may read them.
-    case tasks(space: String)
+    /// The chat's schedule with this name changed, by whoever made it or an admin of its space.
+    case changeSchedule(in: TaskListing.Chat, named: String, ScheduleChange)
+    /// The chat's reminder with this name cancelled, by whoever made it or an admin of its space.
+    case cancelReminder(in: TaskListing.Chat, named: String)
 }
 
 /// The answer to a push.
@@ -66,8 +68,6 @@ public enum ChatReply: Equatable, Sendable {
     case ok
     /// What's remembered about the person.
     case memory(MemorySummary)
-    /// A space's objects the runtime keeps something due for.
-    case tasks([TaskListing])
     /// It couldn't be done, and why.
     case failed(ChatError)
 }
@@ -84,7 +84,8 @@ extension ChatAsk {
         case unarchiveSpace = "space.unarchive"
         case leaveConversation = "conversation.leave"
         case deleteConversation = "conversation.delete"
-        case tasks = "space.tasks"
+        case changeSchedule = "schedule.change"
+        case cancelReminder = "reminder.cancel"
     }
 
     var name: Name {
@@ -98,7 +99,8 @@ extension ChatAsk {
         case .unarchiveSpace: .unarchiveSpace
         case .leaveConversation: .leaveConversation
         case .deleteConversation: .deleteConversation
-        case .tasks: .tasks
+        case .changeSchedule: .changeSchedule
+        case .cancelReminder: .cancelReminder
         }
     }
 }

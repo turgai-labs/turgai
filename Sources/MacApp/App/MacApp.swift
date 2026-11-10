@@ -32,13 +32,13 @@ public struct TurgaiScenes: Scene {
         .commands { PanelCommands(store: app) }
 
         Window("Objects", id: WindowID.objects) {
-            ObjectsView(store: app.scope(state: \.objects, action: \.objects))
+            ObjectsView(store: app.scope(\.objects, action: \.objects))
                 .frame(minWidth: 320, minHeight: 400)
         }
         .defaultSize(width: 380, height: 600)
 
         Window("Profile", id: WindowID.profile) {
-            ProfileView(store: app.scope(state: \.profile, action: \.profile))
+            ProfileView(store: app.scope(\.profile, action: \.profile))
                 .frame(minWidth: 360, minHeight: 420)
         }
         .defaultSize(width: 420, height: 560)

@@ -36,6 +36,7 @@ struct ProfileFeatureTests {
             ProfileFeature()
         } withDependencies: {
             $0.chat.ask = connection(asked: asked) { ask in ask == .memory ? .memory(remembered) : .ok }
+            $0.chat.events = { .never }
         }
 
         await store.send(.shown) { $0.showing = .shown }
@@ -54,9 +55,11 @@ struct ProfileFeatureTests {
         await store.send(.forgetTapped) { $0.alert = .forgetEverything }
         await store.send(.alert(.presented(.forgetConfirmed))) { $0.alert = nil }
         await store.receive(\.forgotten) { $0.memory = .read(MemorySummary(nodes: [], remembering: .on)) }
-        #expect(asked.value == [.join(.memory), .memory, .forgetMemory])
         #expect(store.state.memoryShown == .note("Nothing is remembered about you yet."))
         #expect(!store.state.canForget)
+        await store.send(.hidden) { $0.showing = .hidden }
+        await store.finish()
+        #expect(asked.value == [.join(.memory), .memory, .forgetMemory, .leave(.memory)])
     }
 
     /// While it's shown, a change to their memory, or the connection opening again, has it read
@@ -67,16 +70,19 @@ struct ProfileFeatureTests {
         let remembered = remembered
         let forgotten = MemorySummary(nodes: [], remembering: .off)
         let current = LockIsolated(remembered)
+        let (events, heard) = AsyncStream.makeStream(of: ChatEvent.self)
         let store = TestStore(initialState: ProfileFeature.State()) {
             ProfileFeature()
         } withDependencies: {
             $0.chat.ask = connection(asked: asked) { ask in ask == .memory ? .memory(current.value) : .ok }
+            $0.chat.events = { events }
         }
 
         await store.send(.shown) { $0.showing = .shown }
         await store.receive(\.memoryLoaded) { $0.memory = .read(remembered) }
         current.setValue(forgotten)
-        await store.send(.memoryChanged)
+        heard.yield(ChatEvent(payload: .memoryChanged))
+        await store.receive(\.memoryChanged)
         await store.receive(\.memoryLoaded) { $0.memory = .read(forgotten) }
         await store.send(.connected)
         await store.receive(\.memoryLoaded)
@@ -123,12 +129,14 @@ struct ProfileFeatureTests {
             ProfileFeature()
         } withDependencies: {
             $0.chat.ask = { _ in throw ChatSocketError.closed }
+            $0.chat.events = { .never }
         }
 
         await store.send(.shown) { $0.showing = .shown }
         await store.receive(\.memoryFailed) { $0.memory = .failed("Couldn't read what's remembered.") }
         #expect(store.state.memoryShown == .note("Couldn't read what's remembered."))
         #expect(!store.state.canForget)
+        await store.send(.hidden) { $0.showing = .hidden }
     }
 }
 

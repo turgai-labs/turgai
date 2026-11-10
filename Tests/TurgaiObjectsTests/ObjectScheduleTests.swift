@@ -71,6 +71,8 @@ struct ObjectScheduleTests {
             let worker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
                 actorSystem: node, activities: ObjectScheduleActivities())
             defer { _ = worker }
+            let (listener, heard) = try await listening(to: AsAPerson.person.space, on: node)
+            defer { _ = listener }
             let objects = try await DynamicObjects.resolve(on: node)
             let identity = try await objects.create(
                 name: "Ticker", spec: .new(try Script(code: Self.ticker, type: "Ticker", uses: Self.uses)))
@@ -87,6 +89,17 @@ struct ObjectScheduleTests {
             // Its property holding none ends it.
             _ = try await ticker.respond("stop", arguments: [:])
             try await eventually("ended") { try await !kept() }
+
+            // Whoever follows its space's tasks is told it's kept, then that it isn't due any more.
+            try await eventually("told") { await heard.notices.count == 2 }
+            #expect(
+                await heard.notices == [
+                    .kept(
+                        KeptTask(
+                            id: .schedule(id), of: .object(identity, field: "tick"), due: .schedule(.every(minutes: 5)),
+                            paused: false, maker: AsAPerson.person.person)),
+                    .ended(.schedule(id)),
+                ])
         }
     }
 

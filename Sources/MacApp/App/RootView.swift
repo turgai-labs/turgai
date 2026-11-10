@@ -59,7 +59,7 @@ struct LoginView: View {
                 .frame(width: 56, height: 56)
                 .foregroundStyle(Color.turgaiAccent)
             Text(form.title)
-                .font(.system(size: 40, weight: .heavy))
+                .font(.largeTitle.weight(.heavy))
                 .foregroundStyle(Color.turgaiInk)
                 .contentTransition(.opacity)
             if let notice = form.notice {
@@ -96,7 +96,7 @@ struct WaitingView: View {
                 .frame(width: 56, height: 56)
                 .foregroundStyle(Color.turgaiAccent)
             Text(connection.title)
-                .font(.system(size: 40, weight: .heavy))
+                .font(.largeTitle.weight(.heavy))
                 .foregroundStyle(Color.turgaiInk)
                 .contentTransition(.opacity)
             Text(connection.message)

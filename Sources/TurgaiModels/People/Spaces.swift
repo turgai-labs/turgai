@@ -15,6 +15,24 @@ public struct Me: Codable, Hashable, Sendable {
     }
 }
 
+/// A space's id, as the API names it.
+public struct SpaceID: Codable, Hashable, Sendable, RawRepresentable {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 /// A space the signed-in person is in, as their list shows it: what it's called, their role,
 /// whether it's in use, and whose it is.
 public struct SpaceSummary: Codable, Hashable, Sendable, Identifiable {
@@ -35,13 +53,13 @@ public struct SpaceSummary: Codable, Hashable, Sendable, Identifiable {
         case made
     }
 
-    public let id: String
+    public let id: SpaceID
     public let name: String
     public let role: Role
     public let status: Status
     public let kind: Kind
 
-    public init(id: String, name: String, role: Role, status: Status, kind: Kind) {
+    public init(id: SpaceID, name: String, role: Role, status: Status, kind: Kind) {
         self.id = id
         self.name = name
         self.role = role
@@ -121,10 +139,10 @@ public struct SpaceInviteListing: Codable, Hashable, Sendable, Identifiable {
 
 /// An invite to a space, as its link writes it: `turgai://join/<space>/<token>`.
 public struct SpaceInviteLink: Hashable, Sendable, CustomStringConvertible {
-    public let spaceID: String
+    public let spaceID: SpaceID
     public let token: String
 
-    public init(spaceID: String, token: String) {
+    public init(spaceID: SpaceID, token: String) {
         self.spaceID = spaceID
         self.token = token
     }
@@ -135,10 +153,10 @@ public struct SpaceInviteLink: Hashable, Sendable, CustomStringConvertible {
         guard words.count == 1, let link = words.first, link.hasPrefix(Self.prefix) else { return nil }
         let parts = link.dropFirst(Self.prefix.count).split(separator: "/", omittingEmptySubsequences: false)
         guard parts.count == 2, UUID(uuidString: String(parts[0])) != nil, !parts[1].isEmpty else { return nil }
-        self.init(spaceID: String(parts[0]), token: String(parts[1]))
+        self.init(spaceID: SpaceID(rawValue: String(parts[0])), token: String(parts[1]))
     }
 
-    public var description: String { Self.prefix + "\(spaceID)/\(token)" }
+    public var description: String { Self.prefix + "\(spaceID.rawValue)/\(token)" }
 
     private static let prefix = "turgai://join/"
 }

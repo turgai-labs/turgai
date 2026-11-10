@@ -129,6 +129,7 @@ public distributed actor Scheduler {
         try await workflows.schedule(
             id: id, recurrence: rule, workflow: ScheduleWorkflow.self, input: entry,
             retryPolicy: ChatSchedule.retryPolicy, overlapPolicy: .skip)
+        await actorSystem.tellTasks(in: chain.scope.space, .kept(KeptTask(entry, id: id, paused: false)))
         let next = try await workflows.describeSchedule(id: id, workflow: ScheduleWorkflow.self)?.nextFireAt
         return ScheduleInChat(name: name, schedule: schedule, then: then, next: next, paused: false)
     }
@@ -204,6 +205,9 @@ public distributed actor Scheduler {
         let workflows = actorSystem.workflows
         try await change(id, workflows)
         let after = try await workflows.describeSchedule(id: id, workflow: ScheduleWorkflow.self)
+        await actorSystem.tellTasks(
+            in: chain.scope.space,
+            after.map { .kept(KeptTask(made, id: id, paused: $0.paused)) } ?? .ended(.schedule(id)))
         return ScheduleInChat(
             name: made.name, schedule: made.schedule, then: made.then, next: after?.nextFireAt,
             paused: after?.paused ?? false)

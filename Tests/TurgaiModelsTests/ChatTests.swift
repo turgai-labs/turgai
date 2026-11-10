@@ -87,11 +87,13 @@ struct ChatTests {
     func pushesAndRepliesRoundTrip() throws {
         let ref = PushRef(rawValue: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!)
         let dinner = ConversationID(rawValue: "dinner")
+        let family = SpaceID(rawValue: "family")
         for ask in [
-            ChatAsk.join(.memory), .leave(.memory), .join(.tasks(space: "family")), .leave(.tasks(space: "family")),
+            ChatAsk.join(.memory), .leave(.memory), .join(.tasks(space: family)), .leave(.tasks(space: family)),
             .memory, .forgetMemory, .setRemembering(.off),
-            .archiveSpace("family"), .unarchiveSpace("family"), .leaveConversation(dinner), .deleteConversation(dinner),
-            .tasks(space: "family"),
+            .archiveSpace(family), .unarchiveSpace(family), .leaveConversation(dinner), .deleteConversation(dinner),
+            .changeSchedule(in: TaskListing.Chat(rawValue: "turgai:dinner"), named: "news", .pause),
+            .cancelReminder(in: TaskListing.Chat(rawValue: "turgai:dinner"), named: "tea"),
         ] {
             let push = ChatCommand.push(ref: ref, ask: ask)
             #expect(try JSONDecoder().decode(ChatCommand.self, from: JSONEncoder().encode(push)) == push)
@@ -104,24 +106,31 @@ struct ChatTests {
         #expect(json["remembering"] as? String == "off")
 
         let memory = MemorySummary(nodes: [.init(name: "home", said: "Haar", children: [])], remembering: .on)
-        let ticker = TaskListing(
-            object: ObjectListing(
-                id: "ticker", title: "ticker", summary: nil, actions: ["stop()"], events: [], node: "127.0.0.1:1",
-                made: nil),
-            schedules: ["tick": "every 5 minutes"], timers: ["alarm": Date(timeIntervalSince1970: 60)])
-        for reply in [
-            ChatReply.ok, .memory(memory), .tasks([ticker]), .tasks([]),
-            .failed(ChatError(code: "push_failed", message: "No")),
-        ] {
+        for reply in [ChatReply.ok, .memory(memory), .failed(ChatError(code: "push_failed", message: "No"))] {
             let event = ChatEvent(payload: .reply(ref: ref, reply: reply))
             #expect(try JSONDecoder().decode(ChatEvent.self, from: JSONEncoder().encode(event)) == event)
         }
         let changed = ChatEvent(payload: .memoryChanged)
         #expect(try JSONDecoder().decode(ChatEvent.self, from: JSONEncoder().encode(changed)) == changed)
         #expect(changed.type.rawValue == "memory.changed")
-        let tasksChanged = ChatEvent(payload: .tasksChanged(space: "family"))
-        #expect(try JSONDecoder().decode(ChatEvent.self, from: JSONEncoder().encode(tasksChanged)) == tasksChanged)
-        #expect(tasksChanged.type.rawValue == "tasks.changed")
+        // A space's tasks come as they are, then each change.
+        let news = TaskListing(
+            id: TaskListing.ID(rawValue: "news"), title: "news", does: "asks for the news",
+            when: .repeating("daily at 08:00 (Europe/Berlin)"), paused: false,
+            kind: .schedule(in: TaskListing.Chat(rawValue: "turgai:dinner"), named: "news"))
+        let alarm = TaskListing(
+            id: TaskListing.ID(rawValue: "alarm"), title: "ticker · alarm", does: nil,
+            when: .once(Date(timeIntervalSince1970: 60)),
+            paused: false, kind: .object)
+        for (payload, type) in [
+            (ChatEvent.Payload.tasks(space: family, tasks: [news, alarm]), "tasks"),
+            (.taskKept(space: family, task: news), "task.kept"),
+            (.taskEnded(space: family, id: alarm.id), "task.ended"),
+        ] {
+            let event = ChatEvent(payload: payload)
+            #expect(try JSONDecoder().decode(ChatEvent.self, from: JSONEncoder().encode(event)) == event)
+            #expect(event.type.rawValue == type)
+        }
         let deleted = ChatEvent(payload: .conversationDeleted(conversationID: dinner))
         #expect(try JSONDecoder().decode(ChatEvent.self, from: JSONEncoder().encode(deleted)) == deleted)
         #expect(deleted.type.rawValue == "conversation.deleted")

@@ -227,18 +227,7 @@ struct ChatFeature {
         case accessAnswered(AccessRequest.ID, AccessAnswer)
         case delegate(Delegate)
 
-        /// What the connection says about the person's conversations and memory, for the window,
-        /// and that it's open again.
         enum Delegate: Equatable {
-            case conversationJoined(Conversation)
-            case conversationSaid(Conversation)
-            case conversationTitled(Conversation)
-            case conversationLeft(ConversationID)
-            case conversationDeleted(ConversationID)
-            /// What's remembered about them changed.
-            case memoryChanged
-            /// What's due for the objects of the space with this id changed.
-            case tasksChanged(String)
             /// The connection is open, again or for the first time: what's joined is joined again.
             case connected
         }
@@ -362,20 +351,10 @@ struct ChatFeature {
 
             case .received(let event):
                 switch event.payload {
-                case .conversationJoined(let conversation):
-                    return .send(.delegate(.conversationJoined(conversation)))
-                case .conversationSaid(let conversation):
-                    return .send(.delegate(.conversationSaid(conversation)))
-                case .conversationTitled(let conversation):
-                    return .send(.delegate(.conversationTitled(conversation)))
-                case .conversationLeft(let id):
-                    return .send(.delegate(.conversationLeft(id)))
-                case .conversationDeleted(let id):
-                    return .send(.delegate(.conversationDeleted(id)))
-                case .memoryChanged:
-                    return .send(.delegate(.memoryChanged))
-                case .tasksChanged(let space):
-                    return .send(.delegate(.tasksChanged(space)))
+                case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft,
+                    .conversationDeleted, .memoryChanged, .tasks, .taskKept, .taskEnded:
+                    // What the sidebar and the profile hear for themselves.
+                    return .none
                 case .reply:
                     // The client hands replies to what pushed them: none comes here.
                     return .none
@@ -514,8 +493,8 @@ struct ChatFeature {
         case .notice(_, _, let error):
             state.error = error
         case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft, .conversationDeleted,
-            .memoryChanged, .tasksChanged, .reply:
-            // Passed on to the window before this, or not the conversation's.
+            .memoryChanged, .tasks, .taskKept, .taskEnded, .reply:
+            // Not the conversation's.
             break
         }
     }
@@ -660,7 +639,7 @@ extension ChatEvent {
             id
         case .notice(let id, _, _):
             id
-        case .reply, .memoryChanged, .tasksChanged:
+        case .reply, .memoryChanged, .tasks, .taskKept, .taskEnded:
             nil
         case .conversationJoined(let conversation), .conversationSaid(let conversation),
             .conversationTitled(let conversation):

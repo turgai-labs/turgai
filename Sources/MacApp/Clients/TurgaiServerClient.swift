@@ -17,19 +17,19 @@ struct TurgaiServerClient: Sendable {
     /// The account's conversations, the one something was last said in first.
     var conversations: @Sendable (Session) async throws -> [Conversation]
     /// A new conversation, in the space `spaceID`, or Turgai's own, with the default bot.
-    var startConversation: @Sendable (Session, _ spaceID: String?) async throws -> Conversation
+    var startConversation: @Sendable (Session, _ spaceID: SpaceID?) async throws -> Conversation
     /// Who's in a conversation: its agent and its people.
     var participants: @Sendable (Session, ConversationID) async throws -> [ParticipantSummary]
     /// Who's in a space, as the account's person sees them.
-    var people: @Sendable (Session, _ spaceID: String) async throws -> [SpacePerson]
+    var people: @Sendable (Session, _ spaceID: SpaceID) async throws -> [SpacePerson]
     /// A conversation called `title` from now on.
     var titleConversation: @Sendable (Session, ConversationID, _ title: String) async throws -> Void
     /// A new space called `name`, the account's person its admin.
     var makeSpace: @Sendable (Session, _ name: String) async throws -> SpaceSummary
     /// A space called `name` from now on.
-    var renameSpace: @Sendable (Session, _ spaceID: String, _ name: String) async throws -> SpaceSummary
+    var renameSpace: @Sendable (Session, _ spaceID: SpaceID, _ name: String) async throws -> SpaceSummary
     /// A new invite to a space, working until it's used.
-    var makeInvite: @Sendable (Session, _ spaceID: String) async throws -> SpaceInviteOffer
+    var makeInvite: @Sendable (Session, _ spaceID: SpaceID) async throws -> SpaceInviteOffer
     /// The space `link` invites to, joined by the account's person.
     var joinSpace: @Sendable (Session, SpaceInviteLink) async throws -> SpaceSummary
 }
@@ -69,12 +69,13 @@ extension TurgaiServerClient: DependencyKey {
             spaces: { try await api("GET", "api/v1/spaces", as: $0) },
             conversations: { try await api("GET", "api/v1/conversations", as: $0) },
             startConversation: { session, space in
-                try await api("POST", "api/v1/conversations", body: CreateConversationRequest(spaceID: space), as: session)
+                try await api(
+                    "POST", "api/v1/conversations", body: CreateConversationRequest(spaceID: space), as: session)
             },
             participants: { session, id in
                 try await api("GET", "api/v1/conversations/\(id.rawValue)/participants", as: session)
             },
-            people: { session, space in try await api("GET", "api/v1/spaces/\(space)/people", as: session) },
+            people: { session, space in try await api("GET", "api/v1/spaces/\(space.rawValue)/people", as: session) },
             titleConversation: { session, id, title in
                 _ = try await request(
                     "PATCH", "api/v1/conversations/\(id.rawValue)", body: TitleConversationRequest(title: title),
@@ -84,15 +85,17 @@ extension TurgaiServerClient: DependencyKey {
                 try await api("POST", "api/v1/spaces", body: MakeSpaceRequest(name: name), as: session)
             },
             renameSpace: { session, space, name in
-                try await api("PATCH", "api/v1/spaces/\(space)", body: RenameSpaceRequest(name: name), as: session)
+                try await api(
+                    "PATCH", "api/v1/spaces/\(space.rawValue)", body: RenameSpaceRequest(name: name), as: session)
             },
             makeInvite: { session, space in
                 try await api(
-                    "POST", "api/v1/spaces/\(space)/invites", body: MakeInviteRequest(validForDays: nil), as: session)
+                    "POST", "api/v1/spaces/\(space.rawValue)/invites", body: MakeInviteRequest(validForDays: nil),
+                    as: session)
             },
             joinSpace: { session, link in
                 try await api(
-                    "POST", "api/v1/spaces/\(link.spaceID)/join", body: JoinSpaceRequest(token: link.token),
+                    "POST", "api/v1/spaces/\(link.spaceID.rawValue)/join", body: JoinSpaceRequest(token: link.token),
                     as: session)
             }
         )

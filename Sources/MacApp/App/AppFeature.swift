@@ -191,16 +191,16 @@ struct AppFeature {
 
     var body: some ReducerOf<Self> {
         BindingReducer()
-        Scope(state: \.sidebar, action: \.sidebar) {
+        Scope(\.sidebar, action: \.sidebar) {
             SidebarFeature()
         }
-        Scope(state: \.chat, action: \.chat) {
+        Scope(\.chat, action: \.chat) {
             ChatFeature()
         }
-        Scope(state: \.objects, action: \.objects) {
+        Scope(\.objects, action: \.objects) {
             ObjectsFeature()
         }
-        Scope(state: \.profile, action: \.profile) {
+        Scope(\.profile, action: \.profile) {
             ProfileFeature()
         }
         Reduce(relay)
@@ -209,25 +209,14 @@ struct AppFeature {
     /// What `action` does to the app beyond its features' own: what one says to another.
     private func relay(_ state: inout State, _ action: Action) -> Effect<Action> {
         switch action {
-        // The sidebar says what the chat shows; the chat's connection says how the sidebar changes.
+        // The sidebar says what the chat shows; the chat's connection being open again, what the
+        // profile reads again.
         case .sidebar(.delegate(.open(let id))):
             return .send(.chat(.open(id, in: state.sidebar.space(of: id))))
         case .sidebar(.delegate(.close(let space))):
             return .send(.chat(.close(in: space)))
         case .sidebar(.delegate(.spaceChanged(let space))):
             return .send(.chat(.spaceChanged(space)))
-        case .chat(.delegate(.conversationJoined(let conversation))):
-            return .send(.sidebar(.conversationJoined(conversation)))
-        case .chat(.delegate(.conversationSaid(let conversation))):
-            return .send(.sidebar(.conversationSaid(conversation)))
-        case .chat(.delegate(.conversationTitled(let conversation))):
-            return .send(.sidebar(.conversationTitled(conversation)))
-        case .chat(.delegate(.conversationLeft(let id))), .chat(.delegate(.conversationDeleted(let id))):
-            return .send(.sidebar(.conversationLeft(id)))
-        case .chat(.delegate(.memoryChanged)):
-            return .send(.profile(.memoryChanged))
-        case .chat(.delegate(.tasksChanged(let space))):
-            return .send(.sidebar(.tasks(.changed(space))))
         case .chat(.delegate(.connected)):
             return .send(.profile(.connected))
 

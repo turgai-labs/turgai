@@ -245,7 +245,9 @@ struct ChatFeatureTests {
             return (store.state.draft, store.state.draftSelection)
         }
 
-        let (atCursor, cursor) = await typing(into: "ab") { TextSelection(insertionPoint: $0.index(after: $0.startIndex)) }
+        let (atCursor, cursor) = await typing(into: "ab") {
+            TextSelection(insertionPoint: $0.index(after: $0.startIndex))
+        }
         #expect(atCursor == "a\nb")
         #expect(cursor == TextSelection(insertionPoint: atCursor.index(atCursor.startIndex, offsetBy: 2)))
 

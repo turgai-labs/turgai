@@ -499,6 +499,9 @@ public distributed actor Conversation {
         try await changing { if let joined = state.admitting(person) { try await emit(event: joined) } }
     }
 
+    /// The space it's in: none until it has started.
+    package distributed var spaceID: SpaceID? { state.space }
+
     /// Its space: who's in it, and what its admins allow. Refused until it has started.
     private func space() async throws -> Space {
         guard let space = state.space else { throw ConversationRefusal.notStarted }

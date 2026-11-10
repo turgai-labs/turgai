@@ -1,4 +1,5 @@
 import DistributedCluster
+import DurableWorkflows
 import Foundation
 import Hail
 import TurgaiCalls
@@ -332,53 +333,112 @@ public actor TurgaiWebChatBridge {
         return try await CallChain.$current.withValue(.start(scope, in: nil)) { try await runtime.objectCatalog.entries() }
     }
 
-    /// The objects made in `space` that `person` may read, as they list them there, each with what
-    /// the runtime keeps due for it: those it keeps nothing for aren't among them.
-    public func objects(withWorkIn space: SpaceID, listedTo person: TurgaiDomain.UserID) async throws
-        -> [(entry: ObjectEntry, work: [ObjectDueListing])]
-    {
+    /// `person`'s tasks in `space`, those they may change, as they are now; then each change to them,
+    /// through `onNotice`, for as long as the returned listener lives. Refused when `person` isn't
+    /// in the space.
+    public func followTasks(
+        in space: SpaceID, of person: TurgaiDomain.UserID,
+        onNotice: @escaping @Sendable (TasksNotice) async -> Void
+    ) async throws -> (listener: TasksListener, tasks: [KeptTask]) {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
         let system = runtime.actorSystem
         let scope = try await Space.resolve(on: system, id: space).scope(of: person)
-        let kept = Dictionary(grouping: try await objectDues(on: system).dues(in: space), by: \.object)
-        return try await CallChain.$current.withValue(.start(scope, in: nil)) {
-            try await DynamicObjects.resolve(on: system).held(in: space).compactMap { entry in
-                guard let identity = DynamicObject.identity(of: entry.object.id), let work = kept[identity] else {
-                    return nil
-                }
-                return (entry, work)
+        // Whoever may change a task sees it: whoever made it, and the space's admins.
+        let sees: @Sendable (KeptTask) -> Bool = { $0.maker == scope.person || scope.role == .admin }
+        // Following first, so no change between this and what's read now is missed.
+        let listener = await TasksListener(actorSystem: system, following: space) { notice in
+            if case .kept(let task) = notice, !sees(task) { return }
+            await onNotice(notice)
+        }
+        return (listener, try await Self.tasks(in: space, on: system).filter(sees))
+    }
+
+    /// `change` to the chat `chat`'s schedule `name`, on behalf of `person`: refused unless they made
+    /// it, or are an admin of the chat's space.
+    public func changeSchedule(
+        _ change: Conversation.TaskChange, named name: String, in chat: ConversationID, by person: TurgaiDomain.UserID
+    ) async throws {
+        try await inChat(chat, as: person) { system in
+            let scheduler = try await Scheduler.resolve(on: system)
+            switch change {
+            case .pause: _ = try await scheduler.pause(name: name)
+            case .resume: _ = try await scheduler.resume(name: name)
+            case .cancel: _ = try await scheduler.cancel(name: name)
             }
         }
     }
 
-    /// Told, through `onChange`, as what's due in `space` changes, until `unfollowObjectDues`: the
-    /// listener the object due directory tells. Refused when `person` isn't in it.
-    public func followObjectDues(
-        in space: SpaceID, of person: TurgaiDomain.UserID, onChange: @escaping @Sendable () async -> Void
-    ) async throws -> ObjectDueListener {
+    /// The chat `chat`'s reminder `name` cancelled, on behalf of `person`: refused unless they set
+    /// it, or are an admin of the chat's space.
+    public func cancelReminder(named name: String, in chat: ConversationID, by person: TurgaiDomain.UserID)
+        async throws
+    {
+        try await inChat(chat, as: person) { _ = try await Timers.resolve(on: $0).cancel(name: name) }
+    }
+
+    /// `act` on behalf of `person`, in the chat `chat`, as they are in its space.
+    private func inChat(
+        _ chat: ConversationID, as person: TurgaiDomain.UserID, _ act: (ClusterSystem) async throws -> Void
+    ) async throws {
         guard let runtime else {
             throw TurgaiWebChatBridgeError.runtimeUnavailable
         }
         let system = runtime.actorSystem
-        _ = try await Space.resolve(on: system, id: space).scope(of: person)
-        let listener = ObjectDueListener(actorSystem: system, onChange: onChange)
-        try await objectDues(on: system).follow(space, with: listener)
-        return listener
-    }
-
-    /// `listener` no longer told what's due changed.
-    public func unfollowObjectDues(_ listener: ObjectDueListener) async throws {
-        guard let runtime else {
-            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        guard let space = try await Conversation.resolve(on: system, conversationID: chat).spaceID else {
+            throw ConversationRefusal.notStarted
         }
-        try await objectDues(on: runtime.actorSystem).unfollow(listener)
+        let scope = try await Space.resolve(on: system, id: space).scope(of: person)
+        try await CallChain.$current.withValue(.start(scope, in: chat)) { try await act(system) }
     }
 
-    /// The cluster's object due directory.
-    private func objectDues(on system: ClusterSystem) async throws -> ObjectDueDirectory {
-        try await system.singleton.proxy(ObjectDueDirectory.self, name: ObjectDueDirectory.singletonName)
+    /// What's kept due in `space` now: its chats' schedules and timers, and its objects'.
+    private static func tasks(in space: SpaceID, on system: ClusterSystem) async throws -> [KeptTask] {
+        let workflows = system.workflows
+        let decoder = JSONDecoder()
+        var tasks: [KeptTask] = []
+        for schedule in try await workflows.listSchedules(workflow: ObjectScheduleWorkflow.self) {
+            guard let firing = try? decoder.decode(ObjectFiring.self, from: schedule.inputData), firing.space == space
+            else { continue }
+            tasks.append(
+                KeptTask(
+                    id: .schedule(schedule.id), of: .object(firing.object, field: firing.property), due: firing.due,
+                    paused: schedule.paused, maker: firing.maker))
+        }
+        for timer in try await workflows.listWorkflows(workflow: ObjectTimerWorkflow.self) {
+            guard case .running = timer.status, let data = timer.inputData,
+                let firing = try? decoder.decode(ObjectFiring.self, from: data), firing.space == space
+            else { continue }
+            tasks.append(
+                KeptTask(
+                    id: .timer(timer.id), of: .object(firing.object, field: firing.property), due: firing.due,
+                    paused: false, maker: firing.maker))
+        }
+        // A chat's are in its space: found from the chats of whoever made them.
+        var chats: [KeptTask] = []
+        for schedule in try await workflows.listSchedules(workflow: ScheduleWorkflow.self) {
+            guard let made = try? decoder.decode(ChatSchedule.self, from: schedule.inputData) else { continue }
+            chats.append(KeptTask(made, id: schedule.id, paused: schedule.paused))
+        }
+        for timer in try await workflows.listWorkflows(workflow: TimerWorkflow.self) {
+            guard case .running = timer.status, let data = timer.inputData,
+                let made = try? decoder.decode(ChatTimer.self, from: data)
+            else { continue }
+            chats.append(KeptTask(made, id: timer.id))
+        }
+        let directory = try await system.singleton.proxy(
+            ConversationDirectory.self, name: ConversationDirectory.singletonName)
+        var inSpace: Set<ConversationID> = []
+        for maker in Set(chats.map(\.maker)) {
+            for chat in try await directory.conversations(of: maker) where chat.space == space {
+                inSpace.insert(chat.id)
+            }
+        }
+        return tasks
+            + chats.filter { task in
+                if case .chat(let chat, _, _) = task.of { inSpace.contains(chat) } else { false }
+            }
     }
 
     /// Shares the object made here as `identity` with everyone, as far as `level`, or takes their

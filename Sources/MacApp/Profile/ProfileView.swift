@@ -21,7 +21,7 @@ struct ProfileView: View {
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(ProfileField())
-        .alert($store.scope(state: \.alert, action: \.alert))
+        .alert($store.scope(\.$alert, action: \.alert))
         .onAppear { store.send(.shown) }
         .onDisappear { store.send(.hidden) }
         .onChange(of: store.isSignedIn) { _, isSignedIn in
@@ -38,12 +38,12 @@ private struct ProfileHeading: View {
     var body: some View {
         HStack(spacing: 16) {
             Text(initial)
-                .font(.system(size: 26, weight: .heavy))
+                .font(.largeTitle.weight(.heavy))
                 .foregroundStyle(Color.inkOnSignal)
                 .frame(width: 56, height: 56)
                 .background(StampBackground(color: .bubbleYours, lean: Lean(degrees: 4)))
             Text(name)
-                .font(.system(size: 30, weight: .heavy).width(.condensed))
+                .font(.largeTitle.weight(.heavy).width(.condensed))
                 .tracking(-0.3)
                 .lineLimit(1)
                 .foregroundStyle(Color.turgaiInk)
@@ -66,7 +66,7 @@ private struct MemorySection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Remembered about you")
-                .font(.system(size: 15, weight: .bold))
+                .font(.title3.weight(.bold))
                 .foregroundStyle(Color.turgaiInk)
             Toggle(isOn: $remembers) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -111,11 +111,11 @@ private struct MemoryLineView: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(line.name)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(line.said == nil ? Color.turgaiInk : Color.turgaiMuted)
             if let said = line.said {
                 Text(said)
-                    .font(.system(size: 13))
+                    .font(.body)
                     .foregroundStyle(Color.turgaiInk)
                     .textSelection(.enabled)
             }

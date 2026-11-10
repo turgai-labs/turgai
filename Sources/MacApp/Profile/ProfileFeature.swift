@@ -97,9 +97,10 @@ struct ProfileFeature {
         /// Someone's signed in as `session`: who they are is read.
         case appeared(Session)
         case meLoaded(Me)
-        /// The profile is shown: it joins their memory, and reads it.
+        /// The profile is shown: it joins their memory and reads it, and reads it again as it
+        /// changes, until it's closed.
         case shown
-        /// The profile is closed: it leaves their memory.
+        /// The profile is closed.
         case hidden
         /// What's remembered changed: it's read again, while it's shown.
         case memoryChanged
@@ -123,6 +124,8 @@ struct ProfileFeature {
         }
     }
 
+    private enum CancelID { case memory }
+
     @Dependency(\.server) var server
     @Dependency(\.chat) var chat
 
@@ -142,19 +145,26 @@ struct ProfileFeature {
             case .shown:
                 state.showing = .shown
                 state.memory = .reading
-                // Joined before it's read, so no change between the two goes unheard.
                 return .run { send in
+                    // Listened to before it's joined, and joined before it's read, so no change in
+                    // between goes unheard.
+                    let heard = await chat.events()
                     do {
                         try await chat.perform(.join(.memory))
                         await send(.memoryLoaded(try await chat.memory()))
                     } catch {
                         await send(.memoryFailed("Couldn't read what's remembered."))
                     }
+                    for await event in heard {
+                        if case .memoryChanged = event.payload { await send(.memoryChanged) }
+                    }
+                    try? await chat.perform(.leave(.memory))
                 }
+                .cancellable(id: CancelID.memory, cancelInFlight: true)
 
             case .hidden:
                 state.showing = .hidden
-                return .run { _ in try? await chat.perform(.leave(.memory)) }
+                return .cancel(id: CancelID.memory)
 
             case .memoryChanged, .connected:
                 guard state.showing == .shown else { return .none }

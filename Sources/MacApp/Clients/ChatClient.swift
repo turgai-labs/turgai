@@ -9,6 +9,9 @@ struct ChatClient: Sendable {
     /// Opens the signed-in account's one connection, showing no conversation until one is opened
     /// on it. The stream ends when the socket closes; replies never come in it.
     var connect: @Sendable (Session) async -> AsyncThrowingStream<ChatEvent, any Error> = { _ in .finished() }
+    /// What the connection hears, but replies, from whichever connection is open, until the one
+    /// listening stops: a connection made again doesn't end it.
+    var events: @Sendable () async -> AsyncStream<ChatEvent> = { .finished }
     /// Sends what the window asks on the open connection: a conversation to show, a message to it,
     /// or an answer to an access request.
     var send: @Sendable (ChatCommand) async throws -> Void
@@ -36,7 +39,7 @@ extension ChatClient {
         switch try await self.ask(ask) {
         case .ok: return
         case .failed(let error): throw ChatSocketError.failed(error)
-        case .memory, .tasks: throw ChatSocketError.refused
+        case .memory: throw ChatSocketError.refused
         }
     }
 
@@ -45,16 +48,6 @@ extension ChatClient {
         guard case .memory(let summary) = try await ask(.memory) else { throw ChatSocketError.refused }
         return summary
     }
-
-    /// The objects of the space `space` the runtime keeps something due for, as the person may read
-    /// them.
-    func tasks(in space: String) async throws -> [TaskListing] {
-        switch try await ask(.tasks(space: space)) {
-        case .tasks(let tasks): return tasks
-        case .failed(let error): throw ChatSocketError.failed(error)
-        case .ok, .memory: throw ChatSocketError.refused
-        }
-    }
 }
 
 extension ChatClient: DependencyKey {
@@ -62,6 +55,7 @@ extension ChatClient: DependencyKey {
         let socket = ChatSocket(baseURL: LocalServer.baseURL)
         return ChatClient(
             connect: { await socket.connect($0) },
+            events: { await socket.events() },
             send: { try await socket.send($0) },
             ask: { try await socket.ask($0) },
             disconnect: { await socket.disconnect() }
@@ -84,6 +78,8 @@ private actor ChatSocket {
     private var waiting: [PushRef: CheckedContinuation<ChatReply, any Error>] = [:]
     /// The topics joined, joined again on each new connection, as Phoenix's client rejoins.
     private var joined: Set<ChatTopic> = []
+    /// Who listens to what's heard, while they listen.
+    private var listeners: [UUID: AsyncStream<ChatEvent>.Continuation] = [:]
     /// How long a push waits for its reply.
     private static let replyTimeout: Duration = .seconds(10)
 
@@ -115,6 +111,7 @@ private actor ChatSocket {
                             self.answer(ref, with: .success(reply))
                         } else {
                             continuation.yield(event)
+                            self.tell(event)
                         }
                     }
                     continuation.finish()
@@ -130,6 +127,23 @@ private actor ChatSocket {
         }
     }
 
+    /// What's heard from now on, until the stream's dropped.
+    func events() -> AsyncStream<ChatEvent> {
+        let (events, continuation) = AsyncStream.makeStream(of: ChatEvent.self)
+        let listener = UUID()
+        listeners[listener] = continuation
+        continuation.onTermination = { _ in Task { await self.stopListening(listener) } }
+        return events
+    }
+
+    private func tell(_ event: ChatEvent) {
+        for listener in listeners.values { listener.yield(event) }
+    }
+
+    private func stopListening(_ listener: UUID) {
+        listeners[listener] = nil
+    }
+
     func send(_ command: ChatCommand) async throws {
         guard let task else { throw URLError(.notConnectedToInternet) }
         let data = try JSONEncoder().encode(command)
@@ -141,7 +155,7 @@ private actor ChatSocket {
         case .join(let topic): joined.insert(topic)
         case .leave(let topic): joined.remove(topic)
         case .memory, .forgetMemory, .setRemembering, .archiveSpace, .unarchiveSpace, .leaveConversation,
-            .deleteConversation, .tasks:
+            .deleteConversation, .changeSchedule, .cancelReminder:
             break
         }
         let ref = PushRef()

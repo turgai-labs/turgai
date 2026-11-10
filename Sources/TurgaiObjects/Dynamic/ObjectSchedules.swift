@@ -189,6 +189,10 @@ public struct ObjectScheduleActivities {
         try await CallChain.$current.withValue(.own(DynamicObject.callActor(for: input.object), for: scope, in: nil)) {
             try await DynamicObject.resolve(on: context.system, identity: input.object).fired(input.property)
         }
+        // A timer is due once: done, it isn't one any more.
+        if case .timer = input.due {
+            await context.system.tellTasks(in: input.space, .ended(.timer(context.workflowID)))
+        }
         return DurableVoid()
     }
 }
