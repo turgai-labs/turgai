@@ -110,6 +110,8 @@ private struct SidebarDialogs: ViewModifier {
                     sections: store.spaceSections, note: store.spacesNote,
                     search: $store.search.sending(\.searchChanged), pick: { store.send(.spacePicked($0)) },
                     submit: { store.send(.searchSubmitted) }, done: { store.send(.dialogPresented(false)) })
+            case .tasks(let tasks)?:
+                TasksSheet(tasks: tasks, done: { store.send(.dialogPresented(false)) })
             case nil:
                 EmptyView()
             }
@@ -523,6 +525,7 @@ private struct ConversationColumn: View {
             Rectangle().fill(Color.turgaiInk.opacity(0.15)).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
+                    TasksLine { store.send(.tasks(.tapped)) }
                     ForEach(store.entries) { (entry: SidebarFeature.Entry) in
                         ConversationLine(entry: entry, hue: store.shownSpaceHue) { store.send(.selected(entry.id)) }
                             .contextMenu {
@@ -542,6 +545,60 @@ private struct ConversationColumn: View {
                 Text(error).font(.callout).foregroundStyle(Color.turgaiAccent).padding(12)
             }
         }
+    }
+}
+
+/// Tasks, above the shown space's conversations: what in it has something due.
+private struct TasksLine: View {
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            Label("Tasks", systemImage: "clock")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.turgaiInk)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// A space's tasks: each object in it with something due, with what's due; or, instead, that
+/// they're being read, that there are none, or why they couldn't be read.
+private struct TasksSheet: View {
+    let tasks: SidebarFeature.Tasks
+    let done: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(tasks.title).font(.headline)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    ForEach(tasks.rows) { (row: SidebarFeature.TaskRow) in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.title).font(.body.weight(.semibold)).foregroundStyle(Color.turgaiInk)
+                            ForEach(row.lines, id: \.self) { line in
+                                Text(line).font(.callout).foregroundStyle(Color.turgaiMuted)
+                            }
+                        }
+                    }
+                    if let note = tasks.note {
+                        Text(note).foregroundStyle(Color.turgaiMuted)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: 300)
+            HStack {
+                Spacer()
+                Button("Done", action: done).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
     }
 }
 

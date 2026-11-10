@@ -332,6 +332,55 @@ public actor TurgaiWebChatBridge {
         return try await CallChain.$current.withValue(.start(scope, in: nil)) { try await runtime.objectCatalog.entries() }
     }
 
+    /// The objects made in `space` that `person` may read, as they list them there, each with what
+    /// the runtime keeps due for it: those it keeps nothing for aren't among them.
+    public func objects(withWorkIn space: SpaceID, listedTo person: TurgaiDomain.UserID) async throws
+        -> [(entry: ObjectEntry, work: [ObjectDueListing])]
+    {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let system = runtime.actorSystem
+        let scope = try await Space.resolve(on: system, id: space).scope(of: person)
+        let kept = Dictionary(grouping: try await objectDues(on: system).dues(in: space), by: \.object)
+        return try await CallChain.$current.withValue(.start(scope, in: nil)) {
+            try await DynamicObjects.resolve(on: system).held(in: space).compactMap { entry in
+                guard let identity = DynamicObject.identity(of: entry.object.id), let work = kept[identity] else {
+                    return nil
+                }
+                return (entry, work)
+            }
+        }
+    }
+
+    /// Told, through `onChange`, as what's due in `space` changes, until `unfollowObjectDues`: the
+    /// listener the object due directory tells. Refused when `person` isn't in it.
+    public func followObjectDues(
+        in space: SpaceID, of person: TurgaiDomain.UserID, onChange: @escaping @Sendable () async -> Void
+    ) async throws -> ObjectDueListener {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        let system = runtime.actorSystem
+        _ = try await Space.resolve(on: system, id: space).scope(of: person)
+        let listener = ObjectDueListener(actorSystem: system, onChange: onChange)
+        try await objectDues(on: system).follow(space, with: listener)
+        return listener
+    }
+
+    /// `listener` no longer told what's due changed.
+    public func unfollowObjectDues(_ listener: ObjectDueListener) async throws {
+        guard let runtime else {
+            throw TurgaiWebChatBridgeError.runtimeUnavailable
+        }
+        try await objectDues(on: runtime.actorSystem).unfollow(listener)
+    }
+
+    /// The cluster's object due directory.
+    private func objectDues(on system: ClusterSystem) async throws -> ObjectDueDirectory {
+        try await system.singleton.proxy(ObjectDueDirectory.self, name: ObjectDueDirectory.singletonName)
+    }
+
     /// Shares the object made here as `identity` with everyone, as far as `level`, or takes their
     /// access away, on behalf of `person` in Turgai's own space: refused unless they may change it.
     public func share(

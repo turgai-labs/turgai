@@ -15,9 +15,24 @@ public struct PushRef: Codable, Hashable, Sendable {
 
 /// What a connection can hear about besides the conversation it shows: once it joins one, it's
 /// told as it changes, until it leaves.
-public enum ChatTopic: String, Codable, Hashable, Sendable {
+public enum ChatTopic: Hashable, Sendable {
     /// What's remembered about the person, and whether they're remembered.
     case memory
+    /// What the runtime keeps due for the objects of the space with this id.
+    case tasks(space: String)
+
+    /// What it is, as the socket names it.
+    enum Name: String, Codable {
+        case memory
+        case tasks
+    }
+
+    var name: Name {
+        switch self {
+        case .memory: .memory
+        case .tasks: .tasks
+        }
+    }
 }
 
 /// What a connection asks, each answered by a reply.
@@ -40,6 +55,9 @@ public enum ChatAsk: Equatable, Sendable {
     case leaveConversation(ConversationID)
     /// The conversation deleted for everyone: by the only person in it, or an admin of its space.
     case deleteConversation(ConversationID)
+    /// The objects of the space with this id that the runtime keeps something due for, as the asker
+    /// may read them.
+    case tasks(space: String)
 }
 
 /// The answer to a push.
@@ -48,6 +66,8 @@ public enum ChatReply: Equatable, Sendable {
     case ok
     /// What's remembered about the person.
     case memory(MemorySummary)
+    /// A space's objects the runtime keeps something due for.
+    case tasks([TaskListing])
     /// It couldn't be done, and why.
     case failed(ChatError)
 }
@@ -64,6 +84,7 @@ extension ChatAsk {
         case unarchiveSpace = "space.unarchive"
         case leaveConversation = "conversation.leave"
         case deleteConversation = "conversation.delete"
+        case tasks = "space.tasks"
     }
 
     var name: Name {
@@ -77,6 +98,7 @@ extension ChatAsk {
         case .unarchiveSpace: .unarchiveSpace
         case .leaveConversation: .leaveConversation
         case .deleteConversation: .deleteConversation
+        case .tasks: .tasks
         }
     }
 }

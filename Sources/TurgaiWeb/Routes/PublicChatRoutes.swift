@@ -770,18 +770,40 @@ private actor JoinedTopics {
     }
 }
 
-/// `person` told about `topic` on the connection `writer` writes to, as it changes, until the
+/// What a connection follows, its topic read: a space's tasks by the space's id.
+private enum Following {
+    case memory
+    case tasks(SpaceID)
+
+    /// `topic`, read: none when the space it names isn't one.
+    init?(_ topic: TurgaiModels.ChatTopic) {
+        switch topic {
+        case .memory:
+            self = .memory
+        case .tasks(let space):
+            guard let id = UUID(uuidString: space) else { return nil }
+            self = .tasks(SpaceID(rawValue: id))
+        }
+    }
+}
+
+/// `person` told about `following` on the connection `writer` writes to, as it changes, until the
 /// returned function is called.
 private func follow(
-    _ topic: TurgaiModels.ChatTopic, for person: TurgaiDomain.UserID, writer: PublicChatSocketWriter,
+    _ following: Following, for person: TurgaiDomain.UserID, writer: PublicChatSocketWriter,
     bridge: TurgaiWebChatBridge
 ) async throws -> @Sendable () async -> Void {
-    switch topic {
+    switch following {
     case .memory:
         let listener = try await bridge.followMemory(of: person) {
             try? await writer.write(.init(payload: .memoryChanged))
         }
         return { try? await bridge.unfollowMemory(listener) }
+    case .tasks(let space):
+        let listener = try await bridge.followObjectDues(in: space, of: person) {
+            try? await writer.write(.init(payload: .tasksChanged(space: space.rawValue.uuidString)))
+        }
+        return { try? await bridge.unfollowObjectDues(listener) }
     }
 }
 
@@ -794,7 +816,8 @@ private func answer(
     do {
         switch ask {
         case .join(let topic):
-            try await topics.join(topic) { try await follow(topic, for: person, writer: writer, bridge: bridge) }
+            guard let following = Following(topic) else { return .failed(notASpace) }
+            try await topics.join(topic) { try await follow(following, for: person, writer: writer, bridge: bridge) }
             return .ok
         case .leave(let topic):
             await topics.leave(topic)
@@ -823,6 +846,12 @@ private func answer(
         case .deleteConversation(let conversation):
             try await bridge.delete(domainID(of: conversation), by: person)
             return .ok
+        case .tasks(let space):
+            guard let id = UUID(uuidString: space) else { return .failed(notASpace) }
+            return .tasks(
+                try await bridge.objects(withWorkIn: SpaceID(rawValue: id), listedTo: person).map { entry, work in
+                    TaskListing(entry, work: work)
+                })
         }
     } catch let refusal as SpaceRefusal {
         return .failed(TurgaiModels.ChatError(code: "refused", message: refusal.description))
@@ -1804,6 +1833,21 @@ struct PublicAPIAuthorization<Context: RequestContext>: RouterMiddleware {
     ) async throws -> Response {
         guard configuration.authorizes(request) else { return publicAPIUnauthorizedResponse() }
         return try await next(request, context)
+    }
+}
+
+extension TaskListing {
+    /// The object `entry` lists, with `work`, what the runtime keeps due for it, as the API lists it.
+    fileprivate init(_ entry: ObjectEntry, work: [ObjectDueListing]) {
+        var schedules: [String: String] = [:]
+        var timers: [String: Date] = [:]
+        for listing in work {
+            switch listing.due {
+            case .schedule(let schedule): schedules[listing.property] = schedule.described
+            case .timer(let timer): timers[listing.property] = timer.date
+            }
+        }
+        self.init(object: ObjectListing(entry), schedules: schedules, timers: timers)
     }
 }
 

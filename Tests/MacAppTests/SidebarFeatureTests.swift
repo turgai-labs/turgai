@@ -427,6 +427,62 @@ struct SidebarFeatureTests {
         await store.finish()
     }
 
+    /// Tasks lists the shown space's objects with something due, each with what's due, following
+    /// their changes while it's shown; or that there are none, or why they couldn't be read.
+    @Test
+    func tasksListsWhatWorksOnItsOwn() async {
+        let asked = LockIsolated<[ChatAsk]>([])
+        let ticker = TaskListing(
+            object: ObjectListing(
+                id: "ticker", title: "ticker", summary: nil, actions: [], events: [], node: "127.0.0.1:1", made: nil),
+            schedules: ["tick": "every 5 minutes"], timers: [:])
+        var state = SidebarFeature.State()
+        state.spaces = [turgai]
+        let store = TestStore(initialState: state) {
+            SidebarFeature()
+        } withDependencies: {
+            $0.chat.ask = { ask in
+                asked.withValue { $0.append(ask) }
+                switch ask {
+                case .join, .leave: return .ok
+                default:
+                    let reads = asked.value.filter { $0 == .tasks(space: "turgai") }.count
+                    guard reads < 3 else { return .failed(ChatError(code: "refused", message: "No.")) }
+                    return .tasks(reads == 1 ? [ticker] : [])
+                }
+            }
+        }
+
+        await store.send(.tasks(.tapped)) { $0.dialog = .tasks(.init(spaceID: "turgai", spaceName: "Turgai")) }
+        await store.receive(\.tasks.read) {
+            $0.dialog = .tasks(.init(spaceID: "turgai", spaceName: "Turgai", listing: .read([ticker])))
+        }
+        guard case .tasks(let tasks) = store.state.dialog else { return }
+        #expect(tasks.title == "Tasks in Turgai")
+        #expect(tasks.rows.map(\.lines) == [["tick · every 5 minutes"]])
+        #expect(tasks.note == nil)
+        let none = SidebarFeature.Tasks(spaceID: "turgai", spaceName: "Turgai", listing: .read([]))
+        #expect(none.note == "Nothing here is due.")
+
+        // A change in another space reads nothing; one in this space reads them again.
+        await store.send(.tasks(.changed("family")))
+        await store.send(.tasks(.changed("turgai")))
+        await store.receive(\.tasks.read) {
+            $0.dialog = .tasks(.init(spaceID: "turgai", spaceName: "Turgai", listing: .read([])))
+        }
+        await store.send(.dialogPresented(false)) { $0.dialog = nil }
+        await store.send(.tasks(.tapped)) { $0.dialog = .tasks(.init(spaceID: "turgai", spaceName: "Turgai")) }
+        await store.receive(\.tasks.failed) {
+            $0.dialog = .tasks(.init(spaceID: "turgai", spaceName: "Turgai", listing: .failed("No.")))
+        }
+        await store.finish()
+        #expect(
+            asked.value == [
+                .join(.tasks(space: "turgai")), .tasks(space: "turgai"), .tasks(space: "turgai"),
+                .leave(.tasks(space: "turgai")), .join(.tasks(space: "turgai")), .tasks(space: "turgai"),
+            ])
+    }
+
     /// Spaces, or ⌘K, lists every space, those in use first; what's written finds them by name, and
     /// Return shows the first found.
     @Test

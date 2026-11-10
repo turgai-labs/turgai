@@ -129,9 +129,19 @@ public distributed actor DynamicObjects {
     /// The objects made here by name that the call may read, as they're listed and found: each as
     /// its type and what it was made for say, without asking the objects.
     public distributed func held() async throws -> [ObjectEntry] {
+        try await listing(state.entries)
+    }
+
+    /// The objects made in `space` that the call may read, as `held()` lists them.
+    public distributed func held(in space: SpaceID) async throws -> [ObjectEntry] {
+        try await listing(state.entries.filter { $0.maker.space == space })
+    }
+
+    /// Those of `entries` the call may read, each as its type and what it was made for say.
+    private func listing(_ entries: [DynamicObjectsState.Entry]) async throws -> [ObjectEntry] {
         let reader = try caller()
         var held: [ObjectEntry] = []
-        for entry in state.entries where entry.access.allows(reader, .read) {
+        for entry in entries where entry.access.allows(reader, .read) {
             guard let code = state.types[entry.type] else { continue }
             let spec = try code.spec(description: entry.description)
             let object = try await object(entry.identity)

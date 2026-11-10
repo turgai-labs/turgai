@@ -36,7 +36,7 @@ extension ChatClient {
         switch try await self.ask(ask) {
         case .ok: return
         case .failed(let error): throw ChatSocketError.failed(error)
-        case .memory: throw ChatSocketError.refused
+        case .memory, .tasks: throw ChatSocketError.refused
         }
     }
 
@@ -44,6 +44,16 @@ extension ChatClient {
     func memory() async throws -> MemorySummary {
         guard case .memory(let summary) = try await ask(.memory) else { throw ChatSocketError.refused }
         return summary
+    }
+
+    /// The objects of the space `space` the runtime keeps something due for, as the person may read
+    /// them.
+    func tasks(in space: String) async throws -> [TaskListing] {
+        switch try await ask(.tasks(space: space)) {
+        case .tasks(let tasks): return tasks
+        case .failed(let error): throw ChatSocketError.failed(error)
+        case .ok, .memory: throw ChatSocketError.refused
+        }
     }
 }
 
@@ -131,7 +141,7 @@ private actor ChatSocket {
         case .join(let topic): joined.insert(topic)
         case .leave(let topic): joined.remove(topic)
         case .memory, .forgetMemory, .setRemembering, .archiveSpace, .unarchiveSpace, .leaveConversation,
-            .deleteConversation:
+            .deleteConversation, .tasks:
             break
         }
         let ref = PushRef()

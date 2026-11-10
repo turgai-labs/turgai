@@ -144,6 +144,58 @@ struct SidebarFeature {
         var search = ""
     }
 
+    /// A space's tasks: its objects the runtime keeps something due for, while they're read, once
+    /// they are, or why they couldn't be.
+    struct Tasks: Equatable {
+        enum Listing: Equatable {
+            case reading
+            case read([TaskListing])
+            case failed(String)
+        }
+
+        let spaceID: String
+        let spaceName: String
+        var listing = Listing.reading
+
+        /// What the list is called.
+        var title: String { "Tasks in \(spaceName)" }
+
+        /// Each object with something due, with what's due.
+        var rows: [TaskRow] {
+            guard case .read(let tasks) = listing else { return [] }
+            return tasks.map(TaskRow.init)
+        }
+
+        /// What the list says instead of rows: while they're read, when there are none, or why
+        /// they couldn't be read.
+        var note: String? {
+            switch listing {
+            case .reading: "Reading…"
+            case .read(let tasks) where tasks.isEmpty: "Nothing here is due."
+            case .read: nil
+            case .failed(let why): why
+            }
+        }
+    }
+
+    /// An object with something due, as the tasks list shows it: its name, and a line for each
+    /// thing due: `tick · every 5 minutes`, `reminder · Nov 9, 2026 at 09:00`.
+    struct TaskRow: Equatable, Identifiable {
+        let id: String
+        let title: String
+        let lines: [String]
+
+        init(_ task: TaskListing) {
+            id = task.id
+            title = task.object.title
+            let schedules = task.schedules.sorted { $0.key < $1.key }.map { "\($0.key) · \($0.value)" }
+            let timers = task.timers.sorted { $0.key < $1.key }.map {
+                "\($0.key) · \($0.value.formatted(date: .abbreviated, time: .shortened))"
+            }
+            lines = schedules + timers
+        }
+    }
+
     /// The dialog open over the window, with what's written in it.
     enum Dialog: Equatable {
         /// A conversation's or a space's new name.
@@ -154,14 +206,16 @@ struct SidebarFeature {
         case inviting(Inviting)
         /// Every space, to pick one.
         case choosingSpace(ChoosingSpace)
+        /// The shown space's tasks.
+        case tasks(Tasks)
 
-        /// What's written for a name in it: nothing in an invite or the Spaces list.
+        /// What's written for a name in it: nothing in an invite or a list.
         var name: String {
             get {
                 switch self {
                 case .renaming(let renaming): renaming.name
                 case .addingSpace(let adding): adding.name
-                case .inviting, .choosingSpace: ""
+                case .inviting, .choosingSpace, .tasks: ""
                 }
             }
             set {
@@ -172,7 +226,7 @@ struct SidebarFeature {
                 case .addingSpace(var adding):
                     adding.name = newValue
                     self = .addingSpace(adding)
-                case .inviting, .choosingSpace:
+                case .inviting, .choosingSpace, .tasks:
                     break
                 }
             }
@@ -398,6 +452,7 @@ struct SidebarFeature {
         case spacePicked(String)
         /// Return in the Spaces list: the first space found is shown.
         case searchSubmitted
+        case tasks(TasksAction)
         case inviteMade(SpaceInviteOffer)
         case inviteFailed
         /// Copy in the invite: its link is copied.
@@ -422,6 +477,17 @@ struct SidebarFeature {
         enum Alert: Equatable {
             case archiveConfirmed(String)
             case deleteConfirmed(ConversationID)
+        }
+
+        @CasePathable
+        enum TasksAction: Equatable {
+            /// Tasks, under the shown space's name: its objects with something due are read.
+            case tapped
+            case read([TaskListing])
+            case failed(String)
+            /// What's due in the space with this id changed: its tasks are read again while
+            /// they're shown.
+            case changed(String)
         }
 
         enum Delegate: Equatable {
@@ -610,6 +676,9 @@ struct SidebarFeature {
             guard let first = state.spaceSections.first?.choices.first else { return .none }
             return .send(.spacePicked(first.id))
 
+        case .tasks(let action):
+            return tasks(&state, action)
+
         case .inviteMade(let offer):
             guard case .inviting(var inviting) = state.dialog else { return .none }
             inviting.link = offer.link
@@ -642,8 +711,12 @@ struct SidebarFeature {
             return .none
 
         case .dialogPresented(let presented):
-            if !presented { state.dialog = nil }
-            return .none
+            guard !presented else { return .none }
+            let closed = state.dialog
+            state.dialog = nil
+            // Tasks no longer shown aren't followed.
+            guard case .tasks(let tasks) = closed else { return .none }
+            return .run { _ in try? await chat.perform(.leave(.tasks(space: tasks.spaceID))) }
 
         case .renameConfirmed:
             guard case .renaming(let renaming) = state.dialog, let session = state.session else { return .none }
@@ -732,6 +805,48 @@ struct SidebarFeature {
         case .archived:
             state.selected = nil
             return .send(.delegate(.close(space)))
+        }
+    }
+
+    /// What `action` does to the tasks shown, and what it asks for.
+    private func tasks(_ state: inout State, _ action: Action.TasksAction) -> Effect<Action> {
+        switch action {
+        case .tapped:
+            guard let space = state.shownSpace else { return .none }
+            state.dialog = .tasks(Tasks(spaceID: space.id, spaceName: space.name))
+            // Following them before they're read, so no change between is missed.
+            return readTasks(in: space.id, joining: true)
+
+        case .changed(let space):
+            guard case .tasks(let shown) = state.dialog, shown.spaceID == space else { return .none }
+            return readTasks(in: space, joining: false)
+
+        case .read(let tasks):
+            guard case .tasks(var shown) = state.dialog else { return .none }
+            shown.listing = .read(tasks)
+            state.dialog = .tasks(shown)
+            return .none
+
+        case .failed(let why):
+            guard case .tasks(var shown) = state.dialog else { return .none }
+            shown.listing = .failed(why)
+            state.dialog = .tasks(shown)
+            return .none
+        }
+    }
+
+    /// The tasks of the space `space` read, after their changes are followed when `joining`.
+    private func readTasks(in space: String, joining: Bool) -> Effect<Action> {
+        .run { send in
+            do {
+                if joining { try await chat.perform(.join(.tasks(space: space))) }
+                let tasks = try await chat.tasks(in: space)
+                await send(.tasks(.read(tasks)))
+            } catch ChatSocketError.failed(let error) {
+                await send(.tasks(.failed(error.message)))
+            } catch {
+                await send(.tasks(.failed("Couldn't read the tasks.")))
+            }
         }
     }
 

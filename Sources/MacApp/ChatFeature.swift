@@ -237,6 +237,8 @@ struct ChatFeature {
             case conversationDeleted(ConversationID)
             /// What's remembered about them changed.
             case memoryChanged
+            /// What's due for the objects of the space with this id changed.
+            case tasksChanged(String)
             /// The connection is open, again or for the first time: what's joined is joined again.
             case connected
         }
@@ -372,6 +374,8 @@ struct ChatFeature {
                     return .send(.delegate(.conversationDeleted(id)))
                 case .memoryChanged:
                     return .send(.delegate(.memoryChanged))
+                case .tasksChanged(let space):
+                    return .send(.delegate(.tasksChanged(space)))
                 case .reply:
                     // The client hands replies to what pushed them: none comes here.
                     return .none
@@ -510,7 +514,7 @@ struct ChatFeature {
         case .notice(_, _, let error):
             state.error = error
         case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft, .conversationDeleted,
-            .memoryChanged, .reply:
+            .memoryChanged, .tasksChanged, .reply:
             // Passed on to the window before this, or not the conversation's.
             break
         }
@@ -656,7 +660,7 @@ extension ChatEvent {
             id
         case .notice(let id, _, _):
             id
-        case .reply, .memoryChanged:
+        case .reply, .memoryChanged, .tasksChanged:
             nil
         case .conversationJoined(let conversation), .conversationSaid(let conversation),
             .conversationTitled(let conversation):

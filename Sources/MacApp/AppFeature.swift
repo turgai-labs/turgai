@@ -226,6 +226,8 @@ struct AppFeature {
             return .send(.sidebar(.conversationLeft(id)))
         case .chat(.delegate(.memoryChanged)):
             return .send(.profile(.memoryChanged))
+        case .chat(.delegate(.tasksChanged(let space))):
+            return .send(.sidebar(.tasks(.changed(space))))
         case .chat(.delegate(.connected)):
             return .send(.profile(.connected))
 
