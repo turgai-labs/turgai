@@ -157,11 +157,12 @@ enum TechTopic: String, CaseIterable {
         """
 
     static let profile = """
-        TurgaiAgentProfile(
+        <b>try</b> TurgaiAgentProfile(
           id: "support",
           name: "Support",
-          model: <b>try</b> AgentModel(provider: .ollama, id: "qwen3:8b"),
-          providerConfiguration: .ollama(baseURL: localOllama, contextWindow: 16_384),
+          providerConfiguration: .server(ModelServer(
+            software: .ollama, address: .localOllama, key: <b>nil</b>, contextWindow: .standard)),
+          modelID: "qwen3:8b",
           instructions: "Answer customers. Pass orders to the shop."
         )
 
@@ -300,9 +301,10 @@ struct Recovery: HTML {
         figure(.class("recovery")) {
             div(.class("rc-stage"), .init(name: "aria-hidden", value: "true")) {
                 RecoveryJournal(entries: changes.map(\.entry))
-                RecoveryObject(changes: changes.map { (change: Change) -> (trip: String, state: String) in
-                    (change.trip, change.state)
-                }, statuses: statuses)
+                RecoveryObject(
+                    changes: changes.map { (change: Change) -> (trip: String, state: String) in
+                        (change.trip, change.state)
+                    }, statuses: statuses)
             }
             figcaption {
                 "The trip desk keeps its state in memory and appends every change to its journal. A crash loses the memory, not the journal: the trip desk restarts and replays it line by line, back to where it was."

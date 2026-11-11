@@ -4,6 +4,7 @@ import HummingbirdElementary
 import HummingbirdWebSocket
 import TurgaiApplication
 import TurgaiDomain
+import TurgaiHail
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -43,12 +44,14 @@ extension TurgaiMainWebApp {
                 }
                 let chosen = if let bot { bot } else { try await agentProfiles.defaultProfile() }
                 guard let profile = chosen else { return TurgaiWebSupport.redirect(to: "/onboarding") }
-                let started = TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(UUID().uuidString))
+                let started = TurgaiDomain.ConversationID(
+                    channel: turgaiChannel, externalAddress: .init(UUID().uuidString))
                 try await bridge.startConversation(started, in: nil, agent: AgentProfileID(profile.id), by: person)
                 return TurgaiWebSupport.redirect(to: "\(path)?conversation=\(started.externalAddress.rawValue)")
             }
             guard let minted = UUID(uuidString: written) else { return TurgaiWebSupport.redirect(to: path) }
-            let conversation = TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(minted.uuidString))
+            let conversation = TurgaiDomain.ConversationID(
+                channel: turgaiChannel, externalAddress: .init(minted.uuidString))
             let outline: ConversationOutline
             do {
                 outline = try await bridge.conversation(conversation, readBy: person)
@@ -109,10 +112,8 @@ extension TurgaiMainWebApp {
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            let profiles = try await agentProfiles.profiles()
-            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
             return HTMLResponse {
-                NewAgentPage(user: user, modelCatalog: modelCatalog, draft: .new(named: "", in: modelCatalog))
+                NewAgentPage(user: user, draft: .new(named: ""))
             }.response(from: request, context: context)
         }
 
@@ -125,8 +126,6 @@ extension TurgaiMainWebApp {
             else {
                 return TurgaiWebSupport.redirect(to: "/")
             }
-            let profiles = try await agentProfiles.profiles()
-            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
             let runtime = await runtimeSnapshots(.account(user.id)).filter { $0.profileID == profile.id }
             let placement: AgentDetailPage.Placement =
                 try await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
@@ -136,11 +135,25 @@ extension TurgaiMainWebApp {
                     user: user,
                     profile: profile,
                     draft: draft,
-                    modelCatalog: modelCatalog,
                     runtime: runtime,
                     placement: placement
                 )
             }.response(from: request, context: context)
+        }
+
+        // The chosen provider's models, as the form has it, while it's filled in: answered under the
+        // model field, its models in place of the field's suggestions.
+        agents.post("models") { request, context in
+            guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
+                return Response(status: .unauthorized)
+            }
+            let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
+            let id = form["id"]?.first?.trimmed() ?? ""
+            let saved = id.isEmpty ? nil : try await agentProfiles.profile(id: id)
+            let outcome = await ModelSearch.search(
+                AgentDraft(form: form, over: .new(named: "")), saved: saved?.providerConfiguration,
+                credentials: agentCredentials)
+            return HTMLResponse { ModelSearchAnswer(outcome: outcome) }.response(from: request, context: context)
         }
 
         agents.post("update") { request, context in
@@ -153,40 +166,34 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/")
             }
             let draft = AgentDraft(
-                form: form, over: AgentDraft(existingProfile, requestLimit: try await requestLimit(of: existingProfile)))
+                form: form, over: AgentDraft(existingProfile, requestLimit: try await requestLimit(of: existingProfile))
+            )
             var pendingCredential: AgentCredentialReference?
             do {
                 var profile = existingProfile
                 profile.name = draft.name
-                let model = try OnboardingInput.model(from: draft)
-                let reasoningEffort = try OnboardingInput.reasoningEffort(from: draft)
-                profile.model = model
-                profile.reasoningEffort = reasoningEffort
-                let submission = try OnboardingInput.providerSubmission(
-                    from: draft,
-                    for: model,
-                    existing: existingProfile.providerConfiguration
-                )
-                if let credential = submission.credential {
-                    pendingCredential = credential.reference
-                    try await agentCredentials.save(credential.value, for: credential.reference)
+                profile.reasoningEffort = try OnboardingInput.reasoningEffort(from: draft)
+                let checked = try await OnboardingInput.submission(
+                    from: draft, saved: existingProfile.providerConfiguration
+                ).checked(credentials: agentCredentials)
+                try profile.use(checked.configuration, model: checked.model)
+                if let key = checked.newKey {
+                    pendingCredential = key.reference
+                    try await agentCredentials.save(key.value, for: key.reference)
                 }
-                profile.providerConfiguration = submission.configuration
                 profile.persona = draft.persona
                 profile.instructions = draft.instructions
                 try await agentProfiles.update(profile)
                 try await saveRequestLimit(of: draft, for: profile)
                 pendingCredential = nil
                 if let oldReference = existingProfile.providerConfiguration.credentialReference,
-                    oldReference != submission.configuration.credentialReference
+                    oldReference != checked.configuration.credentialReference
                 {
                     try? await agentCredentials.remove(oldReference)
                 }
                 return TurgaiWebSupport.redirect(to: "/agents/\(profile.id)")
             } catch {
                 if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
-                let profiles = try await agentProfiles.profiles()
-                let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
                 let runtime = await runtimeSnapshots(.account(user.id)).filter {
                     $0.profileID == existingProfile.id
                 }
@@ -197,7 +204,6 @@ extension TurgaiMainWebApp {
                         user: user,
                         profile: existingProfile,
                         draft: draft,
-                        modelCatalog: modelCatalog,
                         runtime: runtime,
                         placement: placement,
                         error: TurgaiWebSupport.profileErrorMessage(error)
@@ -225,22 +231,21 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: try await agentProfiles.profiles())
-            let draft = AgentDraft(form: form, over: .new(named: "", in: modelCatalog))
+            let draft = AgentDraft(form: form, over: .new(named: ""))
             var pendingCredential: AgentCredentialReference?
             do {
-                let model = try OnboardingInput.model(from: draft)
                 let reasoningEffort = try OnboardingInput.reasoningEffort(from: draft)
-                let submission = try OnboardingInput.providerSubmission(from: draft, for: model)
-                if let credential = submission.credential {
-                    pendingCredential = credential.reference
-                    try await agentCredentials.save(credential.value, for: credential.reference)
+                let checked = try await OnboardingInput.submission(from: draft, saved: nil)
+                    .checked(credentials: agentCredentials)
+                if let key = checked.newKey {
+                    pendingCredential = key.reference
+                    try await agentCredentials.save(key.value, for: key.reference)
                 }
                 let profile = try await agentProfiles.create(
                     name: draft.name,
-                    model: model,
+                    providerConfiguration: checked.configuration,
+                    modelID: checked.model,
                     reasoningEffort: reasoningEffort,
-                    providerConfiguration: submission.configuration,
                     persona: draft.persona,
                     instructions: draft.instructions
                 )
@@ -252,7 +257,6 @@ extension TurgaiMainWebApp {
                 return HTMLResponse {
                     NewAgentPage(
                         user: user,
-                        modelCatalog: modelCatalog,
                         draft: draft,
                         error: TurgaiWebSupport.profileErrorMessage(error)
                     )
@@ -276,8 +280,6 @@ extension TurgaiMainWebApp {
                 }
                 return TurgaiWebSupport.redirect(to: "/")
             } catch {
-                let profiles = try await agentProfiles.profiles()
-                let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
                 let runtime = await runtimeSnapshots(.account(user.id)).filter { $0.profileID == profile.id }
                 let placement: AgentDetailPage.Placement =
                     try await agentProfiles.isDefaultProfile(id: profile.id) ? .default : .additional
@@ -287,7 +289,6 @@ extension TurgaiMainWebApp {
                         user: user,
                         profile: profile,
                         draft: draft,
-                        modelCatalog: modelCatalog,
                         runtime: runtime,
                         placement: placement,
                         error: TurgaiWebSupport.profileErrorMessage(error)

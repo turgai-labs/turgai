@@ -263,6 +263,12 @@ form { margin: 0; }
     line-height: var(--leading-subhead);
 }
 .form-field .hint { margin-top: var(--space-2); }
+/* What a server said when asked for its models: finding them while it's asked, then what it found. */
+.model-search-finding { display: none; }
+.model-search.htmx-request .model-search-finding { display: inline; }
+.model-search.htmx-request .model-search-answer { display: none; }
+.model-search:not(.htmx-request):has(.model-search-answer:empty) { display: none; }
+.model-search-error { color: var(--danger); }
 .error {
     margin: 0;
     padding: .75rem 1rem;
@@ -489,12 +495,6 @@ html[data-theme="dark"] .wordmark-logo { filter: invert(1); }
     font-weight: var(--weight-medium);
     line-height: 1.3;
     text-decoration: none;
-}
-.nav-icon {
-    display: block;
-    width: 1.125rem;
-    height: 1.125rem;
-    flex: 0 0 auto;
 }
 .nav-link:hover, .text-link:hover {
     color: var(--link-strong);
@@ -932,6 +932,17 @@ html[data-theme="dark"] .button-accent:hover {
     color: var(--chat-assistant-ink);
     --chat-background: var(--signal-blue);
 }
+.chat-message-other {
+    align-self: flex-start;
+    margin-right: auto;
+    color: var(--ink);
+    --chat-background: var(--signal-coral);
+}
+.chat-message-author {
+    margin-bottom: .15rem;
+    font-size: .8em;
+    font-weight: 600;
+}
 .chat-message-live-update::before { animation: none; }
 .chat-message-content.markdown-body {
     display: block;
@@ -997,16 +1008,16 @@ html[data-theme="dark"] .button-accent:hover {
     padding: .7rem 0;
     transform: none;
 }
-.chat-approval-arguments code {
+.chat-access-request code {
     font-size: .85em;
     word-break: break-all;
 }
-.chat-approval-actions {
+.chat-access-actions {
     display: flex;
     gap: .5rem;
     margin-top: .5rem;
 }
-.chat-approval-answer { margin: 0; }
+.chat-access-answer { margin: 0; }
 .provider-settings fieldset {
     border: 0;
     margin: 0;
@@ -1637,22 +1648,6 @@ html[data-theme="dark"] .setup-hero-art img { filter: invert(1); }
     .app-header, .setup-header { height: 4.25rem; }
     .app-nav { gap: var(--space-4); }
     .app-nav-links { gap: var(--space-4); }
-    .app-nav-links { gap: var(--space-1); }
-    .nav-link {
-        width: 2.5rem;
-        justify-content: center;
-        padding-right: 0;
-        padding-left: 0;
-    }
-    .nav-link-label {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        overflow: hidden;
-        clip: rect(0 0 0 0);
-        white-space: nowrap;
-    }
-    .nav-link-active::after { right: .25rem; left: .25rem; }
     .signed-in { display: none; }
     .page-intro { display: block; margin: var(--space-8) 0 0; }
     .page-intro .button, .page-intro .add-tool-link { margin-top: var(--space-4); }
@@ -2140,7 +2135,7 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
    layer (backface-visibility) and padding its edge with a transparent outline makes them anti-aliased */
 .github, .soon, .chapter-tag, .cta .button-accent { -webkit-backface-visibility: hidden; backface-visibility: hidden; outline: 1px solid transparent; }
 
-:root { --ga1: 5.4deg; --ga2: 5.1deg; --ga3: 3.5deg; }
+:root { --ga1: -3.2deg; --ga2: -3.8deg; --ga3: 4.2deg; }
 body { timeline-scope: --intro, --inside, --grows, --trust, --yours, --why, --closing; }
 .s-inside { animation-timeline: --inside; }
 .s-inside .joins, .s-inside .joins-fade { animation-timeline: --inside; }

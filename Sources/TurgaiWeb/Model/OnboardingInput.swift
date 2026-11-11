@@ -1,8 +1,8 @@
 import Hail
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiPersistence
-import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -11,158 +11,56 @@ import TurgaiDomain
 #endif
 
 enum OnboardingInput {
-    struct ProviderSubmission: Sendable {
-        let configuration: AgentProviderConfiguration
-        let credential: (reference: AgentCredentialReference, value: String)?
-    }
-    static func model(from draft: AgentDraft) throws -> AgentModel {
-        let providerValue = draft.provider.rawValue
-        let modelValue = draft.modelID
-        guard !providerValue.isEmpty, !modelValue.isEmpty else {
-            throw FormValidationError.invalidValue("model")
-        }
-
-        let provider = AgentModelProvider(rawValue: providerValue)
-        if modelValue.contains("/") {
-            guard let fullModel = try? AgentModel(modelValue), fullModel.provider == provider else {
-                throw FormValidationError.invalidValue("model")
-            }
-            return fullModel
-        }
-        guard let model = try? AgentModel(provider: provider, id: AgentModelID(rawValue: modelValue)) else {
-            throw FormValidationError.invalidValue("model")
-        }
-        return model
-    }
-
-    static func providerSubmission(
-        from draft: AgentDraft,
-        for model: AgentModel,
-        existing: AgentProviderConfiguration? = nil
-    ) throws -> ProviderSubmission {
-        /// Only providers whose window is a choice ask for one.
+    /// Where `draft` says its model runs.
+    static func location(from draft: AgentDraft) throws(FormValidationError) -> ModelLocation {
         let values = draft.settings
-        func contextWindow() throws -> Int {
-            try positiveInteger(values.contextWindow, field: "context window")
-        }
-        switch model.provider {
-        case .ollama:
-            let rawValue =
-                values.endpointURL.isEmpty ? OllamaConfiguration.defaultBaseURL.absoluteString : values.endpointURL
-            return ProviderSubmission(
-                configuration: .ollama(baseURL: try httpURL(rawValue), contextWindow: try contextWindow()),
-                credential: nil
-            )
-        case .openAI:
-            return try credentialSubmission(
-                value: values.apiKey,
-                existing: existing,
-                matches: { if case .openAI = $0 { true } else { false } },
-                configuration: { [window = try contextWindow()] in .openAI(credential: $0, contextWindow: window) }
-            )
-        case .anthropic:
-            return try credentialSubmission(
-                value: values.apiKey,
-                existing: existing,
-                matches: { if case .anthropic = $0 { true } else { false } },
-                configuration: { [window = try contextWindow()] in .anthropic(credential: $0, contextWindow: window) }
-            )
-        case .gemini:
-            return try credentialSubmission(
-                value: values.apiKey,
-                existing: existing,
-                matches: { if case .gemini = $0 { true } else { false } },
-                configuration: { [window = try contextWindow()] in .gemini(credential: $0, contextWindow: window) }
-            )
-        case .openAICompatible:
-            let endpoint = values.endpointURL
-            guard !endpoint.isEmpty else {
-                throw FormValidationError.invalidValue("model endpoint URL")
-            }
-            guard let api = OpenAICompatibleAPI(rawValue: values.compatibleAPI) else {
-                throw FormValidationError.invalidValue("compatible API")
-            }
-            let existingReference: AgentCredentialReference?
-            if case .openAICompatible(_, let reference, _, _) = existing {
-                existingReference = reference
-            } else {
-                existingReference = nil
-            }
-            let reference = values.apiKey.isEmpty ? (existingReference ?? .new()) : .new()
-            return try submission(
-                configuration: .openAICompatible(
-                    baseURL: httpURL(endpoint),
-                    credential: reference,
-                    api: api,
-                    contextWindow: contextWindow()
-                ),
-                reference: reference,
-                apiKey: values.apiKey,
-                hasExistingCredential: existingReference != nil
-            )
-        case .system:
-            return ProviderSubmission(configuration: .appleSystem, credential: nil)
+        switch draft.provider {
+        case .appleSystem:
+            return .appleSystem
         #if Llama
             case .llamaCPP:
-                let modelPath = values.modelPath
-                guard !modelPath.isEmpty else {
-                    throw FormValidationError.invalidValue("GGUF model path")
-                }
-                let gpuLayers = Int32(values.gpuLayers) ?? -1
-                return ProviderSubmission(
-                    configuration: .llamaCPP(
-                        .init(modelPath: modelPath, gpuLayers: gpuLayers), contextWindow: try contextWindow()),
-                    credential: nil
-                )
+                guard !values.modelFile.isEmpty else { throw .invalidValue("GGUF model file") }
+                guard let layers = Int32(values.gpuLayers) else { throw .invalidValue("number of GPU layers") }
+                return .llamaCPP(file: values.modelFile, gpuLayers: layers)
         #endif
-        default:
-            throw FormValidationError.invalidValue("provider")
+        case .ollama:
+            return .server(.ollama, values.address.isEmpty ? .localOllama : try address(values.address))
+        case .openAICompatible:
+            guard let api = OpenAICompatibleAPI(rawValue: values.compatibleAPI) else {
+                throw .invalidValue("compatible API")
+            }
+            return .server(.openAICompatible(api), try address(values.address))
+        case .openAI:
+            return .cloud(.openAI)
+        case .anthropic:
+            return .cloud(.anthropic)
+        case .gemini:
+            return .cloud(.gemini)
         }
     }
 
-    private static func httpURL(_ rawValue: String) throws -> URL {
-        guard let url = URL(string: rawValue),
-            let scheme = url.scheme?.lowercased(),
-            scheme == "http" || scheme == "https",
-            url.host != nil
-        else {
-            throw FormValidationError.invalidValue("model endpoint URL")
+    /// What `draft` gives for its model, read: its key the one typed, or else the one `saved`
+    /// keeps for the same place.
+    static func submission(from draft: AgentDraft, saved: AgentProviderConfiguration?) throws(FormValidationError)
+        -> ModelSubmission
+    {
+        let location = try location(from: draft)
+        guard !draft.modelID.isEmpty else { throw .invalidValue("model") }
+        var window: ContextWindow?
+        if !draft.settings.contextWindow.isEmpty {
+            guard let tokens = Int(draft.settings.contextWindow), let typed = try? ContextWindow(tokens: tokens) else {
+                throw .invalidValue("context window")
+            }
+            window = typed
         }
-        return url
+        return ModelSubmission(
+            location: location, model: AgentModelID(rawValue: draft.modelID),
+            key: ModelSubmission.Key(typed: draft.settings.apiKey, at: location, saved: saved),
+            contextWindow: window)
     }
 
-    private static func credentialSubmission(
-        value: String?,
-        existing: AgentProviderConfiguration?,
-        matches: (AgentProviderConfiguration) -> Bool,
-        configuration: (AgentCredentialReference) -> AgentProviderConfiguration
-    ) throws -> ProviderSubmission {
-        let existingReference = existing.flatMap { matches($0) ? $0.credentialReference : nil }
-        let reference = value?.isEmpty == false ? .new() : (existingReference ?? .new())
-        return try submission(
-            configuration: configuration(reference),
-            reference: reference,
-            apiKey: value,
-            hasExistingCredential: existingReference != nil
-        )
-    }
-
-    private static func submission(
-        configuration: AgentProviderConfiguration,
-        reference: AgentCredentialReference,
-        apiKey: String?,
-        hasExistingCredential: Bool
-    ) throws -> ProviderSubmission {
-        if let apiKey, !apiKey.isEmpty {
-            return ProviderSubmission(
-                configuration: configuration,
-                credential: (reference, apiKey)
-            )
-        }
-        guard hasExistingCredential else {
-            throw FormValidationError.invalidValue("API key")
-        }
-        return ProviderSubmission(configuration: configuration, credential: nil)
+    private static func address(_ written: String) throws(FormValidationError) -> ServerAddress {
+        do { return try ServerAddress(written) } catch { throw .invalidValue("server address") }
     }
 
     static func reasoningEffort(from draft: AgentDraft) throws -> ReasoningEffort? {
@@ -185,13 +83,6 @@ enum OnboardingInput {
             }
             return try TurgaiStorageConfiguration.postgresStore(url: rawURL, username: values.postgresUsername)
         }
-    }
-
-    static func positiveInteger(_ value: String?, field: String) throws -> Int {
-        guard let value, let integer = Int(value), integer > 0 else {
-            throw FormValidationError.invalidValue(field)
-        }
-        return integer
     }
 
     static func chatIDs(from value: String?) throws -> [Int64] {

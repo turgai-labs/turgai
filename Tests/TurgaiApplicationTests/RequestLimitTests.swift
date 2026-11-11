@@ -7,23 +7,36 @@ import Testing
 @Suite("Request limits")
 struct RequestLimitTests {
     @Test func eachProviderAccountIsItsOwn() throws {
-        let local = AgentProviderConfiguration.ollama(
-            baseURL: URL(string: "http://127.0.0.1:11434")!, contextWindow: 16_384)
+        let local = AgentProviderConfiguration.server(
+            ModelServer(software: .ollama, address: .localOllama, key: nil, contextWindow: .standard))
         #expect(
             local.account(for: try AgentModel(provider: .ollama, id: "deepseek-v4.1-flash:cloud"))
                 == ModelAccount(rawValue: "ollama-cloud"))
         #expect(
             local.account(for: try AgentModel(provider: .ollama, id: "qwen3.5:9b"))
                 == ModelAccount(rawValue: "ollama@127.0.0.1"))
-        let compatible = AgentProviderConfiguration.openAICompatible(
-            baseURL: URL(string: "https://api.deepseek.com/v1")!, credential: .new(), api: .chatCompletions,
-            contextWindow: 65_536)
+        // Ollama's cloud itself is the same account as a cloud model through a local server.
+        let cloud = AgentProviderConfiguration.server(
+            ModelServer(software: .ollama, address: .ollamaCloud, key: .new(), contextWindow: .standard))
+        #expect(
+            cloud.account(for: try AgentModel(provider: .ollama, id: "gpt-oss:120b"))
+                == ModelAccount(rawValue: "ollama-cloud"))
+        let compatible = AgentProviderConfiguration.server(
+            ModelServer(
+                software: .openAICompatible(.chatCompletions),
+                address: try ServerAddress("https://api.deepseek.com/v1"),
+                key: .new(), contextWindow: .standard))
         #expect(
             compatible.account(for: try AgentModel(provider: .openAICompatible, id: "deepseek-chat"))
                 == ModelAccount(rawValue: "api.deepseek.com"))
+        let anthropic = AgentProviderConfiguration.cloud(
+            CloudAccount(provider: .anthropic, key: .new(), contextWindow: .standard))
         #expect(
-            AgentProviderConfiguration.appleSystem.account(for: try AgentModel(provider: .system, id: "default")) == nil
-        )
+            anthropic.account(for: try AgentModel(provider: .anthropic, id: "claude-sonnet-5-5"))
+                == ModelAccount(rawValue: "anthropic"))
+        #expect(
+            AgentProviderConfiguration.local(.appleSystem).account(
+                for: try AgentModel(provider: .system, id: "default")) == nil)
     }
 
     /// The default is kept whatever is set next, and a lifted one stays lifted.

@@ -94,11 +94,10 @@ extension TurgaiOnboardingWebApp {
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            let profiles = try await agentProfiles.profiles()
-            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: profiles)
-            let draft = try await agentProfiles.defaultProfile().map { AgentDraft($0, requestLimit: nil) }
+            let profile = try await agentProfiles.defaultProfile()
+            let draft = profile.map { AgentDraft($0, requestLimit: nil) }
             return HTMLResponse {
-                ModelPage(modelCatalog: modelCatalog, draft: draft ?? .new(named: "Turgai", in: modelCatalog))
+                ModelPage(draft: draft ?? .new(named: "Turgai"), profileID: profile?.id)
             }.response(from: request, context: context)
         }
 
@@ -107,46 +106,40 @@ extension TurgaiOnboardingWebApp {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let modelCatalog = await TurgaiWebSupport.modelCatalog(for: try await agentProfiles.profiles())
             let existingProfile = try await agentProfiles.defaultProfile()
             let draft = AgentDraft(
                 form: form,
-                over: existingProfile.map { AgentDraft($0, requestLimit: nil) }
-                    ?? .new(named: "Turgai", in: modelCatalog))
+                over: existingProfile.map { AgentDraft($0, requestLimit: nil) } ?? .new(named: "Turgai"))
             var pendingCredential: AgentCredentialReference?
             do {
-                let model = try OnboardingInput.model(from: draft)
                 let reasoningEffort = try OnboardingInput.reasoningEffort(from: draft)
-                let submission = try OnboardingInput.providerSubmission(
-                    from: draft,
-                    for: model,
-                    existing: existingProfile?.providerConfiguration
-                )
-                if let credential = submission.credential {
-                    pendingCredential = credential.reference
-                    try await agentCredentials.save(credential.value, for: credential.reference)
+                let checked = try await OnboardingInput.submission(
+                    from: draft, saved: existingProfile?.providerConfiguration
+                ).checked(credentials: agentCredentials)
+                if let key = checked.newKey {
+                    pendingCredential = key.reference
+                    try await agentCredentials.save(key.value, for: key.reference)
                 }
                 if var profile = try await agentProfiles.defaultProfile() {
-                    profile.model = model
-                    profile.reasoningEffort = reasoningEffort
                     let oldReference = profile.providerConfiguration.credentialReference
-                    profile.providerConfiguration = submission.configuration
+                    try profile.use(checked.configuration, model: checked.model)
+                    profile.reasoningEffort = reasoningEffort
                     profile.name = draft.name
                     profile.persona = draft.persona
                     profile.instructions = draft.instructions
                     try await agentProfiles.update(profile)
                     pendingCredential = nil
                     if let oldReference,
-                        oldReference != submission.configuration.credentialReference
+                        oldReference != checked.configuration.credentialReference
                     {
                         try? await agentCredentials.remove(oldReference)
                     }
                 } else {
                     _ = try await agentProfiles.create(
                         name: draft.name,
-                        model: model,
+                        providerConfiguration: checked.configuration,
+                        modelID: checked.model,
                         reasoningEffort: reasoningEffort,
-                        providerConfiguration: submission.configuration,
                         persona: draft.persona,
                         instructions: draft.instructions
                     )
@@ -157,8 +150,8 @@ extension TurgaiOnboardingWebApp {
                 if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
                 return HTMLResponse {
                     ModelPage(
-                        modelCatalog: modelCatalog,
                         draft: draft,
+                        profileID: existingProfile?.id,
                         error: TurgaiWebSupport.profileErrorMessage(error)
                     )
                 }.response(from: request, context: context)

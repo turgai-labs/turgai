@@ -9,20 +9,26 @@ extension AgentProviderConfiguration {
     /// `nil` for a model that runs on this machine without HTTP.
     public func account(for model: AgentModel) -> ModelAccount? {
         switch self {
-        case .ollama(let baseURL, _):
-            // A cloud model is the account's, whichever server passes its requests on.
+        case .local:
+            return nil
+        case .server(let server):
+            // A cloud model is the account's, whichever server passes its requests on: a local one,
+            // or Ollama's cloud itself.
             let name = model.id.rawValue
-            if name.hasSuffix(":cloud") || name.hasSuffix("-cloud") { return ModelAccount(rawValue: "ollama-cloud") }
-            return ModelAccount(rawValue: "ollama@\(baseURL.host() ?? baseURL.absoluteString)")
-        case .openAI: return ModelAccount(rawValue: "openai")
-        case .anthropic: return ModelAccount(rawValue: "anthropic")
-        case .gemini: return ModelAccount(rawValue: "gemini")
-        case .openAICompatible(let baseURL, _, _, _):
-            return ModelAccount(rawValue: baseURL.host() ?? baseURL.absoluteString)
-        case .appleSystem: return nil
-        #if Llama
-            case .llamaCPP: return nil
-        #endif
+            if case .ollama = server.software,
+                name.hasSuffix(":cloud") || name.hasSuffix("-cloud") || server.address.isSameServer(as: .ollamaCloud)
+            {
+                return ModelAccount(rawValue: "ollama-cloud")
+            }
+            let host = server.address.url.host() ?? server.address.description
+            if case .ollama = server.software { return ModelAccount(rawValue: "ollama@\(host)") }
+            return ModelAccount(rawValue: host)
+        case .cloud(let account):
+            switch account.provider {
+            case .openAI: return ModelAccount(rawValue: "openai")
+            case .anthropic: return ModelAccount(rawValue: "anthropic")
+            case .gemini: return ModelAccount(rawValue: "gemini")
+            }
         }
     }
 }
@@ -137,8 +143,10 @@ private struct RequestLimitTable: Sendable {
     }
 
     func limit(for account: ModelAccount) async throws -> Int? {
-        try await connection.query("SELECT max_requests FROM request_limits WHERE account = ?", [.text(account.rawValue)])
-            .first?.column("max_requests")?.integer.map { Int($0) }
+        try await connection.query(
+            "SELECT max_requests FROM request_limits WHERE account = ?", [.text(account.rawValue)]
+        )
+        .first?.column("max_requests")?.integer.map { Int($0) }
     }
 
     func set(_ limit: Int?, for account: ModelAccount) async throws {

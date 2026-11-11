@@ -22,12 +22,6 @@ enum TurgaiWebSupport {
     /// The cookie a guest no one signed in as comes back with.
     static let guestCookieName = "turgai_guest"
 
-    static func modelCatalog(
-        for profiles: [TurgaiAgentProfile]
-    ) async -> TurgaiModelCatalog {
-        await TurgaiModelCatalogLoader.load(profiles: profiles)
-    }
-
     /// An error a form didn't expect: logged, and, unless the page is one anyone may open, said
     /// with what failed.
     private static func unexpected(_ error: Error, _ failed: String, shown: Bool = true) -> String {
@@ -101,10 +95,6 @@ enum TurgaiWebSupport {
         switch error {
         case FormValidationError.invalidValue(let field):
             "Enter a valid \(field)."
-        case TurgaiAgentProfileError.invalidEndpointURL:
-            "Model endpoint URL must be an http(s) URL with a host."
-        case TurgaiAgentProfileError.invalidContextWindow:
-            "Context window must be a positive number."
         case TurgaiAgentProfileError.invalidName:
             "Give the agent a name and keep it under 120 characters."
         case TurgaiAgentProfileError.invalidID(let id):
@@ -113,6 +103,14 @@ enum TurgaiWebSupport {
             "Agent \(id) no longer exists."
         case TurgaiAgentProfileError.cannotDeleteDefaultProfile:
             "The default agent cannot be deleted."
+        case ModelRefusal.unavailable(let reason):
+            reason.sentence
+        case ModelRefusal.window(.aboveModel(_, let model)):
+            "This model takes at most \(model.formatted()) tokens: enter a smaller context window."
+        case ModelRefusal.window(.unknown):
+            "The model's context window isn't known: enter it."
+        case is AgentModelError:
+            "Enter a valid model."
         default:
             unexpected(error, "Could not save the agent configuration")
         }

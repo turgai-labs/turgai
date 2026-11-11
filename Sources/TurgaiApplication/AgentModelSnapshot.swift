@@ -35,7 +35,7 @@ public struct AgentModelSnapshot: Codable, Sendable, Equatable {
             model: profile.model,
             provider: .configured(
                 profile.providerConfiguration,
-                ollamaKeepAlive: profile.model.provider == .ollama ? "10m" : nil
+                ollamaKeepAlive: profile.providerConfiguration.provider == .ollama ? "10m" : nil
             )
         )
     }

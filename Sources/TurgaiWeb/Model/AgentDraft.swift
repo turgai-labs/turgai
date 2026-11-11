@@ -1,7 +1,7 @@
 import Hail
 import TurgaiApplication
-import TurgaiHail
 import TurgaiDomain
+import TurgaiHail
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -16,7 +16,7 @@ struct AgentDraft: Sendable, Equatable {
     var name: String
     var persona: String
     var instructions: String
-    var provider: AgentModelProvider
+    var provider: AgentProvider
     var modelID: String
     /// The chosen level's name: empty is the provider's default.
     var reasoningEffort: String
@@ -25,60 +25,59 @@ struct AgentDraft: Sendable, Equatable {
 
 /// The chosen provider's own settings, as typed.
 struct ProviderSettingsDraft: Sendable, Equatable {
-    var endpointURL: String
+    /// A server's address: for Ollama, empty is the one on this machine.
+    var address: String
     var compatibleAPI: String
-    var modelPath: String
+    var modelFile: String
     var gpuLayers: String
+    /// Empty is the model's own.
     var contextWindow: String
     /// Empty is no limit.
     var requestLimit: String
     /// A key typed now. Never shown back.
     var apiKey: String
     /// The provider whose key is already saved, when one is.
-    var savedKeyProvider: AgentModelProvider?
+    var savedKeyProvider: AgentProvider?
 }
 
 extension AgentDraft {
-    /// A new agent called `name`, on the catalog's first local provider.
-    static func new(named name: String, in catalog: TurgaiModelCatalog) -> AgentDraft {
-        let providers = catalog.providers.map { AgentModelProvider(rawValue: $0.provider.rawValue) }
-        let provider = providers.contains(.ollama) ? .ollama : providers.first ?? .ollama
-        return AgentDraft(
+    /// A new agent called `name`, on Ollama on this machine.
+    static func new(named name: String) -> AgentDraft {
+        AgentDraft(
             name: name, persona: "", instructions: "",
-            provider: provider,
+            provider: .ollama,
             modelID: "", reasoningEffort: "",
             settings: ProviderSettingsDraft(
-                endpointURL: provider == .ollama ? OllamaConfiguration.defaultBaseURL.absoluteString : "",
-                compatibleAPI: OpenAICompatibleAPI.chatCompletions.rawValue, modelPath: "", gpuLayers: "-1",
-                contextWindow: String(TurgaiAgentProfileStore.defaultContextWindow), requestLimit: "", apiKey: "",
-                savedKeyProvider: nil))
+                address: "", compatibleAPI: OpenAICompatibleAPI.chatCompletions.rawValue, modelFile: "",
+                gpuLayers: "-1", contextWindow: "", requestLimit: "", apiKey: "", savedKeyProvider: nil))
     }
 
     /// The saved `profile`, whose provider account takes `requestLimit` requests at once.
     init(_ profile: TurgaiAgentProfile, requestLimit: Int?) {
         let configuration = profile.providerConfiguration
         var settings = ProviderSettingsDraft(
-            endpointURL: "",
-            compatibleAPI: OpenAICompatibleAPI.chatCompletions.rawValue, modelPath: "", gpuLayers: "-1",
-            contextWindow: String(profile.contextWindow), requestLimit: requestLimit.map(String.init) ?? "",
-            apiKey: "", savedKeyProvider: configuration.credentialReference == nil ? nil : profile.model.provider)
+            address: "", compatibleAPI: OpenAICompatibleAPI.chatCompletions.rawValue, modelFile: "", gpuLayers: "-1",
+            contextWindow: "", requestLimit: requestLimit.map(String.init) ?? "", apiKey: "",
+            savedKeyProvider: configuration.credentialReference == nil ? nil : configuration.provider)
         switch configuration {
-        case .ollama(let url, _):
-            settings.endpointURL = url.absoluteString
-        case .openAICompatible(let url, _, let api, _):
-            settings.endpointURL = url.absoluteString
-            settings.compatibleAPI = api.rawValue
-        #if Llama
-            case .llamaCPP(let llama, _):
-                settings.modelPath = llama.modelPath
-                settings.gpuLayers = String(llama.gpuLayers)
-        #endif
-        case .openAI, .anthropic, .gemini, .appleSystem:
+        case .local(.appleSystem):
             break
+        #if Llama
+            case .local(.llamaCPP(let file, let layers, let window)):
+                settings.modelFile = file
+                settings.gpuLayers = String(layers)
+                settings.contextWindow = String(window.tokens)
+        #endif
+        case .server(let server):
+            settings.address = server.address.description
+            if case .openAICompatible(let api) = server.software { settings.compatibleAPI = api.rawValue }
+            settings.contextWindow = String(server.contextWindow.tokens)
+        case .cloud(let account):
+            settings.contextWindow = String(account.contextWindow.tokens)
         }
         self.init(
             name: profile.name, persona: profile.persona ?? "", instructions: profile.instructions,
-            provider: profile.model.provider, modelID: profile.model.id.rawValue,
+            provider: configuration.provider, modelID: profile.model.id.rawValue,
             reasoningEffort: profile.reasoningEffort?.rawValue ?? "", settings: settings)
     }
 
@@ -91,12 +90,12 @@ extension AgentDraft {
         name = form["name"]?.first ?? saved.name
         persona = form["persona"]?.first ?? saved.persona
         instructions = form["instructions"]?.first ?? saved.instructions
-        provider = typed("provider").map(AgentModelProvider.init(rawValue:)) ?? saved.provider
+        provider = typed("provider").flatMap(AgentProvider.init(name:)) ?? saved.provider
         modelID = typed("modelID") ?? saved.modelID
         reasoningEffort = typed("reasoningEffort") ?? saved.reasoningEffort
-        settings.endpointURL = typed("endpointURL") ?? saved.settings.endpointURL
+        settings.address = typed("address") ?? saved.settings.address
         settings.compatibleAPI = typed("compatibleAPI") ?? saved.settings.compatibleAPI
-        settings.modelPath = typed("modelPath") ?? saved.settings.modelPath
+        settings.modelFile = typed("modelFile") ?? saved.settings.modelFile
         settings.gpuLayers = typed("gpuLayers") ?? saved.settings.gpuLayers
         settings.contextWindow = typed("contextWindow") ?? saved.settings.contextWindow
         settings.requestLimit = typed("requestLimit") ?? saved.settings.requestLimit

@@ -11,8 +11,9 @@ struct AgentModelEndpointFactoryTests {
     func ollamaTakesEffortNoneAsThinkingOff() async throws {
         let factory = AgentModelEndpointFactory(credentials: AgentCredentialStore(storage: .test))
         let model = try AgentModel(provider: .ollama, id: "qwen3.5:9b")
-        let ollama = AgentProviderConfiguration.ollama(
-            baseURL: URL(string: "http://127.0.0.1:11434")!, contextWindow: 8192)
+        let ollama = AgentProviderConfiguration.server(
+            ModelServer(
+                software: .ollama, address: .localOllama, key: nil, contextWindow: try ContextWindow(tokens: 8192)))
 
         _ = try await factory.endpoint(
             model: model, configuration: ollama, temperature: 0, reasoning: ReasoningEffortSelection(effort: .none))
@@ -21,5 +22,23 @@ struct AgentModelEndpointFactoryTests {
                 model: model, configuration: ollama, temperature: 0,
                 reasoning: ReasoningEffortSelection(effort: .medium))
         }
+    }
+
+    /// An Ollama server's key is read from the credentials, as another provider's is: one that
+    /// isn't there fails, as theirs does.
+    @Test
+    func ollamasKeyIsReadFromTheCredentials() async throws {
+        let credentials = AgentCredentialStore(storage: .test)
+        let factory = AgentModelEndpointFactory(credentials: credentials)
+        let model = try AgentModel(provider: .ollama, id: "gpt-oss:120b")
+        let key = AgentCredentialReference.new()
+        let cloud = AgentProviderConfiguration.server(
+            ModelServer(software: .ollama, address: .ollamaCloud, key: key, contextWindow: .standard))
+
+        await #expect(throws: AgentModelEndpointFactoryError.missingCredential(key)) {
+            try await factory.endpoint(model: model, configuration: cloud, temperature: 0)
+        }
+        try await credentials.save("secret", for: key)
+        _ = try await factory.endpoint(model: model, configuration: cloud, temperature: 0)
     }
 }

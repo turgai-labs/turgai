@@ -1,7 +1,7 @@
 import AnyLanguageModel
 import Hail
-import TurgaiPersistence
 import TurgaiDomain
+import TurgaiPersistence
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -32,99 +32,20 @@ public struct AgentCredentialReference: RawRepresentable, Codable, Sendable, Has
     }
 }
 
-public enum OpenAICompatibleAPI: String, Codable, Sendable, Equatable {
-    case chatCompletions
-    case responses
-}
-
-#if Llama
-    public struct LlamaCPPConfiguration: Codable, Sendable, Equatable {
-        public let modelPath: String
-        public let gpuLayers: Int32
-
-        public init(modelPath: String, gpuLayers: Int32 = -1) {
-            self.modelPath = modelPath
-            self.gpuLayers = gpuLayers
-        }
-    }
-#endif
-
-/// Complete provider-owned configuration for a profile. Each case carries
-/// exactly the values required to construct that provider for a turn,
-/// including its context window where that is the user's choice.
-public enum AgentProviderConfiguration: Codable, Sendable, Equatable {
-    case ollama(baseURL: URL, contextWindow: Int)
-    case openAI(credential: AgentCredentialReference, contextWindow: Int)
-    case anthropic(credential: AgentCredentialReference, contextWindow: Int)
-    case gemini(credential: AgentCredentialReference, contextWindow: Int)
-    case openAICompatible(
-        baseURL: URL,
-        credential: AgentCredentialReference,
-        api: OpenAICompatibleAPI,
-        contextWindow: Int
-    )
-    /// Apple's on-device model. Its context window isn't a setting: the model
-    /// reports it, and it differs between OS releases.
-    case appleSystem
-    #if Llama
-        case llamaCPP(LlamaCPPConfiguration, contextWindow: Int)
-    #endif
-}
-
-extension AgentProviderConfiguration {
-    public var credentialReference: AgentCredentialReference? {
-        switch self {
-        case .openAI(let reference, _), .anthropic(let reference, _), .gemini(let reference, _):
-            return reference
-        case .openAICompatible(_, let reference, _, _):
-            return reference
-        case .ollama, .appleSystem:
-            return nil
-        #if Llama
-            case .llamaCPP:
-                return nil
-        #endif
-        }
-    }
-
-    /// How many tokens a prompt may use with this provider.
-    public var contextWindow: Int {
-        switch self {
-        case .ollama(_, let window), .openAI(_, let window), .anthropic(_, let window),
-            .gemini(_, let window), .openAICompatible(_, _, _, let window):
-            return window
-        #if Llama
-            case .llamaCPP(_, let window):
-                return window
-        #endif
-        case .appleSystem:
-            return Self.appleSystemContextWindow
-        }
-    }
-
-    /// The on-device model's own context window.
-    public static var appleSystemContextWindow: Int {
-        #if canImport(FoundationModels)
-            SystemLanguageModel.default.contextSize
-        #else
-            0
-        #endif
-    }
-}
-
 public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
     private enum CodingKeys: String, CodingKey {
-        case id, name, model, reasoningEffort, providerConfiguration, persona, instructions,
-            availability
+        case id, name, modelID, reasoningEffort, providerConfiguration, persona, instructions, availability
     }
 
     public let id: String
     public var name: String
-    public var model: AgentModel
+    /// Where its model runs, and what reaching it takes.
+    public private(set) var providerConfiguration: AgentProviderConfiguration
+    /// Its model: the provider's, as the configuration says, by the ID the provider knows it by.
+    public private(set) var model: AgentModel
     /// Optional provider-facing reasoning effort. Nil delegates the choice to
     /// the selected model provider.
     public var reasoningEffort: ReasoningEffort?
-    public var providerConfiguration: AgentProviderConfiguration
     /// How many tokens a prompt may use, as the provider configuration says.
     public var contextWindow: Int { providerConfiguration.contextWindow }
     /// Optional persona supplied by configuration. Nil or an empty string
@@ -136,42 +57,52 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
     public init(
         id: String,
         name: String,
-        model: AgentModel,
-        reasoningEffort: ReasoningEffort? = nil,
         providerConfiguration: AgentProviderConfiguration,
+        modelID: AgentModelID,
+        reasoningEffort: ReasoningEffort? = nil,
         persona: String? = nil,
         instructions: String = "",
         availability: AgentAvailability = .enabled
-    ) {
+    ) throws(AgentModelError) {
         self.id = id
         self.name = name
-        self.model = model
-        self.reasoningEffort = reasoningEffort
         self.providerConfiguration = providerConfiguration
+        self.model = try AgentModel(provider: providerConfiguration.provider.modelProvider, id: modelID)
+        self.reasoningEffort = reasoningEffort
         self.persona = persona
         self.instructions = instructions
         self.availability = availability
     }
 
+    /// Runs `id` where `configuration` says from now on: the two change together.
+    public mutating func use(_ configuration: AgentProviderConfiguration, model id: AgentModelID)
+        throws(AgentModelError)
+    {
+        model = try AgentModel(provider: configuration.provider.modelProvider, id: id)
+        providerConfiguration = configuration
+    }
+
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        id = try values.decode(String.self, forKey: .id)
-        name = try values.decode(String.self, forKey: .name)
-        model = try values.decode(AgentModel.self, forKey: .model)
-        reasoningEffort = try values.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort)
-        providerConfiguration = try values.decode(AgentProviderConfiguration.self, forKey: .providerConfiguration)
-        persona = try values.decodeIfPresent(String.self, forKey: .persona)
-        instructions = try values.decode(String.self, forKey: .instructions)
-        availability = try values.decode(AgentAvailability.self, forKey: .availability)
+        try self.init(
+            id: try values.decode(String.self, forKey: .id),
+            name: try values.decode(String.self, forKey: .name),
+            providerConfiguration: try values.decode(AgentProviderConfiguration.self, forKey: .providerConfiguration),
+            modelID: try values.decode(AgentModelID.self, forKey: .modelID),
+            reasoningEffort: try values.decodeIfPresent(ReasoningEffort.self, forKey: .reasoningEffort),
+            persona: try values.decodeIfPresent(String.self, forKey: .persona),
+            instructions: try values.decode(String.self, forKey: .instructions),
+            availability: try values.decode(AgentAvailability.self, forKey: .availability)
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encode(id, forKey: .id)
         try values.encode(name, forKey: .name)
-        try values.encode(model, forKey: .model)
-        try values.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
         try values.encode(providerConfiguration, forKey: .providerConfiguration)
+        try values.encode(model.id, forKey: .modelID)
+        try values.encodeIfPresent(reasoningEffort, forKey: .reasoningEffort)
         try values.encodeIfPresent(persona, forKey: .persona)
         try values.encode(instructions, forKey: .instructions)
         try values.encode(availability, forKey: .availability)
@@ -181,8 +112,6 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
 public enum TurgaiAgentProfileError: Error, Equatable, Sendable {
     case invalidID(String)
     case invalidName
-    case invalidEndpointURL(String)
-    case invalidContextWindow(Int)
     case unknownProfile(String)
     case cannotDeleteDefaultProfile
     case noEnabledProfile
@@ -195,9 +124,6 @@ public enum TurgaiAgentProfileError: Error, Equatable, Sendable {
 /// What must hold across profiles, one default that exists, is the storage's.
 public actor TurgaiAgentProfileStore {
     public static let defaultProfileID = "conversation"
-    /// The context window a new profile starts with, for providers where it's a choice.
-    public static let defaultContextWindow = 16_384
-
     private let storage: AgentProfileStorage
 
     /// The profiles kept in `storage`.
@@ -255,18 +181,18 @@ public actor TurgaiAgentProfileStore {
     @discardableResult
     public func create(
         name: String,
-        model: AgentModel,
-        reasoningEffort: ReasoningEffort? = nil,
         providerConfiguration: AgentProviderConfiguration,
+        modelID: AgentModelID,
+        reasoningEffort: ReasoningEffort? = nil,
         persona: String? = nil,
         instructions: String = ""
     ) async throws -> TurgaiAgentProfile {
-        let profile = TurgaiAgentProfile(
+        let profile = try TurgaiAgentProfile(
             id: Self.uniqueID(for: name, existing: try await storage.ids()),
             name: name,
-            model: model,
-            reasoningEffort: reasoningEffort,
             providerConfiguration: providerConfiguration,
+            modelID: modelID,
+            reasoningEffort: reasoningEffort,
             persona: persona,
             instructions: instructions
         )
@@ -292,37 +218,6 @@ public actor TurgaiAgentProfileStore {
             profile.name.count <= 120
         else {
             throw TurgaiAgentProfileError.invalidName
-        }
-        switch profile.providerConfiguration {
-        case .ollama(let baseURL, _):
-            guard profile.model.provider == .ollama, Self.validHTTPURL(baseURL) else {
-                throw TurgaiAgentProfileError.invalidEndpointURL(baseURL.absoluteString)
-            }
-        case .openAI:
-            guard profile.model.provider == .openAI else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
-        case .anthropic:
-            guard profile.model.provider == .anthropic else {
-                throw TurgaiAgentProfileError.invalidEndpointURL("")
-            }
-        case .gemini:
-            guard profile.model.provider == .gemini else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
-        case .openAICompatible(let baseURL, _, _, _):
-            guard profile.model.provider == .openAICompatible, Self.validHTTPURL(baseURL) else {
-                throw TurgaiAgentProfileError.invalidEndpointURL(baseURL.absoluteString)
-            }
-        case .appleSystem:
-            guard profile.model.provider == .system else { throw TurgaiAgentProfileError.invalidEndpointURL("") }
-        #if Llama
-            case .llamaCPP(let configuration, _):
-                guard profile.model.provider == .llamaCPP,
-                    !configuration.modelPath.trimmed().isEmpty
-                else {
-                    throw TurgaiAgentProfileError.invalidEndpointURL(configuration.modelPath)
-                }
-        #endif
-        }
-        guard profile.contextWindow > 0 else {
-            throw TurgaiAgentProfileError.invalidContextWindow(profile.contextWindow)
         }
     }
 
@@ -358,12 +253,5 @@ public actor TurgaiAgentProfileStore {
             suffix += 1
         }
         return candidate
-    }
-
-    private static func validHTTPURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(),
-            scheme == "http" || scheme == "https"
-        else { return false }
-        return url.host != nil
     }
 }

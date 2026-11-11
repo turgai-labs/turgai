@@ -25,8 +25,12 @@ struct AgentConfigurationForm: HTML, Sendable {
     let action: String
     let editing: Editing
     let draft: AgentDraft
-    let modelCatalog: TurgaiModelCatalog
     let submitLabel: String
+
+    /// The saved bot's id, when it's a saved one.
+    private var savedID: String? {
+        if case .saved(let id) = editing { id } else { nil }
+    }
 
     private var cancelHref: String {
         switch editing {
@@ -49,9 +53,14 @@ struct AgentConfigurationForm: HTML, Sendable {
             }
             section(.class("config-group")) {
                 h3 { "Model" }
-                ModelPicker(catalog: modelCatalog, provider: draft.provider, modelID: draft.modelID)
-                ProviderConfigurationFields(provider: draft.provider, settings: draft.settings)
+                // The provider, how it's reached, then its model, and how much it's given.
+                ProviderPicker(provider: draft.provider, profileID: savedID)
+                ProviderConfigurationFields(
+                    provider: draft.provider, settings: draft.settings, profileID: savedID, part: .reaching)
+                ModelPicker(modelID: draft.modelID, profileID: savedID)
                 ReasoningEffortField(selected: draft.reasoningEffort)
+                ProviderConfigurationFields(
+                    provider: draft.provider, settings: draft.settings, profileID: savedID, part: .tuning)
             }
             AgentBehaviorFields(persona: draft.persona, instructions: draft.instructions)
             div(.class("form-actions")) {
@@ -72,7 +81,8 @@ struct AgentBehaviorFields: HTML, Sendable {
             h3 { "Behavior" }
             label(.class("form-field")) {
                 span(.class("field-label")) { "Persona" }
-                textarea(.name("persona"), .init(name: "rows", value: "6"), .placeholder("How should this bot speak?")) {
+                textarea(.name("persona"), .init(name: "rows", value: "6"), .placeholder("How should this bot speak?"))
+                {
                     persona
                 }
             }

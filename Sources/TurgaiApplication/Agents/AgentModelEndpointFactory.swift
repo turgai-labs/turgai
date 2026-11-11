@@ -41,113 +41,7 @@ public actor AgentModelEndpointFactory {
         let transport: any HTTPTransport =
             configuration.account(for: agentModel).map { transports.transport(for: $0) } ?? makeDefaultTransport()
         switch configuration {
-        case .ollama(let baseURL, _):
-            let think: Bool?
-            switch reasoning?.encoding {
-            case nil: think = nil
-            case .disabled: think = false
-            // Ollama's `think` is on or off, so effort none means off for any model, whether or not
-            // a catalog lists the model's reasoning levels.
-            case .raw where reasoning?.effort == ReasoningEffort.none: think = false
-            case .raw, .dynamic, .tokenBudget:
-                throw ModelRouterError.unsupportedReasoningEffort(
-                    provider: agentModel.provider,
-                    model: model,
-                    effort: reasoning?.effort ?? .none
-                )
-            }
-            return AnyLanguageModelEndpoint.ollama(
-                model: model,
-                baseURL: baseURL,
-                temperature: temperature,
-                contextWindow: contextWindow,
-                keepAlive: ollamaKeepAlive,
-                think: think,
-                transport: transport
-            )
-        case .openAI(let reference, _):
-            let apiKey = try await credential(reference)
-            return AnyLanguageModelEndpoint(
-                languageModel: OpenAILanguageModel(
-                    apiKey: apiKey,
-                    model: model,
-                    transport: transport
-                ),
-                modelIdentifier: model,
-                temperature: temperature,
-                effectiveContextWindow: contextWindow,
-                generationOptions: try ModelRouter.generationOptions(
-                    provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
-                ),
-                failures: .openAI
-            )
-        case .anthropic(let reference, _):
-            let apiKey = try await credential(reference)
-            return AnyLanguageModelEndpoint(
-                languageModel: AnthropicLanguageModel(
-                    apiKey: apiKey,
-                    model: model,
-                    transport: transport
-                ),
-                modelIdentifier: model,
-                temperature: temperature,
-                effectiveContextWindow: contextWindow,
-                generationOptions: try ModelRouter.generationOptions(
-                    provider: .anthropic, model: model, temperature: temperature, reasoning: reasoning
-                ),
-                failures: .anthropic
-            )
-        case .gemini(let reference, _):
-            let apiKey = try await credential(reference)
-            return AnyLanguageModelEndpoint(
-                languageModel: GeminiLanguageModel(
-                    apiKey: apiKey,
-                    model: model,
-                    transport: transport
-                ),
-                modelIdentifier: model,
-                temperature: temperature,
-                effectiveContextWindow: contextWindow,
-                generationOptions: try ModelRouter.geminiGenerationOptions(
-                    model: model, temperature: temperature, reasoning: reasoning
-                ),
-                failures: .gemini
-            )
-        case .openAICompatible(let baseURL, let reference, let api, _):
-            let key = try await credential(reference)
-            switch api {
-            case .chatCompletions:
-                return AnyLanguageModelEndpoint(
-                    languageModel: OpenAILanguageModel(
-                        baseURL: baseURL,
-                        apiKey: key,
-                        model: model,
-                        transport: transport
-                    ),
-                    modelIdentifier: model,
-                    temperature: temperature,
-                    effectiveContextWindow: contextWindow,
-                    generationOptions: try ModelRouter.generationOptions(
-                        provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
-                    ),
-                    failures: .openAICompatible
-                )
-            case .responses:
-                try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
-                return AnyLanguageModelEndpoint(
-                    languageModel: OpenResponsesLanguageModel(
-                        baseURL: baseURL,
-                        apiKey: key,
-                        model: model,
-                        transport: transport
-                    ),
-                    modelIdentifier: model,
-                    temperature: temperature,
-                    effectiveContextWindow: contextWindow,
-                    failures: .openAICompatible
-                )
-            }
-        case .appleSystem:
+        case .local(.appleSystem):
             try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
             #if canImport(FoundationModels)
                 return AnyLanguageModelEndpoint.system(
@@ -159,17 +53,118 @@ public actor AgentModelEndpointFactory {
                 throw AgentModelEndpointFactoryError.unavailable(.system)
             #endif
         #if Llama
-            case .llamaCPP(let configuration, _):
+            case .local(.llamaCPP(let file, let layers, _)):
                 try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
                 return await llamaCache.endpoint(
                     model: model,
-                    modelPath: configuration.modelPath,
+                    modelPath: file,
                     temperature: temperature,
                     contextWindow: contextWindow,
-                    gpuLayers: configuration.gpuLayers
+                    gpuLayers: layers
                 )
         #endif
+        case .server(let server):
+            var key: String?
+            if let reference = server.key { key = try await credential(reference) }
+            switch server.software {
+            case .ollama:
+                return AnyLanguageModelEndpoint.ollama(
+                    model: model,
+                    baseURL: server.address.url,
+                    apiKey: key,
+                    temperature: temperature,
+                    contextWindow: contextWindow,
+                    keepAlive: ollamaKeepAlive,
+                    think: try Self.think(reasoning, model: agentModel),
+                    transport: transport
+                )
+            case .openAICompatible(.chatCompletions):
+                return AnyLanguageModelEndpoint(
+                    languageModel: try Self.remote(configuration, model, key: key, transport: transport),
+                    modelIdentifier: model,
+                    temperature: temperature,
+                    effectiveContextWindow: contextWindow,
+                    generationOptions: try ModelRouter.generationOptions(
+                        provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
+                    ),
+                    failures: .openAICompatible
+                )
+            case .openAICompatible(.responses):
+                try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
+                return AnyLanguageModelEndpoint(
+                    languageModel: try Self.remote(configuration, model, key: key, transport: transport),
+                    modelIdentifier: model,
+                    temperature: temperature,
+                    effectiveContextWindow: contextWindow,
+                    failures: .openAICompatible
+                )
+            }
+        case .cloud(let account):
+            let key = try await credential(account.key)
+            let languageModel = try Self.remote(configuration, model, key: key, transport: transport)
+            switch account.provider {
+            case .openAI:
+                return AnyLanguageModelEndpoint(
+                    languageModel: languageModel,
+                    modelIdentifier: model,
+                    temperature: temperature,
+                    effectiveContextWindow: contextWindow,
+                    generationOptions: try ModelRouter.generationOptions(
+                        provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
+                    ),
+                    failures: .openAI
+                )
+            case .anthropic:
+                return AnyLanguageModelEndpoint(
+                    languageModel: languageModel,
+                    modelIdentifier: model,
+                    temperature: temperature,
+                    effectiveContextWindow: contextWindow,
+                    generationOptions: try ModelRouter.generationOptions(
+                        provider: .anthropic, model: model, temperature: temperature, reasoning: reasoning
+                    ),
+                    failures: .anthropic
+                )
+            case .gemini:
+                return AnyLanguageModelEndpoint(
+                    languageModel: languageModel,
+                    modelIdentifier: model,
+                    temperature: temperature,
+                    effectiveContextWindow: contextWindow,
+                    generationOptions: try ModelRouter.geminiGenerationOptions(
+                        model: model, temperature: temperature, reasoning: reasoning
+                    ),
+                    failures: .gemini
+                )
+            }
         }
+    }
+
+    /// Ollama's `think` for `reasoning`: on or off, so effort none means off for any model, whether
+    /// or not a catalog lists the model's reasoning levels; other levels can't be said.
+    private static func think(_ reasoning: ReasoningEffortSelection?, model: AgentModel) throws -> Bool? {
+        switch reasoning?.encoding {
+        case nil: return nil
+        case .disabled: return false
+        case .raw where reasoning?.effort == ReasoningEffort.none: return false
+        case .raw, .dynamic, .tokenBudget:
+            throw ModelRouterError.unsupportedReasoningEffort(
+                provider: model.provider,
+                model: model.id.rawValue,
+                effort: reasoning?.effort ?? .none
+            )
+        }
+    }
+
+    /// AnyLanguageModel's model for `model` where `configuration` says, as the check makes it too.
+    private static func remote(
+        _ configuration: AgentProviderConfiguration, _ model: String, key: String?, transport: any HTTPTransport
+    ) throws -> any LanguageModel {
+        guard let languageModel = configuration.location.remoteLanguageModel(model, key: key, transport: transport)
+        else {
+            throw AgentModelEndpointFactoryError.unavailable(configuration.provider.modelProvider)
+        }
+        return languageModel
     }
 
     private func rejectReasoning(

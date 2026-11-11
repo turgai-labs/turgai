@@ -5,9 +5,9 @@ import Hummingbird
 import HummingbirdElementary
 import NIOCore
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiPersistence
-import TurgaiDomain
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -26,7 +26,6 @@ struct AgentDetailPage: HTMLDocument, Sendable {
     let profile: TurgaiAgentProfile
     /// The form's values: the saved profile, or what was submitted when saving failed.
     let draft: AgentDraft
-    let modelCatalog: TurgaiModelCatalog
     let runtime: [TurgaiAgentRuntimeSnapshot]
     let placement: Placement
     let error: String?
@@ -35,7 +34,6 @@ struct AgentDetailPage: HTMLDocument, Sendable {
         user: AuthenticatedUser,
         profile: TurgaiAgentProfile,
         draft: AgentDraft,
-        modelCatalog: TurgaiModelCatalog,
         runtime: [TurgaiAgentRuntimeSnapshot] = [],
         placement: Placement,
         error: String? = nil
@@ -43,7 +41,6 @@ struct AgentDetailPage: HTMLDocument, Sendable {
         self.user = user
         self.profile = profile
         self.draft = draft
-        self.modelCatalog = modelCatalog
         self.runtime = runtime
         self.placement = placement
         self.error = error
@@ -65,7 +62,7 @@ struct AgentDetailPage: HTMLDocument, Sendable {
                         switch user {
                         case .administrator:
                             AgentEditor(
-                                id: profile.id, draft: draft, modelCatalog: modelCatalog, placement: placement)
+                                id: profile.id, draft: draft, placement: placement)
                         case .user, .member:
                             AgentConfigurationSummary(profile: profile)
                         }
@@ -116,7 +113,6 @@ struct AgentDetailIntro: HTML, Sendable {
 struct AgentEditor: HTML, Sendable {
     let id: String
     let draft: AgentDraft
-    let modelCatalog: TurgaiModelCatalog
     let placement: AgentDetailPage.Placement
 
     var body: some HTML {
@@ -126,7 +122,7 @@ struct AgentEditor: HTML, Sendable {
             "Changes take effect the next time this bot starts. Conversations already underway keep their current voice."
         }
         AgentConfigurationForm(
-            action: "/agents/update", editing: .saved(id: id), draft: draft, modelCatalog: modelCatalog,
+            action: "/agents/update", editing: .saved(id: id), draft: draft,
             submitLabel: "Save changes")
         if case .additional = placement {
             form(.method(.post), .action("/agents/delete"), .class("delete-form")) {

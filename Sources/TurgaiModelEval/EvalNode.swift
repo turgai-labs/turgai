@@ -99,7 +99,8 @@ struct EvalNode: Sendable {
         let others: [Role] = agents.map(\.role).filter { (role: Role) -> Bool in role != context.agentID.role }
         let offered = try await Agent.offered(others, on: actorSystem)
         let writer = ObjectWriter(
-            endpoint: writing, report: { (event: WriterEvent) in FileHandle.standardError.write(Data(event.written.utf8)) })
+            endpoint: writing,
+            report: { (event: WriterEvent) in FileHandle.standardError.write(Data(event.written.utf8)) })
         let session = ObjectSession(
             actorSystem: actorSystem, objectCatalog: catalog, agents: offered, writer: writer,
             request: context.input.text)
@@ -116,8 +117,8 @@ struct EvalNode: Sendable {
     /// The provider settings the app's profiles use for this model.
     static func configuration(for model: AgentModel) throws -> AgentProviderConfiguration {
         switch model.provider {
-        case .ollama: .ollama(baseURL: URL(string: "http://127.0.0.1:11434")!, contextWindow: 16_384)
-        case .system: .appleSystem
+        case .ollama: .server(ModelServer(software: .ollama, address: .localOllama, key: nil, contextWindow: .standard))
+        case .system: .local(.appleSystem)
         default: throw UnsupportedModel(model: model)
         }
     }

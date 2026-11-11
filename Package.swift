@@ -32,8 +32,9 @@ let package = Package(
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
-            url: "https://github.com/huggingface/AnyLanguageModel.git",
-            from: "1.2.0",
+            // Listing a provider's models and checking one, until huggingface/AnyLanguageModel#416 is released.
+            url: "https://github.com/akbashev/AnyLanguageModel.git",
+            branch: "feat/list-models",
             traits: ["AsyncHTTPClient", .trait(name: "Llama", condition: .when(traits: ["Llama"]))]
         ),
         .package(
@@ -372,7 +373,8 @@ let package = Package(
         .testTarget(
             name: "TurgaiApplicationTests",
             dependencies: [
-                "TurgaiCalls", "TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiPeople", "TurgaiWeb",
+                "TurgaiCalls", "TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiPeople", "TurgaiPersistence",
+                "TurgaiWeb",
             ]
         ),
         .testTarget(

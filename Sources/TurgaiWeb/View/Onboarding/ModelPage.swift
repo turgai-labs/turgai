@@ -16,17 +16,18 @@ import TurgaiTelegram
 #endif
 
 struct ModelPage: HTMLDocument, Sendable {
-    let modelCatalog: TurgaiModelCatalog
     let draft: AgentDraft
+    /// The bot being set up, once it's saved.
+    let profileID: String?
     let error: String?
 
     init(
-        modelCatalog: TurgaiModelCatalog,
         draft: AgentDraft,
+        profileID: String?,
         error: String? = nil
     ) {
-        self.modelCatalog = modelCatalog
         self.draft = draft
+        self.profileID = profileID
         self.error = error
     }
     var title: String { "Turgai — Model" }
@@ -64,9 +65,14 @@ struct ModelPage: HTMLDocument, Sendable {
 
     @HTMLBuilder private var modelForm: some HTML & Sendable {
         form(.method(.post), .action("/onboarding/model"), .init(name: "id", value: "model-form")) {
-            ModelPicker(catalog: modelCatalog, provider: draft.provider, modelID: draft.modelID)
-            ProviderConfigurationFields(provider: draft.provider, settings: draft.settings)
+            // The provider, how it's reached, then its model, and how much it's given.
+            ProviderPicker(provider: draft.provider, profileID: profileID)
+            ProviderConfigurationFields(
+                provider: draft.provider, settings: draft.settings, profileID: profileID, part: .reaching)
+            ModelPicker(modelID: draft.modelID, profileID: profileID)
             ReasoningEffortField(selected: draft.reasoningEffort)
+            ProviderConfigurationFields(
+                provider: draft.provider, settings: draft.settings, profileID: profileID, part: .tuning)
             AgentCharacterFields(name: draft.name, persona: draft.persona, instructions: draft.instructions)
         }
     }
