@@ -1,5 +1,5 @@
 {
-  "originHash" : "1f39bfcd943bfecb6d4454c5cb30c5c3b7c4d4e27e5ca5b98ed2528706254971",
+  "originHash" : "140c60e747b74809390c2c4c764175ea8052e8a6df4653577292f64e5416d75d",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -87,8 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/elementary-swift/elementary.git",
       "state" : {
-        "revision" : "f0141ba98c0f3ec9eeaee40fb4bffd1427482a1d",
-        "version" : "0.8.1"
+        "revision" : "71521f6f710b523d572293b90646ea12befa5b9f",
+        "version" : "0.9.0"
       }
     },
     {
@@ -96,8 +96,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/elementary-swift/elementary-htmx.git",
       "state" : {
-        "revision" : "1cbf32fd20d1eff7fc8c587e22ebda21b71a799b",
-        "version" : "0.5.2"
+        "revision" : "91b31282312295483c7499015590cdcb7919ab10",
+        "version" : "0.7.0"
       }
     },
     {
@@ -141,8 +141,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/hummingbird-community/hummingbird-elementary.git",
       "state" : {
-        "revision" : "3b1399c6f6bca28ca3efee1904737cb3e3f6a9c8",
-        "version" : "0.5.1"
+        "revision" : "6b4f8e69bd7dfa45843620178a343efca219e2dd",
+        "version" : "0.6.0"
       }
     },
     {

@@ -91,9 +91,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
         .package(url: "https://github.com/apple/swift-system.git", from: "1.5.0"),
         .package(url: "https://github.com/hummingbird-project/hummingbird-websocket.git", from: "2.2.0"),
-        .package(url: "https://github.com/elementary-swift/elementary.git", from: "0.7.0"),
-        .package(url: "https://github.com/elementary-swift/elementary-htmx.git", from: "0.1.0"),
-        .package(url: "https://github.com/hummingbird-community/hummingbird-elementary.git", from: "0.4.2"),
+        .package(url: "https://github.com/elementary-swift/elementary.git", from: "0.9.0"),
+        .package(url: "https://github.com/elementary-swift/elementary-htmx.git", from: "0.7.0"),
+        .package(url: "https://github.com/hummingbird-community/hummingbird-elementary.git", from: "0.6.0"),
         .package(
             url: "https://github.com/apple/swift-log.git",
             from: "1.6.0"
@@ -169,8 +169,8 @@ let package = Package(
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "Elementary", package: "elementary"),
-                .product(name: "ElementaryHTMX", package: "elementary-htmx"),
-                .product(name: "ElementaryHTMXWS", package: "elementary-htmx"),
+                .product(name: "ElementaryHTMX4", package: "elementary-htmx"),
+                .product(name: "ElementaryHTMX4WS", package: "elementary-htmx"),
                 .product(name: "HummingbirdElementary", package: "hummingbird-elementary"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(name: "Markdown", package: "swift-markdown"),

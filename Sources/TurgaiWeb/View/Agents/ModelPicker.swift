@@ -1,5 +1,5 @@
 import Elementary
-import ElementaryHTMX
+import ElementaryHTMX4
 import Hail
 import TurgaiApplication
 
@@ -20,7 +20,7 @@ struct ProviderPicker: HTML, Sendable {
             // Its settings show before it's asked: only the shown ones are sent.
             select(
                 attributes: [.name("provider"), .required, .init(name: "onchange", value: Self.showSettings)]
-                    + ModelSearchRequest.attributes(on: "change", profileID: profileID)
+                    + ModelSearchRequest.attributes(on: .choosing, profileID: profileID)
             ) {
                 for kind in AgentProvider.Kind.allCases {
                     let providers = AgentProvider.offered.filter { $0.kind == kind }
@@ -65,7 +65,7 @@ struct ModelPicker: HTML, Sendable {
                 attributes: [
                     .class("hint model-search"), .id(ModelSearchRequest.statusID),
                     .init(name: "aria-live", value: "polite"),
-                ] + ModelSearchRequest.attributes(on: "load", profileID: profileID)
+                ] + ModelSearchRequest.attributes(on: .opening, profileID: profileID)
             ) {
                 span(.class("model-search-finding")) { "Finding models…" }
                 span(.class("model-search-answer"), .id(ModelSearchRequest.answerID)) {}
@@ -74,24 +74,35 @@ struct ModelPicker: HTML, Sendable {
     }
 }
 
-/// What asks the chosen provider for its models, as the form has it: the answer goes under the
-/// model field, and its models into the field's suggestions.
+/// What asks the chosen provider for its models, as the form has it, the form's shown fields sent
+/// with the request: the answer goes under the model field, and its models into the field's
+/// suggestions.
 enum ModelSearchRequest {
     static let statusID = "turgai-model-search"
     static let answerID = "turgai-model-search-answer"
-    /// A moment after a field is typed in.
-    static let typing = "input changed delay:600ms"
 
-    static func attributes<Tag: HTMLTrait.Attributes.Global>(on trigger: String, profileID: String?)
+    /// When it's asked.
+    enum Moment {
+        /// As the page opens.
+        case opening
+        /// As a choice changes.
+        case choosing
+        /// A moment after a field is typed in.
+        case typing
+    }
+
+    static func attributes<Tag: HTMLTrait.Attributes.Global>(on moment: Moment, profileID: String?)
         -> [HTMLAttribute<Tag>]
     {
-        [
-            .hx.post("/agents/models"),
-            .hx.trigger(HTMLAttributeValue.HTMX.EventTrigger(rawValue: trigger)),
-            .hx.include("closest form"),
-            .hx.target("#\(answerID)"),
-            .hx.indicator("#\(statusID)"),
-        ] + (profileID.map { [.hx.vals(#"{"id": "\#($0)"}"#)] } ?? [])
+        let trigger: HTMLAttribute<Tag> =
+            switch moment {
+            case .opening: .hx.trigger(.event(.load))
+            case .choosing: .hx.trigger(.event(.change))
+            case .typing: .hx.trigger(.event(.input), [.changed, .delay("600ms")])
+            }
+        return [
+            .hx.post("/agents/models"), trigger, .hx.target("#\(answerID)"), .hx.indicator("#\(statusID)"),
+        ] + (profileID.map { [.hx.vals([.init("id", $0)])] } ?? [])
     }
 }
 

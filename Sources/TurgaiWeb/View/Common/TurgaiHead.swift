@@ -20,8 +20,8 @@ struct TurgaiHead: HTML, Sendable {
         meta(.charset(.utf8))
         meta(.name(.viewport), .content("width=device-width, initial-scale=1, viewport-fit=cover"))
         link(.href("/turgai.css"), .rel(.stylesheet))
-        script(.src("https://unpkg.com/htmx.org@2.0.3")) {}
-        script(.src("https://unpkg.com/htmx-ext-ws@2.0.1/ws.js")) {}
+        script(.src("https://cdn.jsdelivr.net/npm/htmx.org@4.0.1/dist/htmx.min.js")) {}
+        script(.src("https://cdn.jsdelivr.net/npm/htmx.org@4.0.1/dist/ext/hx-ws.min.js")) {}
         HTMLRaw(
             """
             <script>
@@ -195,7 +195,7 @@ struct TurgaiHead: HTML, Sendable {
                 target.form?.requestSubmit();
             });
 
-            document.addEventListener("htmx:wsAfterSend", (event) => {
+            document.addEventListener("htmx:ws:after:message:outgoing", (event) => {
                 const form = event.target;
                 if (!(form instanceof HTMLFormElement)) return;
                 if (!form.classList.contains("chat-composer-form")) return;
@@ -272,19 +272,12 @@ struct TurgaiHead: HTML, Sendable {
                 });
             };
 
-            document.addEventListener("htmx:oobAfterSwap", () => {
+            document.addEventListener("htmx:after:swap", () => {
                 observeChat();
                 applyChatBubbleGeometry();
                 if (document.querySelector(".chat-wrapper") && chatStickToBottom) {
                     maybeScrollChat();
                 }
-            }, true);
-            document.addEventListener("htmx:afterSettle", () => {
-                if (!document.querySelector(".chat-app-page")) return;
-                observeChat();
-                applyChatBubbleGeometry();
-                chatStickToBottom = true;
-                maybeScrollChat();
             }, true);
             observeChat();
             applyChatBubbleGeometry();

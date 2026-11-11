@@ -1,5 +1,5 @@
 import Elementary
-import ElementaryHTMXWS
+import ElementaryHTMX4WS
 
 struct PageFooter<Content: HTML & Sendable>: HTML, Sendable {
     let content: Content
@@ -82,7 +82,7 @@ struct ChatFooterContent: HTML, Sendable {
     let profileName: String
 
     var body: some HTML {
-        form(.id("chat-composer"), .class("chat-composer-form"), .ws.send) {
+        form(.id("chat-composer"), .class("chat-composer-form"), .hx.ws.send) {
             input(.type(.hidden), .name("command"), .value("message"))
             label(.for("chat-message"), .class("chat-composer-label")) {
                 "Message \(profileName)"

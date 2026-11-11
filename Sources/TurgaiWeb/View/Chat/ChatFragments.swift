@@ -1,5 +1,6 @@
 import Elementary
-import ElementaryHTMX
+import ElementaryHTMX4
+import ElementaryHTMX4WS
 import Foundation
 import TurgaiModels
 
@@ -81,7 +82,7 @@ struct ChatLiveAppendedMessage: HTML, Sendable {
     let message: Message
 
     var body: some HTML {
-        div(.hx.swapOOB(.beforeEnd, "#chat-messages-content")) {
+        hxPartial(.hx.target("#chat-messages-content"), .hx.swap(.beforeEnd)) {
             let id = "message-\(message.id.rawValue.uuidString)"
             div(
                 .id(id),
@@ -126,7 +127,7 @@ struct ChatLiveHistory: HTML, Sendable {
         div(
             .id("chat-messages-content"),
             .class("chat-messages-content"),
-            .hx.swapOOB(.outerHTML, "#chat-messages-content")
+            .hx.swapOOB(.outerHTML)
         ) {
             if messages.isEmpty {
                 div(.class("chat-empty"), .id("chat-empty")) {
@@ -157,7 +158,7 @@ struct ChatLiveAccessRequest: HTML, Sendable {
     let request: AccessRequest
 
     var body: some HTML {
-        div(.hx.swapOOB(.beforeEnd, "#chat-messages-content")) {
+        hxPartial(.hx.target("#chat-messages-content"), .hx.swap(.beforeEnd)) {
             div(
                 .id("access-\(request.id.uuidString)"),
                 .class("chat-message chat-message-assistant chat-access")
@@ -175,7 +176,7 @@ struct ChatLiveAccessRequest: HTML, Sendable {
     }
 
     private func answer(_ answer: AccessAnswer, label: String, style: String) -> some HTML {
-        form(.ws.send, .class("chat-access-answer")) {
+        form(.hx.ws.send, .class("chat-access-answer")) {
             input(.type(.hidden), .name("command"), .value("answer"))
             input(.type(.hidden), .name("id"), .value(request.id.uuidString))
             input(.type(.hidden), .name("answer"), .value(answer.rawValue))
@@ -256,7 +257,7 @@ enum ChatLiveFragment {
     /// `content` as a turn's reply, after the messages.
     private static func appended(_ content: ChatLiveMessageBody, turnID: TurnID) -> String {
         ChatLiveEmptyClear().render()
-            + div(.hx.swapOOB(.beforeEnd, "#chat-messages-content")) {
+            + hxPartial(.hx.target("#chat-messages-content"), .hx.swap(.beforeEnd)) {
                 div(.id("turn-\(turnID.rawValue.uuidString)"), .class("chat-message chat-message-assistant")) {
                     content
                 }

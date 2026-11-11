@@ -1,5 +1,6 @@
 import Elementary
-import ElementaryHTMXWS
+import ElementaryHTMX4
+import ElementaryHTMX4WS
 import TurgaiApplication
 
 struct ChatPage: HTMLDocument, Sendable {
@@ -41,8 +42,9 @@ struct ChatPage: HTMLDocument, Sendable {
     var body: some HTML {
         main(
             .class("app-page chat-app-page overlay-scroll-page"),
-            .init(name: "hx-ext", value: "ws"),
-            .ws.connect("/api/v1/chat?conversationID=\(conversationID)")
+            .hx.ws.connect("/api/v1/chat?conversationID=\(conversationID)"),
+            // The socket sends only swaps that say where they go.
+            .hx.swap(.none)
         ) {
             PageShell(
                 kind: shellKind,

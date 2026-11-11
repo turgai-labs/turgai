@@ -1,5 +1,5 @@
 import Elementary
-import ElementaryHTMX
+import ElementaryHTMX4
 import Hail
 import TurgaiApplication
 
@@ -110,7 +110,7 @@ private struct AddressField: HTML, Sendable {
             span(.class("field-label")) { "Server address" }
             input(
                 attributes: [.type(.url), .name("address"), .value(address), .placeholder(placeholder)]
-                    + ModelSearchRequest.attributes(on: ModelSearchRequest.typing, profileID: profileID))
+                    + ModelSearchRequest.attributes(on: .typing, profileID: profileID))
             p(.class("hint")) { hint }
         }
     }
@@ -149,7 +149,7 @@ private struct APIKeyField: HTML, Sendable {
                 attributes: [
                     .type(.password), .name("apiKey"), .autocomplete(.off),
                     .placeholder(hasSavedKey ? "Leave blank to keep the saved key" : placeholder),
-                ] + ModelSearchRequest.attributes(on: ModelSearchRequest.typing, profileID: profileID))
+                ] + ModelSearchRequest.attributes(on: .typing, profileID: profileID))
             p(.class("hint")) { "The key is stored as a secret and never shown again." }
         }
     }
