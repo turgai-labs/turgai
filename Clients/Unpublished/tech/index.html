@@ -2184,7 +2184,7 @@ a:focus-visible { outline: 2px solid var(--signal-blue); outline-offset: 4px; bo
    layer (backface-visibility) and padding its edge with a transparent outline makes them anti-aliased */
 .github, .eyebrow, .tech-topic .kicker, .cta .button-accent { -webkit-backface-visibility: hidden; backface-visibility: hidden; outline: 1px solid transparent; }
 
-:root { --ga1: -3.2deg; --ga2: -3.8deg; --ga3: 4.2deg; }
+:root { --ga1: 2.2deg; --ga2: -3.1deg; --ga3: 0.7deg; }
 body { timeline-scope: --t-objects, --t-actors, --t-agents, --t-behaviors, --t-effects, --t-control, --t-plugins, --t-swift, --t-status, --t-night; }
 .orbit .appear.a-objects { animation-timeline: --t-objects; }
 .orbit .appear.a-actors { animation-timeline: --t-actors; }
@@ -2213,7 +2213,7 @@ body { timeline-scope: --t-objects, --t-actors, --t-agents, --t-behaviors, --t-e
   id: "support",
   name: "Support",
   providerConfiguration: .server(ModelServer(
-    software: .ollama, address: .localOllama, key: <b>nil</b>, contextWindow: .standard)),
+    software: .ollama, address: .localOllama, key: <b>nil</b>, context: .chosen(.standard))),
   modelID: "qwen3:8b",
   instructions: "Answer customers. Pass orders to the shop."
 )

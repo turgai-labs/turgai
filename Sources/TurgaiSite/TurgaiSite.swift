@@ -111,7 +111,7 @@ struct SiteNav: HTML {
 
     var body: some HTML {
         nav(.class("app-nav-links"), .init(name: "aria-label", value: "Main")) {
-            for page in SitePage.allCases {
+            for page in SitePage.allCases where page != .tech || TechPage.isPublished {
                 if page == current {
                     a(
                         .class("nav-link nav-link-active"), .href(page.link(from: current)),
@@ -161,7 +161,7 @@ struct PageTag: HTML {
     static let origin = "https://turg.ai"
     static let title = "Turgai — an agent harness built on objects"
     static let description =
-        "Turgai is an agent harness for adding AI agents to your product. Add tools, rules and features while everything keeps running. Any model, wherever you run it."
+        "Turgai is an agent harness for adding AI agents to your product. Add tools, rules and features as you need them. Any model, wherever you run it."
 
     static let all: [PageTag] = [
         PageTag(kind: .name, key: "description", value: description),
@@ -261,8 +261,8 @@ extension Chapter {
             }
         case .grows:
             p {
-                "From then on, you grow it by asking: say what you need, and an agent writes the new part. Or write it in code yourself. "
-                strong { "The new part joins what’s already there. Nothing is rebuilt, nothing stops." }
+                "From then on, it grows with you: new rules, new tools, new features. "
+                strong { "What already works keeps working." }
             }
         case .trust:
             p {
@@ -276,9 +276,11 @@ extension Chapter {
             p { strong { "You set the rules, they hold below the model, and the journal shows everything it did." } }
         case .why:
             p {
-                "Everything in Turgai, from a supplier to a rule to an agent, is an object that keeps its own data and talks to the others by messages, on one machine or across many. That’s why a new part joins without touching the rest, and a part that fails comes back with what it knew."
+                "Turgai is built so that adding something new never means rebuilding what works, and a part that fails comes back with what it knew."
             }
-            p { a(.class("more"), .href(TechPage.path)) { "How it works →" } }
+            if TechPage.isPublished {
+                p { a(.class("more"), .href(TechPage.path)) { "How it works →" } }
+            }
         }
     }
 
@@ -302,7 +304,7 @@ extension Chapter {
             Proof(
                 label: "At Dopline",
                 text:
-                    "Anna said “Trips over €8,000 need my approval.” The planner wrote this trip desk, Anna read it and switched it on, and from then on Turgai runs it, not the model. Later she asked for group tours the same way.",
+                    "Anna said “Trips over €8,000 need my approval.” She checked the new rule and switched it on, and from then on it holds every time. Later she added group tours the same way.",
                 exhibit: .code(Code(label: "The trip desk, written by the planner", source: Code.yamlSample))
             )
         case .trust:
@@ -603,9 +605,11 @@ struct TurgaiSite {
             skylarkPath: skylark.pathData,
             angles: angles
         )
-        let techFolder = output.appending(path: TechPage.path, directoryHint: .isDirectory)
-        try files.createDirectory(at: techFolder, withIntermediateDirectories: true)
-        try tech.render().write(to: techFolder.appending(path: "index.html"), atomically: true, encoding: .utf8)
+        if TechPage.isPublished {
+            let techFolder = output.appending(path: TechPage.path, directoryHint: .isDirectory)
+            try files.createDirectory(at: techFolder, withIntermediateDirectories: true)
+            try tech.render().write(to: techFolder.appending(path: "index.html"), atomically: true, encoding: .utf8)
+        }
 
         try files.createDirectory(
             at: output.appending(path: SitePath.video, directoryHint: .isDirectory), withIntermediateDirectories: true)
@@ -664,7 +668,7 @@ private struct SkyIntro: HTML {
                         span(.class("flag")) { "your product." }
                     }
                     p(.class("answer")) {
-                        "Plug AI agents into your product today. Add tools, rules and whole features tomorrow, by asking or in code, while everything keeps running."
+                        "Plug AI agents into your product today. Add tools, rules and whole features as you need them."
                     }
                 }
             }
