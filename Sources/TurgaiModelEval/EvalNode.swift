@@ -117,7 +117,8 @@ struct EvalNode: Sendable {
     /// The provider settings the app's profiles use for this model.
     static func configuration(for model: AgentModel) throws -> AgentProviderConfiguration {
         switch model.provider {
-        case .ollama: .server(ModelServer(software: .ollama, address: .localOllama, key: nil, contextWindow: .standard))
+        case .ollama:
+            .server(ModelServer(software: .ollama, address: .localOllama, key: nil, context: .chosen(.standard)))
         case .system: .local(.appleSystem)
         default: throw UnsupportedModel(model: model)
         }

@@ -13,7 +13,7 @@ struct AgentModelEndpointFactoryTests {
         let model = try AgentModel(provider: .ollama, id: "qwen3.5:9b")
         let ollama = AgentProviderConfiguration.server(
             ModelServer(
-                software: .ollama, address: .localOllama, key: nil, contextWindow: try ContextWindow(tokens: 8192)))
+                software: .ollama, address: .localOllama, key: nil, context: .chosen(try ContextWindow(tokens: 8192))))
 
         _ = try await factory.endpoint(
             model: model, configuration: ollama, temperature: 0, reasoning: ReasoningEffortSelection(effort: .none))
@@ -33,7 +33,7 @@ struct AgentModelEndpointFactoryTests {
         let model = try AgentModel(provider: .ollama, id: "gpt-oss:120b")
         let key = AgentCredentialReference.new()
         let cloud = AgentProviderConfiguration.server(
-            ModelServer(software: .ollama, address: .ollamaCloud, key: key, contextWindow: .standard))
+            ModelServer(software: .ollama, address: .ollamaCloud, key: key, context: .providers(.unsaid)))
 
         await #expect(throws: AgentModelEndpointFactoryError.missingCredential(key)) {
             try await factory.endpoint(model: model, configuration: cloud, temperature: 0)

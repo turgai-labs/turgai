@@ -232,14 +232,16 @@ enum ContextPresentation {
     static func text(for snapshot: AgentContextSnapshot) -> String {
         var lines: [String] = ["Context diagnostics", ""]
         lines.append("Status: \(snapshot.state.rawValue)")
-        if let usage = snapshot.contextUsage {
-            let percentage: Int =
-                usage.limitTokens > 0
-                ? Int((Double(usage.usedTokens) / Double(usage.limitTokens) * 100).rounded())
-                : 0
+        if let usage = snapshot.contextUsage, let limit = usage.limitTokens, limit > 0 {
+            let percentage = Int((Double(usage.usedTokens) / Double(limit) * 100).rounded())
             lines.append(
-                "Context window: \(counted(usage.usedTokens)) / \(counted(usage.limitTokens)) tokens"
+                "Context window: \(counted(usage.usedTokens)) / \(counted(limit)) tokens"
                     + " (\(percentage)%, \(render(source: usage.source)))")
+        } else if let usage = snapshot.contextUsage {
+            // The provider doesn't say its window: only what it was sent is known.
+            lines.append(
+                "Context: \(counted(usage.usedTokens)) tokens; the provider doesn't say its window"
+                    + " (\(render(source: usage.source)))")
         } else {
             lines.append("Context window: not reported")
         }

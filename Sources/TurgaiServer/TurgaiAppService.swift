@@ -480,7 +480,8 @@ extension TurgaiAppService {
         -> TurgaiAgentProfile?
     {
         let role = agentID.role.rawValue
-        return role == "user-tool" ? try await agentProfiles.defaultProfile() : try await agentProfiles.profile(id: role)
+        return role == "user-tool"
+            ? try await agentProfiles.defaultProfile() : try await agentProfiles.profile(id: role)
     }
 
     /// The user's tools in `directory`, each problem with one logged.
@@ -652,7 +653,7 @@ extension TurgaiAppService {
                         phase: snapshot.state,
                         currentTool: nil,
                         contextUsedTokens: snapshot.contextUsage?.usedTokens,
-                        contextLimitTokens: snapshot.contextUsage?.limitTokens,
+                        contextLimitTokens: snapshot.contextUsage?.limitTokens ?? nil,
                         historyTurnCount: snapshot.historyTurnCount,
                         totalTokens: snapshot.usageSummary.totalTokens
                     )

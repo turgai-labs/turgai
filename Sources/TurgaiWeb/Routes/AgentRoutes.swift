@@ -156,6 +156,24 @@ extension TurgaiMainWebApp {
             return HTMLResponse { ModelSearchAnswer(outcome: outcome) }.response(from: request, context: context)
         }
 
+        // The chosen model's window, as the form has it: in place of its provider's context window
+        // field.
+        agents.post("models/window") { request, context in
+            guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
+                return Response(status: .unauthorized)
+            }
+            let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
+            let id = form["id"]?.first?.trimmed() ?? ""
+            let saved = id.isEmpty ? nil : try await agentProfiles.profile(id: id)
+            let draft = AgentDraft(form: form, over: .new(named: ""))
+            let model = await ModelWindow.ask(
+                draft, saved: saved?.providerConfiguration, credentials: agentCredentials)
+            return HTMLResponse {
+                ContextWindowField(
+                    provider: draft.provider, tokens: draft.settings.contextWindow, model: model, replacing: true)
+            }.response(from: request, context: context)
+        }
+
         agents.post("update") { request, context in
             guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")

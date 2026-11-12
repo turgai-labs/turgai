@@ -7,7 +7,7 @@
       "location" : "https://github.com/akbashev/AnyLanguageModel.git",
       "state" : {
         "branch" : "feat/list-models",
-        "revision" : "6c4e6187022dc9f34576ebf52a3e07ccbd58872c"
+        "revision" : "98ff4a92719bb919863b3afd23d90aa55ba1a04d"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "3227e873563239fc65a5255c840e076b6a17adf3"
+        "revision" : "9b6ac618d623b5964760bf1678925721404e1b35"
       }
     },
     {

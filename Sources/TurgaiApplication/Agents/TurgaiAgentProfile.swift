@@ -47,7 +47,7 @@ public struct TurgaiAgentProfile: Codable, Equatable, Sendable, Identifiable {
     /// the selected model provider.
     public var reasoningEffort: ReasoningEffort?
     /// How many tokens a prompt may use, as the provider configuration says.
-    public var contextWindow: Int { providerConfiguration.contextWindow }
+    public var contextWindow: Int? { providerConfiguration.contextWindow }
     /// Optional persona supplied by configuration. Nil or an empty string
     /// means that no persona instructions are added.
     public var persona: String?

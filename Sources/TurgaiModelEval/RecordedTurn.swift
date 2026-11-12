@@ -101,6 +101,8 @@ struct RecordedTurn: Sendable {
             + notices.map { "=== noticed: \($0)\n" }.joined()
             + "=== answer: \(answer)\n"
             + (failure.map { "=== failure: \($0)\n" } ?? "")
-            + (context.map { "=== context: \($0.usedTokens) of \($0.limitTokens) tokens\n" } ?? "")
+            + (context.map {
+                "=== context: \($0.usedTokens) of \($0.limitTokens.map(String.init) ?? "unsaid") tokens\n"
+            } ?? "")
     }
 }

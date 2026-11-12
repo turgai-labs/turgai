@@ -30,7 +30,7 @@ struct ProviderSettingsDraft: Sendable, Equatable {
     var compatibleAPI: String
     var modelFile: String
     var gpuLayers: String
-    /// Empty is the model's own.
+    /// The window chosen, where it's yours to choose: empty is the model's own.
     var contextWindow: String
     /// Empty is no limit.
     var requestLimit: String
@@ -71,9 +71,9 @@ extension AgentDraft {
         case .server(let server):
             settings.address = server.address.description
             if case .openAICompatible(let api) = server.software { settings.compatibleAPI = api.rawValue }
-            settings.contextWindow = String(server.contextWindow.tokens)
-        case .cloud(let account):
-            settings.contextWindow = String(account.contextWindow.tokens)
+            if case .chosen(let window) = server.context { settings.contextWindow = String(window.tokens) }
+        case .cloud:
+            break
         }
         self.init(
             name: profile.name, persona: profile.persona ?? "", instructions: profile.instructions,

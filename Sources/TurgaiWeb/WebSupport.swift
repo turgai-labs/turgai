@@ -105,10 +105,12 @@ enum TurgaiWebSupport {
             "The default agent cannot be deleted."
         case ModelRefusal.unavailable(let reason):
             reason.sentence
-        case ModelRefusal.window(.aboveModel(_, let model)):
+        case ModelRefusal.configuration(.keyNeeded):
+            "This provider asks for an API key."
+        case ModelRefusal.configuration(.windowAboveModel(_, let model)):
             "This model takes at most \(model.formatted()) tokens: enter a smaller context window."
-        case ModelRefusal.window(.unknown):
-            "The model's context window isn't known: enter it."
+        case ModelRefusal.configuration(.windowUnknown):
+            "How many tokens this model takes isn't known here: enter its context window."
         case is AgentModelError:
             "Enter a valid model."
         default:

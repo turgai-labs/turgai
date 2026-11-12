@@ -19,7 +19,7 @@ struct AgentFormTests {
             providerConfiguration: .server(
                 ModelServer(
                     software: .openAICompatible(.responses), address: server, key: .new(),
-                    contextWindow: try ContextWindow(tokens: 32_768))),
+                    context: .providers(.said(try ContextWindow(tokens: 32_768))))),
             modelID: AgentModelID(rawValue: "qwen3"),
             reasoningEffort: .low,
             persona: "Calm.",
@@ -42,7 +42,9 @@ struct AgentFormTests {
         #expect(html.contains(#"value="http://models.test:8080""#))
         #expect(html.contains(#"<option value="responses" selected>"#))
         #expect(html.contains(#"<option value="low" selected>"#))
-        #expect(html.contains(#"value="32768""#))
+        // A compatible server runs its model with its own window: shown, not typed.
+        #expect(!html.contains(#"value="32768""#))
+        #expect(html.contains("Set by the provider"))
         #expect(html.contains(#"value="3""#))
         #expect(html.contains("Calm."))
         #expect(html.contains("Leave blank to keep the saved key"))
@@ -103,7 +105,7 @@ struct AgentFormTests {
         #expect(ModelSubmission.Key(typed: "", at: .cloud(.openAI), saved: saved) == ModelSubmission.Key.none)
 
         let openAI = AgentProviderConfiguration.cloud(
-            CloudAccount(provider: .openAI, key: reference, contextWindow: .standard))
+            CloudAccount(provider: .openAI, key: reference, window: .unsaid))
         #expect(ModelSubmission.Key(typed: "", at: .cloud(.openAI), saved: openAI) == .kept(reference))
         #expect(ModelSubmission.Key(typed: "", at: .cloud(.anthropic), saved: openAI) == ModelSubmission.Key.none)
     }

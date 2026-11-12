@@ -154,7 +154,7 @@ struct AgentConfigurationSummary: HTML, Sendable {
             }
             p {
                 strong { "Context" }
-                "\(profile.contextWindow.formatted()) tokens"
+                profile.contextWindow.map { "\($0.formatted()) tokens" } ?? "The provider's own, which it doesn't say"
             }
             p {
                 strong { "Persona" }

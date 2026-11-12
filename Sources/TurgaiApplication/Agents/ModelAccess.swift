@@ -31,6 +31,14 @@ public enum ModelLocation: Sendable, Equatable {
         }
     }
 
+    /// Whether `model` runs in Ollama's cloud: there, or passed on to it by a server of your own,
+    /// which names its cloud models so.
+    public func runsInOllamasCloud(_ model: AgentModelID) -> Bool {
+        guard case .server(.ollama, let address) = self else { return false }
+        let name = model.rawValue
+        return address.isSameServer(as: .ollamaCloud) || name.hasSuffix(":cloud") || name.hasSuffix("-cloud")
+    }
+
     /// Whether a key for `other` is one for it too: the same cloud, or the same server.
     public func sharesKey(with other: ModelLocation) -> Bool {
         switch (self, other) {
@@ -40,27 +48,46 @@ public enum ModelLocation: Sendable, Equatable {
         }
     }
 
-    /// A bot's model here, reached with the key `key` refers to and given `window` tokens: Apple's
-    /// on-device model's window is its own.
-    ///
-    /// - Throws: ``ModelUnavailability`` with ``ModelUnavailability/Kind/keyNeeded``, for a cloud
-    ///   without a key.
-    public func configuration(key: AgentCredentialReference?, window: ContextWindow) throws(ModelUnavailability)
-        -> AgentProviderConfiguration
-    {
+    /// A bot's `model` here, reached with the key `key` refers to, with the context it gets: where
+    /// you choose, `typed`, when the model takes that many, or else as many as it takes, and on an
+    /// Ollama server, which keeps memory for the whole window, no more than
+    /// ``ContextWindow/standard``; anywhere else the provider's own window, `modelTakes` when the
+    /// provider says it.
+    public func configuration(
+        key: AgentCredentialReference?, model: AgentModelID, typed: ContextWindow?, modelTakes: Int?
+    ) throws(ModelConfigurationError) -> AgentProviderConfiguration {
         switch self {
         case .appleSystem:
             return .local(.appleSystem)
         #if Llama
             case .llamaCPP(let file, let layers):
+                let window = try Self.chosen(typed: typed, modelTakes: modelTakes, atMost: nil)
                 return .local(.llamaCPP(file: file, gpuLayers: layers, contextWindow: window))
         #endif
         case .server(let software, let address):
-            return .server(ModelServer(software: software, address: address, key: key, contextWindow: window))
+            let context: ModelContext =
+                choosesWindow(for: model)
+                ? .chosen(try Self.chosen(typed: typed, modelTakes: modelTakes, atMost: .standard))
+                : .providers(ProviderWindow(modelTakes: modelTakes))
+            return .server(ModelServer(software: software, address: address, key: key, context: context))
         case .cloud(let provider):
-            guard let key else { throw ModelUnavailability(kind: .keyNeeded) }
-            return .cloud(CloudAccount(provider: provider, key: key, contextWindow: window))
+            guard let key else { throw .keyNeeded }
+            return .cloud(CloudAccount(provider: provider, key: key, window: ProviderWindow(modelTakes: modelTakes)))
         }
+    }
+
+    /// The window you choose: `typed`, when the model takes that many; none typed, as many as it
+    /// takes, no more than `atMost`.
+    private static func chosen(typed: ContextWindow?, modelTakes: Int?, atMost: ContextWindow?)
+        throws(ModelConfigurationError) -> ContextWindow
+    {
+        let own = modelTakes.flatMap { try? ContextWindow(tokens: $0) }
+        if let typed {
+            if let own, typed > own { throw .windowAboveModel(typed: typed.tokens, model: own.tokens) }
+            return typed
+        }
+        guard let own else { throw .windowUnknown }
+        return atMost.map { Swift.min(own, $0) } ?? own
     }
 
     /// The models it offers, by their IDs, as AnyLanguageModel lists them, asked with `key`:
@@ -89,15 +116,44 @@ public enum ModelLocation: Sendable, Equatable {
             case .gemini: names = try await GeminiLanguageModel.availableModels(apiKey: key)
             }
         }
-        return names.map(AgentModelID.init(rawValue:))
+        return names.sorted(by: Self.naturally).map(AgentModelID.init(rawValue:))
+    }
+
+    /// Whether `one` comes before `other` as a person reads them: letters regardless of case, and
+    /// numbers by their value, so `qwen3:8b` before `qwen3:32b`.
+    static func naturally(_ one: String, _ other: String) -> Bool {
+        /// `name`'s runs of digits and of everything else, lowercased.
+        func runs(_ name: String) -> [Substring] {
+            let name = Substring(name.lowercased())
+            guard !name.isEmpty else { return [] }
+            var runs: [Substring] = []
+            var start = name.startIndex
+            for index in name.indices.dropFirst()
+            where name[index].isNumber != name[name.index(before: index)].isNumber {
+                runs.append(name[start..<index])
+                start = index
+            }
+            runs.append(name[start...])
+            return runs
+        }
+        let (ones, others) = (runs(one), runs(other))
+        for (a, b) in zip(ones, others) where a != b {
+            if let x = Int(a), let y = Int(b), x != y { return x < y }
+            return a < b
+        }
+        return ones.count < others.count
     }
 
     /// Whether `model` can be used here now, asked with `key`: a server or a cloud, whether it takes
     /// the key and has the model; this machine, whether it can run it. When it can, what checking
-    /// it learned, such as the model's context size.
+    /// it learned, such as the model's context size. Ollama's cloud shows its models to anyone,
+    /// but runs them only for a key, so there one is needed.
     public func checkAvailability(of model: AgentModelID, key: String?) async throws(CancellationError)
         -> ModelAvailability
     {
+        if case .server(.ollama, let address) = self, address.isSameServer(as: .ollamaCloud), key == nil {
+            return .unavailable(ModelUnavailability(kind: .keyNeeded))
+        }
         switch self {
         case .appleSystem:
             #if canImport(FoundationModels)
@@ -167,26 +223,26 @@ extension AgentProviderConfiguration {
     }
 }
 
-extension ContextWindow {
-    /// A bot's window at `location`, for a model that takes `modelTakes` tokens, when that's known:
-    /// `typed`, when the model takes that many; none typed, as many as the model takes, and on an
-    /// Ollama server, which gives a model memory for its whole window, no more than ``standard``.
-    public static func chosen(typed: ContextWindow?, modelTakes: Int?, at location: ModelLocation)
-        throws(ContextWindowChoiceError) -> ContextWindow
-    {
-        if let typed {
-            if let modelTakes, typed.tokens > modelTakes { throw .aboveModel(typed: typed.tokens, model: modelTakes) }
-            return typed
+extension ModelLocation {
+    /// Whether how much context `model` gets is yours to choose: your own Ollama server runs it,
+    /// unless it passes it on to Ollama's cloud; or llama.cpp loads it here. Anywhere else the
+    /// provider runs it with its own window.
+    public func choosesWindow(for model: AgentModelID) -> Bool {
+        switch self {
+        #if Llama
+            case .llamaCPP: return true
+        #endif
+        case .server(.ollama, _): return !runsInOllamasCloud(model)
+        default: return false
         }
-        guard let modelTakes, let own = try? ContextWindow(tokens: modelTakes) else { throw .unknown }
-        if case .server(.ollama, _) = location { return Swift.min(own, .standard) }
-        return own
     }
 }
 
-public enum ContextWindowChoiceError: Error, Equatable, Sendable {
+public enum ModelConfigurationError: Error, Equatable, Sendable {
+    /// A cloud is asked with a key, and none was given.
+    case keyNeeded
     /// More was typed than the model takes.
-    case aboveModel(typed: Int, model: Int)
-    /// None was typed, and the model's own isn't known.
-    case unknown
+    case windowAboveModel(typed: Int, model: Int)
+    /// Where the window is yours to choose, none was typed, and the model's own isn't known.
+    case windowUnknown
 }

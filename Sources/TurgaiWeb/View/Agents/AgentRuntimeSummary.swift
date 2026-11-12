@@ -33,7 +33,9 @@ struct AgentRuntimeSummary: HTML, Sendable {
             }
             div(.class("detail-facts detail-facts-bottom")) {
                 Fact(label: "Routing", value: "Selected per channel")
-                Fact(label: "Context limit", value: "\(profile.contextWindow.formatted()) tokens")
+                Fact(
+                    label: "Context limit",
+                    value: profile.contextWindow.map { "\($0.formatted()) tokens" } ?? "The provider's, not said")
             }
         }
     }

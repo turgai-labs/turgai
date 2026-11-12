@@ -53,11 +53,19 @@ struct ModelPicker: HTML, Sendable {
     var body: some HTML {
         label(.class("form-field")) {
             span(.class("field-label")) { "Model" }
+            // Choosing a model asks how many tokens it takes, for the context window's hint.
             input(
-                .type(.text), .name("modelID"), .value(modelID),
-                .init(name: "list", value: Self.suggestionsID),
-                .placeholder("Its ID, as the provider names it"),
-                .required
+                attributes: [
+                    .type(.text), .name("modelID"), .value(modelID),
+                    .init(name: "list", value: Self.suggestionsID),
+                    .placeholder("Its ID, as the provider names it"),
+                    .required,
+                    .hx.post("/agents/models/window"),
+                    .hx.trigger(.event(.load)),
+                    .hx.trigger(.event(.change)),
+                    .hx.trigger(.event(.input), [.changed, .delay("800ms")]),
+                    .hx.swap(.none),
+                ] + (profileID.map { [.hx.vals([.init("id", $0)])] } ?? [])
             )
             datalist(.id(Self.suggestionsID)) {}
             // Asked as the page opens: the saved provider's models, with its saved key.

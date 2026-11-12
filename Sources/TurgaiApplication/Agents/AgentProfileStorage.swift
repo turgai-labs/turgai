@@ -106,24 +106,31 @@ private struct AgentProfileTable: Sendable {
                 address          TEXT,
                 credential       TEXT,
                 api              TEXT    CHECK (api IN ('chatCompletions', 'responses')),
+                -- Who decides the model's window: you, or the provider, saying it or not.
+                context          TEXT    CHECK (context IN ('chosen', 'said', 'unsaid')),
                 context_window   INTEGER CHECK (context_window > 0),
                 model_path       TEXT,
                 gpu_layers       INTEGER,
                 created_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                -- The window is there exactly when it's known.
+                CHECK ((context_window IS NULL) = (context IS NULL OR context = 'unsaid')),
                 CHECK (
-                    -- On this machine: Apple's model, its window its own; or a GGUF file.
+                    -- On this machine: Apple's model, its window its own; or a GGUF file, its
+                    -- window chosen.
                     (provider = 'system' AND address IS NULL AND credential IS NULL AND api IS NULL
-                        AND context_window IS NULL AND model_path IS NULL AND gpu_layers IS NULL)
+                        AND context IS NULL AND model_path IS NULL AND gpu_layers IS NULL)
                     OR (provider = 'llama-cpp' AND model_path IS NOT NULL AND gpu_layers IS NOT NULL
-                        AND context_window IS NOT NULL AND address IS NULL AND credential IS NULL AND api IS NULL)
-                    -- A server at an address, its key a choice.
-                    OR (provider = 'ollama' AND address IS NOT NULL AND context_window IS NOT NULL
+                        AND context = 'chosen' AND address IS NULL AND credential IS NULL AND api IS NULL)
+                    -- A server at an address, its key a choice: Ollama's of your own gives the
+                    -- window chosen; Ollama's cloud and a compatible server run the model with
+                    -- theirs.
+                    OR (provider = 'ollama' AND address IS NOT NULL AND context IS NOT NULL
                         AND api IS NULL AND model_path IS NULL AND gpu_layers IS NULL)
                     OR (provider = 'openai-compatible' AND address IS NOT NULL AND api IS NOT NULL
-                        AND context_window IS NOT NULL AND model_path IS NULL AND gpu_layers IS NULL)
-                    -- A provider's cloud, at its own address, with a key.
+                        AND context IN ('said', 'unsaid') AND model_path IS NULL AND gpu_layers IS NULL)
+                    -- A provider's cloud, at its own address, with a key, and its own window.
                     OR (provider IN ('openai', 'anthropic', 'gemini') AND credential IS NOT NULL
-                        AND context_window IS NOT NULL
+                        AND context IN ('said', 'unsaid')
                         AND address IS NULL AND api IS NULL AND model_path IS NULL AND gpu_layers IS NULL)
                 )
             ) WITHOUT ROWID
@@ -151,7 +158,7 @@ private struct AgentProfileTable: Sendable {
 
     private static let columns = """
         id, name, model_id, reasoning_effort, persona, instructions, availability,
-        provider, address, credential, api, context_window, model_path, gpu_layers
+        provider, address, credential, api, context, context_window, model_path, gpu_layers
         """
 
     func all() async throws -> [TurgaiAgentProfile] {
@@ -179,7 +186,7 @@ private struct AgentProfileTable: Sendable {
 
     func insert(_ profile: TurgaiAgentProfile) async throws {
         _ = try await connection.query(
-            "INSERT INTO agent_profiles (\(Self.columns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO agent_profiles (\(Self.columns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             Self.binds(of: profile))
     }
 
@@ -189,7 +196,7 @@ private struct AgentProfileTable: Sendable {
             UPDATE agent_profiles SET
                 name = ?2, model_id = ?3, reasoning_effort = ?4, persona = ?5, instructions = ?6,
                 availability = ?7, provider = ?8, address = ?9, credential = ?10, api = ?11,
-                context_window = ?12, model_path = ?13, gpu_layers = ?14
+                context = ?12, context_window = ?13, model_path = ?14, gpu_layers = ?15
             WHERE id = ?1
             RETURNING id
             """,
@@ -213,28 +220,36 @@ private struct AgentProfileTable: Sendable {
     private static func binds(of profile: TurgaiAgentProfile) -> [SQLiteData] {
         func text(_ value: String?) -> SQLiteData { value.map(SQLiteData.text) ?? .null }
         func integer(_ value: Int?) -> SQLiteData { value.map { .integer(SQLiteInt64($0)) } ?? .null }
-        var (address, credential, api, window, modelPath, gpuLayers):
+        var (address, credential, api, context, modelPath, gpuLayers):
             (
-                ServerAddress?, AgentCredentialReference?, OpenAICompatibleAPI?, ContextWindow?, String?, Int?
+                ServerAddress?, AgentCredentialReference?, OpenAICompatibleAPI?, ModelContext?, String?, Int?
             ) = (nil, nil, nil, nil, nil, nil)
         switch profile.providerConfiguration {
         case .local(.appleSystem):
             break
         #if Llama
             case .local(.llamaCPP(let file, let layers, let size)):
-                (modelPath, gpuLayers, window) = (file, Int(layers), size)
+                (modelPath, gpuLayers, context) = (file, Int(layers), .chosen(size))
         #endif
         case .server(let server):
-            (address, credential, window) = (server.address, server.key, server.contextWindow)
+            (address, credential, context) = (server.address, server.key, server.context)
             if case .openAICompatible(let kind) = server.software { api = kind }
         case .cloud(let account):
-            (credential, window) = (account.key, account.contextWindow)
+            (credential, context) = (account.key, .providers(account.window))
         }
+        let kind: String? =
+            switch context {
+            case nil: nil
+            case .chosen?: "chosen"
+            case .providers(.said)?: "said"
+            case .providers(.unsaid)?: "unsaid"
+            }
         return [
             .text(profile.id), .text(profile.name), .text(profile.model.id.rawValue),
             text(profile.reasoningEffort?.rawValue), text(profile.persona), .text(profile.instructions),
             .text(profile.availability.rawValue), .text(profile.providerConfiguration.provider.name),
-            text(address?.description), text(credential?.rawValue), text(api?.rawValue), integer(window?.tokens),
+            text(address?.description), text(credential?.rawValue), text(api?.rawValue), text(kind),
+            integer(context?.window?.tokens),
             text(modelPath), integer(gpuLayers),
         ]
     }
@@ -251,6 +266,18 @@ private struct AgentProfileTable: Sendable {
         func window() throws -> ContextWindow {
             guard let tokens = integer("context_window") else { throw AgentProfileStorageError.invalidProfile }
             return try ContextWindow(tokens: tokens)
+        }
+        /// The window the provider runs the model with.
+        func providerWindow() throws -> ProviderWindow {
+            switch text("context") {
+            case "said": .said(try window())
+            case "unsaid": .unsaid
+            default: throw AgentProfileStorageError.invalidProfile
+            }
+        }
+        /// How much context a server's model gets.
+        func context() throws -> ModelContext {
+            text("context") == "chosen" ? .chosen(try window()) : .providers(try providerWindow())
         }
         func address() throws -> ServerAddress {
             guard let written = text("address") else { throw AgentProfileStorageError.invalidProfile }
@@ -273,7 +300,7 @@ private struct AgentProfileTable: Sendable {
         #endif
         case .ollama:
             configuration = .server(
-                ModelServer(software: .ollama, address: try address(), key: credential, contextWindow: try window()))
+                ModelServer(software: .ollama, address: try address(), key: credential, context: try context()))
         case .openAICompatible:
             guard let api = text("api").flatMap(OpenAICompatibleAPI.init(rawValue:)) else {
                 throw AgentProfileStorageError.invalidProfile
@@ -281,13 +308,13 @@ private struct AgentProfileTable: Sendable {
             configuration = .server(
                 ModelServer(
                     software: .openAICompatible(api), address: try address(), key: credential,
-                    contextWindow: try window()))
+                    context: .providers(try providerWindow())))
         case .openAI:
-            configuration = .cloud(CloudAccount(provider: .openAI, key: try key(), contextWindow: try window()))
+            configuration = .cloud(CloudAccount(provider: .openAI, key: try key(), window: try providerWindow()))
         case .anthropic:
-            configuration = .cloud(CloudAccount(provider: .anthropic, key: try key(), contextWindow: try window()))
+            configuration = .cloud(CloudAccount(provider: .anthropic, key: try key(), window: try providerWindow()))
         case .gemini:
-            configuration = .cloud(CloudAccount(provider: .gemini, key: try key(), contextWindow: try window()))
+            configuration = .cloud(CloudAccount(provider: .gemini, key: try key(), window: try providerWindow()))
         }
         return try TurgaiAgentProfile(
             id: id,

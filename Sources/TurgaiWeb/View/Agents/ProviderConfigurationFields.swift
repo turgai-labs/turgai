@@ -84,14 +84,13 @@ struct ProviderConfigurationFields: HTML, Sendable {
         section(.appleSystem) { SystemModelFields() }
         #if Llama
             section(.llamaCPP) {
-                ContextWindowField(tokens: draft(for: .llamaCPP)?.contextWindow ?? "", hint: .file)
+                ContextWindowField(
+                    provider: .llamaCPP, tokens: draft(for: .llamaCPP)?.contextWindow ?? "", model: .none)
             }
         #endif
         for provider in AgentProvider.offered where provider.kind != .local {
             section(provider) {
-                ContextWindowField(
-                    tokens: draft(for: provider)?.contextWindow ?? "",
-                    hint: provider == .ollama ? .ollamaServer : .provider)
+                ContextWindowField(provider: provider, tokens: draft(for: provider)?.contextWindow ?? "", model: .none)
                 RequestLimitField(limit: draft(for: provider)?.requestLimit ?? "")
             }
         }
@@ -218,58 +217,6 @@ private struct RequestLimitField: HTML {
             p(.class("hint")) {
                 "How many requests this provider account takes at the same time, as its plan allows. Every bot on the same account shares it; the rest wait their turn. Leave empty for no limit."
             }
-        }
-    }
-}
-
-/// How many tokens a prompt may use: empty is the model's own, when where it runs says it.
-private struct ContextWindowField: HTML {
-    let tokens: String
-    let hint: Hint
-
-    enum Hint {
-        /// A provider says its models' windows.
-        case provider
-        /// An Ollama server gives a model memory for its whole window.
-        case ollamaServer
-        #if Llama
-            /// A GGUF file's window isn't read.
-            case file
-        #endif
-    }
-
-    var body: some HTML {
-        label(.class("form-field")) {
-            span(.class("field-label")) { "Context window" }
-            input(
-                .type(.number), .name("contextWindow"),
-                .init(name: "min", value: "1"),
-                .value(tokens),
-                .placeholder(placeholder)
-            )
-            p(.class("hint")) { text }
-        }
-    }
-
-    private var placeholder: String {
-        switch hint {
-        case .provider, .ollamaServer: "The model's own"
-        #if Llama
-            case .file: "Tokens"
-        #endif
-        }
-    }
-
-    private var text: String {
-        switch hint {
-        case .provider:
-            "Tokens the model may use in one prompt. Leave empty for as many as the model takes."
-        case .ollamaServer:
-            "Tokens the model may use in one prompt. Leave empty for as many as the model takes, up to \(ContextWindow.standard.tokens.formatted()): Ollama keeps memory for the whole window."
-        #if Llama
-            case .file:
-                "Tokens the model may use in one prompt, as its card says."
-        #endif
         }
     }
 }

@@ -8,7 +8,7 @@ import Testing
 struct RequestLimitTests {
     @Test func eachProviderAccountIsItsOwn() throws {
         let local = AgentProviderConfiguration.server(
-            ModelServer(software: .ollama, address: .localOllama, key: nil, contextWindow: .standard))
+            ModelServer(software: .ollama, address: .localOllama, key: nil, context: .chosen(.standard)))
         #expect(
             local.account(for: try AgentModel(provider: .ollama, id: "deepseek-v4.1-flash:cloud"))
                 == ModelAccount(rawValue: "ollama-cloud"))
@@ -17,7 +17,7 @@ struct RequestLimitTests {
                 == ModelAccount(rawValue: "ollama@127.0.0.1"))
         // Ollama's cloud itself is the same account as a cloud model through a local server.
         let cloud = AgentProviderConfiguration.server(
-            ModelServer(software: .ollama, address: .ollamaCloud, key: .new(), contextWindow: .standard))
+            ModelServer(software: .ollama, address: .ollamaCloud, key: .new(), context: .providers(.unsaid)))
         #expect(
             cloud.account(for: try AgentModel(provider: .ollama, id: "gpt-oss:120b"))
                 == ModelAccount(rawValue: "ollama-cloud"))
@@ -25,12 +25,12 @@ struct RequestLimitTests {
             ModelServer(
                 software: .openAICompatible(.chatCompletions),
                 address: try ServerAddress("https://api.deepseek.com/v1"),
-                key: .new(), contextWindow: .standard))
+                key: .new(), context: .providers(.unsaid)))
         #expect(
             compatible.account(for: try AgentModel(provider: .openAICompatible, id: "deepseek-chat"))
                 == ModelAccount(rawValue: "api.deepseek.com"))
         let anthropic = AgentProviderConfiguration.cloud(
-            CloudAccount(provider: .anthropic, key: .new(), contextWindow: .standard))
+            CloudAccount(provider: .anthropic, key: .new(), window: .unsaid))
         #expect(
             anthropic.account(for: try AgentModel(provider: .anthropic, id: "claude-sonnet-5-5"))
                 == ModelAccount(rawValue: "anthropic"))

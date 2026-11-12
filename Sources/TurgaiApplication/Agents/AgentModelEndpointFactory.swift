@@ -47,19 +47,19 @@ public actor AgentModelEndpointFactory {
                 return AnyLanguageModelEndpoint.system(
                     model: model,
                     temperature: temperature,
-                    contextWindow: contextWindow
+                    contextWindow: LocalModel.appleSystemContextWindow
                 )
             #else
                 throw AgentModelEndpointFactoryError.unavailable(.system)
             #endif
         #if Llama
-            case .local(.llamaCPP(let file, let layers, _)):
+            case .local(.llamaCPP(let file, let layers, let window)):
                 try rejectReasoning(reasoning, provider: agentModel.provider, model: model)
                 return await llamaCache.endpoint(
                     model: model,
                     modelPath: file,
                     temperature: temperature,
-                    contextWindow: contextWindow,
+                    contextWindow: window.tokens,
                     gpuLayers: layers
                 )
         #endif
@@ -73,7 +73,7 @@ public actor AgentModelEndpointFactory {
                     baseURL: server.address.url,
                     apiKey: key,
                     temperature: temperature,
-                    contextWindow: contextWindow,
+                    context: Self.ollamaContext(server.context),
                     keepAlive: ollamaKeepAlive,
                     think: try Self.think(reasoning, model: agentModel),
                     transport: transport
@@ -137,6 +137,16 @@ public actor AgentModelEndpointFactory {
                     failures: .gemini
                 )
             }
+        }
+    }
+
+    /// What an Ollama server is told of `context`: a window you chose, which it gives the model;
+    /// or the model's own, which Ollama's cloud keeps whatever it's told, so it isn't sent.
+    private static func ollamaContext(_ context: ModelContext) -> OllamaContext? {
+        switch context {
+        case .chosen(let window): .given(window.tokens)
+        case .providers(.said(let window)): .own(window.tokens)
+        case .providers(.unsaid): nil
         }
     }
 

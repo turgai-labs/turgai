@@ -102,15 +102,16 @@ public enum AgentProviderConfiguration: Codable, Sendable, Equatable {
         }
     }
 
-    /// How many tokens a prompt may use with it.
-    public var contextWindow: Int {
+    /// How many tokens a prompt may use with it, when that's known: a provider that doesn't say
+    /// its window has none, and the conversation is shortened when it refuses a request.
+    public var contextWindow: Int? {
         switch self {
         case .local(.appleSystem): LocalModel.appleSystemContextWindow
         #if Llama
             case .local(.llamaCPP(_, _, let window)): window.tokens
         #endif
-        case .server(let server): server.contextWindow.tokens
-        case .cloud(let account): account.contextWindow.tokens
+        case .server(let server): server.context.window?.tokens
+        case .cloud(let account): account.window.window?.tokens
         }
     }
 }
@@ -147,15 +148,13 @@ public struct ModelServer: Codable, Sendable, Equatable {
     public var address: ServerAddress
     /// The key it asks for, when it asks for one: a local server asks for none.
     public var key: AgentCredentialReference?
-    public var contextWindow: ContextWindow
+    public var context: ModelContext
 
-    public init(
-        software: Software, address: ServerAddress, key: AgentCredentialReference?, contextWindow: ContextWindow
-    ) {
+    public init(software: Software, address: ServerAddress, key: AgentCredentialReference?, context: ModelContext) {
         self.software = software
         self.address = address
         self.key = key
-        self.contextWindow = contextWindow
+        self.context = context
     }
 }
 
@@ -169,12 +168,48 @@ public struct CloudAccount: Codable, Sendable, Equatable {
 
     public var provider: Provider
     public var key: AgentCredentialReference
-    public var contextWindow: ContextWindow
+    /// A cloud runs a model with its own window.
+    public var window: ProviderWindow
 
-    public init(provider: Provider, key: AgentCredentialReference, contextWindow: ContextWindow) {
+    public init(provider: Provider, key: AgentCredentialReference, window: ProviderWindow) {
         self.provider = provider
         self.key = key
-        self.contextWindow = contextWindow
+        self.window = window
+    }
+}
+
+/// How much context a server's model gets: as much as you give it, on a server of your own, which
+/// keeps memory for it; or the window the provider runs it with.
+public enum ModelContext: Codable, Sendable, Equatable {
+    case chosen(ContextWindow)
+    case providers(ProviderWindow)
+
+    public var window: ContextWindow? {
+        switch self {
+        case .chosen(let window): window
+        case .providers(let provider): provider.window
+        }
+    }
+}
+
+/// The window a provider runs a model with: its own, which the provider says, or doesn't.
+public enum ProviderWindow: Codable, Sendable, Equatable {
+    case said(ContextWindow)
+    /// The provider doesn't say it: the conversation is shortened when the provider refuses a
+    /// request as too long.
+    case unsaid
+
+    /// The window of a model that takes `modelTakes` tokens, as the provider says, when it does.
+    public init(modelTakes: Int?) {
+        if let modelTakes, let window = try? ContextWindow(tokens: modelTakes) {
+            self = .said(window)
+        } else {
+            self = .unsaid
+        }
+    }
+
+    public var window: ContextWindow? {
+        if case .said(let window) = self { window } else { nil }
     }
 }
 

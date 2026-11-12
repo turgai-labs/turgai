@@ -54,12 +54,6 @@ struct ModelSubmission: Sendable {
             guard Self.mayComeLater.contains(reason.kind) else { throw ModelRefusal.unavailable(reason) }
             modelTakes = nil
         }
-        let window: ContextWindow
-        do throws(ContextWindowChoiceError) {
-            window = try .chosen(typed: contextWindow, modelTakes: modelTakes, at: location)
-        } catch {
-            throw ModelRefusal.window(error)
-        }
         let reference: AgentCredentialReference?
         let newKey: (reference: AgentCredentialReference, value: String)?
         switch key {
@@ -71,11 +65,12 @@ struct ModelSubmission: Sendable {
             let new = AgentCredentialReference.new()
             (reference, newKey) = (new, (new, value))
         }
-        do throws(ModelUnavailability) {
-            let configuration = try location.configuration(key: reference, window: window)
+        do throws(ModelConfigurationError) {
+            let configuration = try location.configuration(
+                key: reference, model: model, typed: contextWindow, modelTakes: modelTakes)
             return CheckedModel(configuration: configuration, model: model, newKey: newKey)
         } catch {
-            throw ModelRefusal.unavailable(error)
+            throw ModelRefusal.configuration(error)
         }
     }
 
@@ -96,8 +91,8 @@ struct CheckedModel: Sendable {
 enum ModelRefusal: Error {
     /// It can't be used where the form says.
     case unavailable(ModelUnavailability)
-    /// The window doesn't fit it.
-    case window(ContextWindowChoiceError)
+    /// Where it runs takes something the form doesn't give: a key, or a window that fits.
+    case configuration(ModelConfigurationError)
 }
 
 extension ModelUnavailability {

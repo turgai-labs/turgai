@@ -10,6 +10,9 @@ struct TechPage: HTMLDocument {
     let angles: GeometryAngles
 
     static let path = "tech/"
+    /// Whether the site publishes it: off until the patent application is filed, so the build
+    /// leaves out the page, its links and its sitemap entry. Turn it back on to publish it again.
+    static let isPublished = false
     static let title = "How Turgai works — objects, actors, Swift"
     static let description =
         "Everything in Turgai is an object, run by a small core: why objects, why distributed actors, why Swift, and how agents, behaviors and permissions fit into your product."
@@ -161,7 +164,7 @@ enum TechTopic: String, CaseIterable {
           id: "support",
           name: "Support",
           providerConfiguration: .server(ModelServer(
-            software: .ollama, address: .localOllama, key: <b>nil</b>, contextWindow: .standard)),
+            software: .ollama, address: .localOllama, key: <b>nil</b>, context: .chosen(.standard))),
           modelID: "qwen3:8b",
           instructions: "Answer customers. Pass orders to the shop."
         )

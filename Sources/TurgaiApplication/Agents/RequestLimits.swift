@@ -14,12 +14,7 @@ extension AgentProviderConfiguration {
         case .server(let server):
             // A cloud model is the account's, whichever server passes its requests on: a local one,
             // or Ollama's cloud itself.
-            let name = model.id.rawValue
-            if case .ollama = server.software,
-                name.hasSuffix(":cloud") || name.hasSuffix("-cloud") || server.address.isSameServer(as: .ollamaCloud)
-            {
-                return ModelAccount(rawValue: "ollama-cloud")
-            }
+            if location.runsInOllamasCloud(model.id) { return ModelAccount(rawValue: "ollama-cloud") }
             let host = server.address.url.host() ?? server.address.description
             if case .ollama = server.software { return ModelAccount(rawValue: "ollama@\(host)") }
             return ModelAccount(rawValue: host)
