@@ -17,12 +17,9 @@ struct MainWindow: View {
 
     var body: some View {
         ZStack {
-            WorkingField(hue: store.sidebar.shownSpaceHue)
+            WorkingField(hue: hue)
             // The conversation keeps clear of the panel; the field runs under it.
-            ChatView(title: store.sidebar.openTitle, store: chat)
-                // Only the panel's room: what's in the conversation keeps its own margins.
-                .safeAreaPadding(.leading, chatInset)
-                .toolbar { WindowToolbar(initial: store.profile.initial, name: store.profile.me?.name) }
+            ConversationPane(title: openTitle, chat: chat, inset: chatInset, initial: initial, name: name)
             LeftPanel(store: store, width: Self.sidebarWidth)
                 .padding(Self.gap)
                 // From the window's top, as the system's own sidebars are: the traffic lights sit in it.
@@ -43,6 +40,16 @@ struct MainWindow: View {
         store.scope(\.chat, action: \.chat)
     }
 
+    /// The shown space's color, the field's.
+    private var hue: SpaceHue { store.sidebar.shownSpaceHue }
+
+    private var openTitle: String { store.sidebar.openTitle }
+
+    /// Who's signed in: their initial, and their name, once it's read.
+    private var initial: String { store.profile.initial }
+
+    private var name: String? { store.profile.me?.name }
+
     private var sidebar: StoreOf<SidebarFeature> {
         store.scope(\.sidebar, action: \.sidebar)
     }
@@ -51,6 +58,23 @@ struct MainWindow: View {
     /// shown.
     private var chatInset: CGFloat {
         store.showsSidebar ? Self.sidebarWidth + Self.gap : 0
+    }
+}
+
+/// The open conversation, `inset` from the window's leading edge, and the window's toolbar over it.
+private struct ConversationPane: View {
+    let title: String
+    let chat: StoreOf<ChatFeature>
+    /// The panel's room: what's in the conversation keeps its own margins.
+    let inset: CGFloat
+    /// Who's signed in: their initial, and their name, once it's read.
+    let initial: String
+    let name: String?
+
+    var body: some View {
+        ChatView(title: title, store: chat)
+            .safeAreaPadding(.leading, inset)
+            .toolbar { WindowToolbar(initial: initial, name: name) }
     }
 }
 
