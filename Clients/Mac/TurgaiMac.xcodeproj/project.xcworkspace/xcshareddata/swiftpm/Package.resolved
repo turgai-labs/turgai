@@ -4,10 +4,10 @@
     {
       "identity" : "anylanguagemodel",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/akbashev/AnyLanguageModel.git",
+      "location" : "https://github.com/huggingface/AnyLanguageModel.git",
       "state" : {
-        "branch" : "feat/list-models",
-        "revision" : "98ff4a92719bb919863b3afd23d90aa55ba1a04d"
+        "branch" : "main",
+        "revision" : "6f9387a974c5254ac58c918b747f672463d252fb"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "9b6ac618d623b5964760bf1678925721404e1b35"
+        "revision" : "cc0cb712e8872e1e120c04d9fe580c2fa4723b0e"
       }
     },
     {

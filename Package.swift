@@ -32,9 +32,9 @@ let package = Package(
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
-            // Listing a provider's models and checking one, until huggingface/AnyLanguageModel#416 is released.
-            url: "https://github.com/akbashev/AnyLanguageModel.git",
-            branch: "feat/list-models",
+            // Ollama's API key (#414) and no key for an empty one (#417), until a release has them.
+            url: "https://github.com/huggingface/AnyLanguageModel.git",
+            branch: "main",
             traits: ["AsyncHTTPClient", .trait(name: "Llama", condition: .when(traits: ["Llama"]))]
         ),
         .package(

@@ -106,9 +106,8 @@ extension ModelUnavailability {
         case .deviceNotEligible: "This machine can't run Apple's on-device model."
         case .appleIntelligenceNotEnabled: "Turn on Apple Intelligence in System Settings to use its model."
         case .notReady: "The on-device model isn't ready yet."
-        case .failedToLoad: "The model couldn't be loaded: \(underlyingError.map { "\($0)" } ?? "no reason given")."
         case .providerError: "The provider answered with an error: \(underlyingError.map { "\($0)" } ?? "none given")."
-        default: "The model can't be used now."
+        case .other: "The model can't be used now."
         }
     }
 }

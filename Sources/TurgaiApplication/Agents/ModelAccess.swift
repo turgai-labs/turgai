@@ -90,33 +90,37 @@ public enum ModelLocation: Sendable, Equatable {
         return atMost.map { Swift.min(own, $0) } ?? own
     }
 
-    /// The models it offers, by their IDs, as AnyLanguageModel lists them, asked with `key`:
-    /// Apple's on-device model is its one model; a GGUF file is whichever model it holds.
+    /// How Hail asks about models here, with `key`: none for a cloud without one.
+    private func access(key: String?) -> ModelAccess? {
+        switch self {
+        case .appleSystem:
+            return .system
+        #if Llama
+            case .llamaCPP(let file, _):
+                return .llama(modelPath: file)
+        #endif
+        case .server(.ollama, let address):
+            return .ollama(baseURL: address.url, apiKey: key)
+        case .server(.openAICompatible, let address):
+            return .openAICompatible(baseURL: address.url, apiKey: key)
+        case .cloud(let provider):
+            guard let key else { return nil }
+            switch provider {
+            case .openAI: return .openAI(apiKey: key)
+            case .anthropic: return .anthropic(apiKey: key)
+            case .gemini: return .gemini(apiKey: key)
+            }
+        }
+    }
+
+    /// The models it offers, by their IDs, as Hail lists them, asked with `key`: Apple's on-device
+    /// model is its one model; a GGUF file is whichever model it holds.
     ///
     /// - Throws: ``ModelUnavailability``, when the provider refuses the key, can't be reached, or
     ///   answers something else; `CancellationError`, when it's cancelled.
     public func availableModels(key: String?) async throws -> [AgentModelID] {
-        let names: [String]
-        switch self {
-        case .appleSystem:
-            names = ["default"]
-        #if Llama
-            case .llamaCPP:
-                names = []
-        #endif
-        case .server(.ollama, let address):
-            names = try await OllamaLanguageModel.availableModels(baseURL: address.url, apiKey: key)
-        case .server(.openAICompatible, let address):
-            names = try await OpenAILanguageModel.availableModels(baseURL: address.url, apiKey: key)
-        case .cloud(let provider):
-            guard let key else { throw ModelUnavailability(kind: .keyNeeded) }
-            switch provider {
-            case .openAI: names = try await OpenAILanguageModel.availableModels(apiKey: key)
-            case .anthropic: names = try await AnthropicLanguageModel.availableModels(apiKey: key)
-            case .gemini: names = try await GeminiLanguageModel.availableModels(apiKey: key)
-            }
-        }
-        return names.sorted(by: Self.naturally).map(AgentModelID.init(rawValue:))
+        guard let access = access(key: key) else { throw ModelUnavailability(kind: .keyNeeded) }
+        return try await access.availableModels().sorted(by: Self.naturally).map(AgentModelID.init(rawValue:))
     }
 
     /// Whether `one` comes before `other` as a person reads them: letters regardless of case, and
@@ -154,22 +158,8 @@ public enum ModelLocation: Sendable, Equatable {
         if case .server(.ollama, let address) = self, address.isSameServer(as: .ollamaCloud), key == nil {
             return .unavailable(ModelUnavailability(kind: .keyNeeded))
         }
-        switch self {
-        case .appleSystem:
-            #if canImport(FoundationModels)
-                return try await SystemLanguageModel().checkAvailability()
-            #else
-                return .unavailable(ModelUnavailability(kind: .deviceNotEligible))
-            #endif
-        #if Llama
-            case .llamaCPP(let file, let layers):
-                return try await LlamaLanguageModel(modelPath: file, gpuLayers: layers).checkAvailability()
-        #endif
-        case .server, .cloud:
-            guard let languageModel = remoteLanguageModel(model.rawValue, key: key, transport: makeDefaultTransport())
-            else { return .unavailable(ModelUnavailability(kind: .keyNeeded)) }
-            return try await languageModel.checkAvailability()
-        }
+        guard let access = access(key: key) else { return .unavailable(ModelUnavailability(kind: .keyNeeded)) }
+        return try await access.checkAvailability(of: model.rawValue)
     }
 
     /// AnyLanguageModel's model for `model` on a server or in a cloud, asked with `key` and sent
@@ -184,19 +174,16 @@ public enum ModelLocation: Sendable, Equatable {
         #endif
         case .server(let software, let address):
             let url = address.url
+            // A server that takes no key is given an empty one, and sent none.
             switch (software, key) {
             case (.ollama, let key?):
                 return OllamaLanguageModel(baseURL: url, apiKey: key, model: model, transport: transport)
             case (.ollama, nil):
                 return OllamaLanguageModel(baseURL: url, model: model, transport: transport)
-            case (.openAICompatible(.chatCompletions), let key?):
-                return OpenAILanguageModel(baseURL: url, apiKey: key, model: model, transport: transport)
-            case (.openAICompatible(.chatCompletions), nil):
-                return OpenAILanguageModel(baseURL: url, model: model, transport: transport)
-            case (.openAICompatible(.responses), let key?):
-                return OpenResponsesLanguageModel(baseURL: url, apiKey: key, model: model, transport: transport)
-            case (.openAICompatible(.responses), nil):
-                return OpenResponsesLanguageModel(baseURL: url, model: model, transport: transport)
+            case (.openAICompatible(.chatCompletions), _):
+                return OpenAILanguageModel(baseURL: url, apiKey: key ?? "", model: model, transport: transport)
+            case (.openAICompatible(.responses), _):
+                return OpenResponsesLanguageModel(baseURL: url, apiKey: key ?? "", model: model, transport: transport)
             }
         case .cloud(let provider):
             guard let key else { return nil }
