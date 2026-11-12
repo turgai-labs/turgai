@@ -1,3 +1,4 @@
+import AppKit
 import ComposableArchitecture
 import Foundation
 import TurgaiModels
@@ -356,6 +357,8 @@ extension AppFeature {
             AppFeature()
         } withDependencies: {
             $0.objects = objects
+            // SwiftUI's openURL opens nothing outside a view, so the system is asked itself.
+            $0.openURL = OpenURLEffect { url in await MainActor.run { NSWorkspace.shared.open(url) } }
         }
     }
 }
