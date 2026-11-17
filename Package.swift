@@ -128,6 +128,8 @@ let package = Package(
                 "TurgaiDomain",
                 "TurgaiMemory",
                 "TurgaiPersistence",
+                .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+                .product(name: "Hail", package: "hail"),
                 .product(name: "SQLiteNIO", package: "sqlite-nio"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
@@ -137,14 +139,54 @@ let package = Package(
         .target(
             name: "TurgaiSpaces",
             dependencies: [
+                "TurgaiObjects",
+                "TurgaiConversations",
                 "TurgaiCalls",
                 "TurgaiDomain",
+                "TurgaiHail",
+                "TurgaiMemory",
+                "TurgaiPeople",
                 "TurgaiPersistence",
+                .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
+                .product(name: "Hail", package: "hail"),
+                .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "SQLiteNIO", package: "sqlite-nio"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+            ]
+        ),
+        .target(
+            name: "TurgaiConversations",
+            dependencies: [
+                "TurgaiCalls",
+                "TurgaiDomain",
+                "TurgaiHail",
+                "TurgaiMemory",
+                "TurgaiPeople",
+                .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
+                .product(name: "Hail", package: "hail"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+                .product(name: "SQLiteNIO", package: "sqlite-nio"),
+                "TurgaiPersistence",
+            ]
+        ),
+        .target(
+            name: "TurgaiAgents",
+            dependencies: [
+                "TurgaiDomain",
+                "TurgaiPersistence",
+                .product(name: "SQLiteNIO", package: "sqlite-nio"),
+                .product(name: "AnyLanguageModel", package: "AnyLanguageModel"),
+                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
+                .product(name: "AsyncHTTPClient", package: "async-http-client"),
+                .product(name: "Hail", package: "hail"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
             ]
         ),
         .target(
@@ -156,7 +198,11 @@ let package = Package(
         .target(
             name: "TurgaiWeb",
             dependencies: [
+                .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
+                "TurgaiAgents",
                 "TurgaiCalls",
+                "TurgaiConversations",
+                "TurgaiSpaces",
                 "TurgaiPeople",
                 "TurgaiBrand",
                 "TurgaiApplication",
@@ -166,6 +212,7 @@ let package = Package(
                 "TurgaiHail",
                 "TurgaiPersistence",
                 "TurgaiTelegram",
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "Elementary", package: "elementary"),
@@ -187,12 +234,21 @@ let package = Package(
                 .process("Resources")
             ]
         ),
+        // Actors that run by themselves while they have work, brought back after a restart.
+        .target(
+            name: "RunningActors",
+            dependencies: [
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+            ]
+        ),
         .target(
             name: "TurgaiObjects",
             dependencies: [
+                "RunningActors",
                 "TurgaiCalls",
                 "TurgaiDomain",
-                "TurgaiSpaces",
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
@@ -213,14 +269,15 @@ let package = Package(
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxMacroExpansion", package: "swift-syntax"),
                 .product(name: "SwiftDiagnostics", package: "swift-syntax"),
-                .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "Elementary", package: "elementary"),
             ]
         ),
         .executableTarget(
             name: "TurgaiModelEval",
             dependencies: [
+                "TurgaiAgents",
                 "TurgaiCalls",
+                "TurgaiConversations",
                 "TurgaiSpaces",
                 "TurgaiApplication",
                 "TurgaiHail",
@@ -252,7 +309,10 @@ let package = Package(
         .target(
             name: "TurgaiApplication",
             dependencies: [
+                "RunningActors",
                 .product(name: "SQLiteNIO", package: "sqlite-nio"),
+                "TurgaiAgents",
+                "TurgaiConversations",
                 "TurgaiCalls",
                 "TurgaiDomain",
                 "TurgaiMemory",
@@ -291,7 +351,10 @@ let package = Package(
         .target(
             name: "TurgaiServer",
             dependencies: [
+                "RunningActors",
+                "TurgaiAgents",
                 "TurgaiCalls",
+                "TurgaiConversations",
                 "TurgaiPeople",
                 "TurgaiSpaces",
                 "TurgaiApplication",
@@ -373,8 +436,8 @@ let package = Package(
         .testTarget(
             name: "TurgaiApplicationTests",
             dependencies: [
-                "TurgaiCalls", "TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiPeople", "TurgaiPersistence",
-                "TurgaiWeb",
+                "TurgaiAgents", "TurgaiCalls", "TurgaiConversations", "TurgaiDomain", "TurgaiHail", "TurgaiApplication",
+                "TurgaiPeople", "TurgaiPersistence", "TurgaiSpaces", "TurgaiWeb",
             ]
         ),
         .testTarget(

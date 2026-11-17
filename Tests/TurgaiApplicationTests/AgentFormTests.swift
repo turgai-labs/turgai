@@ -2,61 +2,62 @@ import Elementary
 import Foundation
 import Hail
 import Testing
+import TurgaiAgents
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 
 @testable import TurgaiWeb
 
-@Suite("The agent form")
+@Suite("The bot form")
 struct AgentFormTests {
     private let server = try! ServerAddress("http://models.test:8080")
-    private let profile: TurgaiAgentProfile
+    private let bot: Bot
 
     init() throws {
-        profile = try TurgaiAgentProfile(
-            id: "helper",
-            name: "Helper",
-            providerConfiguration: .server(
-                ModelServer(
-                    software: .openAICompatible(.responses), address: server, key: .new(),
-                    context: .providers(.said(try ContextWindow(tokens: 32_768))))),
-            modelID: AgentModelID(rawValue: "qwen3"),
-            reasoningEffort: .low,
-            persona: "Calm.",
-            instructions: "Answer briefly."
-        )
+        bot = Bot(
+            name: BotName("Helper")!, instructions: "Answer briefly.",
+            model: BotModel(
+                location: .server(
+                    ModelServer(
+                        software: .openAICompatible(.responses), address: server, key: .new(),
+                        context: .providers(.said(try ContextWindow(tokens: 32_768))))),
+                name: ModelName("qwen3")!))
     }
+
+    private let family = SpaceID()
 
     private func render(_ draft: AgentDraft) -> String {
         AgentConfigurationForm(
-            action: "/agents/update", editing: .saved(id: profile.id), draft: draft, submitLabel: "Save changes"
+            action: "/spaces/\(family.rawValue.uuidString)/bots/update",
+            editing: .saved(id: bot.id.description, in: family), draft: draft,
+            submitLabel: "Save changes"
         ).render()
     }
 
     @Test("a saved agent shows as it's saved")
     func savedAgentShows() {
-        let html = render(AgentDraft(profile, requestLimit: 3))
+        let html = render(AgentDraft(bot, requestLimit: 3))
 
         #expect(html.contains(#"<option value="openai-compatible" selected>"#))
         #expect(html.contains(#"value="qwen3""#))
         #expect(html.contains(#"value="http://models.test:8080""#))
         #expect(html.contains(#"<option value="responses" selected>"#))
-        #expect(html.contains(#"<option value="low" selected>"#))
         // A compatible server runs its model with its own window: shown, not typed.
         #expect(!html.contains(#"value="32768""#))
         #expect(html.contains("Set by the provider"))
         #expect(html.contains(#"value="3""#))
-        #expect(html.contains("Calm."))
+        #expect(html.contains("Answer briefly."))
         #expect(html.contains("Leave blank to keep the saved key"))
     }
 
     @Test("a failed save shows what was typed, but never the key")
     func submittedAgentShowsAgain() {
-        let saved = AgentDraft(profile, requestLimit: nil)
+        let saved = AgentDraft(bot, requestLimit: nil)
         let form: [String: [String]] = [
             "name": ["Helper 2"], "provider": ["openai-compatible"], "modelID": ["qwen3-large"],
-            "reasoningEffort": [""], "address": ["not a url"], "compatibleAPI": ["chatCompletions"],
-            "contextWindow": ["0"], "apiKey": ["sk-secret"], "persona": [""], "instructions": ["Answer at length."],
+            "address": ["not a url"], "compatibleAPI": ["chatCompletions"],
+            "contextWindow": ["0"], "apiKey": ["sk-secret"], "instructions": ["Answer at length."],
         ]
         let draft = AgentDraft(form: form, over: saved)
         let html = render(draft)
@@ -65,14 +66,13 @@ struct AgentFormTests {
         #expect(html.contains(#"value="Helper 2""#))
         #expect(html.contains(#"value="qwen3-large""#))
         #expect(html.contains(#"value="not a url""#))
-        #expect(html.contains(#"<option value="" selected>"#))
         #expect(html.contains("Answer at length."))
         #expect(!html.contains("sk-secret"))
     }
 
     @Test("what's read from the form: a server's address, and the window only when one is typed")
     func whatsRead() throws {
-        let saved = AgentDraft(profile, requestLimit: nil)
+        let saved = AgentDraft(bot, requestLimit: nil)
         let local = try OnboardingInput.submission(
             from: AgentDraft(form: ["provider": ["ollama"], "address": [""], "contextWindow": [""]], over: saved),
             saved: nil)
@@ -92,7 +92,7 @@ struct AgentFormTests {
     /// never another's.
     @Test("a saved key is kept only where it's for")
     func aSavedKeyIsKeptOnlyWhereItsFor() throws {
-        let saved = profile.providerConfiguration
+        let saved = bot.model.location
         let reference = try #require(saved.credentialReference)
         let sameServer = ModelLocation.server(
             .openAICompatible(.chatCompletions), try ServerAddress("http://models.test:8080/"))

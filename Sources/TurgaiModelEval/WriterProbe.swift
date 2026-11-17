@@ -1,6 +1,7 @@
 import AnyLanguageModel
 import Foundation
 import Hail
+import TurgaiAgents
 import TurgaiApplication
 import TurgaiObjects
 import TurgaiPersistence

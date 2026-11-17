@@ -1,7 +1,7 @@
 import Testing
 import TurgaiDomain
 
-@testable import TurgaiApplication
+@testable import TurgaiConversations
 
 struct ReplyScopeTests {
     @Test

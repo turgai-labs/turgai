@@ -116,9 +116,9 @@ public distributed actor User {
 
     private static let persistencePrefix = "turgai-user-"
 
-    public static func resolve(
-        on actorSystem: ClusterSystem,
-        userID: UserID
+    public static func identified(
+        by userID: UserID,
+        on actorSystem: ClusterSystem
     ) async throws -> User {
         try await actorSystem.virtualActors.getActor(
             identifiedBy: actorID(for: userID),

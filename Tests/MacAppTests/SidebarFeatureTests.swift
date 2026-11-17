@@ -8,11 +8,20 @@ import TurgaiModels
 private let turgaiSpace = SpaceID(rawValue: "turgai")
 private let familySpace = SpaceID(rawValue: "family")
 private let workSpace = SpaceID(rawValue: "work")
+/// What a member may in a space: see its people and use its bots.
+private let memberMay = SpacePermissions(
+    people: .see, bots: .use, requests: nil, tasks: nil, connections: false, deleteConversations: false,
+    configureSpace: false)
+/// What an admin may in a space: everything.
+private let adminMay = SpacePermissions(
+    people: .manage, bots: .configure, requests: .runAny, tasks: .manage, connections: true,
+    deleteConversations: true, configureSpace: true)
 
 @MainActor
 struct SidebarFeatureTests {
     let session = Session(token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
-    let turgai = SpaceSummary(id: turgaiSpace, name: "Turgai", role: .member, status: .active, kind: .turgaisOwn)
+    let turgai = SpaceSummary(
+        id: turgaiSpace, name: "Turgai", permissions: memberMay, status: .active)
     let dinner = Conversation(
         id: ConversationID(rawValue: "dinner"), botID: BotID(rawValue: "conversation"), title: "plan dinner",
         spaceID: turgaiSpace, people: 1)
@@ -44,10 +53,10 @@ struct SidebarFeatureTests {
         await store.finish()
     }
 
-    /// With no conversations yet, one is started in Turgai's own space, and opened.
+    /// With no conversations yet, one is started in the space shown, and opened.
     @Test
     func withNoneOneIsStarted() async {
-        let started = LockIsolated<[SpaceID?]>([])
+        let started = LockIsolated<[SpaceID]>([])
         let store = TestStore(initialState: SidebarFeature.State()) {
             SidebarFeature()
         } withDependencies: {
@@ -68,7 +77,7 @@ struct SidebarFeatureTests {
         }
         await store.receive(\.delegate, .open(dinner.id))
         await store.finish()
-        #expect(started.value == [nil])
+        #expect(started.value == [turgaiSpace])
     }
 
     /// While the window's shown, what the connection says about their conversations is heard: one
@@ -141,35 +150,39 @@ struct SidebarFeatureTests {
         let store = TestStore(initialState: state) {
             SidebarFeature()
         } withDependencies: {
-            $0.server.titleConversation = { _, _, title in titled.withValue { $0.append(title) } }
+            $0.server.titleConversation = { _, _, _, title in titled.withValue { $0.append(title) } }
         }
 
         await store.send(.conversationMenuPicked(dinner.id, .rename)) {
-            $0.destination = .renaming(.init(subject: .conversation(self.dinner.id), name: "plan dinner"))
+            $0.destination = .renaming(
+                .init(subject: .conversation(self.dinner.id, in: turgaiSpace), name: "plan dinner"))
         }
         await store.send(.destination(.presented(.renaming(.binding(.set(\.name, " Dinner ")))))) {
-            $0.destination = .renaming(.init(subject: .conversation(self.dinner.id), name: " Dinner "))
+            $0.destination = .renaming(.init(subject: .conversation(self.dinner.id, in: turgaiSpace), name: " Dinner "))
         }
         await store.send(.renameConfirmed) { $0.destination = nil }
         await store.receive(\.renamed) { $0.conversations[id: self.dinner.id]?.title = "Dinner" }
         await store.send(.conversationMenuPicked(dinner.id, .rename)) {
-            $0.destination = .renaming(.init(subject: .conversation(self.dinner.id), name: "Dinner"))
+            $0.destination = .renaming(.init(subject: .conversation(self.dinner.id, in: turgaiSpace), name: "Dinner"))
         }
         await store.send(.destination(.presented(.renaming(.binding(.set(\.name, " ")))))) {
-            $0.destination = .renaming(.init(subject: .conversation(self.dinner.id), name: " "))
+            $0.destination = .renaming(.init(subject: .conversation(self.dinner.id, in: turgaiSpace), name: " "))
         }
         await store.send(.renameConfirmed) { $0.destination = nil }
         #expect(titled.value == ["Dinner"])
     }
 
-    /// + makes a space by its name, or joins one by an invite's link; either is then shown. A link
-    /// that isn't one can't be joined, and one that doesn't work says so, the dialog still open.
+    /// + makes a space by its name and then its first bot, its model picked from what the provider
+    /// offers, or joins one by an invite's link; either is then shown. A link that isn't one can't
+    /// be joined, and one that doesn't work says so, the dialog still open.
     @Test
     func aSpaceIsMadeOrJoined() async {
-        let family = SpaceSummary(id: familySpace, name: "Family", role: .admin, status: .active, kind: .made)
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: adminMay, status: .active)
         let space = "8F3C1E2A-4B5D-4E6F-8A9B-0C1D2E3F4A5B"
-        let work = SpaceSummary(id: SpaceID(rawValue: space), name: "Work", role: .member, status: .active, kind: .made)
+        let work = SpaceSummary(
+            id: SpaceID(rawValue: space), name: "Work", permissions: memberMay, status: .active)
         let joined = LockIsolated<[SpaceInviteLink]>([])
+        let made = LockIsolated<[BotConfiguration]>([])
         var state = SidebarFeature.State()
         state.session = session
         state.spaces = [turgai]
@@ -177,7 +190,12 @@ struct SidebarFeatureTests {
         let store = TestStore(initialState: state) {
             SidebarFeature()
         } withDependencies: {
-            $0.server.makeSpace = { _, _ in family }
+            $0.server.makeSpace = { _, _, bot in
+                made.withValue { $0.append(bot) }
+                return family
+            }
+            $0.server.models = { _, _ in .found(["llama3"]) }
+            $0.continuousClock = ImmediateClock()
             $0.server.joinSpace = { _, link in
                 joined.withValue { $0.append(link) }
                 guard link.token == "good" else { throw URLError(.badServerResponse) }
@@ -191,7 +209,24 @@ struct SidebarFeatureTests {
         await store.send(.destination(.presented(.addingSpace(.binding(.set(\.name, "Family")))))) {
             $0.destination = .addingSpace(.init(session: self.session, name: "Family"))
         }
-        await store.send(.destination(.presented(.addingSpace(.makeTapped))))
+        // Its bot, as the bot step writes it.
+        var named = SidebarFeature.AddingSpace.State(session: session, name: "Family")
+        named.bot = BotForm.State(session: session, name: "Family")
+        await store.send(.destination(.presented(.addingSpace(.nextTapped)))) {
+            $0.destination = .addingSpace(named)
+        }
+        named.bot?.models = .asking
+        await store.send(.destination(.presented(.addingSpace(.bot(.shown))))) { $0.destination = .addingSpace(named) }
+        named.bot?.models = .found(["llama3"])
+        await store.receive(\.destination.presented.addingSpace.bot.modelsAnswered) {
+            $0.destination = .addingSpace(named)
+        }
+        named.bot?.model = "llama3"
+        await store.send(.destination(.presented(.addingSpace(.bot(.binding(.set(\.model, "llama3"))))))) {
+            $0.destination = .addingSpace(named)
+        }
+        named.making = true
+        await store.send(.destination(.presented(.addingSpace(.makeTapped)))) { $0.destination = .addingSpace(named) }
         await store.receive(\.destination.presented.addingSpace.delegate, .added(family)) {
             $0.destination = nil
             $0.spaces = [self.turgai, family]
@@ -234,12 +269,133 @@ struct SidebarFeatureTests {
         await store.receive(\.delegate, .open(trip.id))
         await store.finish()
         #expect(joined.value.map(\.token) == ["bad", "good"])
+        #expect(
+            made.value == [
+                BotConfiguration(
+                    name: "Family", instructions: "", model: ModelChoice(provider: .ollama, model: "llama3"))
+            ])
+    }
+
+    /// Bots… lists the shown space's bots; one added, changed, made main or removed is saved, and
+    /// they're read again; a refusal says why, the form still open.
+    @Test
+    func aSpacesBotsAreConfigured() async {
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: adminMay, status: .active)
+        let helper = SpaceBot(
+            id: BotID(rawValue: "helper"), name: "Helper", instructions: "", provider: .ollama, address: nil,
+            hasKey: false, model: "llama3", contextWindow: nil, isMain: true)
+        let chef = SpaceBot(
+            id: BotID(rawValue: "chef"), name: "Chef", instructions: "Cook.", provider: .openAI, address: nil,
+            hasKey: true, model: "gpt-5", contextWindow: nil, isMain: false)
+        let saved = LockIsolated<[String]>([])
+        let store = TestStore(initialState: SidebarFeature.SpaceBots.State(session: session, space: family)) {
+            SidebarFeature.SpaceBots()
+        } withDependencies: {
+            $0.server.bots = { _, _ in saved.value.isEmpty ? [helper] : [helper, chef] }
+            $0.server.addBot = { _, space, bot in
+                saved.withValue { $0.append("added \(bot.name) to \(space.rawValue)") }
+                return chef
+            }
+            $0.server.changeBot = { _, _, id, bot in
+                guard bot.model.apiKey == nil else { throw ServerRefusal(error: ChatError(code: "x", message: "No.")) }
+                saved.withValue { $0.append("changed \(id.rawValue): \(bot.name)") }
+                return chef
+            }
+            $0.server.chooseMainBot = { _, _, id in saved.withValue { $0.append("main \(id.rawValue)") } }
+            $0.server.removeBot = { _, _, id in saved.withValue { $0.append("removed \(id.rawValue)") } }
+            $0.server.models = { _, _ in .found(["gpt-5"]) }
+            $0.continuousClock = ImmediateClock()
+        }
+
+        await store.send(.shown)
+        await store.receive(\.read) { $0.bots = [helper] }
+        await store.send(.addTapped) { $0.form = BotForm.State(session: self.session) }
+        await store.send(.form(.binding(.set(\.name, "Chef")))) { $0.form?.name = "Chef" }
+        await store.send(.form(.binding(.set(\.model, "gpt-5")))) { $0.form?.model = "gpt-5" }
+        await store.send(.saveTapped) { $0.saving = true }
+        await store.receive(\.saved) {
+            $0.form = nil
+            $0.saving = false
+        }
+        await store.receive(\.read) { $0.bots = [helper, chef] }
+
+        // Changed with a key typed, it's refused, and says why; its saved key is kept when none is.
+        await store.send(.changeTapped(chef)) {
+            $0.form = BotForm.State(session: self.session, changing: chef, in: familySpace)
+        }
+        // Past here, a key typed asks the provider for its models again, which isn't what's checked.
+        store.exhaustivity = .off
+        await store.send(.form(.binding(.set(\.apiKey, "sk-new"))))
+        await store.send(.saveTapped)
+        await store.receive(\.failed) { $0.problem = "No." }
+        await store.send(.form(.binding(.set(\.apiKey, ""))))
+        await store.send(.saveTapped)
+        await store.receive(\.saved)
+        await store.send(.mainTapped(chef))
+        await store.receive(\.saved)
+        await store.send(.removeTapped(helper))
+        await store.receive(\.saved)
+        await store.finish()
+        #expect(
+            saved.value == [
+                "added Chef to family", "changed chef: Chef", "main chef", "removed helper",
+            ])
+    }
+
+    /// Connections… lists the shown space's connections; one added with the chats written, or
+    /// changed, is saved and they're read again; chats that aren't ids can't be saved.
+    @Test
+    func aSpacesConnectionsAreConfigured() async {
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: adminMay, status: .active)
+        let kids = SpaceConnection(
+            id: "kids", label: "Kids", enabled: true, platform: .telegram(chatIDs: [42]), hasToken: true,
+            running: true, stopped: nil)
+        let saved = LockIsolated<[ConnectionSettings]>([])
+        let store = TestStore(initialState: SidebarFeature.SpaceConnections.State(session: session, space: family)) {
+            SidebarFeature.SpaceConnections()
+        } withDependencies: {
+            $0.server.connections = { _, _ in saved.value.isEmpty ? [] : [kids] }
+            $0.server.addConnection = { _, _, settings in saved.withValue { $0.append(settings) } }
+            $0.server.changeConnection = { _, _, _, settings in saved.withValue { $0.append(settings) } }
+        }
+
+        await store.send(.shown)
+        await store.receive(\.read)
+        await store.send(.addTapped) { $0.form = SidebarFeature.SpaceConnections.Form() }
+        var form = SidebarFeature.SpaceConnections.Form()
+        form.label = "Kids"
+        form.enabled = true
+        form.chatIDs = "42, x"
+        await store.send(.binding(.set(\.form, form))) { $0.form = form }
+        #expect(!store.state.canSave)
+        form.chatIDs = "42"
+        form.token = "123:abc"
+        await store.send(.binding(.set(\.form, form))) { $0.form = form }
+        await store.send(.saveTapped) { $0.saving = true }
+        await store.receive(\.saved) {
+            $0.form = nil
+            $0.saving = false
+        }
+        await store.receive(\.read) { $0.connections = [kids] }
+
+        await store.send(.changeTapped(kids)) { $0.form = SidebarFeature.SpaceConnections.Form(changing: kids) }
+        await store.send(.saveTapped) { $0.saving = true }
+        await store.receive(\.saved) {
+            $0.form = nil
+            $0.saving = false
+        }
+        await store.receive(\.read)
+        #expect(
+            saved.value == [
+                ConnectionSettings(label: "Kids", enabled: true, platform: .telegram(chatIDs: [42]), token: "123:abc"),
+                ConnectionSettings(label: "Kids", enabled: true, platform: .telegram(chatIDs: [42]), token: nil),
+            ])
     }
 
     /// Invite People… makes a link to the shown space, shown to copy; one that can't be made says so.
     @Test
     func anInviteIsMadeAndCopied() async {
-        let family = SpaceSummary(id: familySpace, name: "Family", role: .admin, status: .active, kind: .made)
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: adminMay, status: .active)
         let link = "turgai://join/8F3C1E2A-4B5D-4E6F-8A9B-0C1D2E3F4A5B/abc"
         let copied = LockIsolated<[String]>([])
         let makes = LockIsolated(0)
@@ -304,9 +460,9 @@ struct SidebarFeatureTests {
     /// space shown.
     @Test
     func theRailShowsOneSpaceAtATime() async {
-        let family = SpaceSummary(id: familySpace, name: "Family", role: .admin, status: .active, kind: .made)
-        let work = SpaceSummary(id: workSpace, name: "Work", role: .member, status: .active, kind: .made)
-        let started = LockIsolated<[SpaceID?]>([])
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: adminMay, status: .active)
+        let work = SpaceSummary(id: workSpace, name: "Work", permissions: memberMay, status: .active)
+        let started = LockIsolated<[SpaceID]>([])
         var state = SidebarFeature.State()
         state.session = session
         state.spaces = [turgai, family, work]
@@ -325,7 +481,7 @@ struct SidebarFeatureTests {
         #expect(state.spaceChoices.map(\.unread) == [false, true, false])
         #expect(state.spaceChoices.map(\.isShown) == [true, false, false])
         #expect(state.spaceChoices.map(\.fill) == [.filled, .outlined, .outlined])
-        #expect(state.shownSpaceMenu == [.invite, .rename, .archive])
+        #expect(state.shownSpaceMenu == [.invite, .bots, .connections, .rename, .archive])
         #expect(state.canStartConversation)
         #expect(state.shownSpaceName == "Family")
         #expect(state.spaceChoices.map(\.hue) == [.yellow, .blue, .blue])
@@ -365,13 +521,15 @@ struct SidebarFeatureTests {
 
     /// An admin archives the space shown, asked first: it's off the rail, and the rail's first is
     /// shown instead. Still in the Spaces list, it opens read only, its menu offering only to use it
-    /// again; Turgai's own isn't offered. With nothing left in it, it shows no conversation.
+    /// again. With nothing left in it, it shows no conversation.
     @Test
     func anAdminArchivesASpace() async {
         let asks = LockIsolated<[ChatAsk]>([])
-        let family = SpaceSummary(id: familySpace, name: "Family", role: .admin, status: .active, kind: .made)
-        let archived = SpaceSummary(id: familySpace, name: "Family", role: .admin, status: .archived, kind: .made)
-        let ours = SpaceSummary(id: turgaiSpace, name: "Turgai", role: .admin, status: .active, kind: .turgaisOwn)
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: adminMay, status: .active)
+        let archived = SpaceSummary(
+            id: familySpace, name: "Family", permissions: adminMay, status: .archived)
+        let ours = SpaceSummary(
+            id: turgaiSpace, name: "Turgai", permissions: adminMay, status: .active)
         let row = SidebarFeature.Row(id: dinner.id, title: "plan dinner", spaceID: familySpace, people: 1)
         var state = SidebarFeature.State()
         state.session = session
@@ -425,18 +583,21 @@ struct SidebarFeatureTests {
         await store.receive(\.delegate, .spaceChanged(family))
         await store.finish()
         #expect(
-            asks.value == [.archiveSpace(familySpace), .deleteConversation(dinner.id), .unarchiveSpace(familySpace)])
+            asks.value == [
+                .archiveSpace(familySpace), .deleteConversation(dinner.id, of: familySpace),
+                .unarchiveSpace(familySpace),
+            ])
 
         var turgais = SidebarFeature.State()
         turgais.spaces = [ours]
-        #expect(turgais.shownSpaceMenu == [.invite, .rename])
+        #expect(turgais.shownSpaceMenu == [.invite, .bots, .connections, .rename, .archive])
     }
 
     /// Leaving or deleting the conversation open opens the next in its space; what's refused says
     /// why. Others in it, a member only leaves it.
     @Test
     func leavingOrDeletingOpensTheNext() async {
-        let family = SpaceSummary(id: familySpace, name: "Family", role: .member, status: .active, kind: .made)
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: memberMay, status: .active)
         let lunch = ConversationID(rawValue: "lunch")
         let refused = LockIsolated(true)
         let row = SidebarFeature.Row(id: dinner.id, title: "plan dinner", spaceID: familySpace, people: 1)
@@ -474,7 +635,7 @@ struct SidebarFeatureTests {
     /// Return shows the first found.
     @Test
     func theSpacesListFindsASpace() async {
-        let work = SpaceSummary(id: workSpace, name: "Work", role: .member, status: .archived, kind: .made)
+        let work = SpaceSummary(id: workSpace, name: "Work", permissions: memberMay, status: .archived)
         var state = SidebarFeature.State()
         state.session = session
         state.spaces = [turgai, work]
@@ -529,13 +690,14 @@ struct ChatOpeningTests {
             $0.chat.send = { command in sent.withValue { $0.append(command) } }
         }
 
-        let turgai = SpaceSummary(id: turgaiSpace, name: "Turgai", role: .member, status: .active, kind: .turgaisOwn)
+        let turgai = SpaceSummary(
+            id: turgaiSpace, name: "Turgai", permissions: memberMay, status: .active)
         await store.send(.open(trip, in: turgai)) {
             $0.conversationID = trip
             $0.space = turgai
             $0.messages = []
         }
-        #expect(sent.value == [.open(conversationID: trip)])
+        #expect(sent.value == [.open(spaceID: turgaiSpace, conversationID: trip)])
 
         let late = Message(id: MessageID(), role: .user, text: "late", at: Date(timeIntervalSince1970: 2))
         await store.send(
@@ -578,11 +740,13 @@ struct MentionTests {
         let session = Session(token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
         var state = ChatFeature.State(
             connection: .connected(botID: BotID(rawValue: "conversation")), session: session,
-            conversationID: ConversationID(rawValue: "dinner"), participants: [bob], you: "account-ann")
+            conversationID: ConversationID(rawValue: "dinner"),
+            space: SpaceSummary(id: familySpace, name: "Family", permissions: memberMay, status: .active),
+            participants: [bob], you: "account-ann")
         state.spacePeople = [
-            SpacePerson(id: "account-ann", name: "ann", role: .admin),
-            SpacePerson(id: "account-bob", name: "bob", role: .member),
-            SpacePerson(id: "account-cat", name: "cat", role: .member),
+            SpacePerson(id: "account-ann", name: "ann", groups: []),
+            SpacePerson(id: "account-bob", name: "bob", groups: ["members"]),
+            SpacePerson(id: "account-cat", name: "cat", groups: ["members"]),
         ]
         #expect(state.participantsLine == "bob")
         state.participants = [
@@ -609,7 +773,7 @@ struct MentionTests {
             $0.chat.send = { _ in }
             $0.uuid = .incrementing
             $0.date = .constant(Date(timeIntervalSince1970: 2))
-            $0.server.participants = { _, _ in [bob, cat] }
+            $0.server.participants = { _, _, _ in [bob, cat] }
         }
         await store.send(.mentioned(cat)) {
             $0.draft = "@cat "

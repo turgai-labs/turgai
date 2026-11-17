@@ -34,9 +34,11 @@ struct TasksFeature {
         case object
     }
 
-    /// A chat's schedule or reminder, by the name it's kept under there.
+    /// A chat's schedule or reminder, by the name it's kept under there, in the space the chat is
+    /// one of.
     struct Named: Hashable {
         let chat: TaskListing.Chat
+        let space: SpaceID
         let name: String
     }
 
@@ -153,8 +155,8 @@ struct TasksFeature {
             }
             for await event in heard {
                 switch event.payload {
-                case .tasks(space, let tasks): await send(.current(tasks.map(Row.init)))
-                case .taskKept(space, let task): await send(.kept(Row(task)))
+                case .tasks(space, let tasks): await send(.current(tasks.map { Row($0, in: space) }))
+                case .taskKept(space, let task): await send(.kept(Row(task, in: space)))
                 case .taskEnded(space, let id): await send(.ended(id))
                 default: break
                 }
@@ -165,12 +167,12 @@ struct TasksFeature {
 }
 
 extension TasksFeature.Row {
-    /// `listing`, as the connection says it.
-    init(_ listing: TaskListing) {
+    /// `listing`, one of `space`'s tasks, as the connection says it.
+    init(_ listing: TaskListing, in space: SpaceID) {
         let owner: TasksFeature.Owner =
             switch listing.kind {
-            case .schedule(let chat, let name): .schedule(TasksFeature.Named(chat: chat, name: name))
-            case .reminder(let chat, let name): .reminder(TasksFeature.Named(chat: chat, name: name))
+            case .schedule(let chat, let name): .schedule(TasksFeature.Named(chat: chat, space: space, name: name))
+            case .reminder(let chat, let name): .reminder(TasksFeature.Named(chat: chat, space: space, name: name))
             case .object: .object
             }
         self.init(
@@ -183,10 +185,13 @@ extension TasksFeature.Command {
     /// What it asks the connection.
     var ask: ChatAsk {
         switch self {
-        case .pause(let schedule): .changeSchedule(in: schedule.chat, named: schedule.name, .pause)
-        case .resume(let schedule): .changeSchedule(in: schedule.chat, named: schedule.name, .resume)
-        case .cancelSchedule(let schedule): .changeSchedule(in: schedule.chat, named: schedule.name, .cancel)
-        case .cancelReminder(let reminder): .cancelReminder(in: reminder.chat, named: reminder.name)
+        case .pause(let schedule):
+            .changeSchedule(in: schedule.chat, of: schedule.space, named: schedule.name, .pause)
+        case .resume(let schedule):
+            .changeSchedule(in: schedule.chat, of: schedule.space, named: schedule.name, .resume)
+        case .cancelSchedule(let schedule):
+            .changeSchedule(in: schedule.chat, of: schedule.space, named: schedule.name, .cancel)
+        case .cancelReminder(let reminder): .cancelReminder(in: reminder.chat, of: reminder.space, named: reminder.name)
         }
     }
 }

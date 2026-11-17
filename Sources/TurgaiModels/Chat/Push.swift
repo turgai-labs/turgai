@@ -21,17 +21,22 @@ public enum ChatTopic: Hashable, Sendable {
     /// The tasks of the space with this id that the person may change: what they are as it's
     /// joined, then each change.
     case tasks(space: SpaceID)
+    /// The objects of the space with this id that the person may read: that they changed, as one
+    /// is made, removed, shared or installed.
+    case objects(space: SpaceID)
 
     /// What it is, as the socket names it.
     enum Name: String, Codable {
         case memory
         case tasks
+        case objects
     }
 
     var name: Name {
         switch self {
         case .memory: .memory
         case .tasks: .tasks
+        case .objects: .objects
         }
     }
 }
@@ -52,14 +57,18 @@ public enum ChatAsk: Equatable, Sendable {
     case archiveSpace(SpaceID)
     /// The space with this id in use again, by one of its admins.
     case unarchiveSpace(SpaceID)
-    /// The conversation off the asker's list: they no longer read it, and the rest stay in it.
-    case leaveConversation(ConversationID)
-    /// The conversation deleted for everyone: by the only person in it, or an admin of its space.
-    case deleteConversation(ConversationID)
-    /// The chat's schedule with this name changed, by whoever made it or an admin of its space.
-    case changeSchedule(in: TaskListing.Chat, named: String, ScheduleChange)
-    /// The chat's reminder with this name cancelled, by whoever made it or an admin of its space.
-    case cancelReminder(in: TaskListing.Chat, named: String)
+    /// The conversation of the space off the asker's list: they no longer read it, and the rest
+    /// stay in it.
+    case leaveConversation(ConversationID, of: SpaceID)
+    /// The conversation of the space deleted for everyone: by the only person in it, or someone
+    /// the space lets delete anyone's.
+    case deleteConversation(ConversationID, of: SpaceID)
+    /// The schedule with this name in the space's chat changed, by whoever made it or someone who
+    /// manages the space's tasks.
+    case changeSchedule(in: TaskListing.Chat, of: SpaceID, named: String, ScheduleChange)
+    /// The reminder with this name in the space's chat cancelled, by whoever made it or someone
+    /// who manages the space's tasks.
+    case cancelReminder(in: TaskListing.Chat, of: SpaceID, named: String)
 }
 
 /// The answer to a push.

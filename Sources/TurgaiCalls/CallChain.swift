@@ -55,6 +55,12 @@ public struct CallChain: Codable, Sendable, Equatable {
         CallChain(scope: scope, place: place, asker: .actor(actor), actors: [])
     }
 
+    /// The same chain on behalf of `scope`, as whoever decides for its person settled it now: the
+    /// same person, place, asker and actors it went through.
+    public func settled(as scope: CallScope) -> CallChain {
+        CallChain(scope: scope, place: place, asker: asker, actors: actors)
+    }
+
     /// The chain inside `actor`'s handling of a call that came through this one, refused once
     /// it's too deep. It's left as the handling ends, with the chain it was entered from.
     public func entering(_ actor: CallActor) throws(CallsTooDeep) -> CallChain {

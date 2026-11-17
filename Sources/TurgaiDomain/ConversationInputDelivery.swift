@@ -65,13 +65,13 @@ public actor ConversationInputReceipt {
 /// A channel-neutral input plus the checkpoint receipt owned by the adapter.
 /// The input itself remains a pure domain value.
 public struct ConversationInputDelivery: Sendable {
+    /// The space whose conversation it's for.
+    public let space: SpaceID
     public let input: ConversationInput
     public let receipt: ConversationInputReceipt
 
-    public init(
-        input: ConversationInput,
-        receipt: ConversationInputReceipt
-    ) {
+    public init(in space: SpaceID, input: ConversationInput, receipt: ConversationInputReceipt) {
+        self.space = space
         self.input = input
         self.receipt = receipt
     }

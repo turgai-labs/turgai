@@ -5,6 +5,7 @@ import Foundation
 import Hail
 import Testing
 import TurgaiDomain
+import TurgaiSpaces
 import VirtualActors
 
 @testable import TurgaiApplication
@@ -75,9 +76,19 @@ struct ObjectToolsTests {
     func findRanksRootsByTheQuery() async throws {
         try await withObjectNodes { objectsNode, sessionNode in
             let board = try await Board.start(on: objectsNode)
+            // The space's built-in objects, given to the session as a turn's tools give them.
+            let boardObject = try DiscoverableObject.resolve(id: board.id, using: sessionNode)
+            let boardDescribed = try await boardObject.describe()
+            let boardEntry = ObjectEntry(
+                id: .virtual(try #require(board.id.virtualActorID)), object: boardObject, type: boardDescribed.type,
+                description: boardDescribed.description,
+                actions: boardDescribed.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }.sorted(),
+                events: boardDescribed.events.keys.sorted())
 
             let session = ObjectSession(
-                actorSystem: sessionNode)
+                in: AsAPerson.person.space,
+                objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
+                    for: AsAPerson.person.person), actorSystem: sessionNode, builtIns: [boardEntry])
             _ = try await waitForRoots(1, in: session)
 
             func found(_ query: String) async throws -> [String] {
@@ -94,11 +105,21 @@ struct ObjectToolsTests {
     func theObjectsPageListsRootsAndTheirHandlesWorkWithoutListing() async throws {
         try await withObjectNodes { objectsNode, sessionNode in
             let board = try await Board.start(on: objectsNode)
+            // The space's built-in objects, given to the session as a turn's tools give them.
+            let boardObject = try DiscoverableObject.resolve(id: board.id, using: sessionNode)
+            let boardDescribed = try await boardObject.describe()
+            let boardEntry = ObjectEntry(
+                id: .virtual(try #require(board.id.virtualActorID)), object: boardObject, type: boardDescribed.type,
+                description: boardDescribed.description,
+                actions: boardDescribed.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }.sorted(),
+                events: boardDescribed.events.keys.sorted())
 
-            // The runtime keeps one catalog following the receptionist, as here. The objects page
-            // says what objects are for, lists the roots by handle, and links them directly.
-            let catalog = await ObjectCatalog(actorSystem: sessionNode)
-            let listing = ObjectSession(actorSystem: sessionNode, objectCatalog: catalog)
+            // The objects page says what objects are for, lists the roots by handle, and links them
+            // directly.
+            let listing = ObjectSession(
+                in: AsAPerson.person.space,
+                objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
+                    for: AsAPerson.person.person), actorSystem: sessionNode, builtIns: [boardEntry])
             var lines: [String] = []
             var links: [String] = []
             for _ in 0..<50 {
@@ -119,7 +140,9 @@ struct ObjectToolsTests {
 
             // A new session, as a later turn gets: the listed handle works straight away.
             let session = ObjectSession(
-                actorSystem: sessionNode, objectCatalog: catalog)
+                in: AsAPerson.person.space,
+                objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
+                    for: AsAPerson.person.person), actorSystem: sessionNode, builtIns: [boardEntry])
             #expect(try await session.describe(try await session.id(written: "board"))["type"] == "Board")
             _ = board
         }
@@ -130,7 +153,9 @@ struct ObjectToolsTests {
         await #expect(throws: ObjectToolError.unknownHandle("h9")) {
             try await withObjectNodes { _, sessionNode in
                 let session = ObjectSession(
-                    actorSystem: sessionNode)
+                    in: AsAPerson.person.space,
+                    objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
+                        for: AsAPerson.person.person), actorSystem: sessionNode)
                 _ = try await session.describe(try await session.id(written: "h9"))
             }
         }

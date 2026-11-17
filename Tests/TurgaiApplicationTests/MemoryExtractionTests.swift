@@ -4,7 +4,7 @@ import Testing
 import TurgaiDomain
 import TurgaiMemory
 
-@testable import TurgaiApplication
+@testable import TurgaiPeople
 
 /// What the extractor is given of a conversation, and what it answers.
 struct MemoryExtractionTests {
@@ -12,7 +12,7 @@ struct MemoryExtractionTests {
 
     private func exchange(_ text: String, response: String? = nil) -> MemoryObservation {
         MemoryObservation(
-            sourceID: MemorySourceID(), conversation: check, heardBy: AgentProfileID("turgai"), text: text,
+            sourceID: MemorySourceID(), conversation: check, heardBy: BotID(), text: text,
             response: response, observedAt: Date())
     }
 

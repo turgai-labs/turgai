@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import Foundation
 import TurgaiModels
-import TurgaiObjects
-import TurgaiServer
 
 /// One object in the cluster, as the objects window shows it.
 struct ObjectRow: Equatable, Identifiable, Sendable {
@@ -18,62 +16,41 @@ struct ObjectRow: Equatable, Identifiable, Sendable {
     let node: String
 }
 
-/// The objects the signed-in account may read, following the runtime's object catalog.
+/// A space's objects the signed-in account may read, as the server lists them on its behalf.
 @DependencyClient
 struct ObjectsClient: Sendable {
-    /// The current objects, then the whole list again whenever one joins or leaves.
-    var live: @Sendable () -> AsyncStream<[ObjectRow]> = { .finished }
-    /// Shares an object made here with everyone, as far as asked, or takes that back.
-    var share: @Sendable (MadeObjectID, ObjectSharing) async throws -> Void
+    /// The space's objects as they are now: none when no one is signed in.
+    var list: @Sendable (SpaceID) async -> [ObjectRow] = { _ in [] }
+    /// Shares an object made in the space with everyone in it, as far as asked, or takes that back.
+    var share: @Sendable (SpaceID, MadeObjectID, ObjectSharing) async throws -> Void
 }
 
-extension AsyncStream {
-    fileprivate static var finished: AsyncStream<Element> { AsyncStream { $0.finish() } }
-}
-
-extension ObjectsClient: TestDependencyKey {
+extension ObjectsClient: DependencyKey {
     static let testValue = ObjectsClient()
 
-    /// No runtime, so no objects.
-    static let unavailable = ObjectsClient(live: { .finished }, share: { _, _ in })
-
-    static func live(_ source: TurgaiObjectCatalogSource) -> ObjectsClient {
-        ObjectsClient(
-            live: {
-                AsyncStream { continuation in
-                    let task = Task {
-                        let catalog = await source.catalog()
-                        guard let changes = await catalog.whenLocal({ $0.changes() }) else {
-                            return continuation.finish()
-                        }
-                        for await _ in changes {
-                            continuation.yield(await listed())
-                        }
-                        continuation.finish()
-                    }
-                    continuation.onTermination = { _ in task.cancel() }
-                }
-            },
-            share: { made, sharing in
-                guard let session = SessionStore.liveValue.load() else { return }
-                var request = URLRequest(
-                    url: LocalServer.baseURL.appending(path: "api/v1/objects/\(made.rawValue)/share"))
-                request.httpMethod = "POST"
-                request.setValue("\(LocalServer.sessionCookieName)=\(session.token)", forHTTPHeaderField: "Cookie")
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.httpBody = try JSONEncoder().encode(ObjectSharingRequest(everyone: sharing))
-                let (_, response) = try await URLSession.shared.data(for: request)
-                guard (response as? HTTPURLResponse)?.statusCode == 204 else { throw ObjectSharingRefused() }
-            })
-    }
+    static let liveValue = ObjectsClient(
+        list: { await listed(in: $0) },
+        share: { space, made, sharing in
+            guard let session = SessionStore.liveValue.load() else { return }
+            var request = URLRequest(
+                url: LocalServer.baseURL.appending(
+                    path: "api/v1/spaces/\(space.rawValue)/objects/\(made.rawValue)/share"))
+            request.httpMethod = "POST"
+            request.setValue("\(LocalServer.sessionCookieName)=\(session.token)", forHTTPHeaderField: "Cookie")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(ObjectSharingRequest(everyone: sharing))
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 204 else { throw ObjectSharingRefused() }
+        })
 }
 
 extension ObjectsClient {
-    /// The objects the signed-in account may read, as the server lists them on its behalf in its
-    /// chat: none when no one is signed in.
-    fileprivate static func listed() async -> [ObjectRow] {
+    /// `space`'s objects the signed-in account may read, as the server lists them on its behalf:
+    /// none when no one is signed in.
+    fileprivate static func listed(in space: SpaceID) async -> [ObjectRow] {
         guard let session = SessionStore.liveValue.load() else { return [] }
-        var request = URLRequest(url: LocalServer.baseURL.appending(path: "api/v1/objects"))
+        var request = URLRequest(
+            url: LocalServer.baseURL.appending(path: "api/v1/spaces/\(space.rawValue)/objects"))
         request.setValue("\(LocalServer.sessionCookieName)=\(session.token)", forHTTPHeaderField: "Cookie")
         guard let (data, _) = try? await URLSession.shared.data(for: request),
             let listings = try? JSONDecoder().decode([ObjectListing].self, from: data)
@@ -102,11 +79,13 @@ struct ObjectsFeature {
     @ObservableState
     struct State: Equatable {
         enum Listing: Equatable {
-            /// The runtime's catalog hasn't answered yet.
+            /// Not listed yet.
             case waiting
             case live(IdentifiedArrayOf<ObjectRow>)
         }
 
+        /// The space shown, whose objects are listed: none until the sidebar shows one.
+        var space: SpaceID?
         var listing = Listing.waiting
         /// Why sharing an object was refused, while it's shown.
         var refusal: String?
@@ -115,8 +94,10 @@ struct ObjectsFeature {
     }
 
     enum Action {
-        /// The window appeared: follow the catalog while it's open.
+        /// The window appeared: follow the shown space's objects while it's open.
         case appeared
+        /// The sidebar shows another space: its objects are followed instead.
+        case spaceChanged(SpaceID)
         case changed([ObjectRow])
         /// Share an object made here with everyone, as far as asked, or take that back.
         case share(MadeObjectID, ObjectSharing)
@@ -126,28 +107,31 @@ struct ObjectsFeature {
     }
 
     @Dependency(\.objects) var objects
+    @Dependency(\.chat) var chat
 
-    private enum CancelID { case live }
+    fileprivate enum CancelID { case live }
 
     var body: some ReducerOf<Self> {
         Reduce { state, action in
             switch action {
             case .appeared:
-                return .run { send in
-                    for await rows in objects.live() {
-                        await send(.changed(rows))
-                    }
-                }
-                .cancellable(id: CancelID.live, cancelInFlight: true)
+                return follow(state.space)
+
+            case .spaceChanged(let space):
+                guard state.space != space else { return .none }
+                state.space = space
+                state.listing = .waiting
+                return follow(space)
 
             case .changed(let rows):
                 state.listing = .live(IdentifiedArray(uniqueElements: rows))
                 return .none
 
             case .share(let made, let sharing):
+                guard let space = state.space else { return .none }
                 return .run { send in
                     do {
-                        try await objects.share(made, sharing)
+                        try await objects.share(space, made, sharing)
                     } catch {
                         await send(.shareRefused)
                     }
@@ -162,6 +146,26 @@ struct ObjectsFeature {
                 return .none
             }
         }
+    }
+}
+
+extension ObjectsFeature {
+    /// `space`'s objects followed: listed now, and again each time objects change, until another
+    /// space is shown.
+    private func follow(_ space: SpaceID?) -> Effect<Action> {
+        guard let space else { return .none }
+        return .run { send in
+            // Listened to before it's joined, and joined before it's listed, so no change in
+            // between goes unheard.
+            let heard = await chat.events()
+            try? await chat.perform(.join(.objects(space: space)))
+            await send(.changed(await objects.list(space)))
+            for await event in heard {
+                if case .objectsChanged = event.payload { await send(.changed(await objects.list(space))) }
+            }
+            try? await chat.perform(.leave(.objects(space: space)))
+        }
+        .cancellable(id: CancelID.live, cancelInFlight: true)
     }
 }
 

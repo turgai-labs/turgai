@@ -111,7 +111,7 @@ struct PageDocument: HTMLDocument {
           }
         }
 
-        new EventSource('/live').addEventListener('page', (event) => show(event.data));
+        new EventSource('live').addEventListener('page', (event) => show(event.data));
         page.addEventListener('click', (event) => {
           const button = event.target.closest('button[data-press]');
           if (button) { fetch(button.dataset.press, { method: 'POST' }); }
@@ -260,6 +260,6 @@ struct LayoutView: HTML {
 
     static func press(_ label: String, version: Int) -> String {
         let encoded = label.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-        return "/press?label=\(encoded)&page=\(version)"
+        return "press?label=\(encoded)&page=\(version)"
     }
 }

@@ -33,61 +33,216 @@ public struct SpaceID: Codable, Hashable, Sendable, RawRepresentable {
     }
 }
 
-/// A space the signed-in person is in, as their list shows it: what it's called, their role,
-/// whether it's in use, and whose it is.
-public struct SpaceSummary: Codable, Hashable, Sendable, Identifiable {
-    public enum Role: String, Codable, Hashable, Sendable {
-        case admin
-        case member
+/// What someone may do in a space: each area's level, none when they may do nothing there.
+public struct SpacePermissions: Codable, Hashable, Sendable {
+    /// Its people: seeing who's in it, or also managing them.
+    public enum People: String, Codable, Hashable, Sendable {
+        case see, manage
     }
 
+    /// Its bots: using them, or also configuring them.
+    public enum Bots: String, Codable, Hashable, Sendable {
+        case use, configure
+    }
+
+    /// What's asked of it: answering, or also running anything without asking.
+    public enum Requests: String, Codable, Hashable, Sendable {
+        case answer, runAny
+    }
+
+    /// The tasks kept in it: seeing everyone's, or also changing them.
+    public enum Tasks: String, Codable, Hashable, Sendable {
+        case see, manage
+    }
+
+    public let people: People?
+    public let bots: Bots?
+    public let requests: Requests?
+    public let tasks: Tasks?
+    /// Configuring its connections.
+    public let connections: Bool
+    /// Deleting anyone's conversation in it.
+    public let deleteConversations: Bool
+    /// Naming and archiving it, and making its groups, what they may do, and its admins.
+    public let configureSpace: Bool
+
+    public init(
+        people: People?, bots: Bots?, requests: Requests?, tasks: Tasks?, connections: Bool,
+        deleteConversations: Bool, configureSpace: Bool
+    ) {
+        self.people = people
+        self.bots = bots
+        self.requests = requests
+        self.tasks = tasks
+        self.connections = connections
+        self.deleteConversations = deleteConversations
+        self.configureSpace = configureSpace
+    }
+}
+
+/// A space the signed-in person is in, as their list shows it: what it's called, what they may do
+/// in it, and whether it's in use.
+public struct SpaceSummary: Codable, Hashable, Sendable, Identifiable {
     /// Whether it's in use. Archived, what's in it is read, and nothing new happens in it.
     public enum Status: String, Codable, Hashable, Sendable {
         case active
         case archived
     }
 
-    /// Whose it is: Turgai's own, where every account is and which stays in use, or one made.
-    public enum Kind: String, Codable, Hashable, Sendable {
-        case turgaisOwn
-        case made
-    }
-
     public let id: SpaceID
     public let name: String
-    public let role: Role
+    public let permissions: SpacePermissions
     public let status: Status
-    public let kind: Kind
 
-    public init(id: SpaceID, name: String, role: Role, status: Status, kind: Kind) {
+    public init(id: SpaceID, name: String, permissions: SpacePermissions, status: Status) {
         self.id = id
         self.name = name
-        self.role = role
+        self.permissions = permissions
         self.status = status
-        self.kind = kind
     }
 }
 
-/// Someone in a space, as another of its people sees them: their id, what they're called, and their
-/// role.
+/// Someone in a space, as another of its people sees them: their id, what they're called, and the
+/// groups they're in.
 public struct SpacePerson: Codable, Hashable, Sendable, Identifiable {
     public let id: String
     public let name: String
-    public let role: SpaceSummary.Role
+    public let groups: [String]
 
-    public init(id: String, name: String, role: SpaceSummary.Role) {
+    public init(id: String, name: String, groups: [String]) {
         self.id = id
         self.name = name
-        self.role = role
+        self.groups = groups
     }
 }
 
-/// A new space, called `name`: the one who asks is its first admin.
+/// A new space, called `name`, with `bot` its first bot: the one who asks is its first admin.
 public struct MakeSpaceRequest: Codable, Hashable, Sendable {
     public let name: String
+    public let bot: BotConfiguration
 
-    public init(name: String) {
+    public init(name: String, bot: BotConfiguration) {
         self.name = name
+        self.bot = bot
+    }
+}
+
+/// A bot as whoever configures it gives it: what it's called, what it's told, and what thinks for
+/// it.
+public struct BotConfiguration: Codable, Hashable, Sendable {
+    public let name: String
+    public let instructions: String
+    public let model: ModelChoice
+
+    public init(name: String, instructions: String, model: ModelChoice) {
+        self.name = name
+        self.instructions = instructions
+        self.model = model
+    }
+}
+
+/// Where a bot's model runs, and which of the models there: a provider, by its name; a server's
+/// address, when it has one; a key typed now, which none keeps as it's saved; and the window chosen,
+/// on a server of your own.
+public struct ModelChoice: Codable, Hashable, Sendable {
+    public let provider: ModelProvider
+    public let address: String?
+    public let apiKey: String?
+    public let model: String
+    public let contextWindow: Int?
+
+    public init(
+        provider: ModelProvider, address: String? = nil, apiKey: String? = nil, model: String, contextWindow: Int? = nil
+    ) {
+        self.provider = provider
+        self.address = address
+        self.apiKey = apiKey
+        self.model = model
+        self.contextWindow = contextWindow
+    }
+}
+
+/// A bot of a space, as someone in it sees it: whether it's the main one, and its configuration but
+/// its key, of which only whether there is one.
+public struct SpaceBot: Codable, Hashable, Sendable, Identifiable {
+    public let id: BotID
+    public let name: String
+    public let instructions: String
+    public let provider: ModelProvider
+    public let address: String?
+    public let hasKey: Bool
+    public let model: String
+    public let contextWindow: Int?
+    public let isMain: Bool
+
+    public init(
+        id: BotID, name: String, instructions: String, provider: ModelProvider, address: String?, hasKey: Bool,
+        model: String, contextWindow: Int?, isMain: Bool
+    ) {
+        self.id = id
+        self.name = name
+        self.instructions = instructions
+        self.provider = provider
+        self.address = address
+        self.hasKey = hasKey
+        self.model = model
+        self.contextWindow = contextWindow
+        self.isMain = isMain
+    }
+}
+
+/// The models where a bot's model would run, as asked with what's chosen so far: the model itself
+/// isn't needed yet.
+public struct ModelsRequest: Codable, Hashable, Sendable {
+    public let provider: ModelProvider
+    public let address: String?
+    public let apiKey: String?
+    /// The bot whose saved key is asked with when none is typed, in the space `spaceID`.
+    public let botID: BotID?
+    public let spaceID: SpaceID?
+
+    public init(
+        provider: ModelProvider, address: String? = nil, apiKey: String? = nil, botID: BotID? = nil,
+        spaceID: SpaceID? = nil
+    ) {
+        self.provider = provider
+        self.address = address
+        self.apiKey = apiKey
+        self.botID = botID
+        self.spaceID = spaceID
+    }
+}
+
+/// What a provider was found to offer, asked with what's chosen so far: its models, or why it
+/// couldn't be asked.
+public enum ModelsAnswer: Codable, Hashable, Sendable {
+    case found([String])
+    case unavailable(String)
+}
+
+/// Who runs a bot's model: Apple's on-device model, an Ollama server, a server that speaks OpenAI's
+/// API, or a provider's cloud.
+public enum ModelProvider: String, Codable, Hashable, Sendable, CaseIterable {
+    case appleSystem = "system"
+    case ollama
+    case openAICompatible = "openai-compatible"
+    case openAI = "openai"
+    case anthropic
+    case gemini
+
+    /// Where its models run: on this machine, on a server at an address, or in its cloud.
+    public enum Kind: Sendable {
+        case local
+        case server
+        case cloud
+    }
+
+    public var kind: Kind {
+        switch self {
+        case .appleSystem: .local
+        case .ollama, .openAICompatible: .server
+        case .openAI, .anthropic, .gemini: .cloud
+        }
     }
 }
 
@@ -166,6 +321,53 @@ public struct JoinSpaceRequest: Codable, Hashable, Sendable {
     public let token: String
 
     public init(token: String) {
+        self.token = token
+    }
+}
+
+/// A connection of a space, as whoever configures them sees it: how it's set up, whether it has its
+/// secret, whether it's running, and why it stopped last, when it stopped by itself.
+public struct SpaceConnection: Codable, Hashable, Sendable, Identifiable {
+    public let id: String
+    public let label: String
+    public let enabled: Bool
+    public let platform: ConnectionPlatform
+    public let hasToken: Bool
+    public let running: Bool
+    public let stopped: String?
+
+    public init(
+        id: String, label: String, enabled: Bool, platform: ConnectionPlatform, hasToken: Bool, running: Bool,
+        stopped: String?
+    ) {
+        self.id = id
+        self.label = label
+        self.enabled = enabled
+        self.platform = platform
+        self.hasToken = hasToken
+        self.running = running
+        self.stopped = stopped
+    }
+}
+
+/// The platform a connection is on, with what it's set up with there.
+public enum ConnectionPlatform: Codable, Hashable, Sendable {
+    /// A Telegram bot, reached by the chats listed: every chat when none are.
+    case telegram(chatIDs: [Int64])
+}
+
+/// A connection as whoever configures it gives it: a token typed now, which none keeps as it's
+/// saved; none keeps the saved one.
+public struct ConnectionSettings: Codable, Hashable, Sendable {
+    public let label: String
+    public let enabled: Bool
+    public let platform: ConnectionPlatform
+    public let token: String?
+
+    public init(label: String, enabled: Bool, platform: ConnectionPlatform, token: String?) {
+        self.label = label
+        self.enabled = enabled
+        self.platform = platform
         self.token = token
     }
 }

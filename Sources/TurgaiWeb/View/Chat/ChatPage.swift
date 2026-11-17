@@ -2,74 +2,57 @@ import Elementary
 import ElementaryHTMX4
 import ElementaryHTMX4WS
 import TurgaiApplication
+import TurgaiDomain
 
+/// A conversation in a space, with the bot answering it.
 struct ChatPage: HTMLDocument, Sendable {
-    enum Presentation: Sendable {
-        case publicChat
-        case dashboard
-    }
-
     let user: AuthenticatedUser?
-    let profile: TurgaiAgentProfile
+    let bot: Bot
+    /// The space whose conversation it is.
+    let space: String
     /// The conversation it shows, as the API calls it.
     let conversationID: String
-    let presentation: Presentation
 
-    init(user: AuthenticatedUser, profile: TurgaiAgentProfile, conversationID: String, presentation: Presentation) {
+    init(user: AuthenticatedUser, bot: Bot, space: String, conversationID: String) {
         self.user = user
-        self.profile = profile
+        self.bot = bot
+        self.space = space
         self.conversationID = conversationID
-        self.presentation = presentation
     }
 
-    var title: String { "Turgai — Chat with \(profile.name)" }
+    var title: String { "Turgai — Chat with \(bot.name)" }
     var head: some HTML { TurgaiHead() }
 
-    private var shellKind: PageShellKind {
-        switch presentation {
-        case .publicChat: .public
-        case .dashboard: .private
-        }
-    }
-
-    private var headerNavigation: PageHeaderNavigation {
-        switch presentation {
-        case .publicChat: .none
-        case .dashboard: .active(.bots)
-        }
-    }
 
     var body: some HTML {
         main(
             .class("app-page chat-app-page overlay-scroll-page"),
-            .hx.ws.connect("/api/v1/chat?conversationID=\(conversationID)"),
+            .hx.ws.connect("/api/v1/chat?space=\(space)&conversationID=\(conversationID)"),
             // The socket sends only swaps that say where they go.
             .hx.swap(.none)
         ) {
             PageShell(
-                kind: shellKind,
+                kind: .private,
                 contentLayout: .overlayScroll,
-                header: PageHeader(user: user, navigation: headerNavigation),
-                footer: PageFooter(behavior: .sticky) { ChatFooterContent(profileName: profile.name) }
+                header: PageHeader(user: user, navigation: .active(.spaces)),
+                footer: PageFooter(behavior: .sticky) { ChatFooterContent(profileName: bot.name.rawValue) }
             ) {
                 div(.class("chat-page")) {
-                    if case .dashboard = presentation {
-                        div(.class("chat-header")) {
-                            div(.class("chat-header-main")) {
-                                a(.href("/agents/\(profile.id)"), .class("chat-back")) {
-                                    "← \(profile.name)"
-                                }
-                                h1 { "Chat" }
+                    div(.class("chat-header")) {
+                        div(.class("chat-header-main")) {
+                            a(.href("/spaces/\(space)/bots/\(bot.id)"), .class("chat-back")) {
+                                "← \(bot.name)"
                             }
-                            span(.class("chat-model")) {
-                                TurgaiModelPresentation.displayName(for: profile.model)
-                            }
+                            h1 { "Chat" }
+                        }
+                        span(.class("chat-model")) {
+                            bot.modelIdentifier
                         }
                     }
                     section(
                         .class("chat-messages chat-wrapper"),
                         .id("chat-messages"),
-                        .init(name: "aria-label", value: "Conversation with \(profile.name)")
+                        .init(name: "aria-label", value: "Conversation with \(bot.name)")
                     ) {
                         div(.class("chat-messages-content"), .id("chat-messages-content")) {
                             div(.class("chat-empty chat-loading"), .id("chat-empty")) {

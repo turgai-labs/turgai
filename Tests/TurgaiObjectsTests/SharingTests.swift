@@ -2,21 +2,22 @@ import DistributedCluster
 import EventSourcing
 import Foundation
 import Testing
+import TurgaiCalls
 import TurgaiDomain
+import TurgaiSpaces
 
 import struct AnyLanguageModel.GeneratedContent
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
-import TurgaiCalls
 
 /// An object is shared through share_object, with the chat the turn came in through, by whoever may
 /// change it: anyone else is refused, as any change is.
 @Suite(.serialized)
 struct SharingTests {
     private let family = SpaceID()
-    private var ann: CallScope { CallScope(UserID.ann, in: family, as: .member, allowed: []) }
-    private var bob: CallScope { CallScope(UserID.bob, in: family, as: .member, allowed: []) }
+    private var ann: CallScope { CallScope.member(UserID.ann, in: family) }
+    private var bob: CallScope { CallScope.member(UserID.bob, in: family) }
     private let counter =
         "actor Counter {\n    var count = 0\n\n    func add() -> Int {\n        count += 1\n        return count\n    }\n}"
 
@@ -45,12 +46,14 @@ struct SharingTests {
     func whoeverMayChangeItSharesItWithTheirChat() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem("sharing", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(family, on: node)
             let id = try await self.as(ann) {
                 try await objects.create(name: "Tally", spec: .new(try Script(code: counter, type: "Counter")))
             }
             let object = try await objects.held(id)
-            let annSession = ObjectSession(actorSystem: node, objectCatalog: await ObjectCatalog(actorSystem: node))
+            let annSession = ObjectSession(
+                in: family, objects: try await Space.identified(by: family, on: node).objects(for: ann.person),
+                actorSystem: node)
             let tally = try await self.as(ann) { try await annSession.id(written: "tally") }
 
             // Shared with the family, the chat Ann's turn came in through: Bob uses it.
@@ -58,7 +61,9 @@ struct SharingTests {
             #expect(try await self.as(bob) { try await object.respond("add", arguments: [:]).reply } == .integer(1))
 
             // Bob reads it, and still can't change who may.
-            let bobSession = ObjectSession(actorSystem: node, objectCatalog: await ObjectCatalog(actorSystem: node))
+            let bobSession = ObjectSession(
+                in: family, objects: try await Space.identified(by: family, on: node).objects(for: bob.person),
+                actorSystem: node)
             let bobsTally = try await self.as(bob) { try await bobSession.id(written: "tally") }
             await #expect(throws: ObjectToolError.failed(NotAllowed(.write).description)) {
                 try await self.as(bob) { _ = try await bobSession.share(bobsTally, with: .everyone, .write) }
@@ -90,20 +95,21 @@ struct SharingTests {
                 name: Uses.module,
                 source: "actor Counter {\n    init(id: String)\n    func add() async throws -> Int\n}"),
             objects: [:], lasting: ["Counter"])
-        try await withClusterSystem("sharing", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann, bob]) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+        try await withClusterSystem("sharing", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann, bob])
+        { node in
+            let objects = try await DynamicObjects.of(family, on: node)
             let drinksID = try await self.as(ann) {
                 _ = try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
                 return try await objects.create(
                     name: "Drinks", spec: .new(try Script(code: drinks, type: "Drinks", uses: uses)))
             }
             let desk = try await objects.held(drinksID)
-            try await self.as(ann) { try await desk.share(with: .space(family), .read) }
+            try await self.as(ann) { try await desk.share(with: .group(family, .members), .read) }
 
             // Bob uses Drinks, and through it the tea it holds.
             #expect(try await self.as(bob) { try await desk.respond("addTea", arguments: [:]).reply } == .integer(1))
             // Not the tea itself, nor does Ann: it's what Drinks holds.
-            let tea = try await DynamicObject.resolve(on: node, identity: ObjectIdentity(rawValue: "tea"))
+            let tea = try await DynamicObject.identified(by: ObjectIdentity(rawValue: "tea"), in: family, on: node)
             await #expect(throws: NotAllowed(.read)) {
                 try await self.as(bob) { _ = try await tea.respond("add", arguments: [:]) }
             }

@@ -91,9 +91,10 @@ struct ChatTests {
         for ask in [
             ChatAsk.join(.memory), .leave(.memory), .join(.tasks(space: family)), .leave(.tasks(space: family)),
             .memory, .forgetMemory, .setRemembering(.off),
-            .archiveSpace(family), .unarchiveSpace(family), .leaveConversation(dinner), .deleteConversation(dinner),
-            .changeSchedule(in: TaskListing.Chat(rawValue: "turgai:dinner"), named: "news", .pause),
-            .cancelReminder(in: TaskListing.Chat(rawValue: "turgai:dinner"), named: "tea"),
+            .archiveSpace(family), .unarchiveSpace(family), .leaveConversation(dinner, of: family),
+            .deleteConversation(dinner, of: family),
+            .changeSchedule(in: TaskListing.Chat(rawValue: "turgai:dinner"), of: family, named: "news", .pause),
+            .cancelReminder(in: TaskListing.Chat(rawValue: "turgai:dinner"), of: family, named: "tea"),
         ] {
             let push = ChatCommand.push(ref: ref, ask: ask)
             #expect(try JSONDecoder().decode(ChatCommand.self, from: JSONEncoder().encode(push)) == push)

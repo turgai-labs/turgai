@@ -2,9 +2,10 @@ import AnyLanguageModel
 import Testing
 import TurgaiDomain
 import TurgaiMemory
+import TurgaiPeople
 
 @testable import TurgaiApplication
-import TurgaiPeople
+@testable import TurgaiConversations
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -17,6 +18,8 @@ struct ConversationTests {
         channel: ChannelID("test"),
         externalAddress: ExternalConversationAddress("chat")
     )
+    /// The bot that answers in these turns.
+    private let answering = BotID()
 
     @Test
     func conversationRecordOwnsQueueAndTurnLifecycle() {
@@ -30,7 +33,7 @@ struct ConversationTests {
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
             turnID: TurnID(),
-            agentRole: "test"
+            bot: answering
         )
         let second = PendingConversationMessage(
             message: InboundMessage(
@@ -41,7 +44,7 @@ struct ConversationTests {
                 receivedAt: Date(timeIntervalSince1970: 2)
             ),
             turnID: TurnID(),
-            agentRole: "test"
+            bot: answering
         )
 
         var record = ConversationState(conversationID: conversationID)
@@ -100,24 +103,26 @@ struct ConversationTests {
             MemoryPresentation.actions(for: remembered, remembering: .on).map(\.command) == [
                 "/forget-fact 00000000-0000-0000-0000-000000000001", "/memory-off", "/forget",
             ])
-        #expect(MemoryPresentation.actions(for: remembered, remembering: .on).first?.label == "Forget Lives in: Haar, Germany")
+        #expect(
+            MemoryPresentation.actions(for: remembered, remembering: .on).first?.label
+                == "Forget Lives in: Haar, Germany")
         #expect(
             MemoryPresentation.text(Remembered([]), remembering: .off)
                 == "Memory is off: nothing new is remembered.\nNothing is remembered.")
         #expect(MemoryPresentation.actions(for: Remembered([]), remembering: .off).map(\.label) == ["Turn memory on"])
     }
 
-    /// Only its people add someone: a person, or an agent while it has none; never a guest, either
+    /// Only its people add someone: a person, or a bot while it has none; never a guest, either
     /// way. Adding someone in it already changes nothing.
     @Test
     func onlyItsPeopleAddSomeone() throws {
         var record = ConversationState(conversationID: conversationID)
-        for event in try record.starting(in: SpaceID(), answeredBy: AgentProfileID("conversation"), by: .ann) {
+        for event in try record.starting(with: BotID(), by: .ann) {
             record.apply(event)
         }
         #expect(throws: ConversationRefusal.notInIt) { try record.adding(.person(.cat), by: .bob) }
         #expect(throws: ConversationRefusal.guestsStayOut) { try record.adding(.person(.guest(UUID())), by: .ann) }
-        #expect(throws: ConversationRefusal.oneAgentForNow) { try record.adding(.agent(AgentProfileID("chef")), by: .ann) }
+        #expect(throws: ConversationRefusal.oneBotForNow) { try record.adding(.bot(BotID()), by: .ann) }
 
         for event in try record.adding(.person(.bob), by: .ann) { record.apply(event) }
         #expect(record.people == [.ann, .bob])
@@ -128,20 +133,20 @@ struct ConversationTests {
     @Test
     func historyKeepsWhoSaidIt() throws {
         var record = ConversationState(conversationID: conversationID)
-        let agent = AgentProfileID("conversation")
-        for event in try record.starting(in: SpaceID(), answeredBy: agent, by: .ann) { record.apply(event) }
+        let agent = BotID()
+        for event in try record.starting(with: agent, by: .ann) { record.apply(event) }
         let asked = PendingConversationMessage(
             message: InboundMessage(
                 conversationID: conversationID, participantID: ParticipantID("ann"), userID: .ann,
                 text: "plan dinner", receivedAt: Date(timeIntervalSince1970: 1)),
-            turnID: TurnID(), agentRole: agent.rawValue)
+            turnID: TurnID(), bot: agent)
         record.apply(.inbox(.turnStarted(asked)))
         record.apply(
             .replyQueued(
                 PendingConversationReply(
                     turnID: asked.turnID, reply: ConversationReply("pasta")!,
                     agentTurn: AgentTurnID(rawValue: "agent-turn"), at: Date(timeIntervalSince1970: 2))))
-        #expect(record.history.map(\.author) == [.person(.ann), .agent(agent)])
+        #expect(record.history.map(\.author) == [.person(.ann), .bot(agent)])
     }
 
     /// Who a message is said to decides who answers: its agent, when it's said to no one in
@@ -150,8 +155,8 @@ struct ConversationTests {
     @Test
     func whoAMessageIsSaidToDecidesWhoAnswers() throws {
         var record = ConversationState(conversationID: conversationID)
-        let agent = AgentProfileID("conversation")
-        for event in try record.starting(in: SpaceID(), answeredBy: agent, by: .ann) { record.apply(event) }
+        let agent = BotID()
+        for event in try record.starting(with: agent, by: .ann) { record.apply(event) }
         for event in try record.adding(.person(.bob), by: .ann) { record.apply(event) }
         func said(to people: Set<Participant>) -> InboundMessage {
             InboundMessage(
@@ -160,7 +165,7 @@ struct ConversationTests {
         }
 
         #expect(try record.answers(said(to: [])))
-        #expect(try record.answers(said(to: [.agent(agent), .person(.bob)])))
+        #expect(try record.answers(said(to: [.bot(agent), .person(.bob)])))
         #expect(try !record.answers(said(to: [.person(.bob)])))
         #expect(throws: ConversationRefusal.addresseeNotInIt) { try record.answers(said(to: [.person(.cat)])) }
 
@@ -183,7 +188,7 @@ struct ConversationTests {
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
             turnID: TurnID(),
-            agentRole: "test"
+            bot: answering
         )
         record.apply(.inbox(.turnStarted(message)))
         record.apply(
@@ -194,25 +199,6 @@ struct ConversationTests {
         )
 
         #expect(!record.requiresRecovery)
-    }
-
-    @Test
-    func recoveryFindsQueuedRepliesInAConversationJournal() {
-        let reply = PendingConversationReply(
-            turnID: TurnID(),
-            reply: ConversationReply("answer")!,
-            agentTurn: AgentTurnID(rawValue: "agent-turn"),
-            at: Date(timeIntervalSince1970: 2)
-        )
-        let journal = ConversationJournal(
-            conversationID: conversationID,
-            events: [.replyQueued(reply)]
-        )
-
-        let recovered = ConversationRecovery()
-            .recoverableConversationIDs(from: [journal])
-
-        #expect(recovered == [conversationID])
     }
 
     /// A new person remembers what they say; a guest, whom no one signed in as, doesn't.

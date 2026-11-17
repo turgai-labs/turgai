@@ -3,11 +3,11 @@ import DurableWorkflows
 import EventSourcing
 import Foundation
 import Testing
+import TurgaiCalls
 import TurgaiDomain
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
-import TurgaiCalls
 
 /// A chat's schedules, by the names they're given in it: listed there, and changed by whoever made
 /// each, or the chat's admins.
@@ -16,8 +16,8 @@ struct SchedulerTests {
     static let chat = ConversationID(
         channel: ChannelID(provider: "telegram", instanceID: "bot"), externalAddress: ExternalConversationAddress("42"))
     static let space = SpaceID()
-    static let ann = CallScope(UserID.ann, in: space, as: .member, allowed: [])
-    static let bob = CallScope(UserID.bob, in: space, as: .member, allowed: [])
+    static let ann = CallScope.member(UserID.ann, in: space)
+    static let bob = CallScope.member(UserID.bob, in: space)
 
     private func `as`<Answer: Sendable>(_ scope: CallScope, _ body: () async throws -> Answer) async throws -> Answer {
         try await CallChain.$current.withValue(.start(scope, in: Self.chat)) { try await body() }
@@ -30,9 +30,9 @@ struct SchedulerTests {
             "scheduler", store: store, hostsVirtualActors: true, people: [Self.ann, Self.bob],
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
-            let scheduler = try await Scheduler.resolve(on: node)
+            let scheduler = try await Scheduler.of(Self.space, on: node)
             let (listener, heard) = try await listening(to: Self.space, on: node)
-            defer { _ = listener }
+            defer { listener.cancel() }
             let made = try await self.as(Self.ann) {
                 try await scheduler.every(
                     name: "Morning News", schedule: .daily(hour: 8, minute: 0, timeZone: "Europe/Berlin"),
@@ -60,7 +60,7 @@ struct SchedulerTests {
             #expect(try await self.as(Self.ann) { try await scheduler.list().chat }.isEmpty)
 
             // Whoever follows the space's tasks is told each change as it's made.
-            let id = ChatSchedule.id(in: Self.chat, named: "morning-news")
+            let id = ChatSchedule.id(in: Self.chat, of: Self.space, named: "morning-news")
             func kept(paused: Bool) -> TasksNotice {
                 .kept(
                     KeptTask(
@@ -69,7 +69,7 @@ struct SchedulerTests {
                         maker: UserID.ann))
             }
             #expect(
-                await heard.notices == [
+                await heard.notices(4) == [
                     kept(paused: false), kept(paused: true), kept(paused: false), .ended(.schedule(id)),
                 ])
         }

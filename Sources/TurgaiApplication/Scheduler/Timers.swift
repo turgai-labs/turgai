@@ -42,26 +42,23 @@ public struct TimersInChat: Codable, Sendable, Equatable {
 @VirtualActor
 public distributed actor Timers {
     public typealias ActorSystem = ClusterSystem
-    public typealias Dependency = ObjectIdentity
+    public typealias Dependency = SpaceID
 
-    public init(actorSystem: ActorSystem, dependency: ObjectIdentity) async throws {
+    public static let kind = BuiltInKind(rawValue: "Timers")
+
+    /// The space whose it is.
+    private let space: SpaceID
+
+    /// `space`'s timers, wherever and whenever it runs.
+    public static func of(_ space: SpaceID, on actorSystem: ClusterSystem) async throws -> Timers {
+        try await actorSystem.virtualActors.getActor(
+            identifiedBy: VirtualActorID(rawValue: "builtin/\(space.rawValue.uuidString)/timers"), dependency: space)
+    }
+
+    public init(actorSystem: ActorSystem, dependency space: SpaceID) async throws {
         self.actorSystem = actorSystem
+        self.space = space
     }
-
-    /// The one set of timers, by the id it always has.
-    public static func resolve(on actorSystem: ClusterSystem) async throws -> Timers {
-        try await actorSystem.virtualActors.getActor(identifiedBy: actorID, dependency: identity)
-    }
-
-    /// Lists it among the objects by its lasting reference.
-    public static func start(on actorSystem: ClusterSystem) async throws {
-        let timers = try await resolve(on: actorSystem)
-        let object = try DiscoverableObject.resolve(id: timers.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: .objects)
-    }
-
-    static let identity = ObjectIdentity(rawValue: "timers")
-    static let actorID = VirtualActorID(rawValue: "builtin/timers")
 
     /// Sets the timer `name` in this chat for `date`, in place of the one of that name: due once
     /// then, doing `then`.
@@ -90,8 +87,8 @@ public distributed actor Timers {
     /// What's due once in this chat: its timers, and its objects'.
     @DiscoverableAction(safe: true, idempotent: true)
     public distributed func list() async throws -> TimersInChat {
-        let (_, chat) = try DueInChatError.chat()
-        let timers = try await running(in: chat).map { _, timer in
+        let (chain, chat) = try DueInChatError.chat()
+        let timers = try await running(in: chat, of: chain.scope.space).map { _, timer in
             TimerInChat(name: timer.name, date: timer.date, then: timer.then)
         }
         let decoder = JSONDecoder()
@@ -113,7 +110,7 @@ public distributed actor Timers {
     public distributed func cancel(name written: String) async throws -> TimerInChat {
         let (chain, chat) = try DueInChatError.chat()
         let name = ObjectNames.handle(for: written)
-        let running = try await running(in: chat)
+        let running = try await running(in: chat, of: chain.scope.space)
         guard let (id, timer) = running.first(where: { $0.timer.name == name }) else {
             throw DueInChatError.none(kind: "timer", written, named: running.map(\.timer.name).sorted())
         }
@@ -129,15 +126,18 @@ public distributed actor Timers {
         let name = ObjectNames.handle(for: written)
         guard !name.trimmed().isEmpty else { throw DueInChatError.unnamed }
         let workflows = actorSystem.workflows
-        if let (id, before) = try await running(in: chat).first(where: { $0.timer.name == name }) {
+        if let (id, before) = try await running(in: chat, of: chain.scope.space).first(where: { $0.timer.name == name })
+        {
             guard DueInChatError.mayChange(madeBy: before.ownerID, chain) else {
                 throw DueInChatError.notTheirs(name)
             }
             try await workflows.cancel(type: TimerWorkflow.self, options: WorkflowOptions(id: id))
             await actorSystem.tellTasks(in: chain.scope.space, .ended(.timer(id)))
         }
-        let timer = ChatTimer(name: name, date: date, then: then, ownerID: chain.scope.person, conversationID: chat)
-        let id = ChatTimer.id(in: chat, named: name, at: date)
+        let timer = ChatTimer(
+            name: name, date: date, then: then, ownerID: chain.scope.person, in: chain.scope.space,
+            conversationID: chat)
+        let id = ChatTimer.id(in: chat, of: chain.scope.space, named: name, at: date)
         try await workflows.start(
             type: TimerWorkflow.self, options: WorkflowOptions(id: id, retryPolicy: ChatSchedule.retryPolicy),
             input: timer)
@@ -145,13 +145,16 @@ public distributed actor Timers {
         return TimerInChat(name: name, date: date, then: then)
     }
 
-    /// This chat's timers that aren't due yet, each with its workflow.
-    private func running(in chat: ConversationID) async throws -> [(id: WorkflowID, timer: ChatTimer)] {
+    /// The timers of the chat `chat` of `space` that aren't due yet, each with its workflow.
+    private func running(in chat: ConversationID, of space: SpaceID) async throws
+        -> [(id: WorkflowID, timer: ChatTimer)]
+    {
         let decoder = JSONDecoder()
         return try await actorSystem.workflows.listWorkflows(workflow: TimerWorkflow.self).compactMap {
             description -> (WorkflowID, ChatTimer)? in
             guard case .running = description.status, let data = description.inputData,
-                let timer = try? decoder.decode(ChatTimer.self, from: data), timer.conversationID == chat
+                let timer = try? decoder.decode(ChatTimer.self, from: data), timer.space == space,
+                timer.conversationID == chat
             else { return nil }
             return (description.id, timer)
         }
@@ -160,5 +163,8 @@ public distributed actor Timers {
 
 /// Read by everyone: what each may change, it decides.
 extension Timers: AccessControlled {
-    public func access(for chain: CallChain) -> Access { .readByEveryone }
+    /// Everyone in its space may use it, and no one from another.
+    public distributed func access(for chain: CallChain) -> Access {
+        chain.scope.space == space ? .readByEveryone : .nobody
+    }
 }

@@ -18,30 +18,34 @@ public struct ChatTimer: Codable, Sendable, Equatable {
     public let then: WhenDue
     /// Who made it: whose message an `ask` is, and who may cancel it, besides the chat's admins.
     public let ownerID: TurgaiDomain.UserID
+    /// The space whose chat it's in, which it does what it does through.
+    public let space: SpaceID
     public let conversationID: ConversationID
     public let participantID: ParticipantID
-    public let agentDirectoryID: AgentDirectoryID
 
     public init(
-        name: String, date: Date, then: WhenDue, ownerID: TurgaiDomain.UserID, conversationID: ConversationID,
-        agentDirectoryID: AgentDirectoryID = "agent-directory"
+        name: String, date: Date, then: WhenDue, ownerID: TurgaiDomain.UserID, in space: SpaceID,
+        conversationID: ConversationID
     ) {
         self.name = name
         self.date = date
         self.then = then
         self.ownerID = ownerID
+        self.space = space
         self.conversationID = conversationID
         self.participantID = ParticipantID(channel: conversationID.channel, rawValue: ownerID.key)
-        self.agentDirectoryID = agentDirectoryID
     }
 
-    /// The durable timer named `name` in `conversation` for `date`: one for each date it's set to,
-    /// which is due once, however often it's started.
-    static func id(in conversation: ConversationID, named name: String, at date: Date) -> WorkflowID {
+    /// The durable timer named `name` in `conversation` of `space` for `date`: one for each date
+    /// it's set to, which is due once, however often it's started.
+    static func id(in conversation: ConversationID, of space: SpaceID, named name: String, at date: Date)
+        -> WorkflowID
+    {
         WorkflowID(
             rawValue: "turgai-timer-"
                 + turgaiDeterministicUUID(
-                    conversation.stableKey + "\u{1F}" + name + "\u{1F}" + String(Int(date.timeIntervalSince1970))
+                    space.rawValue.uuidString + "/" + conversation.stableKey + "\u{1F}" + name + "\u{1F}"
+                        + String(Int(date.timeIntervalSince1970))
                 ).uuidString)
     }
 }
@@ -63,24 +67,15 @@ public struct TimerWorkflow {
 
 @ActivityContainer
 public struct TimerActivities {
-    private let agentProfiles: TurgaiAgentProfileStore
-
-    public init(agentProfiles: TurgaiAgentProfileStore) {
-        self.agentProfiles = agentProfiles
-    }
+    public init() {}
 
     @Activity
     public func deliver(input: ChatTimer, context: ActivityContext) async throws -> DurableVoid {
         try await WhenDue.doing(
-            input.then, in: input.conversationID, for: input.ownerID, as: input.participantID,
-            directory: input.agentDirectoryID, run: context.workflowID, agentProfiles: agentProfiles,
-            on: context.system)
+            input.then, in: input.conversationID, of: input.space, for: input.ownerID, as: input.participantID,
+            run: context.workflowID, on: context.system)
         // Due once: done, it isn't a timer any more.
-        let chat = try await Conversation.resolve(
-            on: context.system, conversationID: input.conversationID, agentDirectoryID: input.agentDirectoryID)
-        if let space = try await chat.spaceID {
-            await context.system.tellTasks(in: space, .ended(.timer(context.workflowID)))
-        }
+        await context.system.tellTasks(in: input.space, .ended(.timer(context.workflowID)))
         return DurableVoid()
     }
 }

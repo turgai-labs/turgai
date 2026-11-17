@@ -2,11 +2,11 @@ import DiscoverableActors
 import Foundation
 import Hail
 import Testing
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
 
 @testable import TurgaiApplication
-import TurgaiCalls
 
 /// The tools every node has, as object code meets them: Swift written from the tools' own types.
 struct NodeToolsTests {
@@ -52,7 +52,7 @@ struct NodeToolsTests {
 
         let said = Said()
         let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-        let ann = CallScope(UserID.ann, in: SpaceID(), as: .member, allowed: [])
+        let ann = CallScope.member(UserID.ann, in: SpaceID())
         func say(_ text: String, in place: ConversationID?) async throws -> ChatSaid {
             try await withActorSystemDependency(said.dependency) {
                 try await CallChain.$current.withValue(.start(ann, in: place)) {
@@ -85,7 +85,7 @@ struct NodeToolsTests {
 
         let said = Said()
         let chat = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-        let ann = CallScope(UserID.ann, in: SpaceID(), as: .member, allowed: [])
+        let ann = CallScope.member(UserID.ann, in: SpaceID())
         func ask(_ text: String, in place: ConversationID?) async throws -> ChatAnswer {
             try await withActorSystemDependency(said.dependency) {
                 try await CallChain.$current.withValue(.start(ann, in: place)) {
@@ -106,33 +106,32 @@ struct NodeToolsTests {
 
     /// A request reaching outside runs as its call's scope allows, and is refused otherwise, saying
     /// exactly what it was, for whoever opened the scope to ask its space.
-    @Test func anExactRequestRunsAsItsScopeAllows() throws {
+    @Test func anExactRequestRunsAsItsScopeAllows() async throws {
         let effect = try Http().send(
             HttpRequest(method: .get, url: "https://example.com/forecast", headers: nil, body: nil))
         let forecast = ExactRequest.http(method: "GET", url: "https://example.com/forecast", body: Data())
         let family = SpaceID()
-        func decision(as scope: CallScope) -> EffectDecision {
-            CallChain.$current.withValue(.start(scope, in: nil)) { TurgaiAuthority().decision(on: effect) }
+        func decision(as scope: CallScope) async -> EffectDecision {
+            await CallChain.$current.withValue(.start(scope, in: nil)) { await TurgaiAuthority().decision(on: effect) }
         }
 
         // Bob, with nothing shared: refused, as exactly that request.
-        guard case .denied(let refusal) = decision(as: CallScope(UserID.bob, in: family, as: .member, allowed: []))
+        guard case .denied(let refusal) = await decision(as: CallScope.member(UserID.bob, in: family))
         else {
             Issue.record("a member's request ran without being shared")
             return
         }
         #expect(ExactRequest(refusal: refusal) == forecast)
         // Shared with Bob, or an admin's: it runs.
-        #expect(decision(as: CallScope(UserID.bob, in: family, as: .member, allowed: [forecast])) == .granted)
-        #expect(decision(as: CallScope(UserID.ann, in: family, as: .admin, allowed: [])) == .granted)
+        #expect(await decision(as: CallScope.member(UserID.bob, in: family, allowed: [forecast])) == .granted)
+        #expect(await decision(as: CallScope.admin(UserID.ann, in: family)) == .granted)
         // A call on behalf of no one: refused.
-        guard case .denied = TurgaiAuthority().decision(on: effect) else {
+        guard case .denied = await TurgaiAuthority().decision(on: effect) else {
             Issue.record("a call on behalf of no one ran")
             return
         }
     }
 }
-
 
 /// What was said in chats, and asked of their models, standing in for the node's conversations.
 private actor Said {
@@ -159,7 +158,7 @@ private actor Said {
         return ActorSystemDependency(
             virtualActors: VirtualActorActions(
                 resolveUser: { _ in throw Unreached() },
-                notify: { chat, text in await self.add(Message(chat: chat, text: text)) },
-                ask: { chat, question in await self.answer(Message(chat: chat, text: question)) }))
+                notify: { _, chat, text in await self.add(Message(chat: chat, text: text)) },
+                ask: { _, chat, question in await self.answer(Message(chat: chat, text: question)) }))
     }
 }

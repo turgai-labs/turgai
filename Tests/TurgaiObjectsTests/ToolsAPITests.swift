@@ -4,11 +4,12 @@ import EventSourcing
 import Foundation
 import ScopedEffect
 import Testing
+import TurgaiApplication
+import TurgaiCalls
 import TurgaiDomain
+import TurgaiSpaces
 
 @testable import TurgaiObjects
-import TurgaiCalls
-import TurgaiSpaces
 
 /// What an echo is given.
 @Describable
@@ -28,7 +29,7 @@ struct Echoed: Codable {
 @Suite(.serialized)
 struct ToolsAPITests {
     private let family = SpaceID()
-    private var ann: CallScope { CallScope(UserID.ann, in: family, as: .member, allowed: []) }
+    private var ann: CallScope { CallScope.member(UserID.ann, in: family) }
 
     /// A tool that gives back the bytes of what it's given, and whom it was called for.
     private let echo = ToolsAPI(tools: [
@@ -65,7 +66,7 @@ struct ToolsAPITests {
             "tools", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann],
             installing: { $0.plugins.install(plugin: ToolsAPIPlugin(api)) }
         ) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(family, on: node)
             let ann = self.ann
             try await CallChain.$current.withValue(.start(ann, in: nil)) {
                 let id = try await objects.create(
@@ -76,8 +77,8 @@ struct ToolsAPITests {
         }
     }
 
-    /// A web the scope doesn't allow: each get is refused, as the node's authority refuses it,
-    /// saying exactly what was refused.
+    /// A web the scope doesn't allow: each get is decided by its space, as the node's authority
+    /// decides it, and refused, saying exactly what was refused.
     private let refusing = ToolsAPI(tools: [
         ToolsAPI.Tool(
             name: "Web", description: "Gets what's at a URL.",
@@ -85,8 +86,12 @@ struct ToolsAPITests {
                 ToolsAPI.Function(
                     name: "get", description: "Gets what's at a URL.", input: Words.jsonSchema,
                     output: Echoed.jsonSchema
-                ) { _, _ in
-                    throw EffectDenied(effect: "network", refusal: ToolsAPITests.forecast.refusal)
+                ) { _, node in
+                    let effect = try Http().send(
+                        HttpRequest(method: .get, url: "https://example.com/forecast", headers: nil, body: nil))
+                    return try await withEffect(effect, authority: TurgaiAuthority(deciding: .bySpace(node))) { _ in
+                        .null
+                    }
                 }
             ])
     ])
@@ -111,7 +116,7 @@ struct ToolsAPITests {
             "tools", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann],
             installing: { $0.plugins.install(plugin: ToolsAPIPlugin(api)) }
         ) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(family, on: node)
             let id = try await CallChain.$current.withValue(.start(ann, in: nil)) {
                 try await objects.create(name: "Reader", spec: .new(try Script(code: code, type: "Reader", uses: uses)))
             }
@@ -133,7 +138,8 @@ struct ToolsAPITests {
             } catch let refused as EffectDenied {
                 #expect(ExactRequest(refusal: refused.refusal) == Self.forecast)
             }
-            #expect(try await CallChain.$current.withValue(.start(ann, in: nil)) { try await reader.health } == .working)
+            #expect(
+                try await CallChain.$current.withValue(.start(ann, in: nil)) { try await reader.health } == .working)
         }
     }
 
@@ -146,7 +152,7 @@ struct ToolsAPITests {
             _ = try await CallChain.$current.withValue(.start(ann, in: nil)) {
                 try await reader.respond("watch", arguments: [:])
             }
-            let group = try await Space.resolve(on: node, id: family)
+            let group = try await Space.identified(by: family, on: node)
             var waiting: [AccessRequest] = []
             for _ in 0..<100 where waiting.isEmpty {
                 waiting = try await group.waiting()
@@ -163,8 +169,10 @@ struct ToolsAPITests {
         func add(_ place: String) { seen.append(place) }
     }
 
-    private static let chatC = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
-    private static let chatD = ConversationID(channel: ChannelID("test"), externalAddress: ExternalConversationAddress("d"))
+    private static let chatC = ConversationID(
+        channel: ChannelID("test"), externalAddress: ExternalConversationAddress("c"))
+    private static let chatD = ConversationID(
+        channel: ChannelID("test"), externalAddress: ExternalConversationAddress("d"))
 
     /// A call happens where whoever called it is; what an object does itself happens where it
     /// was made.
@@ -202,11 +210,12 @@ struct ToolsAPITests {
             "tools", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann],
             installing: { $0.plugins.install(plugin: ToolsAPIPlugin(here)) }
         ) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(family, on: node)
             let ann = self.ann
             // Made in chat C.
             let id = try await CallChain.$current.withValue(.start(ann, in: Self.chatC)) {
-                try await objects.create(name: "Watcher", spec: .new(try Script(code: code, type: "Watcher", uses: uses)))
+                try await objects.create(
+                    name: "Watcher", spec: .new(try Script(code: code, type: "Watcher", uses: uses)))
             }
             let watcher = try await objects.held(id)
             // Called from chat D: the call happens in D.

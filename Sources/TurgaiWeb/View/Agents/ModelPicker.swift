@@ -1,7 +1,9 @@
 import Elementary
 import ElementaryHTMX4
 import Hail
+import TurgaiAgents
 import TurgaiApplication
+import TurgaiDomain
 
 /// The provider to choose, by where its models run: choosing one shows its settings, and asks it
 /// for its models.
@@ -10,6 +12,8 @@ struct ProviderPicker: HTML, Sendable {
     let provider: AgentProvider
     /// The saved bot whose key asking may use.
     let profileID: String?
+    /// Where choosing one asks for its models.
+    let asking: ModelAsking
 
     private static let showSettings =
         "document.querySelectorAll('[data-provider-settings]').forEach((panel) => panel.disabled = panel.hidden = panel.dataset.providerSettings !== this.value)"
@@ -20,7 +24,7 @@ struct ProviderPicker: HTML, Sendable {
             // Its settings show before it's asked: only the shown ones are sent.
             select(
                 attributes: [.name("provider"), .required, .init(name: "onchange", value: Self.showSettings)]
-                    + ModelSearchRequest.attributes(on: .choosing, profileID: profileID)
+                    + ModelSearchRequest.attributes(on: .choosing, profileID: profileID, asking: asking)
             ) {
                 for kind in AgentProvider.Kind.allCases {
                     let providers = AgentProvider.offered.filter { $0.kind == kind }
@@ -47,6 +51,8 @@ struct ModelPicker: HTML, Sendable {
     let modelID: String
     /// The saved bot whose key asking may use.
     let profileID: String?
+    /// Where its provider's models, and its window, are asked.
+    let asking: ModelAsking
 
     static let suggestionsID = "turgai-model-suggestions"
 
@@ -60,7 +66,7 @@ struct ModelPicker: HTML, Sendable {
                     .init(name: "list", value: Self.suggestionsID),
                     .placeholder("Its ID, as the provider names it"),
                     .required,
-                    .hx.post("/agents/models/window"),
+                    .hx.post(asking.window),
                     .hx.trigger(.event(.load)),
                     .hx.trigger(.event(.change)),
                     .hx.trigger(.event(.input), [.changed, .delay("800ms")]),
@@ -73,13 +79,31 @@ struct ModelPicker: HTML, Sendable {
                 attributes: [
                     .class("hint model-search"), .id(ModelSearchRequest.statusID),
                     .init(name: "aria-live", value: "polite"),
-                ] + ModelSearchRequest.attributes(on: .opening, profileID: profileID)
+                ] + ModelSearchRequest.attributes(on: .opening, profileID: profileID, asking: asking)
             ) {
                 span(.class("model-search-finding")) { "Finding models…" }
                 span(.class("model-search-answer"), .id(ModelSearchRequest.answerID)) {}
             }
         }
     }
+}
+
+/// Where a model form asks, while it's filled in, for the chosen provider's models and the chosen
+/// model's window: each web app answers at its own.
+struct ModelAsking: Sendable {
+    let models: String
+    let window: String
+
+    /// The form of a bot of `space`: one saved there asks with its key when none is typed.
+    static func bots(in space: SpaceID) -> ModelAsking {
+        ModelAsking(
+            models: "/spaces/\(space.rawValue.uuidString)/bots/models",
+            window: "/spaces/\(space.rawValue.uuidString)/bots/models/window")
+    }
+    /// A new space's first bot, which has no key saved yet.
+    static let newSpace = ModelAsking(models: "/spaces/new/models", window: "/spaces/new/models/window")
+    /// Setting up, before there's a dashboard.
+    static let setup = ModelAsking(models: "/onboarding/model/models", window: "/onboarding/model/models/window")
 }
 
 /// What asks the chosen provider for its models, as the form has it, the form's shown fields sent
@@ -99,7 +123,9 @@ enum ModelSearchRequest {
         case typing
     }
 
-    static func attributes<Tag: HTMLTrait.Attributes.Global>(on moment: Moment, profileID: String?)
+    static func attributes<Tag: HTMLTrait.Attributes.Global>(
+        on moment: Moment, profileID: String?, asking: ModelAsking
+    )
         -> [HTMLAttribute<Tag>]
     {
         let trigger: HTMLAttribute<Tag> =
@@ -109,7 +135,7 @@ enum ModelSearchRequest {
             case .typing: .hx.trigger(.event(.input), [.changed, .delay("600ms")])
             }
         return [
-            .hx.post("/agents/models"), trigger, .hx.target("#\(answerID)"), .hx.indicator("#\(statusID)"),
+            .hx.post(asking.models), trigger, .hx.target("#\(answerID)"), .hx.indicator("#\(statusID)"),
         ] + (profileID.map { [.hx.vals([.init("id", $0)])] } ?? [])
     }
 }

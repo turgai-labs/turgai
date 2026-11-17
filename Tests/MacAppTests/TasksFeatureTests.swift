@@ -29,8 +29,8 @@ struct TasksFeatureTests {
             id: TaskListing.ID(rawValue: "tick"), title: "ticker · tick", does: nil,
             when: .repeating("every 5 minutes"),
             paused: false, kind: .object)
-        let schedule = TasksFeature.Named(chat: chat, name: "news")
-        let reminder = TasksFeature.Named(chat: chat, name: "tea")
+        let schedule = TasksFeature.Named(chat: chat, space: turgai, name: "news")
+        let reminder = TasksFeature.Named(chat: chat, space: turgai, name: "tea")
 
         // As the connection does: each listener hears what's said; a space's tasks are said as it's
         // joined.
@@ -52,7 +52,7 @@ struct TasksFeatureTests {
                 switch ask {
                 case .join(.tasks(let space)):
                     tell(.tasks(space: space, tasks: space == turgai ? [news, tea, tick] : []))
-                case .changeSchedule(_, _, .cancel): return .failed(ChatError(code: "refused", message: "No."))
+                case .changeSchedule(_, _, _, .cancel): return .failed(ChatError(code: "refused", message: "No."))
                 default: break
                 }
                 return .ok
@@ -60,7 +60,9 @@ struct TasksFeatureTests {
         }
 
         await store.send(.follow(turgai))
-        await store.receive(\.current) { $0.rows = [.init(news), .init(tea), .init(tick)] }
+        await store.receive(\.current) {
+            $0.rows = [.init(news, in: turgai), .init(tea, in: turgai), .init(tick, in: turgai)]
+        }
         #expect(
             store.state.rows.map(\.commands) == [
                 [.pause(schedule), .cancelSchedule(schedule)], [.cancelReminder(reminder)], [],
@@ -74,7 +76,7 @@ struct TasksFeatureTests {
         // A change in another space isn't heard; one in this space changes its row.
         tell(.taskKept(space: family, task: tick))
         tell(.taskKept(space: turgai, task: paused))
-        await store.receive(\.kept) { $0.rows[id: news.id] = .init(paused) }
+        await store.receive(\.kept) { $0.rows[id: news.id] = .init(paused, in: turgai) }
         #expect(store.state.rows.first?.commands == [.resume(schedule), .cancelSchedule(schedule)])
 
         await store.send(.picked(.resume(schedule)))
@@ -94,8 +96,9 @@ struct TasksFeatureTests {
         await store.finish()
         #expect(
             Array(asked.value.prefix(4)) == [
-                .join(.tasks(space: turgai)), .changeSchedule(in: chat, named: "news", .resume),
-                .cancelReminder(in: chat, named: "tea"), .changeSchedule(in: chat, named: "news", .cancel),
+                .join(.tasks(space: turgai)), .changeSchedule(in: chat, of: turgai, named: "news", .resume),
+                .cancelReminder(in: chat, of: turgai, named: "tea"),
+                .changeSchedule(in: chat, of: turgai, named: "news", .cancel),
             ])
         // One space left as another is followed: two topics, in either order.
         #expect(asked.value.count == 7)

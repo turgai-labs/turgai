@@ -59,6 +59,8 @@ struct AppFeature {
             case invalidCredentials
             case invalidUsername
             case weakPassword
+            /// The new password typed twice, differently.
+            case passwordsDiffer
             /// The server refused a registration that passed the rules below.
             case usernameUnavailable
             case unavailable(String)
@@ -69,6 +71,7 @@ struct AppFeature {
                 case .invalidCredentials: "That username and password didn't match."
                 case .invalidUsername: "Choose a username of 3 to 64 letters, numbers, dots, dashes, or underscores."
                 case .weakPassword: "Choose a password with at least 12 characters."
+                case .passwordsDiffer: "The two passwords differ. Type the same password in both."
                 case .usernameUnavailable: "Turgai couldn't create that account. The username may be taken."
                 case .unavailable(let reason): "Turgai didn't answer (\(reason)). Try again in a moment."
                 }
@@ -78,6 +81,8 @@ struct AppFeature {
         var mode = Mode.signIn
         var username = ""
         var password = ""
+        /// A new password typed again, when creating an account.
+        var passwordAgain = ""
         var progress = Progress.editing
         var notice: Notice?
 
@@ -107,8 +112,13 @@ struct AppFeature {
 
         var isSubmitting: Bool { progress == .submitting }
 
-        /// Both a username and a password are typed.
-        var isFilled: Bool { !username.isEmpty && !password.isEmpty }
+        /// A username and a password are typed, and a new password typed again.
+        var isFilled: Bool {
+            switch mode {
+            case .signIn: !username.isEmpty && !password.isEmpty
+            case .register: !username.isEmpty && !password.isEmpty && !passwordAgain.isEmpty
+            }
+        }
 
         /// What the server would refuse in a registration, checked first so the message is precise.
         /// Mirrors `TurgaiAuth`'s rules; keep them in step.
@@ -121,6 +131,7 @@ struct AppFeature {
                 return .invalidUsername
             }
             if password.count < 12 { return .weakPassword }
+            if password != passwordAgain { return .passwordsDiffer }
             return nil
         }
     }
@@ -213,11 +224,13 @@ struct AppFeature {
         // The sidebar says what the chat shows; the chat's connection being open again, what the
         // profile reads again.
         case .sidebar(.delegate(.open(let id))):
-            return .send(.chat(.open(id, in: state.sidebar.space(of: id))))
+            // Opened in the space the sidebar lists it in.
+            guard let space = state.sidebar.space(of: id) else { return .none }
+            return .send(.chat(.open(id, in: space)))
         case .sidebar(.delegate(.close(let space))):
             return .send(.chat(.close(in: space)))
         case .sidebar(.delegate(.spaceChanged(let space))):
-            return .send(.chat(.spaceChanged(space)))
+            return .merge(.send(.chat(.spaceChanged(space))), .send(.objects(.spaceChanged(space.id))))
         case .chat(.delegate(.connected)):
             return .send(.profile(.connected))
 
@@ -272,8 +285,7 @@ struct AppFeature {
             return .none
 
         case .submitTapped:
-            guard state.account == .signedOut, state.login.progress == .editing,
-                !state.login.username.isEmpty, !state.login.password.isEmpty
+            guard state.account == .signedOut, state.login.progress == .editing, state.login.isFilled
             else { return .none }
             if state.login.mode == .register, let problem = state.login.registrationProblem {
                 state.login.notice = problem
@@ -281,14 +293,18 @@ struct AppFeature {
             }
             state.login.progress = .submitting
             state.login.notice = nil
-            let submit =
-                switch state.login.mode {
-                case .signIn: server.signIn
-                case .register: server.register
-                }
-            return .run { [username = state.login.username, password = state.login.password] send in
+            return .run {
+                [
+                    mode = state.login.mode, username = state.login.username, password = state.login.password,
+                    passwordAgain = state.login.passwordAgain
+                ] send in
                 do {
-                    await send(.submitFinished(.success(try await submit(username, password))))
+                    let session =
+                        switch mode {
+                        case .signIn: try await server.signIn(username, password)
+                        case .register: try await server.register(username, password, passwordAgain)
+                        }
+                    await send(.submitFinished(.success(session)))
                 } catch let error as AccountError {
                     await send(.submitFinished(.failure(error)))
                 } catch {
@@ -308,6 +324,7 @@ struct AppFeature {
         case .submitFinished(.failure(let error)):
             state.login.progress = .editing
             state.login.password = ""
+            state.login.passwordAgain = ""
             state.login.notice =
                 switch (error, state.login.mode) {
                 case (.rejected, .signIn): .invalidCredentials
@@ -350,13 +367,12 @@ struct AppFeature {
 }
 
 extension AppFeature {
-    /// The app's store, from its first state, with the runtime's `objects`.
+    /// The app's store, from its first state.
     @MainActor
-    static func store(objects: ObjectsClient) -> StoreOf<AppFeature> {
+    static func store() -> StoreOf<AppFeature> {
         Store(initialState: State()) {
             AppFeature()
         } withDependencies: {
-            $0.objects = objects
             // SwiftUI's openURL opens nothing outside a view, so the system is asked itself.
             $0.openURL = OpenURLEffect { url in await MainActor.run { NSWorkspace.shared.open(url) } }
         }

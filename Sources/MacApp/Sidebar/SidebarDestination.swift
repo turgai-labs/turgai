@@ -16,6 +16,10 @@ extension SidebarFeature {
         case inviting(Inviting)
         /// Every space, to pick one.
         case choosingSpace(ChoosingSpace)
+        /// The shown space's bots, to configure.
+        case bots(SpaceBots)
+        /// The shown space's connections, to configure.
+        case connections(SpaceConnections)
 
         @CasePathable
         enum Action {
@@ -24,6 +28,8 @@ extension SidebarFeature {
             case addingSpace(AddingSpace.Action)
             case inviting(Inviting.Action)
             case choosingSpace(ChoosingSpace.Action)
+            case bots(SpaceBots.Action)
+            case connections(SpaceConnections.Action)
         }
 
         @CasePathable
@@ -39,7 +45,8 @@ extension SidebarFeature {
         @ObservableState
         struct State: Equatable {
             enum Subject: Equatable {
-                case conversation(ConversationID)
+                /// A conversation of the space.
+                case conversation(ConversationID, in: SpaceID)
                 case space(SpaceID)
             }
 
@@ -56,7 +63,8 @@ extension SidebarFeature {
         }
     }
 
-    /// A space being added: made, by the name written, or joined, by the invite's link pasted.
+    /// A space being added: made, by the name written and then its first bot, or joined, by the
+    /// invite's link pasted.
     @Reducer
     struct AddingSpace {
         @ObservableState
@@ -65,17 +73,25 @@ extension SidebarFeature {
             let session: Session
             var name = ""
             var link = ""
+            /// Its first bot, once its name is written: none while it's named.
+            var bot: BotForm.State?
+            /// While the space is being made.
+            var making = false
             /// What went wrong making or joining one, when something did.
             var problem: String?
 
             /// The invite the link is: none while it isn't one.
             var invite: SpaceInviteLink? { SpaceInviteLink(link) }
-            var canMake: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            var canNext: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             var canJoin: Bool { invite != nil }
+            var canMake: Bool { !making && bot?.canSave == true }
         }
 
         enum Action: BindableAction {
             case binding(BindingAction<State>)
+            case bot(BotForm.Action)
+            case nextTapped
+            case backTapped
             case makeTapped
             case joinTapped
             /// Making or joining it failed, and why.
@@ -98,15 +114,30 @@ extension SidebarFeature {
                     state.problem = nil
                     return .none
 
-                case .binding, .delegate:
+                case .binding, .bot, .delegate:
+                    return .none
+
+                case .nextTapped:
+                    guard state.canNext else { return .none }
+                    state.bot = BotForm.State(
+                        session: state.session, name: state.name.trimmingCharacters(in: .whitespacesAndNewlines))
+                    return .none
+
+                case .backTapped:
+                    state.bot = nil
+                    state.problem = nil
                     return .none
 
                 case .makeTapped:
-                    guard state.canMake else { return .none }
+                    guard state.canMake, let bot = state.bot?.configuration else { return .none }
+                    state.making = true
+                    state.problem = nil
                     let name = state.name.trimmingCharacters(in: .whitespacesAndNewlines)
                     return .run { [session = state.session] send in
                         do {
-                            await send(.delegate(.added(try await server.makeSpace(session, name))))
+                            await send(.delegate(.added(try await server.makeSpace(session, name, bot))))
+                        } catch let refusal as ServerRefusal {
+                            await send(.failed(refusal.error.message))
                         } catch {
                             await send(.failed("Couldn't make the space."))
                         }
@@ -124,9 +155,11 @@ extension SidebarFeature {
 
                 case .failed(let why):
                     state.problem = why
+                    state.making = false
                     return .none
                 }
             }
+            .ifLet(\.bot, action: \.bot) { BotForm() }
         }
     }
 

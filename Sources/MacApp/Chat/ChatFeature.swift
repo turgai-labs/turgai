@@ -9,7 +9,8 @@ import TurgaiModels
 struct ChatFeature {
     enum Connection: Equatable, Sendable {
         case connecting
-        case connected(botID: BotID)
+        /// Open, answered by its bot: none once the bot has left it.
+        case connected(botID: BotID?)
         /// The socket closed, and why; the feature reconnects shortly.
         case disconnected(why: String)
     }
@@ -198,8 +199,8 @@ struct ChatFeature {
     enum Action: BindableAction {
         case binding(BindingAction<State>)
         case connect(Session)
-        /// Show `id`, in `space`, instead of the conversation shown before.
-        case open(ConversationID, in: SpaceSummary?)
+        /// Show `id`, a conversation of `space`, instead of the conversation shown before.
+        case open(ConversationID, in: SpaceSummary)
         /// Show no conversation, in `space`, which has none to show.
         case close(in: SpaceSummary)
         /// A space is as `space` says now.
@@ -251,12 +252,12 @@ struct ChatFeature {
             case .connect(let session):
                 state.connection = .connecting
                 state.session = session
-                return .run { [shown = state.conversationID] send in
+                return .run { [shown = state.conversationID, space = state.space?.id] send in
                     let why: String
                     do {
                         let events = await chat.connect(session)
                         // A connection made again shows what was shown before.
-                        if let shown { try await chat.send(.open(conversationID: shown)) }
+                        if let shown, let space { try await chat.send(.open(spaceID: space, conversationID: shown)) }
                         await send(.delegate(.connected))
                         for try await event in events {
                             await send(.received(event))
@@ -290,8 +291,8 @@ struct ChatFeature {
                 guard id != state.conversationID else { return .none }
                 state = State(connection: state.connection, session: state.session, conversationID: id, space: space)
                 return .merge(
-                    .run { _ in try? await chat.send(.open(conversationID: id)) },
-                    loadParticipants(of: id, as: state.session),
+                    .run { _ in try? await chat.send(.open(spaceID: space.id, conversationID: id)) },
+                    loadParticipants(of: id, in: space.id, as: state.session),
                     loadSpacePeople(of: space, as: state.session)
                 )
 
@@ -352,7 +353,7 @@ struct ChatFeature {
             case .received(let event):
                 switch event.payload {
                 case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft,
-                    .conversationDeleted, .memoryChanged, .tasks, .taskKept, .taskEnded:
+                    .conversationDeleted, .memoryChanged, .objectsChanged, .tasks, .taskKept, .taskEnded:
                     // What the sidebar and the profile hear for themselves.
                     return .none
                 case .reply:
@@ -366,8 +367,8 @@ struct ChatFeature {
                     // A message of yours that brought someone in: who's in it is read again.
                     let broughtIn = Self.bringsIn(event.payload, in: state)
                     apply(event.payload, to: &state)
-                    guard broughtIn, let id = state.conversationID else { return .none }
-                    return loadParticipants(of: id, as: state.session)
+                    guard broughtIn, let id = state.conversationID, let space = state.space?.id else { return .none }
+                    return loadParticipants(of: id, in: space, as: state.session)
                 }
 
             case .sendTapped:
@@ -440,11 +441,11 @@ struct ChatFeature {
         }
     }
 
-    /// Who's in the conversation `id`, read for `session`'s person.
-    private func loadParticipants(of id: ConversationID, as session: Session?) -> Effect<Action> {
+    /// Who's in the conversation `id` of `space`, read for `session`'s person.
+    private func loadParticipants(of id: ConversationID, in space: SpaceID, as session: Session?) -> Effect<Action> {
         guard let session else { return .none }
         return .run { send in
-            if let participants = try? await server.participants(session, id) {
+            if let participants = try? await server.participants(session, space, id) {
                 await send(.participantsLoaded(participants))
             }
         }
@@ -493,7 +494,7 @@ struct ChatFeature {
         case .notice(_, _, let error):
             state.error = error
         case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft, .conversationDeleted,
-            .memoryChanged, .tasks, .taskKept, .taskEnded, .reply:
+            .memoryChanged, .objectsChanged, .tasks, .taskKept, .taskEnded, .reply:
             // Not the conversation's.
             break
         }
@@ -639,7 +640,7 @@ extension ChatEvent {
             id
         case .notice(let id, _, _):
             id
-        case .reply, .memoryChanged, .tasks, .taskKept, .taskEnded:
+        case .reply, .memoryChanged, .objectsChanged, .tasks, .taskKept, .taskEnded:
             nil
         case .conversationJoined(let conversation), .conversationSaid(let conversation),
             .conversationTitled(let conversation):

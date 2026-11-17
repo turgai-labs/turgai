@@ -102,11 +102,12 @@ struct SidebarFeature {
         var id: Self { self }
     }
 
-    /// What the shown space's menu offers its admins: inviting people to it, renaming it, and
-    /// archiving it, while it's in use, Turgai's own staying in use; using it again, once it's
-    /// archived.
+    /// What the shown space's menu offers: inviting people to it, its bots, renaming it, and
+    /// archiving it, while it's in use, each to whoever may; using it again, once it's archived.
     enum SpaceMenuItem: Hashable, Identifiable {
         case invite
+        case bots
+        case connections
         case rename
         case archive
         case unarchive
@@ -174,7 +175,7 @@ struct SidebarFeature {
         /// What `row`'s menu offers in `space`.
         private static func menu(of row: Row, in space: SpaceSummary?) -> [ConversationMenuItem] {
             (space?.status == .archived ? [] : [.rename]) + (row.people > 1 ? [.leave] : [])
-                + (row.people <= 1 || space?.role == .admin ? [.delete] : [])
+                + (row.people <= 1 || space?.permissions.deleteConversations == true ? [.delete] : [])
         }
 
         /// What the panel is headed: the shown space's name, or Spaces before they're read.
@@ -222,14 +223,17 @@ struct SidebarFeature {
             }
         }
 
-        /// What the shown space's menu offers, when its person is one of its admins: nothing
-        /// otherwise.
+        /// What the shown space's menu offers its person: inviting when they manage its people,
+        /// and renaming and archiving when they may configure it.
         var shownSpaceMenu: [SpaceMenuItem] {
-            guard let space = shownSpace, space.role == .admin else { return [] }
-            switch (space.status, space.kind) {
-            case (.active, .made): return [.invite, .rename, .archive]
-            case (.active, .turgaisOwn): return [.invite, .rename]
-            case (.archived, _): return [.unarchive]
+            guard let space = shownSpace else { return [] }
+            let invites: [SpaceMenuItem] = space.permissions.people == .manage ? [.invite] : []
+            let bots: [SpaceMenuItem] = space.permissions.bots == .configure ? [.bots] : []
+            let connections: [SpaceMenuItem] = space.permissions.connections ? [.connections] : []
+            let configures = space.permissions.configureSpace
+            switch space.status {
+            case .active: return invites + bots + connections + (configures ? [.rename, .archive] : [])
+            case .archived: return configures ? [.unarchive] : []
             }
         }
 
@@ -316,11 +320,12 @@ struct SidebarFeature {
             state.conversations = IdentifiedArray(uniqueElements: conversations.map { Row($0) })
             state.error = nil
             if let selected = state.selected, state.conversations[id: selected] != nil { return .none }
-            // The latest is shown first; with none, a new one in Turgai's own space.
+            // The latest is shown first; with none, a new one in the space shown, when there's one.
             if let latest = state.conversations.first {
                 return select(latest.id, &state)
             }
-            return start(in: nil, as: state.session)
+            guard let space = state.shownSpace else { return .none }
+            return start(in: space.id, as: state.session)
 
         case .failed(let why):
             state.error = why
@@ -337,8 +342,8 @@ struct SidebarFeature {
             return switchSpace(to: id, &state)
 
         case .newConversationTapped:
-            guard state.canStartConversation else { return .none }
-            return start(in: state.shownSpace?.id, as: state.session)
+            guard state.canStartConversation, let space = state.shownSpace else { return .none }
+            return start(in: space.id, as: state.session)
 
         case .started(let conversation):
             state.conversations.insert(Row(conversation), at: 0)
@@ -383,7 +388,8 @@ struct SidebarFeature {
         case .spaceStatusChanged(let id, let status):
             guard let index = state.spaces.firstIndex(where: { $0.id == id }) else { return .none }
             let space = state.spaces[index]
-            let changed = SpaceSummary(id: id, name: space.name, role: space.role, status: status, kind: space.kind)
+            let changed = SpaceSummary(
+                id: id, name: space.name, permissions: space.permissions, status: status)
             state.spaces[index] = changed
             // Archived while it's shown, it's off the rail: the rail's first is shown instead.
             guard status == .archived, id == state.shownSpace?.id, let next = state.spaceChoices.first else {
@@ -437,7 +443,9 @@ struct SidebarFeature {
                 .archiveSpace(id), then: .spaceStatusChanged(id, .archived), otherwise: "Couldn't archive it.")
 
         case .destination(.presented(.alert(.deleteConfirmed(let id)))):
-            return perform(.deleteConversation(id), then: .conversationLeft(id), otherwise: "Couldn't delete it.")
+            guard let row = state.conversations[id: id] else { return .none }
+            return perform(
+                .deleteConversation(id, of: row.spaceID), then: .conversationLeft(id), otherwise: "Couldn't delete it.")
 
         case .tasks, .destination, .delegate:
             return .none
@@ -496,12 +504,15 @@ struct SidebarFeature {
     ) -> Effect<Action> {
         switch item {
         case .rename:
+            guard let row = state.conversations[id: id] else { return .none }
             state.destination = .renaming(
-                Renaming.State(subject: .conversation(id), name: state.conversations[id: id]?.title ?? ""))
+                Renaming.State(subject: .conversation(id, in: row.spaceID), name: row.title ?? ""))
             return .none
 
         case .leave:
-            return perform(.leaveConversation(id), then: .conversationLeft(id), otherwise: "Couldn't leave it.")
+            guard let row = state.conversations[id: id] else { return .none }
+            return perform(
+                .leaveConversation(id, of: row.spaceID), then: .conversationLeft(id), otherwise: "Couldn't leave it.")
 
         case .delete:
             guard let row = state.conversations[id: id] else { return .none }
@@ -517,6 +528,16 @@ struct SidebarFeature {
         case .invite:
             guard let session = state.session else { return .none }
             state.destination = .inviting(Inviting.State(session: session, space: space))
+            return .none
+
+        case .bots:
+            guard let session = state.session else { return .none }
+            state.destination = .bots(SpaceBots.State(session: session, space: space))
+            return .none
+
+        case .connections:
+            guard let session = state.session else { return .none }
+            state.destination = .connections(SpaceConnections.State(session: session, space: space))
             return .none
 
         case .rename:
@@ -541,8 +562,8 @@ struct SidebarFeature {
         return .run { send in
             do {
                 switch renaming.subject {
-                case .conversation(let id):
-                    try await server.titleConversation(session, id, name)
+                case .conversation(let id, let space):
+                    try await server.titleConversation(session, space, id, name)
                     await send(.renamed(id, title: name))
                 case .space(let id):
                     await send(.spaceRenamed(try await server.renameSpace(session, id, name)))
@@ -590,8 +611,8 @@ struct SidebarFeature {
         }
     }
 
-    /// A new conversation in `space`, or Turgai's own, started for `session`'s person.
-    private func start(in space: SpaceID?, as session: Session?) -> Effect<Action> {
+    /// A new conversation in `space`, started for `session`'s person.
+    private func start(in space: SpaceID, as session: Session?) -> Effect<Action> {
         guard let session else { return .none }
         return .run { send in
             do {

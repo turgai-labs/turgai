@@ -4,7 +4,6 @@ import DurableWorkflows
 import Foundation
 import TurgaiCalls
 import TurgaiDomain
-import TurgaiSpaces
 
 /// When something's due: every so many minutes, every day at a time, or on days of the week at a
 /// time, in an IANA time zone. An object's property of this type is due as it says: each time,
@@ -128,20 +127,26 @@ public struct ObjectFiring: Codable, Sendable, Equatable {
     public let property: String
     public let maker: UserID
     public let space: SpaceID
+    /// Whom its object's own doing was on behalf of when it set this: what lets the firing in.
+    public let scope: CallScope
     /// What makes it due, and the chat the object was made in, which lists it.
     public let due: ObjectDue
     public let place: ConversationID?
 
     /// The durable schedule of `object`'s `property`: one for each, the same after every restart.
-    static func scheduleID(of object: ObjectIdentity, _ property: String) -> ScheduleID {
-        ScheduleID(rawValue: "turgai-object-\(object.rawValue)-\(property)")
+    static func scheduleID(of object: ObjectIdentity, in space: SpaceID, _ property: String) -> ScheduleID {
+        ScheduleID(rawValue: "turgai-object-\(space.rawValue.uuidString)-\(object.rawValue)-\(property)")
     }
 
     /// The durable timer of `object`'s `property` for `date`: one for each date it's set to, which
     /// fires once, however often it's started.
-    static func timerID(of object: ObjectIdentity, _ property: String, at date: Date) -> WorkflowID {
+    static func timerID(of object: ObjectIdentity, in space: SpaceID, _ property: String, at date: Date)
+        -> WorkflowID
+    {
         WorkflowID(
-            rawValue: "turgai-object-timer-\(object.rawValue)-\(property)-\(Int(date.timeIntervalSince1970))")
+            rawValue:
+                "turgai-object-timer-\(space.rawValue.uuidString)-\(object.rawValue)-\(property)-\(Int(date.timeIntervalSince1970))"
+        )
     }
 }
 
@@ -184,10 +189,11 @@ public struct ObjectScheduleActivities {
     /// which spends nothing; the object handles it as its own doing, as it does its tasks.
     @Activity
     public func fire(input: ObjectFiring, context: ActivityContext) async throws -> DurableVoid {
-        let space = try await Space.resolve(on: context.system, id: input.space)
-        let scope = try await space.scope(of: input.maker)
-        try await CallChain.$current.withValue(.own(DynamicObject.callActor(for: input.object), for: scope, in: nil)) {
-            try await DynamicObject.resolve(on: context.system, identity: input.object).fired(input.property)
+        // Let in on the scope it was set with; the object handles it on the scope it holds now.
+        let actor = DynamicObject.callActor(for: input.object, in: input.space)
+        try await CallChain.$current.withValue(.own(actor, for: input.scope, in: nil)) {
+            try await DynamicObject.identified(by: input.object, in: input.space, on: context.system).fired(
+                input.property)
         }
         // A timer is due once: done, it isn't one any more.
         if case .timer = input.due {

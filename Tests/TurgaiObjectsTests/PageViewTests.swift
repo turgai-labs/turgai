@@ -34,7 +34,7 @@ struct PageViewTests {
         ).render()
         #expect(lined.contains(#"id="id-left" class="body primary" data-anchor="leading top""#), "\(lined)")
         #expect(lined.contains(#"data-anchor="leading bottom""#), "\(lined)")
-        #expect(html.contains(#"data-press="/press?label=Play&amp;page=1""#), "\(html)")
+        #expect(html.contains(#"data-press="press?label=Play&amp;page=1""#), "\(html)")
         #expect(html.contains(#"class="title primary""#))
         #expect(html.contains(#"class="prominent""#))
         #expect(html.contains(#"class="normal""#))

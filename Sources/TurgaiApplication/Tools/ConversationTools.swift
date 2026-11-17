@@ -4,6 +4,7 @@ import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
 import TurgaiPeople
+import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -24,7 +25,6 @@ public enum ConversationTools {
         wasmRunnerURL: URL? = nil,
         userTools: UserToolRegistry? = nil,
         actorSystem: ClusterSystem? = nil,
-        objectCatalog: ObjectCatalog? = nil,
         writer: ObjectWriter? = nil,
         agents: [Role] = [],
         linking: PersonLinking? = nil,
@@ -39,7 +39,7 @@ public enum ConversationTools {
                 NowTool(),
             ]
         // A Telegram chat's attachments, got through the bot the chat is with, while it runs.
-        if case .conversation(let conversation)? = working, await telegramFiles.serves(conversation.channel) {
+        if case .conversation(let conversation, _)? = working, await telegramFiles.serves(conversation.channel) {
             tools += Telegram(chat: conversation.channel, files: telegramFiles).tools
         }
         var pages: any ToolPages = NoToolPages()
@@ -47,13 +47,58 @@ public enum ConversationTools {
         // as an object works for no one person.
         let owner: TurgaiDomain.UserID? =
             if case .conversation = working { CallChain.current?.scope.person } else { nil }
-        if let actorSystem {
+        // Objects are its space's, and the built-in ones, as its space hands them to whoever the turn is
+        // for: an agent in no space, or a turn on no one's behalf, reaches none.
+        if let actorSystem, let space = working?.space, let person = CallChain.current?.scope.person {
+            let objects = try await Space.identified(by: space, on: actorSystem).objects(for: person)
             // The other agents, which it can ask: never itself.
-            let askable = try await Agent.offered(agents.filter { $0 != context.agentID.role }, on: actorSystem)
+            let askable = try await Agent.offered(
+                agents.filter { $0 != context.agentID.role }, in: space, on: actorSystem)
+            // The built-in objects installed in the space, each started and checked in there, where the
+            // space's code finds it by name.
+            let installed = Set(try await objects.installed)
+            var installedObjects: [DiscoverableObject] = []
+            if installed.contains(Weather.kind) {
+                let object = try await Weather.of(space, on: actorSystem)
+                installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
+            }
+            if installed.contains(Scheduler.kind) {
+                let object = try await Scheduler.of(space, on: actorSystem)
+                installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
+            }
+            if installed.contains(Timers.kind) {
+                let object = try await Timers.of(space, on: actorSystem)
+                installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
+            }
+            // Each website made in the space, by its name.
+            if installed.contains(Website.kind) {
+                for name in try await objects.sites {
+                    let object = try await Website.named(name, in: space, on: actorSystem)
+                    installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
+                }
+            }
+            var builtIns: [ObjectEntry] = []
+            for object in installedObjects {
+                await actorSystem.receptionist.checkIn(object, with: .virtualObjects(in: space))
+                guard let virtual = object.id.virtualActorID, let description = try? await object.describe() else {
+                    continue
+                }
+                builtIns.append(
+                    ObjectEntry(
+                        id: .virtual(virtual), object: object, type: description.type,
+                        description: description.description,
+                        actions: description.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
+                            .sorted(),
+                        events: description.events.keys.sorted()))
+            }
             let session = ObjectSession(
+                in: space,
+                objects: objects,
                 actorSystem: actorSystem,
-                objectCatalog: objectCatalog,
                 agents: askable,
+                builtIns: builtIns,
+                // What code makes by name in the space: a website, as it says it is.
+                madeByName: installed.contains(Website.kind) ? [Website.describe()] : [],
                 writer: writer,
                 request: context.input.text
             )
@@ -68,7 +113,7 @@ public enum ConversationTools {
                 let persons = [owner] + (try await linking?.linked(to: owner) ?? [])
                 var recallable = false
                 for person in persons where !recallable {
-                    recallable = try await User.resolve(on: actorSystem, userID: person).recallable()
+                    recallable = try await User.identified(by: person, on: actorSystem).recallable()
                 }
                 if recallable { tools.append(RecallTool(actorSystem: actorSystem, persons: persons)) }
             }

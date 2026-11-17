@@ -63,8 +63,8 @@ struct StoragePage: HTMLDocument, Sendable {
                 header: PageHeader(),
                 footer: PageFooter {
                     SetupFooterContent(
-                        step: 4,
-                        backHref: "/onboarding/model",
+                        step: 3,
+                        backHref: "/onboarding/register",
                         submitFormID: "storage-form",
                         submitLabel: "Save this choice"
                     )

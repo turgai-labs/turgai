@@ -1,5 +1,6 @@
 import DiscoverableActors
 import DistributedCluster
+import TurgaiDomain
 import VirtualActors
 
 /// Objects by name, the way models and behaviors refer to them: `shop` or `Shop` for the shop,
@@ -28,40 +29,23 @@ public enum ObjectNames {
         return type.first?.isLetter == true ? type : "Object" + type
     }
 
-    /// The object named `name` among those checked in, if one is: a virtual actor by its id, the
-    /// one of its kind by its type. Two of one name are refused: neither is the one meant. A virtual
-    /// actor is one object however many nodes checked in a reference to it; this node's own is the
-    /// one used. A virtual actor checked in by its id is only asked what it is once it's the one.
-    public static func object(named name: String, using system: ClusterSystem) async throws
+    /// The object named `name` in `space`, besides those made there by name, if there's one: one
+    /// offered there, an agent or an installed built-in object, by the name its id gives it. Two of
+    /// one name are refused: neither is the one meant. A virtual actor is one object however many
+    /// nodes offered it; this node's reference is the one used.
+    public static func object(named name: String, in space: SpaceID, using system: ClusterSystem) async throws
         -> (object: DiscoverableObject, description: ObjectDescription)?
     {
-        var references: [VirtualActorID: DiscoverableObject] = [:]
-        var actors: [DiscoverableObject] = []
-        var described: [ClusterSystem.ActorID: ObjectDescription] = [:]
-        func keep(_ object: DiscoverableObject, as virtual: VirtualActorID) {
-            if references[virtual] == nil || object.id.node == system.cluster.node { references[virtual] = object }
-        }
-        for object in await system.receptionist.lookup(.virtualObjects) {
+        var offered: [VirtualActorID: DiscoverableObject] = [:]
+        for object in await system.receptionist.lookup(.virtualObjects(in: space)) {
             guard let virtual = object.id.virtualActorID, ObjectID.virtual(virtual).name == handle(for: name) else {
                 continue
             }
-            keep(object, as: virtual)
+            if offered[virtual] == nil || object.id.node == system.cluster.node { offered[virtual] = object }
         }
-        for object in await system.receptionist.lookup(.objects) {
-            guard let description = try? await object.describe() else { continue }
-            if let virtual = object.id.virtualActorID {
-                guard ObjectID.virtual(virtual).name == handle(for: name) else { continue }
-                keep(object, as: virtual)
-            } else {
-                guard ObjectID.actor(object.id, type: description.type).name == handle(for: name) else { continue }
-                actors.append(object)
-            }
-            described[object.id] = description
-        }
-        let found = Array(references.values) + actors
+        let found = Array(offered.values)
         guard found.count < 2 else { throw DynamicObjectError.severalNamed(name) }
         guard let object = found.first else { return nil }
-        if let description = described[object.id] { return (object, description) }
         return (object, try await object.describe())
     }
 }

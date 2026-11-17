@@ -25,11 +25,12 @@ struct AgentBusyTests {
         let agents = try HailRuntimeConfiguration(contextWindow: 16_384).makeAgentRuntimePlugin(
             workspaceRoot: workspace,
             spawnConfigProvider: { AgentSpawnConfig(agentID: $0) },
-            modelEndpointProvider: { _ in endpoint },
-            modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
+            modelEndpointProvider: { _, _ in endpoint },
+            modelSelectionProvider: { _, _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
             authority: { _ in TurgaiAuthority() })
         try await withClusterSystem(
-            "probe", store: MemoryEventStore(), hostsVirtualActors: true, installing: { $0.plugins.install(plugin: agents) }
+            "probe", store: MemoryEventStore(), hostsVirtualActors: true,
+            installing: { $0.plugins.install(plugin: agents) }
         ) { node in
             system.set(node)
             let agent = try await node.agent(agentID)

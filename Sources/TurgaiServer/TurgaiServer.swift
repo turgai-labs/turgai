@@ -2,7 +2,9 @@ import Hummingbird
 import HummingbirdWebSocket
 import Logging
 import ServiceLifecycle
+import TurgaiAgents
 import TurgaiApplication
+import TurgaiConversations
 import TurgaiObjects
 import TurgaiPeople
 import TurgaiPersistence
@@ -15,15 +17,13 @@ import TurgaiWeb
     import Foundation
 #endif
 
-/// The whole local Turgai server: the cluster daemon, the runtime and the web app.
+/// The whole local Turgai server: the cluster daemon, setting up's web app until it's done, then
+/// the runtime with the main web app on it.
 /// The `turgai` command and the Mac app both run its services in a `ServiceGroup`.
 public struct TurgaiServer: Sendable {
-    /// Run in this order: `ServiceGroup` shuts services down in reverse, so the HTTP
-    /// application stops first and no new request reaches a draining cluster, and the database
-    /// closes last.
+    /// Run in this order: `ServiceGroup` shuts services down in reverse, so the runtime, whose web
+    /// app stops first, stops before the daemon, and the database closes last.
     public let services: [any Service]
-    /// The runtime's object catalog, available once its cluster is up.
-    public let objects: TurgaiObjectCatalogSource
 
     /// Forgets every secret Turgai keeps in `directory`, and the key they were sealed with, to start
     /// over with another: tokens and API keys are entered again, and everyone signs in again.
@@ -42,12 +42,10 @@ public struct TurgaiServer: Sendable {
         directory: URL,
         secretKey: SecretKey,
         port: Int,
-        websitePort: WebsitePort,
         logLevel: Logger.Level,
         api: APIConfiguration,
         environment: [String: String],
-        workspaceRoot: String,
-        objects: TurgaiObjectCatalogSource = TurgaiObjectCatalogSource()
+        workspaceRoot: String
     ) async throws {
         // Turgai's database first, opened once: accounts, agents, limits, conversations, channels
         // and the journal are kept there, each in tables of its own.
@@ -58,76 +56,42 @@ public struct TurgaiServer: Sendable {
             accounts: try await .live(in: persistence),
             sessionSecret: try await .live(in: persistence, key: secretKey)
         )
-        let agentProfiles = TurgaiAgentProfileStore(storage: try await .live(in: persistence))
         let agentCredentials = AgentCredentialStore(storage: try await .live(in: persistence, key: secretKey))
         let requestLimits = try await RequestLimitStore(storage: try await .live(in: persistence))
         let linking = PersonLinking(storage: try await .live(in: persistence))
         let channelSecrets = ChannelSecretStore(storage: try await .live(in: persistence, key: secretKey))
         let setup = try TurgaiSetupStore(directory: directory)
-        let webChatBridge = TurgaiWebChatBridge()
-        let runtimeSnapshotSource = TurgaiRuntimeSnapshotSource()
-        let onboardingWebApp = try TurgaiOnboardingWebApp(
+        let onboardingWebApp = TurgaiOnboardingWebApp(
             auth: auth,
             directory: directory,
-            agentProfiles: agentProfiles,
             agentCredentials: agentCredentials,
-            requestLimits: requestLimits,
-            setup: setup,
-            channelSecrets: channelSecrets,
-            linking: linking
-        )
-        let mainWebApp = try TurgaiMainWebApp(
-            auth: auth,
-            directory: directory,
-            agentProfiles: agentProfiles,
-            agentCredentials: agentCredentials,
-            requestLimits: requestLimits,
-            channelSecrets: channelSecrets,
-            runtimeSnapshots: { await runtimeSnapshotSource.snapshots(as: $0) },
-            setup: setup,
-            webChatBridge: webChatBridge,
-            linking: linking,
-            apiConfiguration: api
-        )
-        let router = Router(context: BasicWebSocketRequestContext.self)
-        router.addMiddleware {
-            FileMiddleware(TurgaiWebAssets.publicRoot, searchForIndexHtml: false)
-        }
-        onboardingWebApp.registerRoutes(on: router)
-        mainWebApp.registerRoutes(on: router)
-        let application = Application(
-            router: router,
-            server: .http1WebSocketUpgrade(webSocketRouter: router),
-            configuration: .init(address: .hostname("127.0.0.1", port: port))
+            setup: setup
         )
         let appService = TurgaiAppService(
             environment: environment,
             workspaceRoot: workspaceRoot,
             turgaiDirectory: directory,
             persistence: persistence,
-            agentProfiles: agentProfiles,
             agentCredentials: agentCredentials,
             requestLimits: requestLimits,
             channelSecrets: channelSecrets,
-            channels: try await .live(in: persistence),
             linking: linking,
             auth: auth,
-            turgaiSpace: try await .turgai(in: persistence),
             spaceDirectory: try await .live(in: persistence),
             conversationDirectory: try await .live(in: persistence),
-            unreadMemory: try await .live(in: persistence),
-            runtimeSnapshotSource: runtimeSnapshotSource,
-            objectCatalogSource: objects,
-            webChatBridge: webChatBridge,
-            websitePort: websitePort,
+            memoryNotices: try await .live(named: "memory-notices", in: persistence),
+            connectionPolicy: try await .live(named: "connection-policy", in: persistence),
+            setup: setup,
+            port: port,
+            api: api,
             logLevel: logLevel
         )
         let runtimeService = TurgaiRuntimeService(
             onboarding: onboardingWebApp,
-            application: appService
+            application: appService,
+            port: port
         )
-        self.services = [Database(persistence: persistence), Daemon(logLevel: logLevel), runtimeService, application]
-        self.objects = objects
+        self.services = [Database(persistence: persistence), Daemon(logLevel: logLevel), runtimeService]
     }
 
     /// Where Turgai keeps its data unless told otherwise: `~/.turgai`.
@@ -137,31 +101,15 @@ public struct TurgaiServer: Sendable {
     }
 }
 
-/// Hands out the runtime's object catalog, waiting until the runtime has started.
-public actor TurgaiObjectCatalogSource {
-    private var catalog: ObjectCatalog?
-    private var waiters: [CheckedContinuation<ObjectCatalog, Never>] = []
-
-    public init() {}
-
-    func set(_ catalog: ObjectCatalog) {
-        self.catalog = catalog
-        for waiter in waiters { waiter.resume(returning: catalog) }
-        waiters.removeAll()
-    }
-
-    public func catalog() async -> ObjectCatalog {
-        if let catalog { return catalog }
-        return await withCheckedContinuation { waiters.append($0) }
-    }
-}
-
+/// Setting up, on its own web server until it's done; then the runtime, which serves the main web
+/// app on the same port once its cluster runs.
 private struct TurgaiRuntimeService: Service, Sendable {
     let onboarding: TurgaiOnboardingWebApp
     let application: TurgaiAppService
+    let port: Int
 
     func run() async throws {
-        try await onboarding.run()
+        try await onboarding.run(port: port, logger: Logger(label: "turgai.onboarding"))
         // Onboarding also ends when the server stops before it's done: then nothing runs after it.
         guard !Task.isShuttingDownGracefully, !Task.isCancelled else { return }
         try await application.run()

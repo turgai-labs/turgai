@@ -5,13 +5,19 @@ import Foundation
 import Hail
 import Synchronization
 import Testing
+import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
+import TurgaiSpaces
 
 @testable import TurgaiApplication
 
 /// An agent asked by a call that came from its own answer, through objects and nodes, is told it's
 /// itself: the call chain says so, wherever the call went.
+
+/// The space the agents are asked in.
+private let askedIn = AsAPerson.person.space
+
 @Suite(.asAPerson)
 struct AskedByItselfTests {
     static let relay = """
@@ -30,8 +36,8 @@ struct AskedByItselfTests {
         let agents = try HailRuntimeConfiguration(contextWindow: 16_384).makeAgentRuntimePlugin(
             workspaceRoot: workspace,
             spawnConfigProvider: { AgentSpawnConfig(agentID: $0) },
-            modelEndpointProvider: { _ in turn },
-            modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
+            modelEndpointProvider: { _, _ in turn },
+            modelSelectionProvider: { _, _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
             authority: { _ in TurgaiAuthority() })
         let installing: @Sendable (inout ClusterSystemSettings) -> Void = { $0.plugins.install(plugin: agents) }
         try await withClusterSystem("objects", store: store, hostsVirtualActors: true, installing: installing) {
@@ -39,17 +45,27 @@ struct AskedByItselfTests {
             try await withClusterSystem("session", store: store, joining: objects, hostsVirtualActors: false) {
                 sessionNode in
                 // Each node offers the agents, as each node's sessions do.
-                _ = try await Agent.offered([Role("planner")], on: objects)
-                let offered = try await Agent.offered([Role("planner")], on: sessionNode)
-                let writing = ObjectSession(actorSystem: sessionNode, agents: offered)
+                _ = try await Agent.offered([Role("planner")], in: askedIn, on: objects)
+                let offered = try await Agent.offered([Role("planner")], in: askedIn, on: sessionNode)
+                let writing = ObjectSession(
+                    in: AsAPerson.person.space,
+                    objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
+                        for: AsAPerson.person.person), actorSystem: sessionNode, agents: offered)
                 let script = try Script(
                     code: Self.relay, type: "Relay", uses: await writing.others(except: "Relay").uses)
-                _ = try await DynamicObjects.resolve(on: sessionNode).create(
+                _ = try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode).create(
                     name: "Relay", spec: .new(script))
 
                 // The planner's turn calls objects as its tools do, from the other node.
-                turn.uses(ObjectSession(actorSystem: sessionNode, agents: offered))
-                let asking = ObjectSession(actorSystem: sessionNode, agents: offered)
+                turn.uses(
+                    ObjectSession(
+                        in: AsAPerson.person.space,
+                        objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
+                            for: AsAPerson.person.person), actorSystem: sessionNode, agents: offered))
+                let asking = ObjectSession(
+                    in: AsAPerson.person.space,
+                    objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
+                        for: AsAPerson.person.person), actorSystem: sessionNode, agents: offered)
                 let answer = try await asking.invoke(
                     try await asking.id(written: "planner"), action: "respond", arguments: #"{"request": "plan"}"#)
 

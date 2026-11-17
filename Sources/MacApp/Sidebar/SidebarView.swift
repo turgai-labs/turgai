@@ -386,6 +386,8 @@ private struct SpaceMenuButton: View {
     var body: some View {
         switch item {
         case .invite: Button("Invite People…", action: pick)
+        case .bots: Button("Bots…", action: pick)
+        case .connections: Button("Connections…", action: pick)
         case .rename: Button("Rename “\(space)”…", action: pick)
         case .archive: Button("Archive “\(space)”…", action: pick)
         case .unarchive: Button("Unarchive", action: pick)

@@ -2,9 +2,11 @@ import AnyLanguageModel
 import DiscoverableActors
 import DistributedCluster
 import Hail
+import TurgaiAgents
 import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
+import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -86,8 +88,8 @@ public struct ChatSayEffect: ScopedEffect, Sendable {
 
     public static func run(in token: borrowing EffectToken<ChatSayEffect>) async throws -> ChatSaid {
         let text = token.withConfiguration { $0.text }
-        guard let place = CallChain.current?.place else { throw Error.inNoChat }
-        try await ActorSystemDependency<Self>.current.virtualActors.notify(place, text)
+        guard let chain = CallChain.current, let place = chain.place else { throw Error.inNoChat }
+        try await ActorSystemDependency<Self>.current.virtualActors.notify(chain.scope.space, place, text)
         return ChatSaid(text: text)
     }
 }
@@ -137,39 +139,35 @@ public struct ChatAskEffect: ScopedEffect, Sendable {
 
     public static func run(in token: borrowing EffectToken<ChatAskEffect>) async throws -> ChatAnswer {
         let text = token.withConfiguration { $0.text }
-        guard let place = CallChain.current?.place else { throw Error.inNoChat }
-        return ChatAnswer(text: try await ActorSystemDependency<Self>.current.virtualActors.ask(place, text))
+        guard let chain = CallChain.current, let place = chain.place else { throw Error.inNoChat }
+        return ChatAnswer(
+            text: try await ActorSystemDependency<Self>.current.virtualActors.ask(chain.scope.space, place, text))
     }
 }
 
-/// The models chats' agents answer with, each asked a question on its own: the profile of the
-/// agent that answers the chat, on its endpoint.
+/// The models chats' bots answer with, each asked a question on its own: the model of the bot
+/// that answers the chat, as its space has it now.
 public struct ChatModels: Sendable {
-    let agentProfiles: TurgaiAgentProfileStore
     let endpoints: AgentModelEndpointFactory
     let temperature: Double
     let ollamaKeepAlive: String?
 
-    public init(
-        agentProfiles: TurgaiAgentProfileStore, endpoints: AgentModelEndpointFactory, temperature: Double,
-        ollamaKeepAlive: String?
-    ) {
-        self.agentProfiles = agentProfiles
+    public init(endpoints: AgentModelEndpointFactory, temperature: Double, ollamaKeepAlive: String?) {
         self.endpoints = endpoints
         self.temperature = temperature
         self.ollamaKeepAlive = ollamaKeepAlive
     }
 
-    /// What the model of the agent that answers `conversation` answers `question` with, asked on
-    /// its own.
-    func ask(_ question: String, in conversation: ConversationID, on system: ClusterSystem) async throws -> String {
-        guard let role = try await Conversation.resolve(on: system, conversationID: conversation).answeringAgent()?.rawValue
-        else { throw ConversationRefusal.notStarted }
-        guard let profile = try await agentProfiles.profile(id: role) else {
-            throw TurgaiAgentProfileError.unknownProfile(role)
+    /// What the model of the bot that answers `conversation` answers `question` with, asked on its
+    /// own.
+    func ask(_ question: String, in conversation: ConversationID, of space: SpaceID, on system: ClusterSystem)
+        async throws -> String
+    {
+        guard let bot = try await Space.identified(by: space, on: system).answeringBot(of: conversation) else {
+            throw ConversationRefusal.notStarted
         }
         let endpoint = try await endpoints.endpoint(
-            for: profile, temperature: temperature, ollamaKeepAlive: ollamaKeepAlive)
+            for: bot.model, temperature: temperature, ollamaKeepAlive: ollamaKeepAlive)
         guard let answer = try await endpoint.answer([.prompt(.init(segments: [.text(.init(content: question))]))])
         else { throw ChatAskEffect.Error.unanswered }
         return answer

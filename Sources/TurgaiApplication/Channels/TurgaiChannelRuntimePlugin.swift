@@ -1,29 +1,28 @@
 import DistributedCluster
 import EventSourcing
+import TurgaiAgents
 import TurgaiDomain
 import TurgaiObjects
 import TurgaiPeople
 
 public struct TurgaiChannelRuntimeDependencies: Sendable {
     public let secrets: ChannelSecretStore
-    public let connections: TurgaiConnections
+    /// Who's the same human as whom, which `/link` says.
+    public let linking: PersonLinking
     /// Each running Telegram bot's files, by the channel its chats are in.
     public let telegramFiles: TelegramFiles
-    public let objectCatalog: ObjectCatalog
     /// The node's models, as agents' profiles name them.
     public let endpoints: AgentModelEndpointFactory
 
     fileprivate init(
         secrets: ChannelSecretStore,
-        connections: TurgaiConnections,
+        linking: PersonLinking,
         telegramFiles: TelegramFiles,
-        objectCatalog: ObjectCatalog,
         endpoints: AgentModelEndpointFactory
     ) {
         self.secrets = secrets
-        self.connections = connections
+        self.linking = linking
         self.telegramFiles = telegramFiles
-        self.objectCatalog = objectCatalog
         self.endpoints = endpoints
     }
 }
@@ -46,42 +45,30 @@ public actor TurgaiChannelRuntimePlugin: Plugin {
         case stopped
     }
 
-    private let agentProfiles: TurgaiAgentProfileStore
     private let secrets: ChannelSecretStore
     private let telegramFiles: TelegramFiles
     private let endpoints: AgentModelEndpointFactory
     private let linking: PersonLinking
-    private let journal: any EventStore
     private var lifecycle: Lifecycle = .awaitingStart
 
     public init(
-        agentProfiles: TurgaiAgentProfileStore,
         secrets: ChannelSecretStore,
         telegramFiles: TelegramFiles,
         endpoints: AgentModelEndpointFactory,
-        linking: PersonLinking,
-        journal: any EventStore
+        linking: PersonLinking
     ) {
-        self.agentProfiles = agentProfiles
         self.secrets = secrets
         self.telegramFiles = telegramFiles
         self.endpoints = endpoints
         self.linking = linking
-        self.journal = journal
     }
 
     public func start(_ system: ClusterSystem) async throws {
         lifecycle = .running(
             TurgaiChannelRuntimeDependencies(
                 secrets: secrets,
-                connections: TurgaiConnections(
-                    actorSystem: system,
-                    agentProfiles: agentProfiles,
-                    linking: linking,
-                    journal: journal
-                ),
+                linking: linking,
                 telegramFiles: telegramFiles,
-                objectCatalog: await ObjectCatalog(actorSystem: system),
                 endpoints: endpoints
             )
         )

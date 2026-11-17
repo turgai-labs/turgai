@@ -1,18 +1,18 @@
 import DistributedCluster
 import Foundation
 import Testing
+import TurgaiCalls
 import TurgaiDomain
 
 @testable import TurgaiObjects
-import TurgaiCalls
 
 /// Every call to a made object is checked where the object lives, against who may read and
 /// write it, and what's listed to a caller is what they may read.
 @Suite(.serialized)
 struct AccessCheckTests {
     private let family = SpaceID()
-    private var ann: CallScope { CallScope(UserID.ann, in: family, as: .member, allowed: []) }
-    private var bob: CallScope { CallScope(UserID.bob, in: family, as: .member, allowed: []) }
+    private var ann: CallScope { CallScope.member(UserID.ann, in: family) }
+    private var bob: CallScope { CallScope.member(UserID.bob, in: family) }
     private let counter =
         "actor Counter {\n    var count = 0\n\n    func add() -> Int {\n        count += 1\n        return count\n    }\n}"
 
@@ -28,7 +28,7 @@ struct AccessCheckTests {
     func anObjectIsItsMakersUntilShared() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem("objects", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(family, on: node)
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
             }
@@ -43,7 +43,7 @@ struct AccessCheckTests {
             #expect(try await listed(objects, to: bob).isEmpty)
 
             // Shared with the family to read: Bob uses it and sees it, and still can't change it.
-            try await self.as(ann) { try await object.share(with: .space(family), .read) }
+            try await self.as(ann) { try await object.share(with: .group(family, .members), .read) }
             #expect(try await self.as(bob) { try await object.respond("add", arguments: [:]).reply } == .integer(2))
             #expect(try await listed(objects, to: bob) == ["counter"])
             await #expect(throws: NotAllowed(.write)) {
@@ -59,7 +59,7 @@ struct AccessCheckTests {
     func aCallOnBehalfOfNoOneIsRefused() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem("objects", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(family, on: node)
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
             }
@@ -77,7 +77,7 @@ struct AccessCheckTests {
     func anothersObjectIsNotInTheWay() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem("objects", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(family, on: node)
             let annID = try await self.as(ann) {
                 try await objects.create(name: "Tally", spec: .new(try Script(code: counter, type: "Counter")))
             }

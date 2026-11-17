@@ -2,7 +2,6 @@ import AppKit
 import Logging
 import Observation
 import ServiceLifecycle
-import TurgaiObjects
 import TurgaiServer
 import TurgaiWeb
 
@@ -18,15 +17,10 @@ final class Runtime {
     }
 
     private(set) var status = Status.running
-    /// The live objects, for the objects window.
-    let objects: ObjectsClient
     @ObservationIgnored private var group: ServiceGroup?
     @ObservationIgnored private var run: Task<Void, Never>?
 
     init() {
-        // The objects window can open before the server is up: its catalog waits for the runtime.
-        let catalog = TurgaiObjectCatalogSource()
-        self.objects = .live(catalog)
         self.run = Task {
             let server: TurgaiServer
             do {
@@ -34,12 +28,10 @@ final class Runtime {
                     directory: TurgaiServer.defaultDirectory,
                     secretKey: try SecretKeychain.secretKey(),
                     port: LocalServer.baseURL.port ?? 3333,
-                    websitePort: WebsitePort(rawValue: LocalWebsite.port),
                     logLevel: .info,
                     api: APIConfiguration(),
                     environment: ProcessInfo.processInfo.environment,
-                    workspaceRoot: FileManager.default.homeDirectoryForCurrentUser.path,
-                    objects: catalog
+                    workspaceRoot: FileManager.default.homeDirectoryForCurrentUser.path
                 )
             } catch {
                 self.stopped(reason: String(describing: error))

@@ -14,7 +14,8 @@ struct TelegramTests {
     @Test
     func aFilesTypeIsWhatTelegramSaysElseWhatItsPathSays() {
         #expect(TelegramAPIClient.contentType("image/png", ofFileAt: "photos/file_0.jpg") == "image/png")
-        #expect(TelegramAPIClient.contentType("application/octet-stream", ofFileAt: "photos/file_0.jpg") == "image/jpeg")
+        #expect(
+            TelegramAPIClient.contentType("application/octet-stream", ofFileAt: "photos/file_0.jpg") == "image/jpeg")
         #expect(TelegramAPIClient.contentType(nil, ofFileAt: "documents/file_1.pdf") == "application/pdf")
         #expect(TelegramAPIClient.contentType(nil, ofFileAt: "documents/file_2") == nil)
     }
@@ -46,9 +47,14 @@ struct TelegramTests {
 
         #expect(to("what's for dinner?") == [])
         #expect(to("sure", replyingTo: bot) == [])
-        #expect(to("@TurgaiBot what's for dinner?", entities: [TelegramEntity(type: "mention", offset: 0, length: 10)]) == [])
+        #expect(
+            to("@TurgaiBot what's for dinner?", entities: [TelegramEntity(type: "mention", offset: 0, length: 10)])
+                == [])
         #expect(to("pasta?", replyingTo: bob) == [.person(.telegram(bob.id))])
-        #expect(to("@bob pasta?", entities: [TelegramEntity(type: "mention", offset: 0, length: 4)]) == [.person(.telegram(bob.id))])
+        #expect(
+            to("@bob pasta?", entities: [TelegramEntity(type: "mention", offset: 0, length: 4)]) == [
+                .person(.telegram(bob.id))
+            ])
         #expect(
             to("Bob, pasta?", entities: [TelegramEntity(type: "text_mention", offset: 0, length: 3, user: bob)])
                 == [.person(.telegram(bob.id))])
@@ -57,7 +63,8 @@ struct TelegramTests {
             to(
                 "@TurgaiBot ask @bob",
                 entities: [
-                    TelegramEntity(type: "mention", offset: 0, length: 10), TelegramEntity(type: "mention", offset: 15, length: 4),
+                    TelegramEntity(type: "mention", offset: 0, length: 10),
+                    TelegramEntity(type: "mention", offset: 15, length: 4),
                 ]) == [])
     }
 
@@ -185,6 +192,7 @@ struct TelegramTests {
     func botCanRestoreAConversationWithoutATelegramUpdate() async throws {
         let bot = TelegramBot(
             client: makeClient(recorder: TelegramCallRecorder(responses: [])),
+            into: SpaceID(),
             conversationChannel: ChannelID("telegram"),
             initialOffset: nil,
             checkpointOffset: { _ in }
@@ -203,7 +211,7 @@ struct TelegramTests {
         }
 
         #expect(await bot.connect(conversationID: conversationID))
-        #expect(await consumer.value == .connect(conversationID))
+        #expect(await consumer.value == .connectChat(conversationID))
         await bot.stop()
     }
 
@@ -264,6 +272,7 @@ struct TelegramTests {
         let offsets = TelegramOffsetRecorder()
         let bot = TelegramBot(
             client: client,
+            into: SpaceID(),
             conversationChannel: ChannelID("telegram"),
             allowedChatIDs: [42],
             initialOffset: nil,
@@ -292,7 +301,7 @@ struct TelegramTests {
                 for await delivery in inbound {
                     received.append(delivery.input)
                     await delivery.receipt.acknowledge()
-                    if received.count == 3 {
+                    if received.count == 2 {
                         return received
                     }
                 }
@@ -302,16 +311,10 @@ struct TelegramTests {
         let runTask = Task { try await bot.run() }
 
         let received = await consumer.value
-        #expect(received.count == 3)
+        #expect(received.count == 2)
         let participantID = TelegramBot.participantID(for: 7)
         let userID = UserID.telegram(7)
-        // A private chat is called after its one person, who decides for it.
-        #expect(
-            received[0]
-                == .chat(
-                    conversationID: TelegramBot.conversationID(for: 42), named: SpaceName("John Appleseed")!,
-                    admins: [userID], by: userID))
-        if case .message(let message, _) = received[1] {
+        if case .message(let message, _) = received[0] {
             #expect(message.text == "hello Turgai")
             #expect(message.participantID == participantID)
             #expect(message.userID == userID)
@@ -326,7 +329,7 @@ struct TelegramTests {
         } else {
             Issue.record("Expected the first application input to be a message")
         }
-        #expect(received[2] == .reset(TelegramBot.conversationID(for: 42), by: userID))
+        #expect(received[1] == .reset(TelegramBot.conversationID(for: 42), by: userID))
 
         // The bot persists offsets after processing every update, including
         // updates that are filtered out before reaching a connection.
@@ -341,55 +344,6 @@ struct TelegramTests {
         #expect(requestedOffsets.first! == nil)
         #expect(requestedOffsets.contains(15))
         #expect(await offsets.currentOffset == 15)
-        await bot.stop()
-        _ = try? await runTask.value
-    }
-
-    @Test
-    func aGroupsAdministratorsAreItsAdminsAndAskedForOnce() async throws {
-        let group = TelegramChat(id: 42, type: "group", title: "Family")
-        let ann = TelegramUser(id: 7, firstName: "Ann")
-        let bob = TelegramUser(id: 8, firstName: "Bob")
-        let updates = (1...2).map { index in
-            TelegramUpdate(
-                updateID: Int64(index),
-                message: TelegramMessage(
-                    messageID: Int64(index), from: bob, chat: group, date: 100, text: "hello \(index)"))
-        }
-        let recorder = TelegramCallRecorder(responses: [updates])
-        let bot = TelegramBot(
-            client: makeClient(
-                recorder: recorder, administrators: [ann, TelegramUser(id: 9, isBot: true, firstName: "Turgai")]),
-            conversationChannel: ChannelID("telegram"),
-            allowedChatIDs: [42],
-            initialOffset: nil,
-            checkpointOffset: { _ in },
-            configuration: TelegramBotConfiguration(timeout: 1, retryDelay: .milliseconds(1))
-        )
-
-        let connectionStream = try await bot.connections()
-        let consumer = Task { () -> [ConversationInput] in
-            var received: [ConversationInput] = []
-            for await connection in connectionStream {
-                for await delivery in await connection.inbound {
-                    received.append(delivery.input)
-                    await delivery.receipt.acknowledge()
-                    if received.count == 3 { return received }
-                }
-            }
-            return received
-        }
-        let runTask = Task { try await bot.run() }
-
-        let received = await consumer.value
-        let annID = UserID.telegram(7)
-        #expect(
-            received.first
-                == .chat(
-                    conversationID: TelegramBot.conversationID(for: 42), named: SpaceName("Family")!, admins: [annID],
-                    by: .telegram(8)))
-        #expect(received.dropFirst().allSatisfy { if case .message = $0 { true } else { false } })
-        #expect(await recorder.administratorRequests == 1)
         await bot.stop()
         _ = try? await runTask.value
     }
@@ -440,6 +394,7 @@ struct TelegramTests {
         await recorder.failGetUpdates(with: .httpStatus(401))
         let bot = TelegramBot(
             client: makeClient(recorder: recorder),
+            into: SpaceID(),
             conversationChannel: ChannelID("telegram"),
             initialOffset: nil,
             checkpointOffset: { _ in },
@@ -529,6 +484,7 @@ struct TelegramTests {
         let recorder = TelegramCallRecorder(responses: [[update]])
         let bot = TelegramBot(
             client: makeClient(recorder: recorder),
+            into: SpaceID(),
             conversationChannel: ChannelID("telegram"),
             allowedChatIDs: [42],
             initialOffset: nil,
@@ -545,8 +501,6 @@ struct TelegramTests {
                 let inbound = await connection.inbound
                 for await delivery in inbound {
                     await delivery.receipt.acknowledge()
-                    // What the chat is comes first.
-                    if case .chat = delivery.input { continue }
                     return delivery.input
                 }
             }

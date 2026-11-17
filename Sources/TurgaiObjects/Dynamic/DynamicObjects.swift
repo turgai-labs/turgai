@@ -4,11 +4,18 @@ import DistributedCluster
 import EventSourcing
 import TurgaiCalls
 import TurgaiDomain
-import TurgaiSpaces
 import VirtualActors
 
-/// The types and the objects made by name, the way an Erlang node holds its modules and a
-/// supervisor its top processes. There's one, reached by its id alone. It makes those objects, gives a type's new code to them, and starts them again after a restart: each restores
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
+
+/// A space's types and the objects made there by name, the way an Erlang node holds its modules
+/// and a supervisor its top processes. There's one for each space, reached by the space's id: only
+/// what's in the space reaches it, and nothing in it reaches another space's. It makes those
+/// objects, gives a type's new code to them, and starts them again after a restart: each restores
 /// itself from its own journal. An object code makes is its maker's, which holds it: a type's new
 /// code reaches it through its maker, as down a tree, and nothing here knows it.
 ///
@@ -22,28 +29,48 @@ public distributed actor DynamicObjects {
     public typealias ActorSystem = ClusterSystem
     public typealias Event = DynamicObjectsEvent
     public typealias State = DynamicObjectsState
+    public typealias Dependency = SpaceID
 
     public var state = DynamicObjectsState()
+    /// The space whose they are: given, never kept in its state.
+    private let home: SpaceID
     /// References to its objects, resolved once each.
     private var resolved: [ObjectIdentity: DynamicObject] = [:]
+    /// Whoever follows that its objects changed: each one's backlog, and its pull while it waits.
+    private var pulls = Pulls<ObjectsChanged>()
 
-    public init(actorSystem: ClusterSystem) async throws {
+    public init(actorSystem: ClusterSystem, dependency space: SpaceID) async throws {
         self.actorSystem = actorSystem
-        try await actorSystem.journal.register(actor: self, with: Self.persistenceID)
+        self.home = space
+        try await actorSystem.journal.register(actor: self, with: Self.persistenceID(for: space))
     }
 
-    /// The objects made by name, and their types.
-    public static func resolve(on system: ClusterSystem) async throws -> DynamicObjects {
-        try await system.virtualActors.getActor(identifiedBy: actorID, dependency: None())
+    /// The types and objects of `space`, made by name there.
+    package static func of(_ space: SpaceID, on system: ClusterSystem) async throws -> DynamicObjects {
+        try await system.virtualActors.getActor(identifiedBy: actorID(for: space), dependency: space)
     }
 
-    static var actorID: VirtualActorID { VirtualActorID(rawValue: "dynamic-objects") }
+    static func actorID(for space: SpaceID) -> VirtualActorID {
+        VirtualActorID(rawValue: "objects:\(space.rawValue.uuidString)")
+    }
 
-    static var persistenceID: String { "turgai-objects" }
+    private static let persistencePrefix = "turgai-objects-"
+
+    public static func persistenceID(for space: SpaceID) -> String {
+        persistencePrefix + space.rawValue.uuidString
+    }
+
+    /// The space whose registry's journal is `persistenceID`: none for another's journal.
+    public static func space(persistedAs persistenceID: String) -> SpaceID? {
+        guard persistenceID.hasPrefix(persistencePrefix) else { return nil }
+        return UUID(uuidString: String(persistenceID.dropFirst(persistencePrefix.count))).map(SpaceID.init(rawValue:))
+    }
 
     /// The chain the current call came through: every call is on someone's behalf.
     private func caller() throws -> CallChain {
-        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .virtual(Self.actorID)) }
+        guard let chain = CallChain.current else {
+            throw CallOnBehalfOfNoOne(actor: .virtual(Self.actorID(for: home)))
+        }
         return chain
     }
 
@@ -69,6 +96,10 @@ public distributed actor DynamicObjects {
             id = .new()
             try await emit(event: .typeWritten(id, source))
         case .sameAs(let object):
+            // Only an object of this space: another space's isn't reached from here.
+            if DynamicObject.space(of: object.id) != home, let other = DynamicObject.identity(of: object.id) {
+                throw DynamicObjectsError.unknownObject(other)
+            }
             let shared = try await object.identity
             guard let entry = state.entries.first(where: { $0.identity == shared }) else {
                 throw DynamicObjectsError.unknownObject(shared)
@@ -80,7 +111,7 @@ public distributed actor DynamicObjects {
         }
         guard let code = state.types[id] else { throw DynamicObjectsError.unknownType(id.rawValue) }
         // One that's there already, made by name or named by code, is changed, not made again.
-        let existing = try await DynamicObject.resolve(on: actorSystem, identity: identity)
+        let existing = try await DynamicObject.identified(by: identity, in: home, on: actorSystem)
         do {
             let code = try await existing.source
             throw DynamicObjectsError.exists(identity.rawValue, type: code.type)
@@ -91,9 +122,9 @@ public distributed actor DynamicObjects {
             // Not made yet, or removed for good, which what follows refuses.
         }
         guard !state.identities.contains(identity), !state.removed.contains(identity),
-            try await ObjectNames.object(named: identity.rawValue, using: actorSystem) == nil
+            try await ObjectNames.object(named: identity.rawValue, in: home, using: actorSystem) == nil
         else { throw DynamicObjectsError.nameTaken(name) }
-        let made = try await DynamicObject.resolve(on: actorSystem, identity: identity)
+        let made = try await DynamicObject.identified(by: identity, in: home, on: actorSystem)
         try await made.adopt(id, code: code)
         try await made.describe(name: name, description: description)
         if !start.isEmpty { try await made.set(values: start) }
@@ -126,6 +157,75 @@ public distributed actor DynamicObjects {
         return ObjectType(id: id, code: code)
     }
 
+    // MARK: Built-in objects
+
+    /// The built-in objects its space installed.
+    public distributed var installed: [BuiltInKind] { state.installed.sorted() }
+
+    /// The built-in object `kind` installed in its space, as whoever may configure the space asks:
+    /// one installed already stays as it is. Which kinds there are, whoever offers them knows.
+    public distributed func install(_ kind: BuiltInKind) async throws {
+        try configuring()
+        guard !state.installed.contains(kind) else { return }
+        try await emit(event: .installed(kind))
+    }
+
+    /// The built-in object `kind` taken out of its space, as whoever may configure the space asks:
+    /// websites taken out give up their names.
+    public distributed func uninstall(_ kind: BuiltInKind) async throws {
+        try configuring()
+        guard state.installed.contains(kind) else { return }
+        if kind == Website.kind {
+            for name in state.sites.sorted() {
+                try await Website.named(name, in: home, on: actorSystem).release()
+                try await emit(event: .siteRemoved(name))
+            }
+        }
+        try await emit(event: .uninstalled(kind))
+    }
+
+    /// `kinds`, what a new space starts with, installed as it's made: by whoever makes it, before
+    /// anyone's in it to ask.
+    package distributed func install(defaults kinds: [BuiltInKind]) async throws {
+        for kind in kinds where !state.installed.contains(kind) {
+            try await emit(event: .installed(kind))
+        }
+    }
+
+    // MARK: Websites
+
+    /// The websites made here, by name.
+    public distributed var sites: [SiteName] { state.sites.sorted() }
+
+    /// Its space's website named `name`, made the first time, which holds the name for the space:
+    /// only while its space has websites installed, and refused while another space holds the name.
+    package distributed func site(named name: SiteName) async throws -> Website {
+        guard state.installed.contains(Website.kind) else { throw DynamicObjectsError.notInstalled(Website.kind) }
+        let website = try await Website.named(name, in: home, on: actorSystem)
+        if !state.sites.contains(name) {
+            try await website.claim()
+            try await emit(event: .siteMade(name))
+        }
+        return website
+    }
+
+    /// The website named `name` taken out of its space, as whoever may configure the space asks:
+    /// its name free for any space from then on.
+    public distributed func removeSite(_ name: SiteName) async throws {
+        try configuring()
+        guard state.sites.contains(name) else { return }
+        try await Website.named(name, in: home, on: actorSystem).release()
+        try await emit(event: .siteRemoved(name))
+    }
+
+    /// Refused unless whoever the call is on behalf of may configure its space.
+    private func configuring() throws {
+        let chain = try caller()
+        guard chain.scope.space == home, chain.scope.permissions.configureSpace else { throw NotAllowed(.write) }
+    }
+
+    // MARK: Listing
+
     /// The objects made here by name that the call may read, as they're listed and found: each as
     /// its type and what it was made for say, without asking the objects.
     public distributed func held() async throws -> [ObjectEntry] {
@@ -137,7 +237,7 @@ public distributed actor DynamicObjects {
             let object = try await object(entry.identity)
             held.append(
                 ObjectEntry(
-                    id: .virtual(DynamicObject.actorID(for: entry.identity)),
+                    id: .virtual(DynamicObject.actorID(for: entry.identity, in: home)),
                     object: try DiscoverableObject.resolve(id: object.id, using: actorSystem), type: spec.type,
                     description: spec.description,
                     actions: spec.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }.sorted(),
@@ -168,7 +268,8 @@ public distributed actor DynamicObjects {
 
     /// Which of the objects made here the actor `id` is, if it's one of them.
     public distributed func identity(of id: ClusterSystem.ActorID) -> ObjectIdentity? {
-        DynamicObject.identity(of: id).flatMap { state.identities.contains($0) ? $0 : nil }
+        guard DynamicObject.space(of: id) == home else { return nil }
+        return DynamicObject.identity(of: id).flatMap { state.identities.contains($0) ? $0 : nil }
     }
 
     /// The other objects made here running the same type as the object `identity`, by name: those
@@ -193,7 +294,7 @@ public distributed actor DynamicObjects {
             try await rewrite(entry.type, as: source)
             return
         }
-        let named = try await DynamicObject.resolve(on: actorSystem, identity: identity)
+        let named = try await DynamicObject.identified(by: identity, in: home, on: actorSystem)
         guard let type = try? await named.type else { throw DynamicObjectsError.unknownObject(identity) }
         try await rewrite(type, as: source)
         // It may be held by nothing made here by name, so it's told itself too.
@@ -202,7 +303,7 @@ public distributed actor DynamicObjects {
 
     /// The object with `identity`, made here by name or named by code with its id, if there's one.
     public distributed func existing(_ identity: ObjectIdentity) async throws -> DynamicObject? {
-        let object = try await DynamicObject.resolve(on: actorSystem, identity: identity)
+        let object = try await DynamicObject.identified(by: identity, in: home, on: actorSystem)
         return (try? await object.source) == nil ? nil : object
     }
 
@@ -242,43 +343,13 @@ public distributed actor DynamicObjects {
         try await emit(event: .removed(identity))
     }
 
-    /// Starts every object here, each on behalf of whoever made it, in the conversation it was made
-    /// in, as what it does by itself is. Each starts on its own: one that's slow to start, or
-    /// fails, holds up no other.
-    /// The server does this when it starts.
-    public distributed func start() async {
-        await withDiscardingTaskGroup { group in
-            for entry in state.entries {
-                group.addTask { await self.start(entry) }
-            }
-        }
-    }
-
-    /// Starts the object `entry` holds, saying in the log whether it started.
-    private func start(_ entry: DynamicObjectsState.Entry) async {
-        actorSystem.log.info("Starting made object", metadata: ["object": "\(entry.identity)"])
-        do {
-            let made = try await self.object(entry.identity)
-            // As their space settles their scope now.
-            let maker = try await Space.resolve(on: actorSystem, id: entry.maker.space).opening(
-                scopeOf: entry.maker.person, for: .actor(DynamicObject.callActor(for: entry.identity)))
-            try await CallChain.$current.withValue(.own(DynamicObject.callActor(for: entry.identity), for: maker, in: entry.place)) {
-                try await made.start()
-            }
-            actorSystem.log.info("Started made object", metadata: ["object": "\(entry.identity)"])
-        } catch {
-            actorSystem.log.error(
-                "Couldn't start made object", metadata: ["object": "\(entry.identity)", "error": "\(error)"])
-        }
-    }
-
     /// The object held here as `identity`: a reference, resolved once.
     private func object(_ identity: ObjectIdentity) async throws -> DynamicObject {
         if let object = resolved[identity] { return object }
         guard state.entries.contains(where: { $0.identity == identity }) else {
             throw DynamicObjectsError.unknownObject(identity)
         }
-        let object = try await DynamicObject.resolve(on: actorSystem, identity: identity)
+        let object = try await DynamicObject.identified(by: identity, in: home, on: actorSystem)
         resolved[identity] = object
         return object
     }
@@ -286,11 +357,39 @@ public distributed actor DynamicObjects {
     /// Every object held here, by identity, oldest first.
     public distributed var identities: [ObjectIdentity] { state.identities }
 
-    /// It keeps its objects running, so it keeps running itself.
-    public func shouldDeactivate() async -> Bool { false }
+    /// It runs while someone follows its changes: its objects run themselves.
+    public func shouldDeactivate() async -> Bool { pulls.isEmpty }
+
+    // MARK: Following its changes
+
+    /// That its objects changed, from now on, as they're made, removed, shared, or installed: for
+    /// whoever shows them to list them again.
+    public nonisolated func subscription() async throws -> Subscription<ObjectsChanged> {
+        let subscriber = UUID()
+        try await subscribe(subscriber)
+        return Subscription(subscriber, pull: { try await self.next(for: $0) }, leave: { try await self.leave($0) })
+    }
+
+    distributed func subscribe(_ subscriber: UUID) {
+        pulls.subscribe(subscriber)
+    }
+
+    distributed func next(for subscriber: UUID) async -> ObjectsChanged? {
+        switch pulls.take(subscriber) {
+        case .element(let change): return change
+        case .ended: return nil
+        case .empty: return await withCheckedContinuation { pulls.park(subscriber, $0) }
+        }
+    }
+
+    distributed func leave(_ subscriber: UUID) {
+        pulls.leave(subscriber)
+    }
 
     public func handleEvent(_ event: DynamicObjectsEvent) {
         state.apply(event)
+        // Whoever follows is told, as each change happens: replayed, there's no one to tell yet.
+        pulls.tell(ObjectsChanged())
     }
 
     // MARK: Checks
@@ -334,6 +433,14 @@ public enum DynamicObjectsEvent: Codable, Sendable {
     /// Who may read and write an object changed, as the object says.
     case accessChanged(ObjectIdentity, Access)
     case removed(ObjectIdentity)
+    /// A built-in object installed in its space.
+    case installed(BuiltInKind)
+    /// A built-in object taken out of its space.
+    case uninstalled(BuiltInKind)
+    /// A website made, its name its space's.
+    case siteMade(SiteName)
+    /// A website taken out, its name given up.
+    case siteRemoved(SiteName)
 }
 
 public struct DynamicObjectsState: Codable, Sendable {
@@ -359,6 +466,10 @@ public struct DynamicObjectsState: Codable, Sendable {
     public var entries: [Entry] = []
     /// The objects removed from here: their ids are theirs for good, never given to another.
     public var removed: Set<ObjectIdentity> = []
+    /// The built-in objects its space installed.
+    public var installed: Set<BuiltInKind> = []
+    /// The websites made here, by name.
+    public var sites: Set<SiteName> = []
 
     public init() {}
 
@@ -395,6 +506,14 @@ public struct DynamicObjectsState: Codable, Sendable {
         case .removed(let identity):
             entries.removeAll { $0.identity == identity }
             removed.insert(identity)
+        case .installed(let kind):
+            installed.insert(kind)
+        case .uninstalled(let kind):
+            installed.remove(kind)
+        case .siteMade(let name):
+            sites.insert(name)
+        case .siteRemoved(let name):
+            sites.remove(name)
         }
     }
 }
@@ -405,6 +524,8 @@ public enum DynamicObjectsError: Error, Codable, Equatable, Sendable, CustomStri
     /// An object with this id is there already, of this type.
     case exists(String, type: String)
     case unknownType(String)
+    /// Its space hasn't installed this kind of built-in object.
+    case notInstalled(BuiltInKind)
 
     public var description: String {
         switch self {
@@ -416,6 +537,13 @@ public enum DynamicObjectsError: Error, Codable, Equatable, Sendable, CustomStri
             "An object or type named \(name) already exists. To change it, write it with its id, or choose another name."
         case .unknownType(let name):
             "There's no object or type \(name) here."
+        case .notInstalled(let kind):
+            "This space hasn't installed \(kind)."
         }
     }
+}
+
+/// That a space's objects changed: someone showing them lists them again.
+public struct ObjectsChanged: Codable, Sendable, Equatable {
+    public init() {}
 }

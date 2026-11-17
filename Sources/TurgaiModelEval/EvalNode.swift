@@ -4,6 +4,8 @@ import DistributedCluster
 import EventSourcing
 import Foundation
 import Hail
+import RunningActors
+import TurgaiAgents
 import TurgaiApplication
 import TurgaiCalls
 import TurgaiDomain
@@ -20,7 +22,8 @@ struct EvalNode: Sendable {
     let system: ClusterSystem
     let virtualNode: VirtualNode
     let workspace: URL
-    let objectCatalog: ObjectCatalog
+    /// The bot of the asker's space: the model the eval asks, told the eval's instructions.
+    let bot: Bot
 
     static func start(
         model: AgentModel, temperature: Double, instructions: String, objectsPageDescription: String? = nil,
@@ -30,10 +33,6 @@ struct EvalNode: Sendable {
             "turgai-eval-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         let store = MemoryEventStore()
-        // One catalog for the node, following the objects from when it starts, as the app keeps
-        // one: a session making its own would start empty, and a later turn wouldn't find what an
-        // earlier one made.
-        let catalog = Catalog()
         let configuration = try Self.configuration(for: model)
         let endpoints = AgentModelEndpointFactory(
             credentials: AgentCredentialStore(storage: .test),
@@ -42,7 +41,7 @@ struct EvalNode: Sendable {
         let plugin = try runtime.makeAgentRuntimePlugin(
             workspaceRoot: workspace.path,
             spawnConfigProvider: { AgentSpawnConfig(agentID: $0, interruptedTurns: .close, snapshotPolicy: .disabled) },
-            modelEndpointProvider: { _ in
+            modelEndpointProvider: { _, _ in
                 let endpoint = try await endpoints.endpoint(
                     model: model, configuration: configuration, temperature: runtime.temperature,
                     ollamaKeepAlive: runtime.ollamaKeepAlive)
@@ -50,8 +49,8 @@ struct EvalNode: Sendable {
                     ? EvalDumpEndpoint(base: endpoint)
                     : endpoint
             },
-            modelSelectionProvider: { _ in ModelConfiguration(model: model) },
-            definitionProvider: { config in
+            modelSelectionProvider: { _, _ in ModelConfiguration(model: model) },
+            definitionProvider: { config, _ in
                 // A profile's instructions, as given; blank by default. What the agent can do comes
                 // with its tools.
                 let own = agents.first { $0.role == config.agentID.role }?.instructions
@@ -62,7 +61,7 @@ struct EvalNode: Sendable {
                 let writing = try await endpoints.endpoint(
                     model: model, configuration: configuration, temperature: runtime.temperature)
                 return try await Self.tools(
-                    for: context, on: actorSystem, catalog: await catalog.current, agents: agents, writing: writing,
+                    for: context, on: actorSystem, agents: agents, writing: writing,
                     objectsPageDescription: objectsPageDescription, sendsRequests: sendsRequests)
             },
             // What a turn may do is what its scope allows, as on every node.
@@ -81,28 +80,72 @@ struct EvalNode: Sendable {
             settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
             settings.plugins.install(plugin: plugin)
             settings.plugins.install(plugin: ToolsAPIPlugin(Self.nodeTools.api))
+            // What objects keep running; a task's node lives only as long as the task.
+            settings.plugins.install(plugin: RunningActors(recovering: []))
         }
         try await system.cluster.joined(endpoint: system.cluster.endpoint, within: .seconds(10))
-        await catalog.start(on: system)
-        guard let objectCatalog = await catalog.current else { throw EvalCatalogUnavailable() }
+        guard let modelName = ModelName(model.id.rawValue) else { throw UnsupportedModel(model: model) }
         return EvalNode(
             system: system, virtualNode: await VirtualNode(actorSystem: system), workspace: workspace,
-            objectCatalog: objectCatalog)
+            bot: Bot(
+                name: BotName("Eval")!, instructions: instructions,
+                model: BotModel(location: configuration, name: modelName)))
     }
 
     /// A turn's tools: the objects, made and found, and the task's other agents, which it can ask.
     private static func tools(
-        for context: AgentTurnContext, on actorSystem: ClusterSystem, catalog: ObjectCatalog?, agents: [EvalAgent],
+        for context: AgentTurnContext, on actorSystem: ClusterSystem, agents: [EvalAgent],
         writing: any ModelEndpoint, objectsPageDescription: String?, sendsRequests: Bool
     ) async throws -> TurnTools {
         // A task's agents, which the others can ask: never itself.
         let others: [Role] = agents.map(\.role).filter { (role: Role) -> Bool in role != context.agentID.role }
-        let offered = try await Agent.offered(others, on: actorSystem)
+        let offered = try await Agent.offered(others, in: Self.space, on: actorSystem)
         let writer = ObjectWriter(
             endpoint: writing,
             report: { (event: WriterEvent) in FileHandle.standardError.write(Data(event.written.utf8)) })
+        // The built-in objects installed in the space, each started and checked in there, where the
+        // space's code finds it by name.
+        let objects = try await Space.identified(by: Self.space, on: actorSystem).objects(for: Self.askerID)
+        let installed = Set(try await objects.installed)
+        var installedObjects: [DiscoverableObject] = []
+        if installed.contains(Weather.kind) {
+            let object = try await Weather.of(Self.space, on: actorSystem)
+            installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
+        }
+        if installed.contains(Scheduler.kind) {
+            let object = try await Scheduler.of(Self.space, on: actorSystem)
+            installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
+        }
+        if installed.contains(Timers.kind) {
+            let object = try await Timers.of(Self.space, on: actorSystem)
+            installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
+        }
+        // Each website made in the space, by its name.
+        if installed.contains(Website.kind) {
+            for name in try await objects.sites {
+                let object = try await Website.named(name, in: Self.space, on: actorSystem)
+                installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
+            }
+        }
+        var builtIns: [ObjectEntry] = []
+        for object in installedObjects {
+            await actorSystem.receptionist.checkIn(object, with: .virtualObjects(in: Self.space))
+            guard let virtual = object.id.virtualActorID, let description = try? await object.describe() else {
+                continue
+            }
+            builtIns.append(
+                ObjectEntry(
+                    id: .virtual(virtual), object: object, type: description.type,
+                    description: description.description,
+                    actions: description.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
+                        .sorted(),
+                    events: description.events.keys.sorted()))
+        }
         let session = ObjectSession(
-            actorSystem: actorSystem, objectCatalog: catalog, agents: offered, writer: writer,
+            in: Self.space, objects: objects, actorSystem: actorSystem, agents: offered,
+            builtIns: builtIns,
+            // What code makes by name in the space: a website, as it says it is.
+            madeByName: installed.contains(Website.kind) ? [Website.describe()] : [], writer: writer,
             request: context.input.text)
         let roots: [any HailCore.Tool] = try await ObjectTools(session: session).offered()
         // The node's own tools, for a task that sends requests: as every conversation has them.
@@ -130,8 +173,13 @@ struct EvalNode: Sendable {
 
     /// The asker's scope, as their space settles it.
     func asker() async throws -> CallScope {
-        let space = try await Space.resolve(on: system, id: Self.space)
-        try await space.setAdmins([Self.askerID])
+        let space = try await Space.identified(by: Self.space, on: system)
+        if try await space.status() == nil {
+            // It starts with its chats' reminders and schedules, as a new space does.
+            try await space.make(
+                named: SpaceName("Eval")!, admins: NonEmptySet(Self.askerID), bot: bot,
+                installing: [Scheduler.kind, Timers.kind])
+        }
         return try await space.opening(scopeOf: Self.askerID, for: .person)
     }
 
@@ -198,17 +246,6 @@ private struct EvalDumpEndpoint: ModelEndpoint {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
-    }
-}
-
-private struct EvalCatalogUnavailable: Error {}
-
-/// The node's object catalog, made once the node is running.
-private actor Catalog {
-    private(set) var current: ObjectCatalog?
-
-    func start(on system: ClusterSystem) async {
-        current = await ObjectCatalog(actorSystem: system)
     }
 }
 

@@ -2,6 +2,7 @@ import DiscoverableActors
 import DistributedCluster
 import Hail
 import TurgaiCalls
+import TurgaiDomain
 import TurgaiObjects
 import VirtualActors
 
@@ -10,29 +11,26 @@ import VirtualActors
 @VirtualActor
 public distributed actor Weather {
     public typealias ActorSystem = ClusterSystem
-    public typealias Dependency = ObjectIdentity
+    public typealias Dependency = SpaceID
 
-    public init(actorSystem: ActorSystem, dependency: ObjectIdentity) async throws {
+    public static let kind = BuiltInKind(rawValue: "Weather")
+
+    /// The space whose it is.
+    private let space: SpaceID
+
+    /// `space`'s weather, wherever and whenever it runs.
+    public static func of(_ space: SpaceID, on actorSystem: ClusterSystem) async throws -> Weather {
+        try await actorSystem.virtualActors.getActor(
+            identifiedBy: VirtualActorID(rawValue: "builtin/\(space.rawValue.uuidString)/weather"), dependency: space)
+    }
+
+    public init(actorSystem: ActorSystem, dependency space: SpaceID) async throws {
         self.actorSystem = actorSystem
+        self.space = space
     }
 
-    /// The one weather, by the id it always has: a reference to it reaches it after any restart.
-    public static func resolve(on actorSystem: ClusterSystem) async throws -> Weather {
-        try await actorSystem.virtualActors.getActor(identifiedBy: actorID, dependency: identity)
-    }
-
-    /// Starts it, and lists it among the objects by its lasting reference.
-    public static func start(on actorSystem: ClusterSystem) async throws {
-        let weather = try await resolve(on: actorSystem)
-        let object = try DiscoverableObject.resolve(id: weather.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: .objects)
-    }
-
-    static let identity = ObjectIdentity(rawValue: "weather")
-    static let actorID = VirtualActorID(rawValue: "builtin/weather")
-
-    /// It's there for as long as its node runs: what holds it finds it.
-    public func shouldDeactivate() async -> Bool { false }
+    /// It holds nothing: idle, it stops, and a call starts it again.
+    public func shouldDeactivate() async -> Bool { true }
 
     /// The weather at a place now.
     /// - Parameters:
@@ -95,5 +93,8 @@ public distributed actor Weather {
 
 /// Read by everyone and written by no one, as any built-in object.
 extension Weather: AccessControlled {
-    public func access(for chain: CallChain) -> Access { .readByEveryone }
+    /// Everyone in its space may use it, and no one from another.
+    public distributed func access(for chain: CallChain) -> Access {
+        chain.scope.space == space ? .readByEveryone : .nobody
+    }
 }

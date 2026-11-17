@@ -1,12 +1,16 @@
+import DistributedCluster
 import Elementary
+import EventSourcing
 import Hail
 import Hummingbird
 import HummingbirdElementary
 import HummingbirdWebSocket
 import NIOCore
+import TurgaiAgents
 import TurgaiApplication
 import TurgaiDomain
 import TurgaiHail
+import TurgaiObjects
 import TurgaiPeople
 import TurgaiPersistence
 import TurgaiTelegram
@@ -20,15 +24,16 @@ import TurgaiTelegram
 struct TurgaiRouteDependencies: Sendable {
     let auth: TurgaiAuth
     let setup: TurgaiSetupStore
-    let agentProfiles: TurgaiAgentProfileStore
     let agentCredentials: AgentCredentialStore
     let requestLimits: RequestLimitStore
     let channelSecrets: ChannelSecretStore
     /// Turgai's directory, where its own database is.
     let directory: URL
-    let runtimeSnapshots: @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot]
     let userToolRegistry: UserToolRegistry
-    let webChatBridge: TurgaiWebChatBridge
+    /// The cluster Turgai runs on, which every actor the routes call is reached through.
+    let system: ClusterSystem
+    /// Where the agents keep what they did, read for their past turns.
+    let journal: any EventStore
     /// Who's the same human as whom.
     let linking: PersonLinking
     let apiConfiguration: APIConfiguration
@@ -39,24 +44,24 @@ extension TurgaiMainWebApp {
         let dependencies = TurgaiRouteDependencies(
             auth: auth,
             setup: setup,
-            agentProfiles: agentProfiles,
             agentCredentials: agentCredentials,
             requestLimits: requestLimits,
             channelSecrets: channelSecrets,
             directory: directory,
-            runtimeSnapshots: runtimeSnapshots,
             userToolRegistry: UserToolRegistry(
                 directory: directory.appendingPathComponent("tools", isDirectory: true)
             ),
-            webChatBridge: webChatBridge,
+            system: system,
+            journal: journal,
             linking: linking,
             apiConfiguration: apiConfiguration
         )
         registerCoreRoutes(on: router, dependencies: dependencies)
         registerToolRoutes(on: router, dependencies: dependencies)
-        registerAgentRoutes(on: router, dependencies: dependencies)
-        registerChannelRoutes(on: router, dependencies: dependencies)
+        registerSpacePageRoutes(on: router, dependencies: dependencies)
+        registerConnectionRoutes(on: router, dependencies: dependencies)
         registerPublicChatRoutes(on: router, dependencies: dependencies)
         registerAccountRoutes(on: router, dependencies: dependencies)
+        registerWebsiteRoutes(on: router, dependencies: dependencies)
     }
 }

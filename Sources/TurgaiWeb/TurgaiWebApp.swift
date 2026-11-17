@@ -1,12 +1,16 @@
+import DistributedCluster
 import Elementary
+import EventSourcing
 import Hail
 import Hummingbird
 import HummingbirdElementary
 import NIOCore
 import ServiceLifecycle
+import TurgaiAgents
 import TurgaiApplication
 import TurgaiDomain
 import TurgaiHail
+import TurgaiObjects
 import TurgaiPeople
 import TurgaiPersistence
 import TurgaiTelegram
@@ -40,7 +44,7 @@ public struct TurgaiWebConfiguration: Sendable {
     }
 }
 
-/// The configured localhost dashboard and application UI.
+/// The configured localhost dashboard and application UI: built once Turgai's cluster runs, on it.
 public struct TurgaiMainWebApp: Sendable {
     static let sessionCookieName = "turgai_auth"
     static let bootstrapChallengeCookieName = "turgai_bootstrap"
@@ -48,12 +52,12 @@ public struct TurgaiMainWebApp: Sendable {
     let directory: URL
     let auth: TurgaiAuth
     let setup: TurgaiSetupStore
-    let agentProfiles: TurgaiAgentProfileStore
     let agentCredentials: AgentCredentialStore
     let requestLimits: RequestLimitStore
     let channelSecrets: ChannelSecretStore
-    let runtimeSnapshots: @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot]
-    let webChatBridge: TurgaiWebChatBridge
+    let system: ClusterSystem
+    /// Where the agents keep what they did, read for their past turns.
+    let journal: any EventStore
     /// Who's the same human as whom.
     let linking: PersonLinking
     let apiConfiguration: APIConfiguration
@@ -61,25 +65,23 @@ public struct TurgaiMainWebApp: Sendable {
     public init(
         auth: TurgaiAuth,
         directory: URL,
-        agentProfiles: TurgaiAgentProfileStore,
         agentCredentials: AgentCredentialStore,
         requestLimits: RequestLimitStore,
         channelSecrets: ChannelSecretStore,
-        runtimeSnapshots: @escaping @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot] = { _ in [] },
         setup: TurgaiSetupStore,
-        webChatBridge: TurgaiWebChatBridge,
+        system: ClusterSystem,
+        journal: any EventStore,
         linking: PersonLinking,
         apiConfiguration: APIConfiguration = .init()
     ) throws {
         self.directory = directory
         self.auth = auth
         self.setup = setup
-        self.agentProfiles = agentProfiles
         self.agentCredentials = agentCredentials
         self.requestLimits = requestLimits
         self.channelSecrets = channelSecrets
-        self.runtimeSnapshots = runtimeSnapshots
-        self.webChatBridge = webChatBridge
+        self.system = system
+        self.journal = journal
         self.linking = linking
         self.apiConfiguration = apiConfiguration
     }

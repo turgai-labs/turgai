@@ -1,6 +1,13 @@
 import DistributedCluster
 import DurableWorkflows
 import TurgaiDomain
+import VirtualActors
+
+#if canImport(FoundationEssentials)
+    import FoundationEssentials
+#else
+    import Foundation
+#endif
 
 /// Something kept due in a space, as its tasks show it: a chat's reminder, or an object's field,
 /// with when it's due.
@@ -42,39 +49,69 @@ public enum TasksNotice: Codable, Sendable, Equatable {
     case ended(KeptTask.ID)
 }
 
-/// Where a connection following a space's tasks is told what changes there: checked in under the
-/// space's key while it lives, which is for as long as the connection follows them.
-public distributed actor TasksListener {
+/// A space's tasks as they change, as Hail's agent gives its activity: each follower subscribes,
+/// and pulls what's told it. It holds no one who follows, and nothing durable, since the tasks are
+/// their workflows'; it's gone once no one follows them.
+@VirtualActor
+public distributed actor SpaceTasks {
     public typealias ActorSystem = ClusterSystem
+    public typealias Dependency = SpaceID
 
-    private let onNotice: @Sendable (TasksNotice) async -> Void
+    private var pulls = Pulls<TasksNotice>()
 
-    public init(
-        actorSystem: ClusterSystem, following space: SpaceID,
-        onNotice: @escaping @Sendable (TasksNotice) async -> Void
-    ) async {
+    public init(actorSystem: ActorSystem, dependency: SpaceID) async throws {
         self.actorSystem = actorSystem
-        self.onNotice = onNotice
-        await actorSystem.receptionist.checkIn(self, with: .tasks(in: space))
     }
 
-    public distributed func told(_ notice: TasksNotice) async {
-        await onNotice(notice)
+    /// `space`'s tasks, as they change.
+    public static func identified(by space: SpaceID, on actorSystem: ClusterSystem) async throws -> SpaceTasks {
+        try await actorSystem.virtualActors.getActor(
+            identifiedBy: VirtualActorID(rawValue: "tasks:\(space.rawValue.uuidString)"), dependency: space)
     }
-}
 
-extension DistributedReception.Key where Guest == TasksListener {
-    /// Whoever follows `space`'s tasks.
-    static func tasks(in space: SpaceID) -> Self {
-        Self(id: "tasks-\(space.rawValue.uuidString)")
+    /// Its changes from now on, subscribed already: what's read of the tasks after this misses
+    /// nothing.
+    public nonisolated func subscription() async throws -> Subscription<TasksNotice> {
+        let subscriber = UUID()
+        try await subscribe(subscriber)
+        return Subscription(subscriber, pull: { try await self.next(for: $0) }, leave: { try await self.leave($0) })
+    }
+
+    distributed func subscribe(_ subscriber: UUID) {
+        pulls.subscribe(subscriber)
+    }
+
+    /// `subscriber`'s next change: from its backlog, or the next one told. `nil` once it's left.
+    distributed func next(for subscriber: UUID) async -> TasksNotice? {
+        switch pulls.take(subscriber) {
+        case .element(let notice): return notice
+        case .ended: return nil
+        case .empty: return await withCheckedContinuation { pulls.park(subscriber, $0) }
+        }
+    }
+
+    distributed func leave(_ subscriber: UUID) {
+        pulls.leave(subscriber)
+    }
+
+    /// `notice` told to each subscriber.
+    public distributed func told(_ notice: TasksNotice) {
+        pulls.tell(notice)
+    }
+
+    /// Gone once no one follows the space's tasks.
+    public func shouldDeactivate() async -> Bool {
+        pulls.isEmpty
     }
 }
 
 extension ClusterSystem {
     /// Tells whoever follows `space`'s tasks `notice`.
     public func tellTasks(in space: SpaceID, _ notice: TasksNotice) async {
-        for listener in await receptionist.lookup(.tasks(in: space)) {
-            try? await listener.told(notice)
+        do {
+            try await SpaceTasks.identified(by: space, on: self).told(notice)
+        } catch {
+            log.warning("A space's tasks couldn't be told a change", metadata: ["error": "\(error)"])
         }
     }
 }

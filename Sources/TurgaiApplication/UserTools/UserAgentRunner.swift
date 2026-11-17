@@ -2,6 +2,7 @@ import AnyLanguageModel
 import DistributedCluster
 import Hail
 import HailCore
+import TurgaiConversations
 import TurgaiDomain
 import VirtualActors
 
@@ -22,10 +23,10 @@ enum UserAgentRunner {
         sourceAgentID: AgentID
     ) async throws -> String {
         let childID = AgentID(
-            role: Role("user-tool"),
-            contextID: AgentContextID(
-                "\(sourceAgentID.contextID.rawValue)-\(toolName)-\(UUID().uuidString)"
-            )
+            role: .toolRun,
+            contextID: AgentContext.toolRun(
+                toolName, calledBy: sourceAgentID.role, in: try AgentContext.space(of: sourceAgentID), run: UUID()
+            ).contextID
         )
         let agent: Agent = try await actorSystem.agent(childID)
         return try await Agent.answering(as: childID) { try await agent.respond(instruction) }

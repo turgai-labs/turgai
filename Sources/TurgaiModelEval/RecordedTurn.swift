@@ -3,6 +3,7 @@ import DistributedCluster
 import Foundation
 import Hail
 import TurgaiApplication
+import TurgaiConversations
 import TurgaiHail
 import TurgaiObjects
 

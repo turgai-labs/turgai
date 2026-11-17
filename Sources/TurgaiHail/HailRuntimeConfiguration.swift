@@ -80,8 +80,8 @@ public struct HailRuntimeConfiguration: Sendable {
     public func makeAgentRuntimePlugin(
         workspaceRoot: String,
         spawnConfigProvider: @escaping AgentRuntimePlugin.SpawnConfigProvider,
-        modelEndpointProvider: ModelEndpointProvider? = nil,
-        modelSelectionProvider: @escaping ModelSelectionProvider,
+        modelEndpointProvider: AgentRuntimePlugin.ModelEndpointProvider? = nil,
+        modelSelectionProvider: @escaping AgentRuntimePlugin.ModelSelectionProvider,
         definitionProvider: AgentRuntimePlugin.DefinitionProvider? = nil,
         turnToolsProvider: AgentRuntimePlugin.TurnToolsProvider? = nil,
         authority: @escaping @Sendable (ClusterSystem) -> any Authority,

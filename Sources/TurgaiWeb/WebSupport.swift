@@ -6,8 +6,10 @@ import Logging
 import NIOCore
 import ServiceLifecycle
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiPersistence
+import TurgaiSpaces
 import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
@@ -44,26 +46,24 @@ enum TurgaiWebSupport {
         }
     }
 
-    static func channelErrorMessage(_ error: Error) -> String {
+    static func connectionErrorMessage(_ error: Error) -> String {
         switch error {
         case FormValidationError.invalidValue(let field):
             "Enter a valid \(field)."
-        case TurgaiChannelError.invalidLabel:
-            "Give the channel a label and keep it under 120 characters."
-        case TurgaiChannelError.invalidToken:
+        case ConnectionFormError.invalidLabel:
+            "Give the connection a label and keep it under \(ConnectionLabel.maximumLength) characters."
+        case ChannelSecretStore.Refusal.invalidToken:
             "Enter a bot token or leave the token field empty."
-        case TurgaiChannelError.unknownChannel:
-            "That channel no longer exists."
-        case ChannelFormError.unknownBot:
-            "Choose an enabled agent for this connection."
-        case ChannelFormError.unsupportedChannel:
-            "Choose a supported channel type."
+        case let refusal as SpaceRefusal:
+            refusal.description
+        case ConnectionFormError.unsupportedChannel:
+            "Choose a supported kind of connection."
         case TelegramAPIError.httpStatus(401), TelegramAPIError.api(code: 401, message: _):
             "Telegram rejected this bot token. Check it with BotFather and try again."
         case TelegramAPIError.rateLimited:
             "Telegram is temporarily rate-limiting validation. Wait a moment and try again."
         default:
-            unexpected(error, "Could not save the channel")
+            unexpected(error, "Could not save the connection")
         }
     }
 
@@ -95,14 +95,8 @@ enum TurgaiWebSupport {
         switch error {
         case FormValidationError.invalidValue(let field):
             "Enter a valid \(field)."
-        case TurgaiAgentProfileError.invalidName:
-            "Give the agent a name and keep it under 120 characters."
-        case TurgaiAgentProfileError.invalidID(let id):
-            "Invalid agent identifier: \(id)."
-        case TurgaiAgentProfileError.unknownProfile(let id):
-            "Agent \(id) no longer exists."
-        case TurgaiAgentProfileError.cannotDeleteDefaultProfile:
-            "The default agent cannot be deleted."
+        case let refusal as SpaceRefusal:
+            refusal.description
         case ModelRefusal.unavailable(let reason):
             reason.sentence
         case ModelRefusal.configuration(.keyNeeded):
@@ -114,7 +108,7 @@ enum TurgaiWebSupport {
         case is AgentModelError:
             "Enter a valid model."
         default:
-            unexpected(error, "Could not save the agent configuration")
+            unexpected(error, "Could not save the bot")
         }
     }
 
@@ -196,12 +190,11 @@ enum TurgaiWebSupport {
         )
     }
 
-    static func botCard(from profile: TurgaiAgentProfile) -> BotCard {
+    static func botCard(from bot: Bot) -> BotCard {
         BotCard(
-            id: profile.id,
-            name: profile.name,
-            model: profile.model.identifier,
-            availability: profile.availability
+            id: bot.id.description,
+            name: bot.name.rawValue,
+            model: bot.modelIdentifier
         )
     }
 

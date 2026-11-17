@@ -203,20 +203,18 @@ public enum HailAdapterError: Error, Hashable, Sendable {
     case contextUnavailable
 }
 
-/// Resolves one durable Hail agent per normalized Turgai conversation.
-///
-/// The adapter owns Hail identity construction and virtual-actor resolution;
-/// callers only provide a `ConversationID` and receive `HailConversationPeer`.
+/// Resolves one durable Hail agent per Turgai conversation, for each bot that answers in it: its
+/// identity is the bot's role in that conversation of its space.
 public struct HailAgentAdapter: Sendable {
     public let actorSystem: ClusterSystem
     public let agentRole: String
+    /// The space the conversation is one of, as the conversation was given it.
+    public let space: SpaceID
 
-    public init(
-        actorSystem: ClusterSystem,
-        agentRole: String = "conversation"
-    ) {
+    public init(actorSystem: ClusterSystem, agentRole: String, space: SpaceID) {
         self.actorSystem = actorSystem
         self.agentRole = agentRole
+        self.space = space
     }
 
     public func peer(
@@ -264,11 +262,7 @@ public struct HailAgentAdapter: Sendable {
     }
 
     private func agent(for conversationID: ConversationID) async throws -> Agent {
-        let agentID = Self.agentID(
-            for: conversationID,
-            role: agentRole
-        )
-        return try await actorSystem.agent(agentID)
+        try await actorSystem.agent(Self.agentID(for: conversationID, in: space, role: agentRole))
     }
 
     public func deactivate(for conversationID: ConversationID) async throws {
@@ -276,14 +270,29 @@ public struct HailAgentAdapter: Sendable {
         guard try await actorSystem.virtualActors.deactivate(agent) else { return }
     }
 
-    public static func agentID(
-        for conversationID: ConversationID,
-        role: String = "conversation"
-    ) -> AgentID {
-        AgentID(
-            role: Role(role),
-            contextID: AgentContextID(conversationID.stableKey)
-        )
+    /// The agent answering as `role` in the conversation `conversationID` of `space`.
+    public static func agentID(for conversationID: ConversationID, in space: SpaceID, role: String) -> AgentID {
+        AgentID(role: Role(role), contextID: contextID(for: conversationID, in: space))
+    }
+
+    /// The context of the agents answering in the conversation `conversationID` of `space`.
+    public static func contextID(for conversationID: ConversationID, in space: SpaceID) -> AgentContextID {
+        AgentContextID("\(space.rawValue.uuidString)/\(conversationID.stableKey)")
+    }
+
+    /// The conversation `agentID` answers in, and its space: none for an agent that answers in none.
+    public static func conversation(of agentID: AgentID) -> (space: SpaceID, conversation: ConversationID)? {
+        conversation(in: agentID.contextID)
+    }
+
+    /// The conversation an agent of `context` answers in, and its space: none for a context that's
+    /// no conversation's.
+    public static func conversation(in context: AgentContextID) -> (space: SpaceID, conversation: ConversationID)? {
+        let context = context.rawValue
+        guard let slash = context.firstIndex(of: "/"), let space = UUID(uuidString: String(context[..<slash])),
+            let conversation = ConversationID(stableKey: String(context[context.index(after: slash)...]))
+        else { return nil }
+        return (SpaceID(rawValue: space), conversation)
     }
 
     public static func userFacingMessage(for error: any Error) -> String {

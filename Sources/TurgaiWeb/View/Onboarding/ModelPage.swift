@@ -16,16 +16,20 @@ import TurgaiTelegram
 #endif
 
 struct ModelPage: HTMLDocument, Sendable {
+    /// The first space's name, as written.
+    let spaceName: String
     let draft: AgentDraft
     /// The bot being set up, once it's saved.
     let profileID: String?
     let error: String?
 
     init(
+        spaceName: String,
         draft: AgentDraft,
         profileID: String?,
         error: String? = nil
     ) {
+        self.spaceName = spaceName
         self.draft = draft
         self.profileID = profileID
         self.error = error
@@ -39,8 +43,8 @@ struct ModelPage: HTMLDocument, Sendable {
                 header: PageHeader(),
                 footer: PageFooter {
                     SetupFooterContent(
-                        step: 3,
-                        backHref: "/onboarding/register",
+                        step: 4,
+                        backHref: "/onboarding/storage",
                         submitFormID: "model-form",
                         submitLabel: "Continue"
                     )
@@ -48,10 +52,10 @@ struct ModelPage: HTMLDocument, Sendable {
             ) {
                 section(.class("setup-content")) {
                     div(.class("setup-copy")) {
-                        p(.class("eyebrow")) { "The mind" }
-                        h1 { "Give Turgai a mind." }
+                        p(.class("eyebrow")) { "The first space" }
+                        h1 { "Make your first space." }
                         p(.class("lede")) {
-                            "Choose the model behind your companion. You can change its voice and direction later."
+                            "Name it, and choose the model behind its first bot. You can change both later."
                         }
                         div(.class("setup-form-area")) {
                             if let error { p(.class("error")) { error } }
@@ -65,35 +69,33 @@ struct ModelPage: HTMLDocument, Sendable {
 
     @HTMLBuilder private var modelForm: some HTML & Sendable {
         form(.method(.post), .action("/onboarding/model"), .init(name: "id", value: "model-form")) {
+            label(.class("form-field")) {
+                span(.class("field-label")) { "Space name" }
+                input(
+                    .type(.text), .name("spaceName"), .value(spaceName), .placeholder("Family, Work, …"), .required)
+            }
             // The provider, how it's reached, then its model, and how much it's given.
-            ProviderPicker(provider: draft.provider, profileID: profileID)
+            ProviderPicker(provider: draft.provider, profileID: profileID, asking: .setup)
             ProviderConfigurationFields(
-                provider: draft.provider, settings: draft.settings, profileID: profileID, part: .reaching)
-            ModelPicker(modelID: draft.modelID, profileID: profileID)
-            ReasoningEffortField(selected: draft.reasoningEffort)
+                provider: draft.provider, settings: draft.settings, profileID: profileID, asking: .setup, part: .reaching)
+            ModelPicker(modelID: draft.modelID, profileID: profileID, asking: .setup)
             ProviderConfigurationFields(
-                provider: draft.provider, settings: draft.settings, profileID: profileID, part: .tuning)
-            AgentCharacterFields(name: draft.name, persona: draft.persona, instructions: draft.instructions)
+                provider: draft.provider, settings: draft.settings, profileID: profileID, asking: .setup, part: .tuning)
+            AgentCharacterFields(name: draft.name, instructions: draft.instructions)
         }
     }
 
 }
 
-/// The new bot's name, how it speaks, and what guides it.
+/// The new bot's name, and what guides it.
 struct AgentCharacterFields: HTML, Sendable {
     let name: String
-    let persona: String
     let instructions: String
 
     var body: some HTML {
         label(.class("form-field")) {
             span(.class("field-label")) { "Bot name" }
             input(.type(.text), .name("name"), .value(name), .required)
-        }
-        label(.class("form-field")) {
-            span(.class("field-label")) { "Voice" }
-            textarea(.name("persona"), .init(name: "rows", value: "6")) { persona }
-            p(.class("hint")) { "Describe how you want Turgai to speak." }
         }
         label(.class("form-field")) {
             span(.class("field-label")) { "Guidance" }

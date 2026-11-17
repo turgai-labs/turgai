@@ -6,6 +6,7 @@ import TurgaiApplication
 import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
+import TurgaiSpaces
 
 /// Something to ask for, and how to tell it was done.
 struct EvalTask: Sendable {
@@ -55,9 +56,10 @@ struct EvalTask: Sendable {
 
     /// Someone else in the eval's chat, and someone outside it: whom sharing with the chat lets in,
     /// and whom it doesn't.
-    private static let inTheChat = CallScope(.account(UUID()), in: EvalNode.space, as: .member, allowed: [])
+    private static let inTheChat = CallScope(
+        .account(UUID()), in: EvalNode.space, may: .members, groups: [.members], allowed: [])
     private static let outside = CallScope(
-        .account(UUID()), in: SpaceID(), as: .member, allowed: [])
+        .account(UUID()), in: SpaceID(), may: .members, groups: [.members], allowed: [])
 
     /// A planner, whose every plan starts the same way, so an answer can be told to be its.
     private static let planner = EvalAgent(
@@ -209,7 +211,12 @@ struct EvalTask: Sendable {
     private static func state(of addresses: [String], created: [String], on node: EvalNode) async
         -> (text: String, missing: String?)
     {
-        let session = ObjectSession(actorSystem: node.system, objectCatalog: node.objectCatalog)
+        guard
+            let objects = try? await Space.identified(by: EvalNode.space, on: node.system).objects(
+                for: EvalNode.askerID)
+        else { return ("The eval's space isn't there.", nil) }
+        let session = ObjectSession(
+            in: EvalNode.space, objects: objects, actorSystem: node.system)
         let made: String = created.isEmpty ? "none" : created.joined(separator: ", ")
         var text = ""
         var missing: String?
@@ -238,7 +245,7 @@ struct EvalTask: Sendable {
     /// The code each of the `created` objects ended with, when any has code.
     private static func savedCode(of created: [String], on system: ClusterSystem) async throws -> String? {
         guard !created.isEmpty else { return nil }
-        let directory = try await DynamicObjects.resolve(on: system)
+        let directory = try await Space.identified(by: EvalNode.space, on: system).objects(for: EvalNode.askerID)
         var saved: [String] = []
         for handle in created {
             guard let object = try? await directory.existing(ObjectIdentity(rawValue: handle)),
@@ -260,7 +267,9 @@ struct EvalTask: Sendable {
             turns.append(await RecordedTurn.send(asked, to: agent, on: node.system))
         }
         guard let made = turns.flatMap(\.calls).compactMap(Self.createdHandle(from:)).first,
-            let object = try await DynamicObjects.resolve(on: node.system).existing(ObjectIdentity(rawValue: made))
+            let object = try await Space.identified(by: EvalNode.space, on: node.system).objects(
+                for: EvalNode.askerID
+            ).existing(ObjectIdentity(rawValue: made))
         else { return (turns, turns.compactMap(\.failure).first ?? "No object was made.") }
         let access = try await object.access
         turns.append(RecordedTurn(answer: "Who may use \(made): \(access.levels)"))
@@ -347,7 +356,8 @@ struct EvalTask: Sendable {
             var parts: [String] = []
             if !stateMatches(stateText) { parts.append("state: \(Self.inOneLine(stateText).prefix(100))") }
             if !replies.contains(where: answered) {
-                parts.append("reply: \((followUpTurn?.answer ?? "").replacingOccurrences(of: "\n", with: " ").prefix(80))")
+                parts.append(
+                    "reply: \((followUpTurn?.answer ?? "").replacingOccurrences(of: "\n", with: " ").prefix(80))")
             }
             why = parts.joined(separator: "; ")
         }

@@ -38,7 +38,7 @@ struct OverloadTests {
     @Test(.timeLimit(.minutes(1)))
     func eachOverloadIsItsOwnAction() async throws {
         try await withClusterSystem("dynamic", store: MemoryEventStore(), hostsVirtualActors: true) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
             let identity = try await objects.create(
                 name: "Planner", spec: .new(try Script(code: Self.code, type: "Planner")))
             let planner = try await objects.held(identity)

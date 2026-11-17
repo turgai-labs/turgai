@@ -40,11 +40,8 @@ struct PageHeader: HTML, Sendable {
             }
             if let user {
                 nav(.class("app-nav")) {
-                    if case .member = user, case .active(let section) = navigation {
-                        AppHeaderLinks(section: section, scope: .dashboard)
-                    }
-                    if case .administrator = user, case .active(let section) = navigation {
-                        AppHeaderLinks(section: section, scope: .administration)
+                    if case .active(let section) = navigation {
+                        AppHeaderLinks(section: section, user: user)
                     }
                     ThemeSwitch()
                     AccountMenu(username: user.username)
@@ -94,21 +91,22 @@ private struct AccountMenu: HTML, Sendable {
     }
 }
 
+/// Your spaces, for everyone signed in; the server's tools, for its members and administrators;
+/// and its accounts, for its administrators.
 private struct AppHeaderLinks: HTML, Sendable {
-    enum Scope: Sendable {
-        case dashboard
-        case administration
-    }
-
     let section: TurgaiAppSection
-    let scope: Scope
+    let user: AuthenticatedUser
 
     var body: some HTML {
         div(.class("app-nav-links")) {
-            AppNavigationLink(href: "/", label: "Bots", isActive: section == .bots)
-            AppNavigationLink(href: "/tools", label: "Tools", isActive: section == .tools)
-            if case .administration = scope {
-                AppNavigationLink(href: "/channels", label: "Channels", isActive: section == .channels)
+            AppNavigationLink(href: "/", label: "Spaces", isActive: section == .spaces)
+            switch user {
+            case .user:
+                EmptyHTML()
+            case .member:
+                AppNavigationLink(href: "/tools", label: "Tools", isActive: section == .tools)
+            case .administrator:
+                AppNavigationLink(href: "/tools", label: "Tools", isActive: section == .tools)
                 AppNavigationLink(href: "/accounts", label: "Accounts", isActive: section == .accounts)
             }
         }

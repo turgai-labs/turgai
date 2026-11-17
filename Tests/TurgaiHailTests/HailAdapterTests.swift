@@ -89,11 +89,14 @@ struct HailAdapterTests {
             externalAddress: ExternalConversationAddress("chat-42")
         )
 
-        let agentID = HailAgentAdapter.agentID(for: conversationID)
+        let space = SpaceID()
+        let bot = BotID()
+        let agentID = HailAgentAdapter.agentID(for: conversationID, in: space, role: bot.role)
 
-        #expect(agentID.role.rawValue == "conversation")
-        #expect(agentID.contextID.rawValue == "telegram:chat-42")
-        #expect(agentID.rawValue == "conversation-telegram:chat-42")
+        #expect(agentID.role.rawValue == bot.role)
+        #expect(agentID.contextID.rawValue == "\(space.rawValue.uuidString)/telegram:chat-42")
+        #expect(HailAgentAdapter.conversation(of: agentID)?.space == space)
+        #expect(HailAgentAdapter.conversation(of: agentID)?.conversation == conversationID)
     }
 
     @Test
@@ -104,7 +107,7 @@ struct HailAdapterTests {
         let plugin = try configuration.makeAgentRuntimePlugin(
             workspaceRoot: "/tmp/turgai-test-workspace",
             spawnConfigProvider: { AgentSpawnConfig(agentID: $0) },
-            modelSelectionProvider: { _ in
+            modelSelectionProvider: { _, _ in
                 ModelConfiguration(model: try AgentModel("ollama/test"))
             },
             authority: { _ in TurgaiAuthority() }
@@ -160,7 +163,7 @@ struct HailAdapterTests {
                 text: "hello",
                 receivedAt: Date(timeIntervalSince1970: 1)
             ),
-            agentRole: "test"
+            bot: BotID()
         )
 
         let received = Received()
@@ -225,7 +228,10 @@ struct HailAdapterTests {
             Issue.record("a page wasn't given as text")
             return
         }
-        #expect(text == "Page: Example & Domain\nURL: https://example.com\n\nThis domain is for use in documentation examples.")
+        #expect(
+            text
+                == "Page: Example & Domain\nURL: https://example.com\n\nThis domain is for use in documentation examples."
+        )
     }
 
     /// JSON, as any text that isn't a page, is given as its text, bounded as a page is.

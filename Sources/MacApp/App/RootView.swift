@@ -69,7 +69,8 @@ struct LoginView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             LoginFields(
-                username: $store.login.username, password: $store.login.password, mode: form.mode
+                username: $store.login.username, password: $store.login.password,
+                passwordAgain: $store.login.passwordAgain, mode: form.mode
             ) {
                 store.send(.submitTapped)
             }
@@ -149,6 +150,7 @@ struct ColorField: View {
 private struct LoginFields: View {
     @Binding var username: String
     @Binding var password: String
+    @Binding var passwordAgain: String
     let mode: AppFeature.LoginForm.Mode
     let submit: () -> Void
 
@@ -159,6 +161,8 @@ private struct LoginFields: View {
             SecureField("Password", text: $password)
                 .textContentType(mode == .register ? .newPassword : .password)
             if mode == .register {
+                SecureField("Password again", text: $passwordAgain)
+                    .textContentType(.newPassword)
                 Text("Letters, numbers, dots, dashes, or underscores. A password of at least 12 characters.")
                     .font(.caption)
                     .foregroundStyle(Color.turgaiMuted)

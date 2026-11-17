@@ -1,5 +1,5 @@
 {
-  "originHash" : "307034063a4e1ec9200726c7954612da5f8e3a6a24ac4018f8ac107cbb4bdb7a",
+  "originHash" : "ab168ce80cdd8719ee7feb59088d82b49a6d7ba6580fbfe2b1d52d8449b19394",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -70,7 +70,7 @@
       "location" : "https://github.com/akbashev/discoverable-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "f2022e538d54371db918f944650fc6f746034afc"
+        "revision" : "ea5eb6d341874bb67620f817609de3e91fb9a046"
       }
     },
     {
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "cc0cb712e8872e1e120c04d9fe580c2fa4723b0e"
+        "revision" : "4893a48941da5fe548f4896c8224112fe65a6c9d"
       }
     },
     {

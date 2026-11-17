@@ -1,6 +1,7 @@
 import DistributedCluster
 import EventSourcing
 import Testing
+import TurgaiConversations
 import TurgaiDomain
 import TurgaiSpaces
 
@@ -15,8 +16,8 @@ import TurgaiSpaces
 /// The conversation directory: each person's list, kept from the conversations' own events.
 @Suite
 struct ConversationDirectoryTests {
-    /// The agent answering in these conversations.
-    private let agent = AgentProfileID("conversation")
+    /// The bot answering in these conversations.
+    private let helper = ollamaBot("Helper")
 
     /// A person's list has the conversations they're in, each called its title once it has one;
     /// one they left is off it, and each channel's are known.
@@ -24,29 +25,29 @@ struct ConversationDirectoryTests {
         let store = MemoryEventStore()
         try await withClusterSystem("directory", store: store, hostsVirtualActors: true, people: []) { system in
             _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
-                ConversationDirectory(actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
+                ConversationDirectory(
+                    actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
             }
-            let family = try await Spaces(actorSystem: system, turgaisOwn: SpaceID()).make(
-                named: SpaceName("Family")!, by: .ann)
-            func started(_ address: String) async throws -> (ConversationID, Conversation) {
+            let family = try await madeSpace("Family", by: .ann, bot: helper, on: system)
+            let space = try await Space.identified(by: family, on: system)
+            func started(_ address: String) async throws -> ConversationID {
                 let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init(address))
-                let conversation = try await Conversation.resolve(on: system, conversationID: id)
-                try await conversation.start(in: family.id, agent: AgentProfileID("conversation"), by: .ann)
-                return (id, conversation)
+                try await space.start(id, with: nil, by: .ann)
+                return id
             }
-            let (dinnerID, dinner) = try await started("dinner")
-            let (tripID, trip) = try await started("trip")
-            try await trip.title(ConversationTitle("Trip")!, by: .ann)
+            let dinnerID = try await started("dinner")
+            let tripID = try await started("trip")
+            try await space.title(tripID, ConversationTitle("Trip")!, by: .ann)
 
             let annsList = Set([
-                ConversationListing(id: dinnerID, space: family.id, agent: agent, title: nil, people: 1),
-                ConversationListing(id: tripID, space: family.id, agent: agent, title: "Trip", people: 1),
+                ConversationListing(id: dinnerID, space: family, bot: helper.id, title: nil, people: 1),
+                ConversationListing(id: tripID, space: family, bot: helper.id, title: "Trip", people: 1),
             ])
             #expect(try await Set(list(of: .ann, on: system) { Set($0) == annsList }) == annsList)
 
-            try await dinner.leave(.ann)
+            try await space.leave(dinnerID, as: .ann)
             let afterLeaving = [
-                ConversationListing(id: tripID, space: family.id, agent: agent, title: "Trip", people: 1)
+                ConversationListing(id: tripID, space: family, bot: helper.id, title: "Trip", people: 1)
             ]
             #expect(try await list(of: .ann, on: system) { $0 == afterLeaving } == afterLeaving)
 
@@ -63,28 +64,27 @@ struct ConversationDirectoryTests {
         let store = MemoryEventStore()
         try await withClusterSystem("notices", store: store, hostsVirtualActors: true, people: []) { system in
             _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
-                ConversationDirectory(actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
+                ConversationDirectory(
+                    actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
             }
-            let (notices, telling) = AsyncStream<ConversationNotice>.makeStream()
-            let listener = ConversationNoticeListener(actorSystem: system) { telling.yield($0) }
-            try await system.singleton.proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
-                .follow(.ann, with: listener)
+            let notices = try await system.singleton
+                .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+                .subscription(for: .ann)
 
-            let family = try await Spaces(actorSystem: system, turgaisOwn: SpaceID()).make(
-                named: SpaceName("Family")!, by: .ann)
+            let family = try await madeSpace("Family", by: .ann, bot: helper, on: system)
+            let space = try await Space.identified(by: family, on: system)
             let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("dinner"))
-            let dinner = try await Conversation.resolve(on: system, conversationID: id)
-            try await dinner.start(in: family.id, agent: AgentProfileID("conversation"), by: .ann)
-            try await dinner.title(ConversationTitle("Dinner")!, by: .ann)
-            try await dinner.leave(.ann)
+            try await space.start(id, with: nil, by: .ann)
+            try await space.title(id, ConversationTitle("Dinner")!, by: .ann)
+            try await space.leave(id, as: .ann)
 
             var told: [ConversationNotice] = []
             for await notice in notices {
                 told.append(notice)
                 if case .left = notice { break }
             }
-            let listed = ConversationListing(id: id, space: family.id, agent: agent, title: nil, people: 1)
-            let titled = ConversationListing(id: id, space: family.id, agent: agent, title: "Dinner", people: 1)
+            let listed = ConversationListing(id: id, space: family, bot: helper.id, title: nil, people: 1)
+            let titled = ConversationListing(id: id, space: family, bot: helper.id, title: "Dinner", people: 1)
             #expect(told.first == .joined(listed))
             #expect(told.contains(.titled(titled)))
             #expect(told.last == .left(id))
@@ -92,7 +92,7 @@ struct ConversationDirectoryTests {
     }
 
     /// A conversation its only person deletes is off their list, and they're told; one with others
-    /// in it only an admin of its space deletes.
+    /// in it only someone its space lets delete anyone's deletes.
     @Test func aDeletedConversationIsOffTheList() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem("deleting", store: store, hostsVirtualActors: true, people: []) { system in
@@ -100,21 +100,17 @@ struct ConversationDirectoryTests {
                 ConversationDirectory(
                     actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
             }
-            let (notices, telling) = AsyncStream<ConversationNotice>.makeStream()
-            let listener = ConversationNoticeListener(actorSystem: system) { telling.yield($0) }
-            try await system.singleton.proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
-                .follow(.ann, with: listener)
+            let notices = try await system.singleton
+                .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+                .subscription(for: .ann)
 
-            let spaces = Spaces(actorSystem: system, turgaisOwn: SpaceID())
-            let family = try await spaces.make(named: SpaceName("Family")!, by: .ann)
-            let (_, token) = try await spaces.invite(to: family.id, by: .ann, for: .untilUsed)
-            _ = try await spaces.join(family.id, with: token, as: .bob)
+            let family = try await madeSpace("Family", by: .ann, joinedBy: [.bob], bot: helper, on: system)
+            let space = try await Space.identified(by: family, on: system)
             let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("dinner"))
-            let dinner = try await Conversation.resolve(on: system, conversationID: id)
-            try await dinner.start(in: family.id, agent: AgentProfileID("conversation"), by: .bob)
-            try await dinner.add(.person(.ann), by: .bob)
-            await #expect(throws: ConversationRefusal.othersAreInIt) { try await dinner.delete(by: .bob) }
-            try await dinner.delete(by: .ann)
+            try await space.start(id, with: nil, by: .bob)
+            try await space.add(.person(.ann), to: id, by: .bob)
+            await #expect(throws: ConversationRefusal.othersAreInIt) { try await space.delete(id, by: .bob) }
+            try await space.delete(id, by: .ann)
 
             for await notice in notices where notice == .deleted(id) { break }
             #expect(try await list(of: .ann, on: system) { $0.isEmpty }.isEmpty)
@@ -127,7 +123,7 @@ struct ConversationDirectoryTests {
     @Test func whatsSaidPutsAConversationFirst() async throws {
         let directory = ConversationDirectoryStorage.test
         let space = SpaceID()
-        let a = AgentProfileID("a")
+        let a = BotID()
         let dinner = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("dinner"))
         let trip = ConversationID(channel: ChannelID("turgai"), externalAddress: .init("trip"))
         func said(_ text: String, in conversation: ConversationID) -> ConversationDirectoryChange? {
@@ -135,27 +131,27 @@ struct ConversationDirectoryTests {
                 conversationID: conversation, participantID: ParticipantID("ann"), userID: .ann, text: text,
                 receivedAt: Date())
             return ConversationDirectoryChange(
-                .inbox(.turnStarted(PendingConversationMessage(message: message, turnID: TurnID(), agentRole: "a"))),
-                in: conversation)
+                .inbox(.turnStarted(PendingConversationMessage(message: message, turnID: TurnID(), bot: a))),
+                in: conversation, of: space)
         }
         let changes: [ConversationDirectoryChange?] = [
-            .started(dinner, in: space), .joined(dinner, .agent(a)), .joined(dinner, .person(.ann)),
-            .started(trip, in: space), .joined(trip, .agent(a)), .joined(trip, .person(.ann)),
+            .started(dinner, in: space), .joined(dinner, .bot(a)), .joined(dinner, .person(.ann)),
+            .started(trip, in: space), .joined(trip, .bot(a)), .joined(trip, .person(.ann)),
             said("\n  plan dinner  \nfor four", in: dinner), said("pasta?", in: dinner),
         ]
         for (index, change) in changes.enumerated() { try await directory.keep(change, Offset(Int64(index + 1))) }
         #expect(
             try await directory.conversations(.ann) == [
-                ConversationListing(id: dinner, space: space, agent: a, title: "plan dinner", people: 1),
-                ConversationListing(id: trip, space: space, agent: a, title: nil, people: 1),
+                ConversationListing(id: dinner, space: space, bot: a, title: "plan dinner", people: 1),
+                ConversationListing(id: trip, space: space, bot: a, title: nil, people: 1),
             ])
 
         try await directory.keep(.said(trip, firstLine: nil), Offset(9))
         try await directory.keep(.titled(dinner, ConversationTitle("Dinner")!), Offset(10))
         #expect(
             try await directory.conversations(.ann) == [
-                ConversationListing(id: trip, space: space, agent: a, title: nil, people: 1),
-                ConversationListing(id: dinner, space: space, agent: a, title: "Dinner", people: 1),
+                ConversationListing(id: trip, space: space, bot: a, title: nil, people: 1),
+                ConversationListing(id: dinner, space: space, bot: a, title: "Dinner", people: 1),
             ])
     }
 

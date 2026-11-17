@@ -36,13 +36,11 @@ public struct BotSummary: Codable, Sendable, Equatable, Identifiable {
     public let id: String
     public let name: String
     public let model: String
-    public let availability: AgentAvailability
 
-    public init(id: String, name: String, model: String, availability: AgentAvailability) {
+    public init(id: String, name: String, model: String) {
         self.id = id
         self.name = name
         self.model = model
-        self.availability = availability
     }
 }
 
@@ -50,7 +48,6 @@ struct BotCard: Identifiable, Sendable, Equatable {
     let id: String
     let name: String
     let model: String
-    let availability: AgentAvailability
 }
 
 public struct TurgaiDashboardSnapshot: Codable, Sendable, Equatable {
@@ -67,8 +64,10 @@ public struct TurgaiDashboardSnapshot: Codable, Sendable, Equatable {
 }
 
 enum TurgaiAppSection: Sendable {
-    case bots
+    /// Your spaces, and each space's pages.
+    case spaces
+    /// The server's tools.
     case tools
-    case channels
+    /// The server's accounts.
     case accounts
 }

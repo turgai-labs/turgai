@@ -14,7 +14,7 @@ public struct TurgaiScenes: Scene {
     public init() {
         let runtime = Runtime()
         _runtime = State(initialValue: runtime)
-        _app = State(initialValue: AppFeature.store(objects: runtime.objects))
+        _app = State(initialValue: AppFeature.store())
     }
 
     public var body: some Scene {
@@ -24,9 +24,15 @@ public struct TurgaiScenes: Scene {
             Image(nsImage: .menuBarSkylark)
         }
 
+        // Open as the app starts, in front, with the app in the Dock while it is.
         Window("Turgai", id: WindowID.chat) {
             RootView(store: app)
+                .onAppear {
+                    DockPresence.shared.windowOpening()
+                    NSApplication.shared.activate()
+                }
         }
+        .defaultLaunchBehavior(.presented)
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 960, height: 720)
         .commands { PanelCommands(store: app) }

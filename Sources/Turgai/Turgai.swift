@@ -1,7 +1,6 @@
 import ArgumentParser
 import Logging
 import ServiceLifecycle
-import TurgaiObjects
 import TurgaiPersistence
 import TurgaiServer
 import TurgaiWeb
@@ -52,9 +51,6 @@ struct Serve: AsyncParsableCommand {
     @Option(name: .long, help: "Local web server port.")
     var port: Int = 3333
 
-    @Option(name: .long, help: "Port the website object serves on.")
-    var websitePort: Int = 3334
-
     @Option(name: .long, help: "Public API authentication mode: local, api-key, or trusted-proxy.")
     var apiAuth: String = APIAuthMode.local.rawValue
 
@@ -63,7 +59,7 @@ struct Serve: AsyncParsableCommand {
 
     mutating func run() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard (1...65_535).contains(port), (1...65_535).contains(websitePort) else {
+        guard (1...65_535).contains(port) else {
             throw ValidationError("Port must be between 1 and 65535.")
         }
         guard let apiAuthMode = APIAuthMode(rawValue: apiAuth) else {
@@ -85,7 +81,6 @@ struct Serve: AsyncParsableCommand {
             directory: Self.dataDirectory(option: directory, fileManager: .default),
             secretKey: try Self.secretKey(environment: environment),
             port: port,
-            websitePort: WebsitePort(rawValue: websitePort),
             logLevel: level,
             api: APIConfiguration(authMode: apiAuthMode, apiKey: apiKey),
             environment: environment,

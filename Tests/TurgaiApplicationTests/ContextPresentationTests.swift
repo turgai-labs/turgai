@@ -1,7 +1,7 @@
 import Hail
 import Testing
 
-@testable import TurgaiApplication
+@testable import TurgaiConversations
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

@@ -4,14 +4,19 @@ import DistributedCluster
 import DurableWorkflows
 import EventSourcing
 import Hail
+import Hummingbird
+import HummingbirdWebSocket
 import Logging
 import PostgresEventStore
 import PostgresNIO
+import RunningActors
 import SQLiteEventStore
 import SQLiteNIO
 import ServiceLifecycle
+import TurgaiAgents
 import TurgaiApplication
 import TurgaiCalls
+import TurgaiConversations
 import TurgaiDomain
 import TurgaiHail
 import TurgaiMemory
@@ -29,30 +34,22 @@ import VirtualActors
     import Foundation
 #endif
 
-actor TurgaiRuntimeSnapshotSource {
-    private var provider: (@Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot])?
+/// Why an agent has no bot to run as.
+private enum AgentBotError: Error, Sendable, CustomStringConvertible {
+    /// Its role is no bot's.
+    case notABot(Role)
+    /// It answers for nothing in a space.
+    case inNoSpace(AgentID)
+    /// Its space no longer has the bot.
+    case noSuchBot(BotID, in: SpaceID)
 
-    func setProvider(
-        _ provider: @escaping @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot]
-    ) {
-        self.provider = provider
+    var description: String {
+        switch self {
+        case .notABot(let role): "the agent \(role.rawValue) is no bot"
+        case .inNoSpace(let agentID): "the agent \(agentID.rawValue) answers in no space"
+        case .noSuchBot(let bot, let space): "the space \(space.rawValue) has no bot \(bot.rawValue)"
+        }
     }
-
-    /// What each running agent is doing, as `viewer` may see it.
-    func snapshots(as viewer: TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot] {
-        guard let provider else { return [] }
-        return await provider(viewer)
-    }
-}
-
-private enum RuntimeAgentKind {
-    case userTool
-    case profile
-}
-
-private enum TurgaiModelSelectionError: Error, Sendable {
-    case missingProfile(String)
-    case disabledProfile(String)
 }
 
 struct TurgaiAppService: Service, Sendable {
@@ -61,27 +58,24 @@ struct TurgaiAppService: Service, Sendable {
     private let turgaiDirectory: URL
     /// Turgai's database, which the journal is kept in unless it's kept in PostgreSQL.
     private let persistence: TurgaiPersistence
-    private let agentProfiles: TurgaiAgentProfileStore
     private let agentCredentials: AgentCredentialStore
     private let requestLimits: RequestLimitStore
     private let channelSecrets: ChannelSecretStore
-    private let channels: ChannelStorage
     /// Who's the same human as whom.
     private let linking: PersonLinking
-    /// The accounts, which Turgai's own space follows.
+    /// The accounts.
     private let auth: TurgaiAuth
-    /// Turgai's own space, which the dashboard is used in.
-    private let turgaiSpace: SpaceID
     /// Where the space directory is kept: the spaces each person is in.
     private let spaceDirectory: SpaceDirectoryStorage
     /// Where the conversation directory is kept: the conversations each person is in.
     private let conversationDirectory: ConversationDirectoryStorage
-    /// Where what's unread for people's memory is kept: their conversations with exchanges to read.
-    private let unreadMemory: UnreadMemoryStorage
-    private let runtimeSnapshotSource: TurgaiRuntimeSnapshotSource
-    private let objectCatalogSource: TurgaiObjectCatalogSource
-    private let webChatBridge: TurgaiWebChatBridge
-    private let websitePort: WebsitePort
+    /// How far the memory notices have read people's memory events.
+    private let memoryNotices: ProjectionOffset
+    private let connectionPolicy: ProjectionOffset
+    private let setup: TurgaiSetupStore
+    /// Where the main web app is served, once the cluster runs.
+    private let port: Int
+    private let api: APIConfiguration
     /// What the node's log shows.
     private let logLevel: Logger.Level
 
@@ -90,42 +84,36 @@ struct TurgaiAppService: Service, Sendable {
         workspaceRoot: String,
         turgaiDirectory: URL,
         persistence: TurgaiPersistence,
-        agentProfiles: TurgaiAgentProfileStore,
         agentCredentials: AgentCredentialStore,
         requestLimits: RequestLimitStore,
         channelSecrets: ChannelSecretStore,
-        channels: ChannelStorage,
         linking: PersonLinking,
         auth: TurgaiAuth,
-        turgaiSpace: SpaceID,
         spaceDirectory: SpaceDirectoryStorage,
         conversationDirectory: ConversationDirectoryStorage,
-        unreadMemory: UnreadMemoryStorage,
-        runtimeSnapshotSource: TurgaiRuntimeSnapshotSource,
-        objectCatalogSource: TurgaiObjectCatalogSource,
-        webChatBridge: TurgaiWebChatBridge,
-        websitePort: WebsitePort,
+        memoryNotices: ProjectionOffset,
+        connectionPolicy: ProjectionOffset,
+        setup: TurgaiSetupStore,
+        port: Int,
+        api: APIConfiguration,
         logLevel: Logger.Level
     ) {
         self.environment = environment
         self.workspaceRoot = workspaceRoot
         self.turgaiDirectory = turgaiDirectory
         self.persistence = persistence
-        self.agentProfiles = agentProfiles
         self.agentCredentials = agentCredentials
         self.requestLimits = requestLimits
         self.channelSecrets = channelSecrets
-        self.channels = channels
         self.linking = linking
         self.auth = auth
-        self.turgaiSpace = turgaiSpace
         self.spaceDirectory = spaceDirectory
         self.conversationDirectory = conversationDirectory
-        self.unreadMemory = unreadMemory
-        self.runtimeSnapshotSource = runtimeSnapshotSource
-        self.objectCatalogSource = objectCatalogSource
-        self.webChatBridge = webChatBridge
-        self.websitePort = websitePort
+        self.memoryNotices = memoryNotices
+        self.connectionPolicy = connectionPolicy
+        self.setup = setup
+        self.port = port
+        self.api = api
         self.logLevel = logLevel
     }
 
@@ -135,19 +123,15 @@ struct TurgaiAppService: Service, Sendable {
             throw ValidationError("Turgai onboarding is incomplete.")
         }
 
-        guard try await agentProfiles.defaultProfile() != nil else {
-            throw ValidationError("At least one agent must be configured.")
-        }
-        // A profile's endpoint carries its own context window, read with the profile on each turn.
+        // A bot's endpoint carries its own context window, read with the bot on each turn.
         let runtimeConfiguration = HailRuntimeConfiguration()
         let endpointFactory = AgentModelEndpointFactory(
             credentials: agentCredentials, transports: requestLimits.transports)
-        let modelEndpointProvider: ModelEndpointProvider = { request in
-            guard let model = try? AgentModel(request.model),
-                let profile = try await Self.profile(of: request.agentID, in: agentProfiles), profile.model == model
-            else { return nil }
+        let modelEndpointProvider: AgentRuntimePlugin.ModelEndpointProvider = { request, system in
+            let bot = try await Self.bot(of: request.agentID, on: system)
+            guard let model = try? AgentModel(request.model), try bot.model.agentModel == model else { return nil }
             return try await endpointFactory.endpoint(
-                for: profile,
+                for: bot.model,
                 temperature: runtimeConfiguration.temperature,
                 ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive,
                 reasoning: request.reasoning
@@ -184,14 +168,14 @@ struct TurgaiAppService: Service, Sendable {
                 .appendingPathComponent("tools", isDirectory: true)
             let wasmRunnerURL = WasmRunnerLocator.executableURL(environment: environment)
             let telegramFiles = TelegramFiles()
-            // The tools every node has: a turn's, and those object code calls, decided as every
-            // effect is, by the scope of the call.
+            // The tools every node has: a turn's, and those object code calls, each effect decided
+            // by the space of whoever it's on behalf of, as things are then.
             let nodeTools = NodeTools(
                 searchBackend: try Self.makeSearchBackend(environment: environment),
-                authority: { _ in TurgaiAuthority() })
+                authority: { system in TurgaiAuthority(deciding: .bySpace(system)) })
             let userToolRegistry = Self.userToolRegistry(in: userToolsDirectory)
             let turnTools = TurnToolSources(
-                agentProfiles: agentProfiles, endpointFactory: endpointFactory,
+                endpointFactory: endpointFactory,
                 runtimeConfiguration: runtimeConfiguration,
                 telegramFiles: telegramFiles, nodeTools: nodeTools, workspaceRoot: workspaceRoot,
                 wasmRunnerURL: wasmRunnerURL, userToolRegistry: userToolRegistry, linking: linking)
@@ -205,13 +189,18 @@ struct TurgaiAppService: Service, Sendable {
                 // a UUID.
                 spawnConfigProvider: { agentID in Self.spawnConfig(for: agentID) },
                 modelEndpointProvider: modelEndpointProvider,
-                modelSelectionProvider: { request in try await Self.modelSelection(for: request, in: agentProfiles) },
-                definitionProvider: { spawnConfig in try await Self.definition(for: spawnConfig, in: agentProfiles) },
+                modelSelectionProvider: { request, system in
+                    ModelConfiguration(
+                        model: try await Self.bot(of: request.agentID, on: system).model.agentModel)
+                },
+                definitionProvider: { spawnConfig, system in
+                    try await Self.definition(for: spawnConfig, on: system)
+                },
                 turnToolsProvider: { context, actorSystem in
                     try await turnTools.tools(for: context, on: actorSystem)
                 },
-                // No agent has an authority of its own: what a turn may do is what its scope allows.
-                authority: { _ in TurgaiAuthority() }
+                // No agent has an authority of its own: what a turn may do, its space decides.
+                authority: { system in TurgaiAuthority(deciding: .bySpace(system)) }
             )
             // The plugin is the stores' long-term owner: it receives the
             // instances built above and hosts them for every journaled actor.
@@ -221,14 +210,12 @@ struct TurgaiAppService: Service, Sendable {
             )
             let workflowsPlugin = DurableWorkflowsPlugin()
             let channelRuntimePlugin = TurgaiChannelRuntimePlugin(
-                agentProfiles: agentProfiles,
                 secrets: channelSecrets,
                 telegramFiles: telegramFiles,
                 endpoints: endpointFactory,
-                linking: linking,
-                journal: eventStore
+                linking: linking
             )
-
+            // How each platform's connections run, when a space runs one.
             // Nodes find each other through the cluster daemon, as in swift-chat.
             let system = await ClusterSystem("turgai") { settings in
                 settings.bindHost = "127.0.0.1"
@@ -245,10 +232,35 @@ struct TurgaiAppService: Service, Sendable {
                 settings.plugins.install(plugin: virtualActorsPlugin)
                 settings.plugins.install(plugin: DiscoveryPlugin())
                 settings.propagateCallChain()
-                settings.checkObjectAccess()
+                // Whether a call may use an object, the caller's space decides, as things are then.
+                settings.checkObjectAccess(
+                    deciding: ObjectCallDecisions { access, level, chain, system in
+                        let space = try await Space.identified(by: chain.scope.space, on: system)
+                        return try await space.decide(access, level, for: chain)
+                    })
                 settings.plugins.install(plugin: journalPlugin)
                 settings.plugins.install(plugin: runtimePlugin)
                 settings.plugins.install(plugin: workflowsPlugin)
+                // What runs by itself, kept going by its node, and how each kind comes back after a
+                // restart: a connection's run reads its connection again; an object is let in as
+                // whoever it was kept for, as its space decides then.
+                settings.plugins.install(
+                    plugin: RunningActors(recovering: [
+                        .of(
+                            ConnectionRun.self, dependency: ConnectionRun.Config.self,
+                            keptFor: ConnectionRun.Config.self
+                        ) {
+                            run, _, _ in
+                            try await run.recovered()
+                        },
+                        .of(DynamicObject.self, dependency: DynamicObject.Config.self, keptFor: CallScope.self) {
+                            object, config, maker in
+                            let actor = DynamicObject.callActor(for: config.identity, in: config.space)
+                            try await CallChain.$current.withValue(.own(actor, for: maker, in: nil)) {
+                                try await object.recovered()
+                            }
+                        },
+                    ]))
                 settings.plugins.install(plugin: channelRuntimePlugin)
                 settings.plugins.install(plugin: ToolsAPIPlugin(nodeTools.api))
             }
@@ -264,11 +276,13 @@ struct TurgaiAppService: Service, Sendable {
             _ = try await system.singleton.host(ConversationDirectory.self, name: ConversationDirectory.singletonName) {
                 ConversationDirectory(actorSystem: $0, storage: conversationDirectory, journal: eventStore)
             }
-            let unreadMemory = unreadMemory
-            _ = try await system.singleton.host(MemoryPasses.self, name: MemoryPasses.singletonName) {
-                MemoryPasses(
-                    actorSystem: $0, storage: unreadMemory, journal: eventStore, agentProfiles: agentProfiles,
-                    endpoints: endpointFactory)
+            let memoryNotices = memoryNotices
+            let connectionPolicy = connectionPolicy
+            _ = try await system.singleton.host(ConnectionPolicy.self, name: ConnectionPolicy.singletonName) {
+                ConnectionPolicy(actorSystem: $0, offset: connectionPolicy, journal: eventStore)
+            }
+            _ = try await system.singleton.host(MemoryNotices.self, name: MemoryNotices.singletonName) {
+                MemoryNotices(actorSystem: $0, storage: memoryNotices, journal: eventStore)
             }
             // The shared production dependency facade for tool effects. The
             // generic parameter is only a carrier; the stored virtual-actor
@@ -277,17 +291,21 @@ struct TurgaiAppService: Service, Sendable {
                 .live(
                     on: system,
                     models: ChatModels(
-                        agentProfiles: agentProfiles, endpoints: endpointFactory,
+                        endpoints: endpointFactory,
                         temperature: runtimeConfiguration.temperature,
                         ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive)))
             let virtualNode = await VirtualNode(actorSystem: system)
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
-                activities: ScheduleActivities(agentProfiles: agentProfiles)
+                activities: ScheduleActivities()
             )
             let scheduleTimerWorker = await DurableActivityDispatchWorker<TimerWorkflow>(
                 actorSystem: system,
-                activities: TimerActivities(agentProfiles: agentProfiles)
+                activities: TimerActivities()
+            )
+            let memoryReadWorker = await DurableActivityDispatchWorker<MemoryReadWorkflow>(
+                actorSystem: system,
+                activities: MemoryReadActivities()
             )
             let objectScheduleWorker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
                 actorSystem: system,
@@ -297,71 +315,65 @@ struct TurgaiAppService: Service, Sendable {
                 actorSystem: system,
                 activities: ObjectScheduleActivities()
             )
-            let channelRuntime = try await system.turgaiChannelRuntime.dependencies()
-            let connections = channelRuntime.connections
-            await objectCatalogSource.set(channelRuntime.objectCatalog)
-            let turgaiSpace = turgaiSpace
-            let runtimeSnapshotProvider: @Sendable (TurgaiDomain.UserID) async -> [TurgaiAgentRuntimeSnapshot] = {
-                await Self.runtimeSnapshots(on: system, as: $0, in: turgaiSpace)
-            }
-            await runtimeSnapshotSource.setProvider(runtimeSnapshotProvider)
             let clusterService = TurgaiClusterService(
                 system: system,
                 virtualNode: virtualNode,
                 scheduleWorker: scheduleWorker,
                 scheduleTimerWorker: scheduleTimerWorker,
                 objectScheduleWorker: objectScheduleWorker,
-                objectTimerWorker: objectTimerWorker
+                objectTimerWorker: objectTimerWorker,
+                memoryReadWorker: memoryReadWorker
             )
 
             let logger = system.log
-            let websitePort = websitePort
-            let webChatBridge = webChatBridge
             let auth = auth
+            let setup = setup
             // Each part starts on its own: none waits for another, so a slow or failing one holds
             // up nothing else, and messages are taken from the start.
-            let parts = [
-                // The node's built-in objects, reached by the ids they always have.
-                Startup("built-in objects", logger: logger) {
-                    try await Weather.start(on: system)
-                    try await Website.start(on: system, port: websitePort)
-                    try await Scheduler.start(on: system)
-                    try await Timers.start(on: system)
-                },
-                // The objects models made: started again after a restart, each on behalf of
-                // whoever made it, so what they follow and run keeps going.
-                Startup("made objects", logger: logger) {
-                    try await DynamicObjects.resolve(on: system).start()
-                },
+            let parts: [Startup] = [
                 Startup("workflows", logger: logger) {
                     try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
                     try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
                     try await system.workflows.recoverAll(ofType: ObjectScheduleWorkflow.self)
                     try await system.workflows.recoverAll(ofType: ObjectTimerWorkflow.self)
+                    try await system.workflows.recoverAll(ofType: MemoryReadWorkflow.self)
                 },
-                Startup("web chat", logger: logger) {
-                    await webChatBridge.install(
-                        connections,
-                        objectCatalog: channelRuntime.objectCatalog,
-                        channels: channels,
-                        actorSystem: system,
-                        turgaiSpace: turgaiSpace
-                    )
-                    // Every account, as Turgai's space starts following them: what changed while
-                    // it wasn't running too.
-                    try await webChatBridge.follow(try await auth.accounts())
+                // What ran by itself when the node stopped: each comes back by its own id.
+                Startup("running actors", logger: logger) {
+                    await system.runningActors.recover()
+                },
+                // The first space setting up chose, made by whoever set Turgai up, as anyone makes a
+                // space; then setting up holds it no more.
+                Startup("first space", logger: logger) {
+                    guard let first = await setup.firstSpace else { return }
+                    let space = try await Space.identified(by: first.id, on: system)
+                    if try await space.status() == nil {
+                        try await space.make(
+                            named: first.name, by: first.maker, bot: first.bot,
+                            installing: [Scheduler.kind, Timers.kind])
+                    }
+                    try await setup.firstSpaceMade()
                 },
             ]
-            // Every channel's bot, run by the node while its channel is enabled.
-            let telegram = TelegramService(
-                actorSystem: system, dependencies: channelRuntime, channels: channels)
+
+            // The main web app, on the cluster: last, so it stops first, and no request reaches a
+            // draining cluster.
+            let webApp = try TurgaiMainWebApp(
+                auth: auth, directory: turgaiDirectory,
+                agentCredentials: agentCredentials, requestLimits: requestLimits, channelSecrets: channelSecrets,
+                setup: setup, system: system, journal: eventStore,
+                linking: linking, apiConfiguration: api)
+            let router = Router(context: BasicWebSocketRequestContext.self)
+            router.addMiddleware { FileMiddleware(TurgaiWebAssets.publicRoot, searchForIndexHtml: false) }
+            webApp.registerRoutes(on: router)
 
             logger.info("Turgai is ready")
             logger.info("Workspace: \(workspaceRoot)")
             let serviceGroup = ServiceGroup(
                 configuration: ServiceGroupConfiguration(
-                    services: [.init(service: clusterService), .init(service: connections), .init(service: telegram)]
-                        + parts.map { .init(service: $0, successTerminationBehavior: .ignore) },
+                    services: [.init(service: clusterService)]
+                        + parts.map { .init(service: $0, successTerminationBehavior: .ignore) }
+                        + [.init(service: TurgaiWebServer.application(router: router, port: port))],
                     logger: logger
                 )
             )
@@ -432,6 +444,7 @@ struct TurgaiClusterService: Service {
     let scheduleTimerWorker: DurableActivityDispatchWorker<TimerWorkflow>
     let objectScheduleWorker: DurableActivityDispatchWorker<ObjectScheduleWorkflow>
     let objectTimerWorker: DurableActivityDispatchWorker<ObjectTimerWorkflow>
+    let memoryReadWorker: DurableActivityDispatchWorker<MemoryReadWorkflow>
 
     func run() async throws {
         let (shutdownRequests, shutdownContinuation) = AsyncStream<Void>.makeStream()
@@ -475,13 +488,18 @@ struct TurgaiClusterService: Service {
 // MARK: How agents are built
 
 extension TurgaiAppService {
-    /// The profile an agent runs as: its own, or the default one for a helper.
-    static func profile(of agentID: AgentID, in agentProfiles: TurgaiAgentProfileStore) async throws
-        -> TurgaiAgentProfile?
-    {
-        let role = agentID.role.rawValue
-        return role == "user-tool"
-            ? try await agentProfiles.defaultProfile() : try await agentProfiles.profile(id: role)
+    /// The bot an agent runs as, as its space has it now: the bot its role names, in the space its
+    /// context is in; a user's tool thinks as the bot that called it.
+    static func bot(of agentID: AgentID, on system: ClusterSystem) async throws -> Bot {
+        // A user's tool thinks with the bot that called it, in its space.
+        let context = AgentContext(agentID.contextID)
+        let role = if case .toolRun(_, let caller, _, _)? = context { caller } else { agentID.role }
+        guard let id = BotID(role: role.rawValue) else { throw AgentBotError.notABot(role) }
+        guard let space = context?.space else { throw AgentBotError.inNoSpace(agentID) }
+        guard let bot = try await Space.identified(by: space, on: system).bot(id) else {
+            throw AgentBotError.noSuchBot(id, in: space)
+        }
+        return bot
     }
 
     /// The user's tools in `directory`, each problem with one logged.
@@ -501,8 +519,8 @@ extension TurgaiAppService {
     /// An agent's durable configuration, from its identity: a helper's is fresh each time, a
     /// profile agent's is recovered by its conversation.
     static func spawnConfig(for agentID: AgentID) -> AgentSpawnConfig {
-        switch agentID.role.rawValue {
-        case "user-tool":
+        switch agentID.role {
+        case .toolRun:
             AgentSpawnConfig(agentID: agentID, interruptedTurns: .close, snapshotPolicy: .disabled)
         default:
             // Profile agents: their Conversation owns recovery and
@@ -512,95 +530,24 @@ extension TurgaiAppService {
         }
     }
 
-    /// The model an agent's turn runs on: its profile's, or the default profile's for a helper.
-    static func modelSelection(
-        for request: ModelSelectionRequest, in agentProfiles: TurgaiAgentProfileStore
-    ) async throws -> ModelConfiguration {
-        let role = request.agentID.role.rawValue
-        if role == "user-tool" {
-            guard let currentDefault = try await agentProfiles.defaultProfile() else {
-                throw TurgaiModelSelectionError.missingProfile(
-                    TurgaiAgentProfileStore.defaultProfileID
-                )
-            }
-            return ModelConfiguration(
-                model: currentDefault.model,
-                reasoningEffort: currentDefault.reasoningEffort
-            )
+    /// What an agent is: its bot's instructions, or a helper's fixed task.
+    static func definition(for spawnConfig: AgentSpawnConfig, on system: ClusterSystem) async throws
+        -> AgentDefinition?
+    {
+        let role = spawnConfig.agentID.role
+        guard role != .toolRun else {
+            return AgentDefinition(
+                role: role,
+                behavior: .init(
+                    systemPrompt:
+                        "You are an isolated helper agent. Follow the supplied task, return only the useful result, and do not perform side effects.",
+                    execution: AgentExecutionPolicy(sandbox: .readOnly, approvalPolicy: .onRequest)))
         }
-        guard let profile = try await agentProfiles.profile(id: role) else {
-            throw TurgaiModelSelectionError.missingProfile(role)
-        }
-        guard profile.availability == .enabled else {
-            throw TurgaiModelSelectionError.disabledProfile(role)
-        }
-        return ModelConfiguration(
-            model: profile.model,
-            reasoningEffort: profile.reasoningEffort
-        )
-    }
-
-    /// What an agent is: its profile's instructions and persona, or a helper's fixed task.
-    static func definition(
-        for spawnConfig: AgentSpawnConfig, in agentProfiles: TurgaiAgentProfileStore
-    ) async throws -> AgentDefinition? {
-        let role = spawnConfig.agentID.role.rawValue
-        let agentKind: RuntimeAgentKind = role == "user-tool" ? .userTool : .profile
-        let profile: TurgaiAgentProfile?
-        switch agentKind {
-        case .userTool: profile = try await agentProfiles.defaultProfile()
-        case .profile: profile = try await agentProfiles.profile(id: role)
-        }
-        guard let profile else {
-            throw TurgaiModelSelectionError.missingProfile(role)
-        }
-        switch (agentKind, profile.availability) {
-        case (.profile, .disabled):
-            throw TurgaiModelSelectionError.disabledProfile(role)
-        case (.profile, .enabled), (.userTool, _): break
-        }
-        let customInstructions =
-            profile.instructions.trimmed()
-        let personaInstructions =
-            profile.persona?.trimmed() ?? ""
-        let systemPrompt: String
-        switch agentKind {
-        case .userTool:
-            systemPrompt =
-                "You are an isolated helper agent. Follow the supplied task, return only the useful result, and do not perform side effects."
-        case .profile:
-            // The profile's own instructions, blank unless its owner writes some. What the
-            // agent can do comes with its tools and pages, not from here.
-            systemPrompt = customInstructions
-        }
-        let execution: AgentExecutionPolicy
-        switch agentKind {
-        case .userTool:
-            execution = AgentExecutionPolicy(
-                sandbox: .readOnly,
-                approvalPolicy: .onRequest
-            )
-        case .profile:
-            execution = .autonomousWorkspace
-        }
+        // The bot's own instructions, blank unless its space writes some. What the agent can do
+        // comes with its tools and pages, not from here.
+        let bot = try await bot(of: spawnConfig.agentID, on: system)
         return AgentDefinition(
-            role: spawnConfig.agentID.role,
-            behavior: .init(
-                systemPrompt: systemPrompt,
-                execution: execution
-            ),
-            persona: {
-                switch agentKind {
-                case .userTool: return nil
-                case .profile:
-                    guard !personaInstructions.isEmpty else { return nil }
-                    return AgentPersona(
-                        displayName: profile.name,
-                        instructions: personaInstructions
-                    )
-                }
-            }()
-        )
+            role: role, behavior: .init(systemPrompt: bot.instructions.trimmed(), execution: .autonomousWorkspace))
     }
 
     /// What the object writer was asked and wrote, logged.
@@ -620,54 +567,6 @@ extension TurgaiAppService {
                 metadata: ["characters": "\(prompt.count)", "objects": "\(names.joined(separator: ", "))"])
         }
         logger.info("\(event.written)")
-    }
-
-    /// What each running profile agent is doing, for the dashboard, asked on behalf of `viewer`, as
-    /// Turgai's own space settles their scope: none when it can't.
-    static func runtimeSnapshots(
-        on system: ClusterSystem, as viewer: TurgaiDomain.UserID, in turgaiSpace: SpaceID
-    ) async -> [TurgaiAgentRuntimeSnapshot] {
-        // Viewing does nothing: it spends nothing that's allowed once.
-        guard let scope = try? await Space.resolve(on: system, id: turgaiSpace).scope(of: viewer) else { return [] }
-        let entries = (try? await system.agentRuntime.allAgents()) ?? []
-        return await CallChain.$current.withValue(.start(scope, in: nil)) { await snapshots(of: entries, on: system) }
-    }
-
-    private static func snapshots(of entries: [AgentDirectoryEntry], on system: ClusterSystem) async
-        -> [TurgaiAgentRuntimeSnapshot]
-    {
-        await withTaskGroup(
-            of: TurgaiAgentRuntimeSnapshot?.self, returning: [TurgaiAgentRuntimeSnapshot].self
-        ) { group in
-            for entry in entries where entry.role.rawValue != "user-tool" {
-                group.addTask {
-                    guard
-                        let agent: Agent = try? await system.agent(entry.agentID),
-                        let snapshot = try? await agent.contextSnapshot
-                    else {
-                        return nil
-                    }
-                    return TurgaiAgentRuntimeSnapshot(
-                        profileID: entry.role.rawValue,
-                        contextID: snapshot.agentID.contextID.rawValue,
-                        phase: snapshot.state,
-                        currentTool: nil,
-                        contextUsedTokens: snapshot.contextUsage?.usedTokens,
-                        contextLimitTokens: snapshot.contextUsage?.limitTokens ?? nil,
-                        historyTurnCount: snapshot.historyTurnCount,
-                        totalTokens: snapshot.usageSummary.totalTokens
-                    )
-                }
-            }
-
-            var snapshots: [TurgaiAgentRuntimeSnapshot] = []
-            for await snapshot in group {
-                if let snapshot { snapshots.append(snapshot) }
-            }
-            return snapshots.sorted {
-                ($0.profileID, $0.contextID) < ($1.profileID, $1.contextID)
-            }
-        }
     }
 }
 
@@ -701,7 +600,6 @@ extension TurgaiAppService {
 
 /// What a turn's tools are built from: each turn gets them anew, for the agent taking it.
 struct TurnToolSources: Sendable {
-    let agentProfiles: TurgaiAgentProfileStore
     let endpointFactory: AgentModelEndpointFactory
     let runtimeConfiguration: HailRuntimeConfiguration
     let telegramFiles: TelegramFiles
@@ -712,20 +610,22 @@ struct TurnToolSources: Sendable {
     let linking: PersonLinking
 
     func tools(for context: AgentTurnContext, on actorSystem: ClusterSystem) async throws -> TurnTools {
-        let objectCatalog = try await actorSystem.turgaiChannelRuntime.dependencies().objectCatalog
-        // An object's Swift is written by the agent's own model, in a session of its own.
-        let writer: ObjectWriter? =
-            if let profile = try await agentProfiles.profile(id: context.agentID.role.rawValue) {
-                ObjectWriter(
-                    endpoint: try await endpointFactory.endpoint(
-                        for: profile,
-                        temperature: runtimeConfiguration.temperature,
-                        ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive
-                    ),
-                    report: TurgaiAppService.log(_:))
-            } else {
-                nil
-            }
+        // An object's Swift is written by the agent's bot's own model, in a session of its own.
+        let bot = try await TurgaiAppService.bot(of: context.agentID, on: actorSystem)
+        let writer = ObjectWriter(
+            endpoint: try await endpointFactory.endpoint(
+                for: bot.model,
+                temperature: runtimeConfiguration.temperature,
+                ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive
+            ),
+            report: TurgaiAppService.log(_:))
+        // The other bots of its space, which it can ask, as whoever its turn is for may use them.
+        let agents: [Role] =
+            if let space = AgentContext(context.agentID.contextID)?.space, let person = CallChain.current?.scope.person
+            {
+                (try? await Space.identified(by: space, on: actorSystem).bots(for: person).map { Role($0.id.role) })
+                    ?? []
+            } else { [] }
         var tools = try await ConversationTools.make(
             context: context,
             telegramFiles: telegramFiles,
@@ -734,17 +634,13 @@ struct TurnToolSources: Sendable {
             wasmRunnerURL: wasmRunnerURL,
             userTools: userToolRegistry,
             actorSystem: actorSystem,
-            objectCatalog: objectCatalog,
             writer: writer,
-            // Every enabled profile's agent can be asked, as an object.
-            agents: try await agentProfiles.profiles().filter { $0.availability == .enabled }.map {
-                Role($0.id)
-            },
+            agents: agents,
             linking: linking,
-            includeConversationTools: context.agentID.role.rawValue != "user-tool"
+            includeConversationTools: context.agentID.role != .toolRun
         )
         // Hail's files and agent messaging, for the agents granted them.
-        if context.agentID.role.rawValue != "user-tool" {
+        if context.agentID.role != .toolRun {
             tools.tools =
                 try await actorSystem.agentRuntime.agentTools(for: context, actorSystem: actorSystem)
                 + tools.tools

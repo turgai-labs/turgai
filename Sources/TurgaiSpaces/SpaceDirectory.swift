@@ -19,44 +19,43 @@ extension EventTag {
 public enum SpaceDirectoryError: Error, Equatable, Sendable {
     /// A journal that isn't a space's.
     case notASpace(PersistenceID)
-    /// A kept row that isn't a space's member or name.
+    /// A kept row that isn't a space's member.
     case invalidEntry
 }
 
-/// What one of a space's events changes in the directory: what the space is called, whether it's in
-/// use, or who's in it and with what role. Each leaves the directory as it is when it's kept a
-/// second time.
+/// What one of a space's events changes in the directory: who's in it. Each leaves the directory as
+/// it is when it's kept a second time.
 public enum SpaceDirectoryChange: Hashable, Sendable {
-    case named(SpaceID, SpaceName)
-    case status(SpaceID, SpaceStatus)
-    case member(SpaceID, UserID, SpaceRole)
+    case joined(SpaceID, [UserID])
     case left(SpaceID, UserID)
 
     /// What `event`, the space `space`'s, changes: none for what the directory doesn't show.
     public init?(_ event: SpaceEvent, in space: SpaceID) {
         switch event {
-        case .named(let name): self = .named(space, name)
-        case .joined(let person, let role), .roleChanged(let person, let role): self = .member(space, person, role)
+        case .made(_, let admins, _, _): self = .joined(space, admins.elements.sorted { $0.key < $1.key })
+        case .joined(let person, _): self = .joined(space, [person])
         case .left(let person): self = .left(space, person)
-        case .archived: self = .status(space, .archived)
-        case .unarchived: self = .status(space, .active)
-        case .asked, .answered, .spent, .invited, .inviteUsed, .inviteTakenBack: return nil
+        case .named, .connectionAdded, .connectionChanged, .connectionRemoved, .placed, .adminMade, .adminSteppedDown,
+            .groupMade, .permissionsSet, .groupRemoved, .botAdded,
+            .botChanged, .botRemoved, .mainChosen, .asked,
+            .answered, .spent, .invited, .inviteUsed, .inviteTakenBack, .archived, .unarchived:
+            return nil
         }
     }
 }
 
-/// Where the space directory is kept: the named spaces each person is in, and how far into the
-/// spaces' events it's read.
+/// Where the space directory is kept: the spaces each person is in, and how far into the spaces'
+/// events it's read.
 public struct SpaceDirectoryStorage: Sendable {
-    /// The named spaces the person is in, with their role in each, the first joined first.
-    public var spaces: @Sendable (UserID) async throws -> [SpaceListing]
+    /// The spaces the person is in, the first joined first.
+    public var spaces: @Sendable (UserID) async throws -> [SpaceID]
     /// Where it's read the spaces' events up to.
     public var offset: @Sendable () async throws -> Offset
     /// Keeps a change, kept at an offset, then that it's read up to it.
     public var keep: @Sendable (SpaceDirectoryChange?, Offset) async throws -> Void
 
     public init(
-        spaces: @escaping @Sendable (UserID) async throws -> [SpaceListing],
+        spaces: @escaping @Sendable (UserID) async throws -> [SpaceID],
         offset: @escaping @Sendable () async throws -> Offset,
         keep: @escaping @Sendable (SpaceDirectoryChange?, Offset) async throws -> Void
     ) {
@@ -70,7 +69,7 @@ public struct SpaceDirectoryStorage: Sendable {
         let tables = try await SpaceDirectoryTables(in: persistence)
         return Self(
             spaces: { try await tables.spaces(of: $0) },
-            offset: { try await tables.offset() },
+            offset: { try await tables.offset(of: SpaceDirectoryTables.projection) },
             keep: { try await tables.keep($0, at: $1) }
         )
     }
@@ -86,38 +85,24 @@ public struct SpaceDirectoryStorage: Sendable {
     }
 }
 
-/// The directory in Turgai's database: each named space's name, each person in a space with their
-/// role and when they joined, and how far it's read. Each change is one write, and keeping it
-/// again changes nothing, so the offset is kept after it.
+/// The directory in Turgai's database: each person in a space with when they joined, and how far
+/// it's read. Each change is one write, and keeping it again changes nothing, so the offset is kept
+/// after it.
 private struct SpaceDirectoryTables: Sendable {
     // Held, not only its connection: the connection stays open while the tables are used.
     private let persistence: TurgaiPersistence
     private var connection: SQLiteConnection { persistence.connection }
     /// What it's known by among the read sides kept from the journal.
-    private static let projection = "space-directory"
+    static let projection = "space-directory"
 
     init(in persistence: TurgaiPersistence) async throws {
         self.persistence = persistence
         for statement in [
-            """
-            CREATE TABLE IF NOT EXISTS space_names (
-                space TEXT NOT NULL PRIMARY KEY,
-                name  TEXT NOT NULL
-            ) WITHOUT ROWID
-            """,
-            // A space that isn't in use: one with no row is.
-            """
-            CREATE TABLE IF NOT EXISTS space_status (
-                space  TEXT NOT NULL PRIMARY KEY,
-                status TEXT NOT NULL CHECK (status IN ('active', 'archived'))
-            ) WITHOUT ROWID
-            """,
             // A person's spaces, by when they joined: the offset of the event they joined in.
             """
             CREATE TABLE IF NOT EXISTS space_members (
                 person    TEXT    NOT NULL,
                 space     TEXT    NOT NULL,
-                role      TEXT    NOT NULL CHECK (role IN ('member', 'admin')),
                 joined_at INTEGER NOT NULL,
                 PRIMARY KEY (person, space)
             ) WITHOUT ROWID
@@ -133,58 +118,36 @@ private struct SpaceDirectoryTables: Sendable {
         }
     }
 
-    func spaces(of person: UserID) async throws -> [SpaceListing] {
+    func spaces(of person: UserID) async throws -> [SpaceID] {
         try await connection.query(
-            """
-            SELECT space_members.space, name, role, COALESCE(status, 'active') AS status FROM space_members
-            JOIN space_names ON space_names.space = space_members.space
-            LEFT JOIN space_status ON space_status.space = space_members.space
-            WHERE person = ? ORDER BY joined_at
-            """,
-            [.text(person.key)]
+            "SELECT space FROM space_members WHERE person = ? ORDER BY joined_at", [.text(person.key)]
         ).map { row in
-            guard let space = row.column("space")?.string.flatMap(UUID.init(uuidString:)),
-                let name = row.column("name")?.string.flatMap(SpaceName.init),
-                let role = row.column("role")?.string.flatMap(SpaceRole.init(rawValue:)),
-                let status = row.column("status")?.string.flatMap(SpaceStatus.init(rawValue:))
-            else { throw SpaceDirectoryError.invalidEntry }
-            return SpaceListing(id: SpaceID(rawValue: space), name: name, role: role, status: status)
+            guard let space = row.column("space")?.string.flatMap(UUID.init(uuidString:)) else {
+                throw SpaceDirectoryError.invalidEntry
+            }
+            return SpaceID(rawValue: space)
         }
     }
 
-    func offset() async throws -> Offset {
+    /// Where `projection` has read up to.
+    func offset(of projection: String) async throws -> Offset {
         let row = try await connection.query(
-            "SELECT read_up_to FROM projection_offsets WHERE projection = ?", [.text(Self.projection)]
+            "SELECT read_up_to FROM projection_offsets WHERE projection = ?", [.text(projection)]
         ).first
         return Offset(Int64(row?.column("read_up_to")?.integer ?? 0))
     }
 
     func keep(_ change: SpaceDirectoryChange?, at offset: Offset) async throws {
         switch change {
-        case .named(let space, let name)?:
-            _ = try await connection.query(
-                """
-                INSERT INTO space_names (space, name) VALUES (?, ?)
-                ON CONFLICT (space) DO UPDATE SET name = excluded.name
-                """,
-                [.text(space.rawValue.uuidString), .text(name.rawValue)])
-        case .status(let space, let status)?:
-            _ = try await connection.query(
-                """
-                INSERT INTO space_status (space, status) VALUES (?, ?)
-                ON CONFLICT (space) DO UPDATE SET status = excluded.status
-                """,
-                [.text(space.rawValue.uuidString), .text(status.rawValue)])
-        case .member(let space, let person, let role)?:
-            _ = try await connection.query(
-                """
-                INSERT INTO space_members (person, space, role, joined_at) VALUES (?, ?, ?, ?)
-                ON CONFLICT (person, space) DO UPDATE SET role = excluded.role
-                """,
-                [
-                    .text(person.key), .text(space.rawValue.uuidString), .text(role.rawValue),
-                    .integer(Int(offset.rawValue)),
-                ])
+        case .joined(let space, let people)?:
+            for person in people {
+                _ = try await connection.query(
+                    """
+                    INSERT INTO space_members (person, space, joined_at) VALUES (?, ?, ?)
+                    ON CONFLICT (person, space) DO NOTHING
+                    """,
+                    [.text(person.key), .text(space.rawValue.uuidString), .integer(Int(offset.rawValue))])
+            }
         case .left(let space, let person)?:
             _ = try await connection.query(
                 "DELETE FROM space_members WHERE person = ? AND space = ?",
@@ -192,38 +155,33 @@ private struct SpaceDirectoryTables: Sendable {
         case nil:
             break
         }
+        try await read(Self.projection, upTo: offset)
+    }
+
+    /// `projection` read up to `offset`.
+    private func read(_ projection: String, upTo offset: Offset) async throws {
         _ = try await connection.query(
             """
             INSERT INTO projection_offsets (projection, read_up_to) VALUES (?, ?)
             ON CONFLICT (projection) DO UPDATE SET read_up_to = excluded.read_up_to
             """,
-            [.text(Self.projection), .integer(Int(offset.rawValue))])
+            [.text(projection), .integer(Int(offset.rawValue))])
     }
 }
 
 /// The directory of ``SpaceDirectoryStorage/test``.
 private actor MemorySpaceDirectory {
-    private var names: [SpaceID: SpaceName] = [:]
-    private var statuses: [SpaceID: SpaceStatus] = [:]
-    private var members: [UserID: [SpaceID: (role: SpaceRole, joinedAt: Offset)]] = [:]
+    private var members: [UserID: [SpaceID: Offset]] = [:]
     private(set) var offset = Offset.start
 
-    func spaces(of person: UserID) -> [SpaceListing] {
-        (members[person] ?? [:]).sorted { $0.value.joinedAt < $1.value.joinedAt }.compactMap { space, member in
-            names[space].map {
-                SpaceListing(id: space, name: $0, role: member.role, status: statuses[space] ?? .active)
-            }
-        }
+    func spaces(of person: UserID) -> [SpaceID] {
+        (members[person] ?? [:]).sorted { $0.value < $1.value }.map(\.key)
     }
 
     func keep(_ change: SpaceDirectoryChange?, at offset: Offset) {
         switch change {
-        case .named(let space, let name)?:
-            names[space] = name
-        case .status(let space, let status)?:
-            statuses[space] = status
-        case .member(let space, let person, let role)?:
-            members[person, default: [:]][space] = (role, members[person]?[space]?.joinedAt ?? offset)
+        case .joined(let space, let people)?:
+            for person in people { members[person, default: [:]][space] = members[person]?[space] ?? offset }
         case .left(let space, let person)?:
             members[person]?[space] = nil
         case nil:
@@ -233,7 +191,7 @@ private actor MemorySpaceDirectory {
     }
 }
 
-/// The named spaces each person is in, kept from every space's events: one in the cluster, run
+/// The spaces each person is in, kept from every space's events: one in the cluster, run
 /// where the journal can be read, as its projection must be.
 public distributed actor SpaceDirectory: ClusterSingleton {
     public typealias ActorSystem = ClusterSystem
@@ -262,8 +220,8 @@ public distributed actor SpaceDirectory: ClusterSingleton {
         self.refreshInterval = refreshInterval
     }
 
-    /// The named spaces `person` is in, with their role in each, the first joined first.
-    public distributed func spaces(of person: UserID) async throws -> [SpaceListing] {
+    /// The spaces `person` is in, the first joined first.
+    public distributed func spaces(of person: UserID) async throws -> [SpaceID] {
         try await storage.spaces(person)
     }
 

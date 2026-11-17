@@ -40,7 +40,8 @@ struct ObjectScheduleTests {
         let unhandled = Self.ticker.replacingOccurrences(of: "func onTickFired(at time: Date)", with: "func tock()")
         #expect(
             try await Self.refusals(unhandled) == ["no function handles the events of tick: onTickFired(at: Date)"])
-        let mistyped = Self.ticker.replacingOccurrences(of: "onTickFired(at time: Date)", with: "onTickFired(when: Date)")
+        let mistyped = Self.ticker.replacingOccurrences(
+            of: "onTickFired(at time: Date)", with: "onTickFired(when: Date)")
         #expect(try await Self.refusals(mistyped) == ["the event of tick calls onTickFired(at: Date)"])
         // Made from its value, with no type written.
         let made = Self.ticker.replacingOccurrences(
@@ -72,12 +73,12 @@ struct ObjectScheduleTests {
                 actorSystem: node, activities: ObjectScheduleActivities())
             defer { _ = worker }
             let (listener, heard) = try await listening(to: AsAPerson.person.space, on: node)
-            defer { _ = listener }
-            let objects = try await DynamicObjects.resolve(on: node)
+            defer { listener.cancel() }
+            let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
             let identity = try await objects.create(
                 name: "Ticker", spec: .new(try Script(code: Self.ticker, type: "Ticker", uses: Self.uses)))
             let ticker = try await objects.held(identity)
-            let id = ObjectFiring.scheduleID(of: identity, "tick")
+            let id = ObjectFiring.scheduleID(of: identity, in: AsAPerson.person.space, "tick")
             func kept() async throws -> Bool {
                 try await node.workflows.listSchedules(workflow: ObjectScheduleWorkflow.self).contains { $0.id == id }
             }
@@ -136,7 +137,7 @@ struct ObjectScheduleTests {
             let worker = await DurableActivityDispatchWorker<ObjectTimerWorkflow>(
                 actorSystem: node, activities: ObjectScheduleActivities())
             defer { _ = worker }
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
             let identity = try await objects.create(
                 name: "Reminder", spec: .new(try Script(code: Self.reminder, type: "Reminder", uses: Self.uses)))
             let reminder = try await objects.held(identity)

@@ -3,6 +3,7 @@ import Hail
 import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
+import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -16,13 +17,40 @@ import TurgaiObjects
 /// it was: whoever opened the scope asks its space. What Turgai's own objects, schedules and memory
 /// are asked is theirs to check, so it's granted here.
 public struct TurgaiAuthority: Authority {
-    public init() {}
+    /// Who decides exactly a request: what the call carries, for an app with no one else deciding,
+    /// or the space of whoever it's on behalf of, asked as the effect is activated.
+    public enum Deciding: Sendable {
+        /// From the scope the call carries, as its chain started.
+        case fromTheCall
+        /// By the space, as things are now: what its person may do, what's shared with them, and
+        /// what's allowed once, which it spends. Refused, it asks whoever decides.
+        case bySpace(ClusterSystem)
+    }
 
-    public func decision<Effect: ScopedEffect>(on effect: Effect) -> EffectDecision {
-        if let composite = effect as? any CompositeScopedEffect { return composite.decision(using: self) }
+    let deciding: Deciding
+
+    public init(deciding: Deciding = .fromTheCall) {
+        self.deciding = deciding
+    }
+
+    public func decision<Effect: ScopedEffect>(on effect: Effect) async -> EffectDecision {
+        if let composite = effect as? any CompositeScopedEffect { return await composite.decision(using: self) }
         if let request = Self.exactRequest(effect) {
-            guard let scope = CallChain.current?.scope else { return .denied("it's on behalf of no one") }
-            return scope.allows(request) ? .granted : .denied(request.refusal)
+            guard let chain = CallChain.current else { return .denied("it's on behalf of no one") }
+            switch deciding {
+            case .fromTheCall:
+                return chain.scope.allows(request) ? .granted : .denied(request.refusal)
+            case .bySpace(let system):
+                do {
+                    let space = try await Space.identified(by: chain.scope.space, on: system)
+                    switch try await space.decide(request, for: chain) {
+                    case .granted: return .granted
+                    case .refused: return .denied(request.refusal)
+                    }
+                } catch {
+                    return .denied(EffectRefusal("its space couldn't decide: \(error)"))
+                }
+            }
         }
         guard Self.checkedWhereTheyGo.contains(ObjectIdentifier(Effect.self)) else {
             return .denied("the '\(effect.name)' effect is not granted by this authority")

@@ -1,4 +1,5 @@
 import Hail
+import TurgaiAgents
 import TurgaiApplication
 import TurgaiDomain
 import TurgaiHail
@@ -61,15 +62,6 @@ enum OnboardingInput {
 
     private static func address(_ written: String) throws(FormValidationError) -> ServerAddress {
         do { return try ServerAddress(written) } catch { throw .invalidValue("server address") }
-    }
-
-    static func reasoningEffort(from draft: AgentDraft) throws -> ReasoningEffort? {
-        let rawValue = draft.reasoningEffort
-        guard !rawValue.isEmpty else { return nil }
-        guard let effort = try? ReasoningEffort(rawValue) else {
-            throw FormValidationError.invalidValue("reasoning effort")
-        }
-        return effort
     }
 
     static func storageConfiguration(from form: [String: [String]]) throws -> TurgaiStorageConfiguration {

@@ -1,6 +1,8 @@
 import AnyLanguageModel
 import Hail
+import TurgaiAgents
 import TurgaiApplication
+import TurgaiDomain
 
 /// A bot's model as its form gives it, read but not yet checked: where it runs, the model, the key
 /// it's reached with, and the window typed, when one is.

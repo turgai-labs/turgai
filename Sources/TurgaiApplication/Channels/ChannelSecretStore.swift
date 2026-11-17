@@ -14,6 +14,12 @@ import TurgaiPersistence
 public actor ChannelSecretStore {
     private let storage: ChannelTokenStorage
 
+    /// Why a token isn't kept.
+    public enum Refusal: Error, Equatable, Sendable {
+        /// It's empty.
+        case invalidToken
+    }
+
     public init(storage: ChannelTokenStorage) {
         self.storage = storage
     }
@@ -21,7 +27,7 @@ public actor ChannelSecretStore {
     public func setToken(for channelID: UUID, token: String) async throws {
         let trimmed = token.trimmed()
         guard !trimmed.isEmpty else {
-            throw TurgaiChannelError.invalidToken
+            throw Refusal.invalidToken
         }
         try await storage.set(trimmed, channelID)
     }

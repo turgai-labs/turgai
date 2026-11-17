@@ -1,16 +1,24 @@
 import Crypto
+import DistributedCluster
+import DurableWorkflows
+import EventSourcing
 import HTTPTypes
+import Hail
 import Hummingbird
 import HummingbirdWebSocket
 import NIOCore
+import TurgaiAgents
 import TurgaiApplication
 import TurgaiCalls
+import TurgaiConversations
 import TurgaiDomain
+import TurgaiHail
 import TurgaiMemory
 import TurgaiModels
 import TurgaiObjects
 import TurgaiPeople
 import TurgaiSpaces
+import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -29,22 +37,15 @@ extension TurgaiMainWebApp {
         // Every API call comes from a client the API's configuration lets in.
         let api = router.group("api/v1").add(
             middleware: PublicAPIAuthorization(configuration: dependencies.apiConfiguration))
-        api.get("bots") { _, _ in
-            let bots = try await dependencies.agentProfiles.profiles()
-                .filter { $0.availability == .enabled }
-                .map { TurgaiModels.Bot(id: .init(rawValue: $0.id), name: $0.name) }
-            return try publicAPIResponse(bots)
-        }
-        // Someone who doesn't sign in, coming in as a guest: one of Turgai's own space, with the
-        // cookie that says they're them from now on.
-        api.post("guests") { _, _ in
+        // Someone who doesn't sign in, coming into a space as a guest, in its guests group: allowed
+        // what its admins allow that group, nothing unless they do. With the cookie that says
+        // they're them from now on.
+        api.post("spaces/:space/guests") { _, context in
+            guard let id = spaceID(in: context) else { return noSuchSpace() }
+            let space = try await Space.identified(by: id, on: dependencies.system)
+            guard try await space.status() != nil else { return noSuchSpace() }
             let (guest, token) = try await dependencies.auth.newGuest()
-            do {
-                try await dependencies.webChatBridge.admit(guest: guest)
-            } catch TurgaiWebChatBridgeError.runtimeUnavailable {
-                return publicAPIErrorResponse(
-                    status: .serviceUnavailable, code: "runtime_unavailable", message: "Turgai isn't running yet.")
-            }
+            try await space.admit(guest, into: NonEmptySet(.guests))
             var response = Response(status: .created)
             response.setCookie(TurgaiWebSupport.guestCookie(token))
             return response
@@ -54,7 +55,7 @@ extension TurgaiMainWebApp {
             guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
                 return signInRequired()
             }
-            let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
+            let names = ParticipantNames(auth: dependencies.auth, in: nil)
             return try publicAPIResponse(Me(id: person.key, name: try await names.name(of: .person(person))))
         }
         // What's remembered about whoever's signed in, and whether they're remembered; remembering
@@ -63,59 +64,54 @@ extension TurgaiMainWebApp {
             guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
                 return signInRequired()
             }
-            let bridge = dependencies.webChatBridge
-            return try publicAPIResponse(
-                MemorySummary(
-                    try await bridge.remembered(about: person), remembering: try await bridge.remembering(of: person)))
+            return try publicAPIResponse(try await memory(of: person, on: dependencies.system))
         }
         api.put("me/memory/remembering") { request, context in
             guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
                 return signInRequired()
             }
             let input = try await body(SetRememberingRequest.self, of: request, context: context)
-            try await dependencies.webChatBridge.setRemembering(Remembering(input.remembering), for: person)
+            try await User.identified(by: person, on: dependencies.system).setRemembering(
+                Remembering(input.remembering))
             return Response(status: .noContent)
         }
         api.delete("me/memory") { request, _ in
             guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
                 return signInRequired()
             }
-            try await dependencies.webChatBridge.forgetMemory(of: person)
+            _ = try await User.identified(by: person, on: dependencies.system).forgetMemory()
             return Response(status: .noContent)
+        }
+        // What a provider offers, asked with what's chosen so far for a bot's model: with the key
+        // typed, or else the one the bot named keeps, when it's for the same place.
+        api.post("models") { request, context in
+            guard let person = await signedInPerson(from: request, auth: dependencies.auth) else {
+                return signInRequired()
+            }
+            let input = try await body(ModelsRequest.self, of: request, context: context)
+            var saved: AgentProviderConfiguration?
+            if let space = input.spaceID.flatMap(TurgaiDomain.SpaceID.init), let id = input.botID,
+                let bot = TurgaiDomain.BotID(id.rawValue)
+            {
+                saved = try? await Space.identified(by: space, on: dependencies.system).bots(for: person)
+                    .first { $0.id == bot }?.model.location
+            }
+            let draft = AgentDraft(
+                BotConfiguration(
+                    name: "", instructions: "",
+                    model: ModelChoice(
+                        provider: input.provider, address: input.address, apiKey: input.apiKey, model: "")))
+            let answer: ModelsAnswer =
+                switch await ModelSearch.search(draft, saved: saved, credentials: dependencies.agentCredentials) {
+                case .found(let models): .found(models.map(\.rawValue))
+                case .invalid(let field): .unavailable("The \(field) isn't valid.")
+                case .unavailable(let reason): .unavailable(reason.sentence)
+                }
+            return try publicAPIResponse(answer)
         }
         registerConversations(on: api.group("conversations"), dependencies: dependencies)
         registerLinks(on: api.group("me/links"), dependencies: dependencies)
         registerSpaces(on: api.group("spaces"), dependencies: dependencies)
-        registerMessages(on: api.group("conversations/:id/messages"), dependencies: dependencies)
-        // What the signed-in account may read, listed on its behalf in its chat with a bot: the
-        // default one, or `botID`'s.
-        api.get("objects") { request, _ in
-            guard let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: dependencies.auth)
-            else { return publicAPIUnauthorizedResponse() }
-            let entries = try await dependencies.webChatBridge.objects(listedTo: .account(account.id))
-            return try publicAPIResponse(entries.map(ObjectListing.init))
-        }
-        // Shares one of the signed-in account's objects with everyone, or takes that back: only
-        // one who may change it does.
-        api.post("objects/:id/share") { request, context in
-            guard let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: dependencies.auth)
-            else { return publicAPIUnauthorizedResponse() }
-            guard let id = context.parameters.get("id") else { return publicAPIUnauthorizedResponse() }
-            let sharing = try await body(ObjectSharingRequest.self, of: request, context: context)
-            let level: AccessLevel? =
-                switch sharing.everyone {
-                case .read: .read
-                case .write: .write
-                case .none: nil
-                }
-            do {
-                try await dependencies.webChatBridge.share(
-                    ObjectIdentity(rawValue: id), withEveryone: level, by: .account(account.id))
-            } catch is NotAllowed {
-                return Response(status: .forbidden)
-            }
-            return Response(status: .noContent)
-        }
         registerChatSocket(on: router, dependencies: dependencies)
         registerLiveSocket(on: router, dependencies: dependencies)
     }
@@ -130,8 +126,9 @@ extension TurgaiMainWebApp {
             guard dependencies.apiConfiguration.authorizes(request),
                 let owner = await chatOwner(from: request, auth: dependencies.auth),
                 try await apiConversation(
-                    request.uri.queryParameters["conversationID"].map(String.init), readBy: owner.person,
-                    bridge: dependencies.webChatBridge) != nil
+                    request.uri.queryParameters["conversationID"].map(String.init),
+                    in: request.uri.queryParameters["space"].map(String.init), readBy: owner.person,
+                    dependencies: dependencies) != nil
             else {
                 return .dontUpgrade
             }
@@ -139,26 +136,25 @@ extension TurgaiMainWebApp {
         } onUpgrade: { inbound, outbound, context in
             guard let owner = await chatOwner(from: context.request, auth: dependencies.auth),
                 let conversation = try await apiConversation(
-                    context.request.uri.queryParameters["conversationID"].map(String.init), readBy: owner.person,
-                    bridge: dependencies.webChatBridge)
+                    context.request.uri.queryParameters["conversationID"].map(String.init),
+                    in: context.request.uri.queryParameters["space"].map(String.init), readBy: owner.person,
+                    dependencies: dependencies)
             else {
                 try await outbound.close(.policyViolation, reason: "Conversation not found")
                 return
             }
-            let session: TurgaiConnections.WebSession
-            do {
-                session = try await dependencies.webChatBridge.openSession(id: WebSessionID())
-            } catch {
-                try await outbound.close(.policyViolation, reason: "Chat runtime unavailable")
-                return
-            }
+            let session = LiveSession(
+                id: UUID().uuidString, actorSystem: dependencies.system, linking: dependencies.linking, source: .web)
+            // It runs while the socket does: its input finishes as the socket closes.
+            async let _: Void = session.run()
             let userID = owner.person
-            let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
+            let names = ParticipantNames(auth: dependencies.auth, in: conversation.space, on: dependencies.system)
             do {
                 let history = try await publicAPIMessages(
-                    try await dependencies.webChatBridge.conversationHistory(of: conversation.domainID, for: userID),
+                    try await conversation.reached(on: dependencies.system).history(
+                        of: conversation.domainID, for: userID),
                     names: names)
-                let status = try await dependencies.webChatBridge.conversationStatus(
+                let status = try await conversation.reached(on: dependencies.system).status(
                     of: conversation.domainID, for: userID)
                 // The durable snapshot before live delivery, which could otherwise come first and be
                 // replaced by it.
@@ -167,7 +163,7 @@ extension TurgaiMainWebApp {
                 if case .running = status {
                     try await writer.write(ChatLiveFragment.started())
                 }
-                guard try await open(conversation, on: session) else {
+                guard try await open(conversation, for: userID, on: session) else {
                     session.input.finish()
                     try await outbound.close(.policyViolation, reason: "Could not open conversation")
                     return
@@ -206,22 +202,20 @@ extension TurgaiMainWebApp {
                 try await outbound.close(.policyViolation, reason: "Sign in first")
                 return
             }
-            let bridge = dependencies.webChatBridge
-            let session: TurgaiConnections.WebSession
-            do {
-                session = try await bridge.openSession(id: WebSessionID())
-            } catch {
-                try await outbound.close(.policyViolation, reason: "Chat runtime unavailable")
-                return
-            }
+            let session = LiveSession(
+                id: UUID().uuidString, actorSystem: dependencies.system, linking: dependencies.linking, source: .web)
+            // It runs while the socket does: its input finishes as the socket closes.
+            async let _: Void = session.run()
             let person = owner.person
-            let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
             let writer = PublicChatSocketWriter(outbound: outbound)
             let shown = ShownConversation()
             do {
                 // Notices about the person's conversations in Turgai's apps. What's said in the one
                 // it has open, and leaving it, come as that conversation's own events.
-                let listener = try await bridge.followConversations(of: person) { notice in
+                let directory = try await dependencies.system.singleton.proxy(
+                    ConversationDirectory.self, name: ConversationDirectory.singletonName)
+                let notices = try await directory.subscription(for: person)
+                @Sendable func tell(_ notice: ConversationNotice) async {
                     let payload: TurgaiModels.ChatEvent.Payload?
                     switch notice {
                     case .joined(let listing) where listing.id.channel == turgaiChannel:
@@ -245,10 +239,16 @@ extension TurgaiMainWebApp {
                     guard let payload else { return }
                     try? await writer.write(.init(payload: payload))
                 }
-                defer { Task { try? await bridge.unfollow(listener) } }
+                let telling = Task {
+                    for await notice in notices { await tell(notice) }
+                }
+                defer {
+                    telling.cancel()
+                    await notices.cancel()
+                }
                 // What it's told about besides the conversation it shows, while it's joined.
                 let topics = JoinedTopics()
-                defer { Task { await topics.leaveAll() } }
+                defer { await topics.leaveAll() }
 
                 try await withThrowingTaskGroup(of: Void.self) { group in
                     group.addTask {
@@ -258,10 +258,10 @@ extension TurgaiMainWebApp {
                                 let command = try? JSONDecoder().decode(TurgaiModels.ChatCommand.self, from: data)
                             else { continue }
                             switch command {
-                            case .open(let id):
+                            case .open(let space, let id):
                                 guard
                                     let conversation = try await apiConversation(
-                                        id.rawValue, readBy: person, bridge: bridge)
+                                        id.rawValue, in: space.rawValue, readBy: person, dependencies: dependencies)
                                 else {
                                     try await writer.write(
                                         publicAPIErrorEvent(
@@ -272,13 +272,15 @@ extension TurgaiMainWebApp {
                                 if let before = await shown.conversation {
                                     let detached = ConversationInputReceipt()
                                     await session.input.send(
-                                        ConversationInputDelivery(input: .detach(before.domainID), receipt: detached))
+                                        ConversationInputDelivery(
+                                            in: before.space, input: .detach(before.domainID), receipt: detached))
                                     _ = await detached.wait()
                                 }
                                 await shown.show(conversation)
                                 try await writeOpened(
-                                    conversation, for: person, on: writer, names: names, bridge: bridge)
-                                guard try await open(conversation, on: session) else {
+                                    conversation, for: person, on: writer, names: conversation.names,
+                                    dependencies: dependencies)
+                                guard try await open(conversation, for: person, on: session) else {
                                     try await writer.write(
                                         publicAPIErrorEvent(
                                             conversationID: id, code: "conversation_unavailable",
@@ -293,6 +295,7 @@ extension TurgaiMainWebApp {
                                 let receipt = ConversationInputReceipt()
                                 await session.input.send(
                                     ConversationInputDelivery(
+                                        in: conversation.space,
                                         input: .answer(
                                             conversationID: conversation.domainID, AccessRequestID(id), answer.domain,
                                             by: person),
@@ -300,7 +303,7 @@ extension TurgaiMainWebApp {
                                 _ = await receipt.wait()
                             case .push(let ref, let ask):
                                 let reply = await answer(
-                                    ask, for: person, topics: topics, writer: writer, bridge: bridge)
+                                    ask, for: person, topics: topics, writer: writer, dependencies: dependencies)
                                 try await writer.write(.init(payload: .reply(ref: ref, reply: reply)))
                             }
                         }
@@ -314,7 +317,8 @@ extension TurgaiMainWebApp {
                                     event: delivery.event,
                                     publicConversationID: conversation.publicID,
                                     author: try await author(
-                                        of: delivery.event, answeredBy: conversation.agent, names: names)
+                                        of: delivery.event, answeredBy: conversation.bot?.id,
+                                        names: conversation.names)
                                 ).event
                             {
                                 try await writer.write(event)
@@ -340,67 +344,73 @@ extension TurgaiMainWebApp {
         // The person's conversations in Turgai's apps, the one something was last said in first.
         conversations.get { request, _ in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
-            let listed = try await dependencies.webChatBridge.conversations(of: owner.person)
+            let listed = try await dependencies.system.singleton
+                .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
+                .conversations(of: owner.person)
             return try publicAPIResponse(
                 listed.filter { $0.id.channel == turgaiChannel }.map(TurgaiModels.Conversation.init))
         }
 
-        // A new conversation, in a space the person is in, or Turgai's own, with them its first.
+        // A new conversation, in a space the person is in, with them its first:
+        // answered by the bot asked for, or the space's main one.
         conversations.post { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
             let input = try await body(TurgaiModels.CreateConversationRequest.self, of: request, context: context)
-            let profile: TurgaiAgentProfile?
-            if let botID = input.botID {
-                profile = try await dependencies.agentProfiles.profile(id: botID.rawValue)
+            guard let startedIn = TurgaiDomain.SpaceID(input.spaceID) else { return noSuchSpace() }
+            let bot: TurgaiDomain.BotID?
+            if let written = input.botID {
+                guard let id = TurgaiDomain.BotID(written.rawValue) else { return noSuchBot() }
+                bot = id
             } else {
-                profile = try await dependencies.agentProfiles.defaultProfile()
-            }
-            guard let profile, profile.availability == .enabled else {
-                return publicAPIErrorResponse(
-                    status: .notFound,
-                    code: "bot_not_found",
-                    message: "The requested bot does not exist or is disabled."
-                )
-            }
-            let space: TurgaiDomain.SpaceID?
-            if let written = input.spaceID {
-                guard let id = TurgaiDomain.SpaceID(written) else { return noSuchSpace() }
-                space = id
-            } else {
-                space = nil
+                bot = nil
             }
             let conversationID = TurgaiDomain.ConversationID(
                 channel: turgaiChannel, externalAddress: .init(UUID().uuidString))
-            let startedIn: TurgaiDomain.SpaceID
+            let space = try await Space.identified(by: startedIn, on: dependencies.system)
             do {
-                startedIn = try await dependencies.webChatBridge.startConversation(
-                    conversationID, in: space, agent: AgentProfileID(profile.id), by: owner.person)
+                try await space.start(conversationID, with: bot, by: owner.person)
             } catch let refusal as SpaceRefusal {
                 return spaceRefused(refusal)
+            } catch let refusal as ConversationRefusal {
+                return conversationRefused(refusal)
             }
             return try publicAPIResponse(
                 TurgaiModels.Conversation(
-                    id: .init(rawValue: conversationID.externalAddress.rawValue), botID: .init(rawValue: profile.id),
+                    id: .init(rawValue: conversationID.externalAddress.rawValue),
+                    botID: try await space.answeringBot(of: conversationID).map { .init(rawValue: $0.id.role) },
                     spaceID: startedIn.api, people: 1),
                 status: .created
             )
         }
+    }
+
+    /// One of a space's conversations, through the API, by the space and the id it was given: reading
+    /// it, titling it, who's in it, adding someone, and leaving it.
+    private func registerSpaceConversations(
+        on conversations: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        /// The conversation `context` names, as `person` reads it.
+        @Sendable func named(in context: BasicWebSocketRequestContext, readBy person: TurgaiDomain.UserID)
+            async throws -> APIConversation?
+        {
+            try await apiConversation(
+                context.parameters.get("id"), in: context.parameters.get("space"), readBy: person,
+                dependencies: dependencies)
+        }
 
         conversations.get(":id") { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
-            guard
-                let conversation = try await apiConversation(
-                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
-            else { return conversationNotFound() }
+            guard let conversation = try await named(in: context, readBy: owner.person) else {
+                return conversationNotFound()
+            }
             return try publicAPIResponse(conversation.info)
         }
 
         conversations.patch(":id") { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
-            guard
-                let conversation = try await apiConversation(
-                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
-            else { return conversationNotFound() }
+            guard let conversation = try await named(in: context, readBy: owner.person) else {
+                return conversationNotFound()
+            }
             let input = try await body(TurgaiModels.TitleConversationRequest.self, of: request, context: context)
             guard let title = ConversationTitle(input.title) else {
                 return publicAPIErrorResponse(
@@ -408,46 +418,36 @@ extension TurgaiMainWebApp {
                     message: "A conversation's title is some words, at most \(ConversationTitle.maximumLength) letters."
                 )
             }
-            try await dependencies.webChatBridge.title(conversation.domainID, title, by: owner.person)
+            try await conversation.reached(on: dependencies.system).title(
+                conversation.domainID, title, by: owner.person)
             return Response(status: .noContent)
         }
 
-        // Who's in it: its agent, and its people.
+        // Who's in it: its bot, and its people.
         conversations.get(":id/participants") { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
-            guard
-                let conversation = try await apiConversation(
-                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
-            else { return conversationNotFound() }
-            let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
+            guard let conversation = try await named(in: context, readBy: owner.person) else {
+                return conversationNotFound()
+            }
             var participants: [ParticipantSummary] = []
             for participant in conversation.outline.participants {
-                participants.append(try await names.summary(of: participant))
+                participants.append(try await conversation.names.summary(of: participant))
             }
             return try publicAPIResponse(
                 participants.sorted { ($0.kind == .agent ? 0 : 1, $0.name) < ($1.kind == .agent ? 0 : 1, $1.name) })
         }
 
-        // Someone added by one of its people: a person in its space, or an agent.
+        // Someone added by one of its people: a person of its space, or one of its bots.
         conversations.post(":id/participants") { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
-            guard
-                let conversation = try await apiConversation(
-                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
-            else { return conversationNotFound() }
+            guard let conversation = try await named(in: context, readBy: owner.person) else {
+                return conversationNotFound()
+            }
             let input = try await body(ParticipantRef.self, of: request, context: context)
             guard let participant = Participant(input) else { return noSuchParticipant() }
-            if case .agent(let agent) = participant {
-                guard let profile = try await dependencies.agentProfiles.profile(id: agent.rawValue),
-                    profile.availability == .enabled
-                else {
-                    return publicAPIErrorResponse(
-                        status: .notFound, code: "bot_not_found",
-                        message: "The requested bot does not exist or is disabled.")
-                }
-            }
             do {
-                try await dependencies.webChatBridge.add(participant, to: conversation.domainID, by: owner.person)
+                try await conversation.reached(on: dependencies.system).add(
+                    participant, to: conversation.domainID, by: owner.person)
             } catch let refusal as ConversationRefusal {
                 return conversationRefused(refusal)
             } catch let refusal as SpaceRefusal {
@@ -459,11 +459,10 @@ extension TurgaiMainWebApp {
         // The person leaving it: it's off their list, and they no longer read it.
         conversations.delete(":id/me") { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
-            guard
-                let conversation = try await apiConversation(
-                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
-            else { return conversationNotFound() }
-            try await dependencies.webChatBridge.leave(conversation.domainID, as: owner.person)
+            guard let conversation = try await named(in: context, readBy: owner.person) else {
+                return conversationNotFound()
+            }
+            try await conversation.reached(on: dependencies.system).leave(conversation.domainID, as: owner.person)
             return Response(status: .noContent)
         }
     }
@@ -520,64 +519,105 @@ extension TurgaiMainWebApp {
 
     /// The signed-in person's spaces: their list, making one, renaming it, leaving it, inviting
     /// someone, the invites that work, taking one back, and joining with one.
+    /// Everything under `/spaces`: the spaces themselves, their bots, people and connections here,
+    /// and their conversations, messages and objects in parts of their own.
     private func registerSpaces(
         on spaces: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
     ) {
+        registerSpaceConversations(on: spaces.group(":space/conversations"), dependencies: dependencies)
+        registerMessages(on: spaces.group(":space/conversations/:id/messages"), dependencies: dependencies)
+        registerSpaceObjects(on: spaces, dependencies: dependencies)
         let auth = dependencies.auth
-        let bridge = dependencies.webChatBridge
+        let system = dependencies.system
 
-        /// What `request`'s person asks of spaces, refused when no one signed in or the runtime
-        /// isn't running, and said back as the API says it.
+        /// What `request`'s person asks of spaces, refused when no one signed in, and said back as
+        /// the API says it.
         @Sendable func answering(
-            _ request: Request, _ answer: (TurgaiDomain.UserID, Spaces) async throws -> Response
+            _ request: Request, _ answer: (TurgaiDomain.UserID) async throws -> Response
         ) async throws -> Response {
             guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
             do {
-                return try await answer(person, try await bridge.spaces())
+                return try await answer(person)
             } catch let refusal as SpaceRefusal {
                 return spaceRefused(refusal)
-            } catch TurgaiWebChatBridgeError.runtimeUnavailable {
-                return publicAPIErrorResponse(
-                    status: .serviceUnavailable, code: "runtime_unavailable", message: "Turgai isn't running yet.")
             }
         }
 
+        /// The space `id`, as `person`'s list shows it, the API's way: refused when they're not in it.
+        @Sendable func summary(of space: Space, for person: TurgaiDomain.UserID) async throws -> SpaceSummary {
+            guard let listing = try await space.listing(for: person) else { throw SpaceRefusal.notInIt }
+            return SpaceSummary(listing)
+        }
+
+        // The spaces they're in, the first joined first, each as it lists itself for them.
         spaces.get { request, _ in
-            try await answering(request) { person, spaces in
-                try publicAPIResponse(try await spaces.list(for: person).map { SpaceSummary($0, in: spaces) })
+            try await answering(request) { person in
+                let ids = try await system.singleton.proxy(SpaceDirectory.self, name: SpaceDirectory.singletonName)
+                    .spaces(of: person)
+                var listed: [SpaceSummary] = []
+                for id in ids {
+                    // One they've left since the directory read it isn't theirs.
+                    guard let listing = try await Space.identified(by: id, on: system).listing(for: person) else {
+                        continue
+                    }
+                    listed.append(SpaceSummary(listing))
+                }
+                return try publicAPIResponse(listed)
             }
         }
 
         spaces.post { request, context in
-            try await answering(request) { person, spaces in
+            try await answering(request) { person in
                 let input = try await body(MakeSpaceRequest.self, of: request, context: context)
                 guard let name = SpaceName(input.name) else { return nameRequired() }
-                return try publicAPIResponse(
-                    SpaceSummary(try await spaces.make(named: name, by: person), in: spaces), status: .created)
+                // Its first bot, its model checked where it runs; a key typed now is kept first, and
+                // let go when the space isn't made.
+                let made: (bot: TurgaiDomain.Bot, newKey: (reference: AgentCredentialReference, value: String)?)
+                do {
+                    made = try await AgentDraft(input.bot).bot(over: nil, credentials: dependencies.agentCredentials)
+                } catch {
+                    return publicAPIErrorResponse(
+                        status: .badRequest, code: "invalid_bot", message: TurgaiWebSupport.profileErrorMessage(error))
+                }
+                if let newKey = made.newKey {
+                    try await dependencies.agentCredentials.save(newKey.value, for: newKey.reference)
+                }
+                let id = TurgaiDomain.SpaceID()
+                let space = try await Space.identified(by: id, on: system)
+                do {
+                    // It starts with its chats' reminders and schedules.
+                    try await space.make(
+                        named: name, by: person, bot: made.bot, installing: [Scheduler.kind, Timers.kind])
+                } catch {
+                    if let newKey = made.newKey { try? await dependencies.agentCredentials.remove(newKey.reference) }
+                    throw error
+                }
+                return try publicAPIResponse(try await summary(of: space, for: person), status: .created)
             }
         }
 
         spaces.patch(":space") { request, context in
-            try await answering(request) { person, spaces in
-                guard let space = spaceID(in: context) else { return noSuchSpace() }
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
                 let input = try await body(RenameSpaceRequest.self, of: request, context: context)
                 guard let name = SpaceName(input.name) else { return nameRequired() }
-                let renamed = try await spaces.rename(space, to: name, by: person)
-                return try publicAPIResponse(SpaceSummary(renamed, in: spaces))
+                let space = try await Space.identified(by: id, on: system)
+                try await space.rename(to: name, by: person)
+                return try publicAPIResponse(try await summary(of: space, for: person))
             }
         }
 
         spaces.delete(":space/me") { request, context in
-            try await answering(request) { person, spaces in
-                guard let space = spaceID(in: context) else { return noSuchSpace() }
-                try await spaces.leave(space, as: person)
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                try await Space.identified(by: id, on: system).leave(person)
                 return Response(status: .noContent)
             }
         }
 
         spaces.post(":space/invites") { request, context in
-            try await answering(request) { person, spaces in
-                guard let space = spaceID(in: context) else { return noSuchSpace() }
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
                 let input = try await body(MakeInviteRequest.self, of: request, context: context)
                 let lifetime: SpaceInviteLifetime
                 switch input.validForDays {
@@ -588,58 +628,405 @@ extension TurgaiMainWebApp {
                     return publicAPIErrorResponse(
                         status: .badRequest, code: "invalid_days", message: "An invite works for a day or more.")
                 }
-                let (invite, token) = try await spaces.invite(to: space, by: person, for: lifetime)
+                // The token its link carries: only this answer ever holds it, and the space its hash.
+                let token = SpaceInviteToken.new()
+                let invite = SpaceInvite(hash: token.hash, by: person, lifetime: lifetime)
+                try await Space.identified(by: id, on: system).invite(invite)
                 return try publicAPIResponse(
                     SpaceInviteOffer(
                         id: invite.id.rawValue.uuidString, token: token.rawValue,
-                        link: SpaceInviteLink(spaceID: space.api, token: token.rawValue).description,
+                        link: SpaceInviteLink(spaceID: id.api, token: token.rawValue).description,
                         expiresAt: invite.expiresAt),
                     status: .created)
             }
         }
 
+        let credentials = dependencies.agentCredentials
+
+        /// The bot `configuration` describes, `saved` changed or a new one, its model checked where
+        /// it runs, saved by `save`: a key typed now is kept first, and let go when it isn't saved;
+        /// the key it replaces is let go once it is. Why it's refused, when it is.
+        @Sendable func saving(
+            _ configuration: BotConfiguration, over saved: TurgaiDomain.Bot?,
+            _ save: (TurgaiDomain.Bot) async throws -> Void
+        ) async throws -> Response? {
+            let made: (bot: TurgaiDomain.Bot, newKey: (reference: AgentCredentialReference, value: String)?)
+            do {
+                made = try await AgentDraft(configuration).bot(over: saved, credentials: credentials)
+            } catch {
+                return publicAPIErrorResponse(
+                    status: .badRequest, code: "invalid_bot", message: TurgaiWebSupport.profileErrorMessage(error))
+            }
+            if let newKey = made.newKey { try await credentials.save(newKey.value, for: newKey.reference) }
+            do {
+                try await save(made.bot)
+            } catch {
+                if let newKey = made.newKey { try? await credentials.remove(newKey.reference) }
+                throw error
+            }
+            if let old = saved?.model.location.credentialReference, old != made.bot.model.location.credentialReference {
+                try? await credentials.remove(old)
+            }
+            return nil
+        }
+
+        /// The bot `context` names, of the space it names, as `person`, who may use its bots, sees it.
+        @Sendable func named(in context: BasicWebSocketRequestContext, for person: TurgaiDomain.UserID)
+            async throws -> (Space, TurgaiDomain.Bot)?
+        {
+            guard let id = spaceID(in: context),
+                let bot = context.parameters.get("bot").flatMap({ TurgaiDomain.BotID($0) })
+            else { return nil }
+            let space = try await Space.identified(by: id, on: system)
+            guard let found = try await space.bots(for: person).first(where: { $0.id == bot }) else { return nil }
+            return (space, found)
+        }
+
+        // Its bots, the main first, as the person, who may use them, sees them: each with its
+        // configuration, but its key.
+        spaces.get(":space/bots") { request, context in
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                let bots = try await Space.identified(by: id, on: system).bots(for: person)
+                return try publicAPIResponse(bots.enumerated().map { SpaceBot($1, isMain: $0 == 0) })
+            }
+        }
+
+        // A bot added, as the person, who may configure its bots, adds it.
+        spaces.post(":space/bots") { request, context in
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                let input = try await body(BotConfiguration.self, of: request, context: context)
+                let space = try await Space.identified(by: id, on: system)
+                let added = Added()
+                if let refused = try await saving(
+                    input, over: nil,
+                    { bot in
+                        try await space.addBot(bot, by: person)
+                        await added.keep(bot)
+                    })
+                {
+                    return refused
+                }
+                guard let bot = await added.bot else { return noSuchBot() }
+                return try publicAPIResponse(SpaceBot(bot, isMain: false), status: .created)
+            }
+        }
+
+        // A bot as it's configured from now on, as the person, who may configure its bots, changes
+        // it: its saved key kept when none is typed.
+        spaces.patch(":space/bots/:bot") { request, context in
+            try await answering(request) { person in
+                guard let (space, saved) = try await named(in: context, for: person) else { return noSuchBot() }
+                let input = try await body(BotConfiguration.self, of: request, context: context)
+                let changed = Added()
+                if let refused = try await saving(
+                    input, over: saved,
+                    { bot in
+                        try await space.changeBot(bot, by: person)
+                        await changed.keep(bot)
+                    })
+                {
+                    return refused
+                }
+                guard let bot = await changed.bot else { return noSuchBot() }
+                return try publicAPIResponse(SpaceBot(bot, isMain: try await space.mainBot().id == bot.id))
+            }
+        }
+
+        // A bot removed, as the person, who may configure its bots, asks: it's in none of its
+        // conversations any more, and its key is let go.
+        spaces.delete(":space/bots/:bot") { request, context in
+            try await answering(request) { person in
+                guard let (space, saved) = try await named(in: context, for: person) else { return noSuchBot() }
+                try await space.removeBot(saved.id, by: person)
+                if let key = saved.model.location.credentialReference { try? await credentials.remove(key) }
+                return Response(status: .noContent)
+            }
+        }
+
+        // A bot its space's main one from now on: it answers where no other is asked for.
+        spaces.put(":space/bots/:bot/main") { request, context in
+            try await answering(request) { person in
+                guard let (space, saved) = try await named(in: context, for: person) else { return noSuchBot() }
+                try await space.chooseMain(saved.id, by: person)
+                return Response(status: .noContent)
+            }
+        }
+
+        let channelSecrets = dependencies.channelSecrets
+
+        /// The connection `context` names, of the space it names, as `person`, who may configure
+        /// them, sees it.
+        @Sendable func connection(in context: BasicWebSocketRequestContext, for person: TurgaiDomain.UserID)
+            async throws -> (TurgaiDomain.SpaceID, Connection)?
+        {
+            guard let id = spaceID(in: context),
+                let connection = context.parameters.get("connection").flatMap(ConnectionID.init)
+            else { return nil }
+            let space = try await Space.identified(by: id, on: system)
+            guard let found = try await space.connections(for: person).first(where: { $0.id == connection }) else {
+                return nil
+            }
+            return (id, found)
+        }
+
+        /// `connection` with `token` typed now, checked with its platform first: `save` saves it,
+        /// and when that fails, the token saved before is put back.
+        @Sendable func saving(
+            _ connection: Connection, token typed: String?, _ save: () async throws -> Void
+        ) async throws -> Response? {
+            let id = connection.id.rawValue
+            let token = typed?.trimmed().isEmpty == false ? typed?.trimmed() : nil
+            if let token {
+                do {
+                    switch connection.platform {
+                    case .telegram: try await TelegramAPIClient.live(token: token).validateToken()
+                    }
+                } catch {
+                    return publicAPIErrorResponse(
+                        status: .badRequest, code: "token_refused", message: "The platform refused this token.")
+                }
+            }
+            let previous = token == nil ? nil : try await channelSecrets.token(for: id)
+            do {
+                if let token { try await channelSecrets.setToken(for: id, token: token) }
+                try await save()
+            } catch {
+                if token != nil {
+                    if let previous {
+                        try? await channelSecrets.setToken(for: id, token: previous)
+                    } else {
+                        try? await channelSecrets.remove(for: id)
+                    }
+                }
+                throw error
+            }
+            return nil
+        }
+
+        /// What `settings` set up, over `saved` when it changes one: none when its label isn't one.
+        @Sendable func connection(_ settings: ConnectionSettings, over saved: Connection?) -> Connection? {
+            guard let label = ConnectionLabel(settings.label) else { return nil }
+            let platform: TurgaiDomain.ConnectionPlatform =
+                switch settings.platform {
+                case .telegram(let chatIDs): .telegram(TelegramAccess(chatIDs: chatIDs))
+                }
+            return Connection(
+                id: saved?.id ?? ConnectionID(), label: label, enabled: settings.enabled, platform: platform)
+        }
+
+        // Its connections, as the person, who may configure them, sees them.
+        spaces.get(":space/connections") { request, context in
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                var listed: [SpaceConnection] = []
+                for connection in try await Space.identified(by: id, on: system).connections(for: person) {
+                    let status = try await ConnectionRun.of(connection.id, in: id, on: system).status
+                    listed.append(
+                        SpaceConnection(
+                            connection, status: status,
+                            hasToken: try await channelSecrets.hasToken(for: connection.id.rawValue)))
+                }
+                return try publicAPIResponse(listed)
+            }
+        }
+
+        // A connection added: it runs once it's enabled, with its token.
+        spaces.post(":space/connections") { request, context in
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                let input = try await body(ConnectionSettings.self, of: request, context: context)
+                guard let added = connection(input, over: nil) else { return invalidLabel() }
+                if let refused = try await saving(
+                    added, token: input.token,
+                    {
+                        try await Space.identified(by: id, on: system).addConnection(added, by: person)
+                    })
+                {
+                    return refused
+                }
+                return Response(status: .created)
+            }
+        }
+
+        // A connection as the settings say from now on, its saved token kept when none is typed: it
+        // runs again as it is now.
+        spaces.patch(":space/connections/:connection") { request, context in
+            try await answering(request) { person in
+                guard let (space, saved) = try await connection(in: context, for: person) else {
+                    return noSuchConnection()
+                }
+                let input = try await body(ConnectionSettings.self, of: request, context: context)
+                guard let changed = connection(input, over: saved) else { return invalidLabel() }
+                if let refused = try await saving(
+                    changed, token: input.token,
+                    {
+                        try await Space.identified(by: space, on: system).changeConnection(changed, by: person)
+                    })
+                {
+                    return refused
+                }
+                return Response(status: .noContent)
+            }
+        }
+
+        // A connection removed: it stops, and its token is let go.
+        spaces.delete(":space/connections/:connection") { request, context in
+            try await answering(request) { person in
+                guard let (space, saved) = try await connection(in: context, for: person) else {
+                    return noSuchConnection()
+                }
+                try await Space.identified(by: space, on: system).removeConnection(saved.id, by: person)
+                try? await channelSecrets.remove(for: saved.id.rawValue)
+                return Response(status: .noContent)
+            }
+        }
+
         spaces.get(":space/people") { request, context in
-            try await answering(request) { person, spaces in
-                guard let space = spaceID(in: context) else { return noSuchSpace() }
-                let names = ParticipantNames(auth: auth, profiles: dependencies.agentProfiles)
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                let names = ParticipantNames(auth: auth, in: id, on: system)
                 var people: [SpacePerson] = []
-                for (person, role) in try await spaces.people(in: space, for: person) {
+                for (person, groups) in try await Space.identified(by: id, on: system).people(for: person) {
                     people.append(
                         SpacePerson(
                             id: person.key, name: try await names.name(of: .person(person)),
-                            role: role == .admin ? .admin : .member))
+                            groups: groups.map(\.rawValue).sorted()))
                 }
                 return try publicAPIResponse(people.sorted { $0.name < $1.name })
             }
         }
 
         spaces.get(":space/invites") { request, context in
-            try await answering(request) { person, spaces in
-                guard let space = spaceID(in: context) else { return noSuchSpace() }
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
                 return try publicAPIResponse(
-                    try await spaces.invites(to: space, for: person).map {
+                    try await Space.identified(by: id, on: system).openInvites(for: person).map {
                         SpaceInviteListing(id: $0.id.rawValue.uuidString, expiresAt: $0.expiresAt)
                     })
             }
         }
 
         spaces.delete(":space/invites/:invite") { request, context in
-            try await answering(request) { person, spaces in
-                guard let space = spaceID(in: context),
+            try await answering(request) { person in
+                guard let id = spaceID(in: context),
                     let invite = context.parameters.get("invite").flatMap(UUID.init(uuidString:))
                 else { return noSuchSpace() }
-                try await spaces.takeBack(SpaceInviteID(rawValue: invite), to: space, by: person)
+                try await Space.identified(by: id, on: system).takeBack(SpaceInviteID(rawValue: invite), by: person)
                 return Response(status: .noContent)
             }
         }
 
         spaces.post(":space/join") { request, context in
-            try await answering(request) { person, spaces in
-                guard let space = spaceID(in: context) else { return noSuchSpace() }
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
                 let input = try await body(JoinSpaceRequest.self, of: request, context: context)
-                return try publicAPIResponse(
-                    SpaceSummary(
-                        try await spaces.join(space, with: SpaceInviteToken(input.token), as: person), in: spaces))
+                let space = try await Space.identified(by: id, on: system)
+                try await space.join(with: SpaceInviteToken(input.token).hash, as: person)
+                return try publicAPIResponse(try await summary(of: space, for: person))
+            }
+        }
+    }
+
+    /// A space's objects, as its people may read them: those made in it and its installed built-in
+    /// ones, listed, and shared with everyone in it. Part of ``registerSpaces(on:dependencies:)``.
+    private func registerSpaceObjects(
+        on spaces: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
+        let auth = dependencies.auth
+        let system = dependencies.system
+
+        /// What `request`'s person asks of a space's objects, refused when no one signed in, and
+        /// said back as the API says it.
+        @Sendable func answering(
+            _ request: Request, _ answer: (TurgaiDomain.UserID) async throws -> Response
+        ) async throws -> Response {
+            guard let person = await signedInPerson(from: request, auth: auth) else { return signInRequired() }
+            do {
+                return try await answer(person)
+            } catch let refusal as SpaceRefusal {
+                return spaceRefused(refusal)
+            }
+        }
+
+        // Its objects the person may read: those made in it, and the built-in ones.
+        spaces.get(":space/objects") { request, context in
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                let space = try await Space.identified(by: id, on: system)
+                let scope = try await space.scope(of: person)
+                let objects = try await space.objects(for: person)
+                // The built-in objects installed in the space, each started and checked in there, where the
+                // space's code finds it by name.
+                let installed = Set(try await objects.installed)
+                var installedObjects: [DiscoverableObject] = []
+                if installed.contains(Weather.kind) {
+                    let object = try await Weather.of(id, on: system)
+                    installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
+                }
+                if installed.contains(Scheduler.kind) {
+                    let object = try await Scheduler.of(id, on: system)
+                    installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
+                }
+                if installed.contains(Timers.kind) {
+                    let object = try await Timers.of(id, on: system)
+                    installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
+                }
+                // Each website made in the space, by its name.
+                if installed.contains(Website.kind) {
+                    for name in try await objects.sites {
+                        let object = try await Website.named(name, in: id, on: system)
+                        installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
+                    }
+                }
+                var builtIns: [ObjectEntry] = []
+                for object in installedObjects {
+                    await system.receptionist.checkIn(object, with: .virtualObjects(in: id))
+                    guard let virtual = object.id.virtualActorID, let description = try? await object.describe() else {
+                        continue
+                    }
+                    builtIns.append(
+                        ObjectEntry(
+                            id: .virtual(virtual), object: object, type: description.type,
+                            description: description.description,
+                            actions: description.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
+                                .sorted(),
+                            events: description.events.keys.sorted()))
+                }
+                let made = try await CallChain.$current.withValue(.start(scope, in: nil)) {
+                    try await objects.held()
+                }
+                let entries = builtIns + made
+                return try publicAPIResponse(entries.map(ObjectListing.init))
+            }
+        }
+
+        // One of its objects shared with everyone in it, or that taken back: only one who may change
+        // it does.
+        spaces.post(":space/objects/:object/share") { request, context in
+            try await answering(request) { person in
+                guard let id = spaceID(in: context), let object = context.parameters.get("object") else {
+                    return noSuchSpace()
+                }
+                let sharing = try await body(ObjectSharingRequest.self, of: request, context: context)
+                let level: AccessLevel? =
+                    switch sharing.everyone {
+                    case .read: .read
+                    case .write: .write
+                    case .none: nil
+                    }
+                let space = try await Space.identified(by: id, on: system)
+                let scope = try await space.scope(of: person)
+                let made = try await space.objects(for: person).held(ObjectIdentity(rawValue: object))
+                do {
+                    try await CallChain.$current.withValue(.start(scope, in: nil)) {
+                        try await made.share(with: .everyone, level)
+                    }
+                } catch is NotAllowed {
+                    return Response(status: .forbidden)
+                }
+                return Response(status: .noContent)
             }
         }
     }
@@ -652,27 +1039,20 @@ extension TurgaiMainWebApp {
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
             guard
                 let conversation = try await apiConversation(
-                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
+                    context.parameters.get("id"), in: context.parameters.get("space"), readBy: owner.person,
+                    dependencies: dependencies)
             else { return conversationNotFound() }
-            do {
-                let history = try await dependencies.webChatBridge.conversationHistory(
-                    of: conversation.domainID, for: owner.person)
-                let names = ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
-                return try publicAPIResponse(try await publicAPIMessages(history, names: names))
-            } catch {
-                return publicAPIErrorResponse(
-                    status: .serviceUnavailable,
-                    code: "runtime_unavailable",
-                    message: "The conversation runtime is unavailable."
-                )
-            }
+            let history = try await conversation.reached(on: dependencies.system).history(
+                of: conversation.domainID, for: owner.person)
+            return try publicAPIResponse(try await publicAPIMessages(history, names: conversation.names))
         }
 
         messages.post { request, context in
             guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
             guard
                 let conversation = try await apiConversation(
-                    context.parameters.get("id"), readBy: owner.person, bridge: dependencies.webChatBridge)
+                    context.parameters.get("id"), in: context.parameters.get("space"), readBy: owner.person,
+                    dependencies: dependencies)
             else { return conversationNotFound() }
             let input = try await body(TurgaiModels.SendMessageRequest.self, of: request, context: context)
             let text = input.text.trimmed()
@@ -693,18 +1073,12 @@ extension TurgaiMainWebApp {
                     conversation: conversation,
                     as: owner.person,
                     to: to,
-                    bridge: dependencies.webChatBridge,
-                    names: ParticipantNames(auth: dependencies.auth, profiles: dependencies.agentProfiles)
+                    dependencies: dependencies,
+                    names: conversation.names
                 )
                 var response = try publicAPIResponse(event)
                 if case .guest(_, let token) = owner { response.setCookie(TurgaiWebSupport.guestCookie(token)) }
                 return response
-            } catch PublicAPIChatError.runtimeUnavailable {
-                return publicAPIErrorResponse(
-                    status: .serviceUnavailable,
-                    code: "runtime_unavailable",
-                    message: "The conversation runtime is unavailable."
-                )
             } catch {
                 return publicAPIErrorResponse(
                     status: .conflict,
@@ -717,37 +1091,53 @@ extension TurgaiMainWebApp {
 }
 
 private struct APIConversation: Sendable {
+    /// The space it's one of, which it's reached through.
+    let space: TurgaiDomain.SpaceID
     let domainID: TurgaiDomain.ConversationID
-    /// Its space, and who's in it.
+    /// Who's in it.
     let outline: ConversationOutline
-    /// The agent that answers in it.
-    let agent: AgentProfileID
+    /// The bot that answers in it, as its space has it now: none once it's left.
+    let bot: TurgaiDomain.Bot?
+    /// What its participants are called.
+    let names: ParticipantNames
 
     /// What the API calls it: the id it was given as it started.
     var publicID: TurgaiModels.ConversationID { .init(rawValue: domainID.externalAddress.rawValue) }
 
     var info: TurgaiModels.Conversation {
         .init(
-            id: publicID, botID: .init(rawValue: agent.rawValue), spaceID: outline.space.api,
+            id: publicID, botID: bot.map { .init(rawValue: $0.id.role) }, spaceID: space.api,
             people: outline.participants.count { if case .person = $0 { true } else { false } })
+    }
+
+    /// Its space, which it's reached through.
+    func reached(on system: ClusterSystem) async throws -> Space {
+        try await Space.identified(by: space, on: system)
     }
 }
 
-/// The conversation the API calls `id`, as `person` reads it: none when there's no such
-/// conversation, or they're not one of its people, which the API doesn't tell apart.
+/// The conversation the API calls `id` in the space it calls `space`, as `person` reads it: none
+/// when there's no such conversation, or they're not one of its people, which the API doesn't tell
+/// apart.
 private func apiConversation(
-    _ id: String?, readBy person: TurgaiDomain.UserID, bridge: TurgaiWebChatBridge
+    _ id: String?, in space: String?, readBy person: TurgaiDomain.UserID, dependencies: TurgaiRouteDependencies
 ) async throws -> APIConversation? {
-    guard let id, let minted = UUID(uuidString: id) else { return nil }
+    guard let id, let minted = UUID(uuidString: id),
+        let spaceID = space.flatMap({ TurgaiDomain.SpaceID(TurgaiModels.SpaceID(rawValue: $0)) })
+    else { return nil }
     let domainID = TurgaiDomain.ConversationID(channel: turgaiChannel, externalAddress: .init(minted.uuidString))
+    let reached = try await Space.identified(by: spaceID, on: dependencies.system)
     let outline: ConversationOutline
     do {
-        outline = try await bridge.conversation(domainID, readBy: person)
+        outline = try await reached.reading(domainID, by: person)
     } catch is ConversationRefusal {
         return nil
+    } catch is SpaceRefusal {
+        return nil
     }
-    guard let agent = outline.agent else { return nil }
-    return APIConversation(domainID: domainID, outline: outline, agent: agent)
+    return APIConversation(
+        space: spaceID, domainID: domainID, outline: outline, bot: try await reached.answeringBot(of: domainID),
+        names: ParticipantNames(auth: dependencies.auth, in: spaceID, on: dependencies.system))
 }
 
 /// The conversation an app's connection has open, if it has one.
@@ -777,6 +1167,7 @@ private actor JoinedTopics {
 private enum Following {
     case memory
     case tasks(TurgaiDomain.SpaceID)
+    case objects(TurgaiDomain.SpaceID)
 
     /// `topic`, read: none when the space it names isn't one.
     init?(_ topic: TurgaiModels.ChatTopic) {
@@ -786,6 +1177,9 @@ private enum Following {
         case .tasks(let space):
             guard let id = TurgaiDomain.SpaceID(space) else { return nil }
             self = .tasks(id)
+        case .objects(let space):
+            guard let id = TurgaiDomain.SpaceID(space) else { return nil }
+            self = .objects(id)
         }
     }
 }
@@ -794,23 +1188,79 @@ private enum Following {
 /// returned function is called.
 private func follow(
     _ following: Following, for person: TurgaiDomain.UserID, writer: PublicChatSocketWriter,
-    bridge: TurgaiWebChatBridge
+    dependencies: TurgaiRouteDependencies
 ) async throws -> @Sendable () async -> Void {
+    let system = dependencies.system
     switch following {
-    case .memory:
-        let listener = try await bridge.followMemory(of: person) {
-            try? await writer.write(.init(payload: .memoryChanged))
+    case .objects(let space):
+        // Its space hands its objects to someone in it, who follows that they changed; what they
+        // are as it's joined, the app lists itself.
+        let objects = try await Space.identified(by: space, on: system).objects(for: person)
+        let changes = try await objects.subscription()
+        let forwarding = Task {
+            for await _ in changes { try? await writer.write(.init(payload: .objectsChanged)) }
         }
-        return { try? await bridge.unfollowMemory(listener) }
+        // Left, its subscription ends, and nothing more is told.
+        return {
+            await changes.cancel()
+            forwarding.cancel()
+        }
+    case .memory:
+        let changes = try await system.singleton.proxy(MemoryNotices.self, name: MemoryNotices.singletonName)
+            .subscription(for: person)
+        let forwarding = Task {
+            for await _ in changes { try? await writer.write(.init(payload: .memoryChanged)) }
+        }
+        return {
+            await changes.cancel()
+            forwarding.cancel()
+        }
     case .tasks(let space):
         // What the tasks are now goes first; each change follows it, in order.
         let id = space.api
-        let (changes, change) = AsyncStream<TasksNotice>.makeStream()
-        let followed = try await bridge.followTasks(in: space, of: person) { change.yield($0) }
-        try? await writer.write(.init(payload: .tasks(space: id, tasks: followed.tasks.map(TaskListing.init))))
+        let scope = try await Space.identified(by: space, on: system).scope(of: person)
+        // Whoever may change a task sees it: whoever made it, and whoever may see the space's tasks.
+        let sees: @Sendable (KeptTask) -> Bool = { $0.maker == scope.person || scope.permissions.tasks != nil }
+        // Following first, so no change between this and what's read now is missed.
+        let changes = try await SpaceTasks.identified(by: space, on: system).subscription()
+        // What's kept now: its objects' schedules and timers, and its chats'.
+        let workflows = system.workflows
+        let decoder = JSONDecoder()
+        var tasks: [KeptTask] = []
+        for schedule in try await workflows.listSchedules(workflow: ObjectScheduleWorkflow.self) {
+            guard let firing = try? decoder.decode(ObjectFiring.self, from: schedule.inputData), firing.space == space
+            else { continue }
+            tasks.append(
+                KeptTask(
+                    id: .schedule(schedule.id), of: .object(firing.object, field: firing.property), due: firing.due,
+                    paused: schedule.paused, maker: firing.maker))
+        }
+        for timer in try await workflows.listWorkflows(workflow: ObjectTimerWorkflow.self) {
+            guard case .running = timer.status, let data = timer.inputData,
+                let firing = try? decoder.decode(ObjectFiring.self, from: data), firing.space == space
+            else { continue }
+            tasks.append(
+                KeptTask(
+                    id: .timer(timer.id), of: .object(firing.object, field: firing.property), due: firing.due,
+                    paused: false, maker: firing.maker))
+        }
+        for schedule in try await workflows.listSchedules(workflow: ScheduleWorkflow.self) {
+            guard let made = try? decoder.decode(ChatSchedule.self, from: schedule.inputData), made.space == space
+            else { continue }
+            tasks.append(KeptTask(made, id: schedule.id, paused: schedule.paused))
+        }
+        for timer in try await workflows.listWorkflows(workflow: TimerWorkflow.self) {
+            guard case .running = timer.status, let data = timer.inputData,
+                let made = try? decoder.decode(ChatTimer.self, from: data), made.space == space
+            else { continue }
+            tasks.append(KeptTask(made, id: timer.id))
+        }
+        try? await writer.write(.init(payload: .tasks(space: id, tasks: tasks.filter(sees).map(TaskListing.init))))
         let forwarding = Task {
             for await notice in changes {
                 switch notice {
+                case .kept(let task) where !sees(task):
+                    continue
                 case .kept(let task):
                     try? await writer.write(.init(payload: .taskKept(space: id, task: TaskListing(task))))
                 case .ended(let task):
@@ -818,10 +1268,9 @@ private func follow(
                 }
             }
         }
-        // Left, the listener goes with this, and isn't told anything more.
-        return { [listener = followed.listener] in
-            _ = listener
-            change.finish()
+        // Left, its subscription ends, and nothing more is told.
+        return {
+            await changes.cancel()
             forwarding.cancel()
         }
     }
@@ -831,49 +1280,72 @@ private func follow(
 /// left, what's remembered about them, forgetting it, or remembering on or off.
 private func answer(
     _ ask: TurgaiModels.ChatAsk, for person: TurgaiDomain.UserID, topics: JoinedTopics,
-    writer: PublicChatSocketWriter, bridge: TurgaiWebChatBridge
+    writer: PublicChatSocketWriter, dependencies: TurgaiRouteDependencies
 ) async -> TurgaiModels.ChatReply {
+    let system = dependencies.system
     do {
         switch ask {
         case .join(let topic):
             guard let following = Following(topic) else { return .failed(notASpace) }
-            try await topics.join(topic) { try await follow(following, for: person, writer: writer, bridge: bridge) }
+            try await topics.join(topic) {
+                try await follow(following, for: person, writer: writer, dependencies: dependencies)
+            }
             return .ok
         case .leave(let topic):
             await topics.leave(topic)
             return .ok
         case .memory:
-            return .memory(
-                MemorySummary(
-                    try await bridge.remembered(about: person), remembering: try await bridge.remembering(of: person)))
+            return .memory(try await memory(of: person, on: system))
         case .forgetMemory:
-            try await bridge.forgetMemory(of: person)
+            _ = try await User.identified(by: person, on: system).forgetMemory()
             return .ok
         case .setRemembering(let remembering):
-            try await bridge.setRemembering(Remembering(remembering), for: person)
+            try await User.identified(by: person, on: system).setRemembering(Remembering(remembering))
             return .ok
         case .archiveSpace(let space):
             guard let id = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
-            _ = try await bridge.spaces().archive(id, by: person)
+            try await Space.identified(by: id, on: system).archive(by: person)
             return .ok
         case .unarchiveSpace(let space):
             guard let id = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
-            _ = try await bridge.spaces().unarchive(id, by: person)
+            try await Space.identified(by: id, on: system).unarchive(by: person)
             return .ok
-        case .leaveConversation(let conversation):
-            try await bridge.leave(domainID(of: conversation), as: person)
+        case .leaveConversation(let conversation, let space):
+            guard let space = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
+            try await Space.identified(by: space, on: system).leave(domainID(of: conversation), as: person)
             return .ok
-        case .deleteConversation(let conversation):
-            try await bridge.delete(domainID(of: conversation), by: person)
+        case .deleteConversation(let conversation, let space):
+            guard let space = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
+            try await Space.identified(by: space, on: system).delete(domainID(of: conversation), by: person)
             return .ok
-        case .changeSchedule(let chat, let name, let change):
+        case .changeSchedule(let chat, let space, let name, let change):
             guard let chat = TurgaiDomain.ConversationID(stableKey: chat.rawValue) else { return .failed(notAChat) }
-            try await bridge.changeSchedule(
-                TurgaiApplication.Conversation.TaskChange(change), named: name, in: chat, by: person)
+            guard let space = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
+            // On their behalf in the chat, as they are in it: refused unless they made it, or may
+            // change the space's tasks.
+            let reached = try await Space.identified(by: space, on: system)
+            _ = try await reached.reading(chat, by: person)
+            let scope = try await reached.scope(of: person)
+            try await CallChain.$current.withValue(.start(scope, in: chat)) {
+                let scheduler = try await Scheduler.of(space, on: system)
+                switch ChatCommands.TaskChange(change) {
+                case .pause: _ = try await scheduler.pause(name: name)
+                case .resume: _ = try await scheduler.resume(name: name)
+                case .cancel: _ = try await scheduler.cancel(name: name)
+                }
+            }
             return .ok
-        case .cancelReminder(let chat, let name):
+        case .cancelReminder(let chat, let space, let name):
             guard let chat = TurgaiDomain.ConversationID(stableKey: chat.rawValue) else { return .failed(notAChat) }
-            try await bridge.cancelReminder(named: name, in: chat, by: person)
+            guard let space = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
+            // On their behalf in the chat, as they are in it: refused unless they set it, or may
+            // change the space's tasks.
+            let reached = try await Space.identified(by: space, on: system)
+            _ = try await reached.reading(chat, by: person)
+            let scope = try await reached.scope(of: person)
+            try await CallChain.$current.withValue(.start(scope, in: chat)) {
+                _ = try await Timers.of(space, on: system).cancel(name: name)
+            }
             return .ok
         }
     } catch let refusal as DueInChatError {
@@ -887,13 +1359,19 @@ private func answer(
     }
 }
 
+/// What's remembered about `person`, and whether they're remembered, as the API gives it.
+private func memory(of person: TurgaiDomain.UserID, on system: ClusterSystem) async throws -> MemorySummary {
+    let user = try await User.identified(by: person, on: system)
+    return MemorySummary(try await user.remembered(), remembering: try await user.currentRemembering())
+}
+
 /// What a push names no space by.
 private let notASpace = TurgaiModels.ChatError(code: "not_a_space", message: "There's no such space.")
 
 /// What a push names no chat by.
 private let notAChat = TurgaiModels.ChatError(code: "not_a_chat", message: "There's no such chat.")
 
-extension TurgaiApplication.Conversation.TaskChange {
+extension ChatCommands.TaskChange {
     /// `change`, as the app asks for it.
     fileprivate init(_ change: ScheduleChange) {
         self =
@@ -918,10 +1396,14 @@ private actor ShownConversation {
     }
 }
 
-/// `session` attached to `conversation`, so its live events come: whether it was.
-private func open(_ conversation: APIConversation, on session: TurgaiConnections.WebSession) async throws -> Bool {
+/// `session` attached to `conversation` for `person`, so its live events come: whether it was.
+private func open(
+    _ conversation: APIConversation, for person: TurgaiDomain.UserID, on session: LiveSession
+) async throws -> Bool {
     let receipt = ConversationInputReceipt()
-    await session.input.send(ConversationInputDelivery(input: .connect(conversation.domainID), receipt: receipt))
+    await session.input.send(
+        ConversationInputDelivery(
+            in: conversation.space, input: .connect(conversation.domainID, for: person), receipt: receipt))
     return await receipt.wait()
 }
 
@@ -929,21 +1411,22 @@ private func open(_ conversation: APIConversation, on session: TurgaiConnections
 /// been said in it, and the agent's past turns.
 private func writeOpened(
     _ conversation: APIConversation, for person: TurgaiDomain.UserID, on writer: PublicChatSocketWriter,
-    names: ParticipantNames, bridge: TurgaiWebChatBridge
+    names: ParticipantNames, dependencies: TurgaiRouteDependencies
 ) async throws {
+    let space = try await conversation.reached(on: dependencies.system)
     let history = try await publicAPIMessages(
-        try await bridge.conversationHistory(of: conversation.domainID, for: person), names: names)
-    let status = try await bridge.conversationStatus(of: conversation.domainID, for: person)
+        try await space.history(of: conversation.domainID, for: person), names: names)
+    let status = try await space.status(of: conversation.domainID, for: person)
     try await writer.write(
         .init(
             payload: .ready(
-                conversationID: conversation.publicID, botID: .init(rawValue: conversation.agent.rawValue),
+                conversationID: conversation.publicID, botID: conversation.bot.map { .init(rawValue: $0.id.role) },
                 status: publicConversationStatus(status), you: person.key)))
     try await writer.write(.init(payload: .history(conversationID: conversation.publicID, messages: history)))
     // The agent's turns, step by step; the chat works without them, and says why they're missing.
     let turns: [ConversationTurn]
     do {
-        turns = try await bridge.conversationTurns(of: conversation.domainID, askedBy: person)
+        turns = try await agentTurns(in: conversation, of: space, askedBy: person, journal: dependencies.journal)
     } catch {
         try await writer.write(
             publicAPIErrorEvent(
@@ -959,7 +1442,7 @@ private func writeOpened(
 /// it was refused, written back.
 private func say(
     _ request: TurgaiModels.SendMessageRequest, in conversation: APIConversation, as person: TurgaiDomain.UserID,
-    on session: TurgaiConnections.WebSession, writer: PublicChatSocketWriter
+    on session: LiveSession, writer: PublicChatSocketWriter
 ) async throws {
     let text = request.text.trimmed()
     guard !text.isEmpty else {
@@ -979,6 +1462,7 @@ private func say(
     let receipt = ConversationInputReceipt()
     await session.input.send(
         ConversationInputDelivery(
+            in: conversation.space,
             input: .message(
                 InboundMessage(
                     id: .init(rawValue: request.id.rawValue),
@@ -1010,8 +1494,8 @@ private func conversationRefused(_ refusal: ConversationRefusal) -> Response {
         publicAPIErrorResponse(status: .forbidden, code: "guests_stay_out", message: refusal.description)
     case .alreadyStarted:
         publicAPIErrorResponse(status: .conflict, code: "already_started", message: refusal.description)
-    case .oneAgentForNow:
-        publicAPIErrorResponse(status: .conflict, code: "one_agent_for_now", message: refusal.description)
+    case .oneBotForNow:
+        publicAPIErrorResponse(status: .conflict, code: "one_bot_for_now", message: refusal.description)
     case .addresseeNotInIt:
         publicAPIErrorResponse(status: .badRequest, code: "addressee_not_in_it", message: refusal.description)
     case .deleted: conversationNotFound()
@@ -1022,7 +1506,37 @@ private func conversationRefused(_ refusal: ConversationRefusal) -> Response {
     }
 }
 
+/// The agents' past turns in `conversation` of `space`, step by step, as `person` asks for them:
+/// read from each agent's journal, under the conversation's ids.
+private func agentTurns(
+    in conversation: APIConversation, of space: Space, askedBy person: TurgaiDomain.UserID, journal: any EventStore
+) async throws -> [ConversationTurn] {
+    let agentTurns = try await space.agentTurns(of: conversation.domainID, for: person)
+    var turns: [ConversationTurn] = []
+    for bot in agentTurns.bots {
+        let agentID = HailAgentAdapter.agentID(for: conversation.domainID, in: conversation.space, role: bot.role)
+        let events: [AgentEvent] = try await journal.eventsFor(id: agentID.rawValue)
+        turns += try ConversationTurns.turns(from: events, links: agentTurns.links)
+    }
+    return turns.sorted { $0.startedAt < $1.startedAt }
+}
+
 /// The answer for a participant the API can't name.
+private func noSuchConnection() -> Response {
+    publicAPIErrorResponse(
+        status: .notFound, code: "connection_not_found", message: "The space has no such connection.")
+}
+
+private func invalidLabel() -> Response {
+    publicAPIErrorResponse(
+        status: .badRequest, code: "invalid_label",
+        message: "A connection's label is some words, at most \(ConnectionLabel.maximumLength) letters.")
+}
+
+private func noSuchBot() -> Response {
+    publicAPIErrorResponse(status: .notFound, code: "bot_not_found", message: "The space has no such bot.")
+}
+
 private func noSuchParticipant() -> Response {
     publicAPIErrorResponse(status: .badRequest, code: "invalid_participant", message: "No person or bot has that id.")
 }
@@ -1035,7 +1549,8 @@ extension Participant {
             guard let person = try? TurgaiDomain.UserID(key: reference.id) else { return nil }
             self = .person(person)
         case .agent:
-            self = .agent(AgentProfileID(reference.id))
+            guard let bot = TurgaiDomain.BotID(reference.id) else { return nil }
+            self = .bot(bot)
         }
     }
 }
@@ -1045,21 +1560,28 @@ extension ParticipantRef {
     fileprivate init(_ participant: Participant) {
         switch participant {
         case .person(let person): self.init(kind: .person, id: person.key)
-        case .agent(let agent): self.init(kind: .agent, id: agent.rawValue)
+        case .bot(let bot): self.init(kind: .agent, id: bot.role)
         }
     }
 }
 
 /// What participants are called, as the API shows them, each looked up once: an account by its
-/// username, an agent by its name, a Telegram person and a guest by what they are.
+/// username, a bot by its name in `space`, a Telegram person and a guest by what they are.
 private actor ParticipantNames {
     private let auth: TurgaiAuth
-    private let profiles: TurgaiAgentProfileStore
+    /// The space whose bots are named, and the cluster it's reached on: none where no bot is.
+    private let space: (id: TurgaiDomain.SpaceID, system: ClusterSystem)?
     private var known: [Participant: String] = [:]
 
-    init(auth: TurgaiAuth, profiles: TurgaiAgentProfileStore) {
+    init(auth: TurgaiAuth, in space: TurgaiDomain.SpaceID, on system: ClusterSystem) {
         self.auth = auth
-        self.profiles = profiles
+        self.space = (space, system)
+    }
+
+    /// Names for where no bot is: people only.
+    init(auth: TurgaiAuth, in _: Never?) {
+        self.auth = auth
+        self.space = nil
     }
 
     /// `participant` as the API names them.
@@ -1074,7 +1596,12 @@ private actor ParticipantNames {
             case .person(.account(let id)): try await auth.accounts().first { $0.id == id }?.username ?? "Someone"
             case .person(.telegram(let id)): "Telegram user \(id)"
             case .person(.guest): "Guest"
-            case .agent(let agent): try await profiles.profile(id: agent.rawValue)?.name ?? agent.rawValue
+            case .bot(let bot):
+                if let space {
+                    try await Space.identified(by: space.id, on: space.system).bot(bot)?.name.rawValue ?? "Bot"
+                } else {
+                    "Bot"
+                }
             }
         known[participant] = name
         return name
@@ -1097,7 +1624,7 @@ extension ParticipantSummary {
     fileprivate init(_ participant: Participant, name: String) {
         switch participant {
         case .person(let person): self.init(kind: .person, id: person.key, name: name)
-        case .agent(let agent): self.init(kind: .agent, id: agent.rawValue, name: name)
+        case .bot(let bot): self.init(kind: .agent, id: bot.role, name: name)
         }
     }
 }
@@ -1134,12 +1661,23 @@ private func spaceRefused(_ refusal: SpaceRefusal) -> Response {
         switch refusal {
         case .alreadyMade: (.conflict, "already_made")
         case .guestsStayOut: (.forbidden, "guests_stay_out")
-        case .onlyAdmins: (.forbidden, "only_admins")
+        case .notMadeYet: (.notFound, "not_made_yet")
+        case .notAllowed: (.forbidden, "not_allowed")
+        case .noSuchGroup: (.notFound, "no_such_group")
+        case .groupExists: (.conflict, "group_exists")
+        case .membersGroupStays: (.conflict, "members_group_stays")
+        case .guestsGroupStays: (.conflict, "guests_group_stays")
+        case .someoneIsOnlyIn: (.conflict, "someone_is_only_in_it")
+        case .anAdmin: (.conflict, "an_admin")
         case .notInIt: (.notFound, "not_in_it")
         case .lastAdmin: (.conflict, "last_admin")
         case .inviteDoesNotWork: (.conflict, "invite_does_not_work")
+        case .noSuchBot: (.notFound, "bot_not_found")
+        case .botExists: (.conflict, "bot_exists")
+        case .mainBotStays: (.conflict, "main_bot_stays")
+        case .noSuchConnection: (.notFound, "connection_not_found")
+        case .connectionExists: (.conflict, "connection_exists")
         case .archived: (.conflict, "archived")
-        case .turgaisOwn: (.conflict, "turgais_own")
         }
     return publicAPIErrorResponse(status: status, code: code, message: refusal.description)
 }
@@ -1156,13 +1694,68 @@ extension TurgaiDomain.SpaceID {
 }
 
 extension SpaceSummary {
-    /// `listing`, one of `spaces`, as the API gives it.
-    fileprivate init(_ listing: SpaceListing, in spaces: Spaces) {
+    /// `listing`, as the API gives it.
+    fileprivate init(_ listing: SpaceListing) {
         self.init(
             id: listing.id.api, name: listing.name.rawValue,
-            role: listing.role == .admin ? .admin : .member,
-            status: listing.status == .archived ? .archived : .active,
-            kind: listing.id == spaces.turgaisOwn ? .turgaisOwn : .made)
+            permissions: SpacePermissions(listing.permissions),
+            status: listing.status == .archived ? .archived : .active)
+    }
+}
+
+extension SpaceConnection {
+    /// `connection` with its run's `status`, as the API gives it: its token only as whether it has
+    /// one.
+    fileprivate init(_ connection: Connection, status: ConnectionStatus, hasToken: Bool) {
+        let platform: TurgaiModels.ConnectionPlatform =
+            switch connection.platform {
+            case .telegram(let access): .telegram(chatIDs: access.chatIDs)
+            }
+        self.init(
+            id: connection.id.description, label: connection.label.rawValue, enabled: connection.enabled,
+            platform: platform, hasToken: hasToken, running: status.running, stopped: status.stopped?.description)
+    }
+}
+
+/// The bot a save made, once it's saved.
+private actor Added {
+    private(set) var bot: TurgaiDomain.Bot?
+
+    func keep(_ bot: TurgaiDomain.Bot) {
+        self.bot = bot
+    }
+}
+
+extension SpaceBot {
+    /// `bot`, its space's main one or not, as the API gives it: its key only as whether it has one.
+    fileprivate init(_ bot: TurgaiDomain.Bot, isMain: Bool) {
+        let configuration = bot.model.location
+        let address: String?
+        let window: Int?
+        if case .server(let server) = configuration {
+            address = server.address.description
+            window = if case .chosen(let chosen) = server.context { chosen.tokens } else { nil }
+        } else {
+            (address, window) = (nil, nil)
+        }
+        self.init(
+            id: .init(rawValue: bot.id.role), name: bot.name.rawValue, instructions: bot.instructions,
+            provider: ModelProvider(rawValue: configuration.provider.name) ?? .ollama, address: address,
+            hasKey: configuration.credentialReference != nil, model: bot.model.name.rawValue, contextWindow: window,
+            isMain: isMain)
+    }
+}
+
+extension SpacePermissions {
+    /// `permissions`, as the API gives them.
+    fileprivate init(_ permissions: Permissions) {
+        self.init(
+            people: permissions.people.map { $0 == .manage ? .manage : .see },
+            bots: permissions.bots.map { $0 == .configure ? .configure : .use },
+            requests: permissions.requests.map { $0 == .runAny ? .runAny : .answer },
+            tasks: permissions.tasks.map { $0 == .manage ? .manage : .see },
+            connections: permissions.connections, deleteConversations: permissions.deleteConversations,
+            configureSpace: permissions.configureSpace)
     }
 }
 
@@ -1270,11 +1863,11 @@ private func publicAPIMessages(
 /// Who said what `event` carries, as the API names them: a person's message's author, or the agent
 /// that answers for what it says; none for the rest.
 private func author(
-    of event: OutboundEvent, answeredBy agent: AgentProfileID, names: ParticipantNames
+    of event: OutboundEvent, answeredBy bot: TurgaiDomain.BotID?, names: ParticipantNames
 ) async throws -> ParticipantSummary? {
     switch event {
     case .reply(.userMessage(_, _, _, _, let person, _, _)): try await names.summary(of: .person(person))
-    case .reply(.partial), .reply(.finished): try await names.summary(of: .agent(agent))
+    case .reply(.partial), .reply(.finished): if let bot { try await names.summary(of: .bot(bot)) } else { nil }
     default: nil
     }
 }
@@ -1379,22 +1972,20 @@ private func send(
     conversation: APIConversation,
     as person: TurgaiDomain.UserID,
     to: Set<Participant>,
-    bridge: TurgaiWebChatBridge,
+    dependencies: TurgaiRouteDependencies,
     names: ParticipantNames
 ) async throws -> TurgaiModels.ChatEvent {
-    let session: TurgaiConnections.WebSession
-    do {
-        session = try await bridge.openSession(id: WebSessionID())
-    } catch {
-        throw PublicAPIChatError.runtimeUnavailable
-    }
+    let session = LiveSession(
+        id: UUID().uuidString, actorSystem: dependencies.system, linking: dependencies.linking, source: .web)
+    // It runs while the socket does: its input finishes as the socket closes.
+    async let _: Void = session.run()
     let outputTask = Task<TurgaiModels.ChatEvent?, Never> {
         var terminalEvent: TurgaiModels.ChatEvent?
         for await delivery in session.output {
             let event = PublicChatEvent(
                 event: delivery.event,
                 publicConversationID: conversation.publicID,
-                author: try? await author(of: delivery.event, answeredBy: conversation.agent, names: names)
+                author: try? await author(of: delivery.event, answeredBy: conversation.bot?.id, names: names)
             ).event
             await delivery.delivered()
             guard let event else { continue }
@@ -1416,7 +2007,8 @@ private func send(
     let connectReceipt = ConversationInputReceipt()
     await session.input.send(
         ConversationInputDelivery(
-            input: .connect(conversation.domainID),
+            in: conversation.space,
+            input: .connect(conversation.domainID, for: person),
             receipt: connectReceipt
         )
     )
@@ -1430,6 +2022,7 @@ private func send(
     let receivedAt = Date()
     await session.input.send(
         ConversationInputDelivery(
+            in: conversation.space,
             input: .message(
                 InboundMessage(
                     id: .init(rawValue: input.id.rawValue),
@@ -1464,7 +2057,6 @@ private func send(
 }
 
 private enum PublicAPIChatError: Error {
-    case runtimeUnavailable
     case messageRejected
 }
 
@@ -1601,7 +2193,7 @@ private enum HTMLChatCommand: Decodable, Sendable {
 private func runHTMLChatSocket(
     inbound: WebSocketInboundStream,
     outbound: WebSocketOutboundWriter,
-    session: TurgaiConnections.WebSession,
+    session: LiveSession,
     conversation: APIConversation,
     participantID: ParticipantID,
     userID: TurgaiDomain.UserID,
@@ -1630,6 +2222,7 @@ private func runHTMLChatSocket(
                     let receipt = ConversationInputReceipt()
                     await session.input.send(
                         ConversationInputDelivery(
+                            in: conversation.space,
                             input: .answer(
                                 conversationID: conversation.domainID, AccessRequestID(id), answer.domain, by: userID),
                             receipt: receipt
@@ -1644,6 +2237,7 @@ private func runHTMLChatSocket(
                 let receipt = ConversationInputReceipt()
                 await session.input.send(
                     ConversationInputDelivery(
+                        in: conversation.space,
                         input: .message(
                             InboundMessage(
                                 id: .init(rawValue: messageID.rawValue),
@@ -1944,7 +2538,8 @@ extension TurgaiModels.Conversation {
     /// `listing`, a conversation in Turgai's apps, as the API gives it.
     fileprivate init(_ listing: ConversationListing) {
         self.init(
-            id: .init(rawValue: listing.id.externalAddress.rawValue), botID: .init(rawValue: listing.agent.rawValue),
+            id: .init(rawValue: listing.id.externalAddress.rawValue),
+            botID: listing.bot.map { .init(rawValue: $0.role) },
             title: listing.title, spaceID: listing.space.api, people: listing.people)
     }
 }

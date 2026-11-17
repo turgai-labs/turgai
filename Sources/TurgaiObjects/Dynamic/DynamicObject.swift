@@ -4,10 +4,10 @@ import DistributedCluster
 import DurableWorkflows
 import EventSourcing
 import Foundation
+import RunningActors
 import ScopedEffect
 import TurgaiCalls
 import TurgaiDomain
-import TurgaiSpaces
 import VirtualActors
 
 /// An object that runs Swift a model wrote, its ``Script``, the way an Erlang process runs a
@@ -25,13 +25,15 @@ import VirtualActors
 @VirtualActor
 public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     public typealias ActorSystem = ClusterSystem
-    public typealias Dependency = ObjectIdentity
+    public typealias Dependency = Config
     public typealias Event = DynamicObjectEvent
     public typealias State = DynamicObjectState
 
     public var state = DynamicObjectState.unmade
     /// Which object it is, kept across restarts.
     private let own: ObjectIdentity
+    /// The space it's in, whose its maker and every caller are: given, never kept in its state.
+    private let home: SpaceID
     /// Its code: stopped, or running as an instance started from what's journaled. It stops when
     /// its code changes or a message fails, as an Erlang process restarts from its last state.
     private var process = Process.stopped(generation: 0)
@@ -73,50 +75,85 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         for follower in followers.values { follower.task.cancel() }
     }
 
-    public init(actorSystem: ClusterSystem, dependency identity: ObjectIdentity) async throws {
+    /// Which object it is, and the space it's in.
+    public struct Config: Codable, Hashable, Sendable {
+        public let space: SpaceID
+        public let identity: ObjectIdentity
+    }
+
+    public init(actorSystem: ClusterSystem, dependency: Config) async throws {
         self.actorSystem = actorSystem
-        self.own = identity
-        try await actorSystem.journal.register(actor: self, with: Self.persistenceID(for: identity))
+        self.own = dependency.identity
+        self.home = dependency.space
+        try await actorSystem.journal.register(
+            actor: self, with: Self.persistenceID(for: dependency.identity, in: dependency.space))
         rehub()
         refollow()
     }
 
-    /// The object `identity`, a reference that reaches it wherever and whenever it runs.
-    public static func resolve(on system: ClusterSystem, identity: ObjectIdentity) async throws -> DynamicObject {
-        try await system.virtualActors.getActor(identifiedBy: actorID(for: identity), dependency: identity)
+    /// The object `identity` of `space`, a reference that reaches it wherever and whenever it runs:
+    /// only its space's registry, and what it holds, reach it so.
+    package static func identified(by identity: ObjectIdentity, in space: SpaceID, on system: ClusterSystem)
+        async throws -> DynamicObject
+    {
+        try await system.virtualActors.getActor(
+            identifiedBy: actorID(for: identity, in: space), dependency: Config(space: space, identity: identity))
     }
 
-    /// Its virtual actor's id: its identity, as a made object.
-    /// The actor the made object `identity` is, as calls reach it: the same across restarts.
-    static func callActor(for identity: ObjectIdentity) -> CallActor {
-        .virtual(actorID(for: identity))
+    /// Its virtual actor's id: its space's, then its identity there.
+    static func actorID(for identity: ObjectIdentity, in space: SpaceID) -> VirtualActorID {
+        VirtualActorID(rawValue: actorIDPrefix + space.rawValue.uuidString + "/" + identity.rawValue)
     }
 
-    static func actorID(for identity: ObjectIdentity) -> VirtualActorID {
-        VirtualActorID(rawValue: actorIDPrefix + identity.rawValue)
+    /// The actor the made object `identity` of `space` is, as calls reach it: the same across
+    /// restarts.
+    public static func callActor(for identity: ObjectIdentity, in space: SpaceID) -> CallActor {
+        .virtual(actorID(for: identity, in: space))
     }
 
     /// Its id, as objects are known, and calls through it: its virtual actor's.
-    private var objectID: ObjectID { .virtual(Self.actorID(for: own)) }
+    private var objectID: ObjectID { .virtual(Self.actorID(for: own, in: home)) }
 
     private static let actorIDPrefix = "dynamic-object/"
+
+    /// The space and identity of the made object a virtual actor id is: none for another kind of
+    /// actor.
+    private static func made(_ virtual: VirtualActorID) -> (space: SpaceID, identity: ObjectIdentity)? {
+        guard virtual.rawValue.hasPrefix(actorIDPrefix) else { return nil }
+        let parts = virtual.rawValue.dropFirst(actorIDPrefix.count).split(separator: "/", maxSplits: 1)
+        guard parts.count == 2, let space = UUID(uuidString: String(parts[0])) else { return nil }
+        return (SpaceID(rawValue: space), ObjectIdentity(rawValue: String(parts[1])))
+    }
 
     /// The identity of the object a reference with `id` is to: `nil` for a reference to another
     /// kind of actor. A reference kept from before a restart, or made on another node, is another
     /// ID with the same identity.
     public static func identity(of id: ClusterSystem.ActorID) -> ObjectIdentity? {
-        guard let virtual = id.virtualActorID?.rawValue, virtual.hasPrefix(actorIDPrefix) else { return nil }
-        return ObjectIdentity(rawValue: String(virtual.dropFirst(actorIDPrefix.count)))
+        id.virtualActorID.flatMap(made)?.identity
+    }
+
+    /// The space of the made object a reference with `id` is to: `nil` for another kind of actor.
+    public static func space(of id: ClusterSystem.ActorID) -> SpaceID? {
+        id.virtualActorID.flatMap(made)?.space
     }
 
     /// The identity of the made object `objectID` is, if it's one.
     static func identity(of objectID: ObjectID) -> ObjectIdentity? {
-        guard case .virtual(let id) = objectID, id.rawValue.hasPrefix(actorIDPrefix) else { return nil }
-        return ObjectIdentity(rawValue: String(id.rawValue.dropFirst(actorIDPrefix.count)))
+        guard case .virtual(let id) = objectID else { return nil }
+        return made(id)?.identity
     }
 
-    static func persistenceID(for identity: ObjectIdentity) -> String {
-        "turgai-object-\(identity.rawValue)"
+    static func persistenceID(for identity: ObjectIdentity, in space: SpaceID) -> String {
+        "turgai-object-\(space.rawValue.uuidString)-\(identity.rawValue)"
+    }
+
+    /// The object whose journal is `persistenceID`, and its space: none for another's journal.
+    public static func object(persistedAs persistenceID: String) -> (space: SpaceID, identity: ObjectIdentity)? {
+        let prefix = "turgai-object-"
+        guard persistenceID.hasPrefix(prefix) else { return nil }
+        let rest = persistenceID.dropFirst(prefix.count)
+        guard rest.count > 37, let space = UUID(uuidString: String(rest.prefix(36))) else { return nil }
+        return (SpaceID(rawValue: space), ObjectIdentity(rawValue: String(rest.dropFirst(37))))
     }
 
     /// Which object this is: its own, kept across restarts, unlike its actor ID.
@@ -130,23 +167,33 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     /// The object with `id`, of the type whose actor is `type`, as code names it with `Type(id:)`:
     /// the one there is, a built-in one checked in under it, or one made now running its type's
-    /// code. The same id is the same object, whoever names it; one of another type is refused.
-    static func make(_ type: ObjectTypeName, id identity: ObjectIdentity, on system: ClusterSystem) async throws
+    /// code. The same id is the same object, whoever names it; one of another type is refused. A
+    /// website is its space's by its name, made the first time.
+    static func make(
+        _ type: ObjectTypeName, id identity: ObjectIdentity, in space: SpaceID, on system: ClusterSystem
+    ) async throws
         -> ActorReference
     {
-        let object = try await resolve(on: system, identity: identity)
+        if type.rawValue == Website.kind.rawValue {
+            guard let name = SiteName(rawValue: identity.rawValue) else {
+                throw CodeProblem(
+                    "`\(identity)` isn't a website's name: lowercase letters, digits and `-`, not at either end.")
+            }
+            return try ActorReference(try await DynamicObjects.of(space, on: system).site(named: name))
+        }
+        let object = try await identified(by: identity, in: space, on: system)
         if let existing = try? await object.source {
             guard existing.type == type.rawValue else {
                 throw CodeProblem("`\(identity)` is a `\(existing.type)`, not a `\(type)`.")
             }
-        } else if let builtIn = try await ObjectNames.object(named: identity.rawValue, using: system) {
+        } else if let builtIn = try await ObjectNames.object(named: identity.rawValue, in: space, using: system) {
             // A built-in object, the one of its kind, is reached as it checked in.
             guard builtIn.description.type == type.rawValue else {
                 throw CodeProblem("`\(identity)` is a `\(builtIn.description.type)`, not a `\(type)`.")
             }
             return try ActorReference(builtIn.object)
         } else {
-            let declared = try await DynamicObjects.resolve(on: system).type(declaring: type)
+            let declared = try await DynamicObjects.of(space, on: system).type(declaring: type)
             try await object.adopt(declared.id, code: declared.code)
         }
         return try ActorReference(object)
@@ -162,7 +209,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         // What its code makes as it starts is made from it, so it holds what it makes.
         try await CallChain.$current.withValue(try chain.entering(objectID.callActor)) {
             for (field, value) in starts where held[field] == nil {
-                starts[field] = try await Self.making(value, on: actorSystem)
+                starts[field] = try await Self.making(value, in: home, on: actorSystem)
             }
         }
         try await emit(event: try state.adopting(type, code, starts: starts, by: chain))
@@ -213,6 +260,12 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// follows what it subscribes to again.
     distributed func start() {}
 
+    /// Brought back after a restart, as it was running: started again, so it follows again, and
+    /// its code's tasks run.
+    public distributed func recovered() async throws {
+        _ = try await running()
+    }
+
     /// It runs while it's living, so what it follows keeps reaching it.
     public func shouldDeactivate() async -> Bool {
         if case .live = state { false } else { true }
@@ -231,12 +284,12 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         refollow()
         if let workflows = workflows {
             for property in schedules {
-                let id = ObjectFiring.scheduleID(of: own, property)
+                let id = ObjectFiring.scheduleID(of: own, in: home, property)
                 try? await workflows.cancelSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
                 if let space { await actorSystem.tellTasks(in: space, .ended(.schedule(id))) }
             }
             for (property, timer) in timers {
-                let id = ObjectFiring.timerID(of: own, property, at: timer.date)
+                let id = ObjectFiring.timerID(of: own, in: home, property, at: timer.date)
                 try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
                 if let space { await actorSystem.tellTasks(in: space, .ended(.timer(id))) }
             }
@@ -261,22 +314,25 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     /// Its own reference, which keeps reaching it after it restarts: what it passes on as `self`.
     private func reference() async throws -> DynamicObject {
-        try await Self.resolve(on: actorSystem, identity: own)
+        try await Self.identified(by: own, in: home, on: actorSystem)
     }
 
     /// `value` with each object its code's `init()` makes, not made yet, made now.
-    private static func making(_ value: JSONValue, on system: ClusterSystem) async throws -> JSONValue {
+    private static func making(_ value: JSONValue, in space: SpaceID, on system: ClusterSystem) async throws
+        -> JSONValue
+    {
         if case .unmade(let type, let id)? = ObjectReference(value) {
-            return try ObjectReference.actor(try await make(type, id: id, on: system), type: type.rawValue).json
+            return try ObjectReference.actor(try await make(type, id: id, in: space, on: system), type: type.rawValue)
+                .json
         }
         switch value {
         case .object(let members):
             var made: [String: JSONValue] = [:]
-            for (key, member) in members { made[key] = try await making(member, on: system) }
+            for (key, member) in members { made[key] = try await making(member, in: space, on: system) }
             return .object(made)
         case .array(let items):
             var made: [JSONValue] = []
-            for item in items { made.append(try await making(item, on: system)) }
+            for item in items { made.append(try await making(item, in: space, on: system)) }
             return .array(made)
         default:
             return value
@@ -318,15 +374,17 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     public distributed func share(with audience: Audience, _ level: AccessLevel?) async throws {
         try await emit(event: try state.live.sharing(with: audience, level, by: try caller()))
         // Who it's listed to follows who may read it.
-        try await DynamicObjects.resolve(on: actorSystem).accessChanged(own)
+        try await DynamicObjects.of(home, on: actorSystem).accessChanged(own)
     }
 
     // MARK: Who may call it
 
     /// Who may read it and who may write it, for a call through `chain`: one not made yet is the
     /// caller's to make.
-    public func access(for chain: CallChain) -> Access {
-        state.access(for: chain)
+    public distributed func access(for chain: CallChain) -> Access {
+        // No call from another space reaches it, whatever it's shared with.
+        guard chain.scope.space == home else { return .nobody }
+        return state.access(for: chain)
     }
 
     /// The chain the call it's handling came through: every call is on someone's behalf.
@@ -480,11 +538,12 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         let code = object.code
         let me = try await me()
         let system = actorSystem
+        let space = home
         let generation = process.generation + 1
         let started = try await ScriptInstance.start(
             code, as: own, holding: object.fields,
             reaches: { recipient, request in
-                let callee = try await Self.recipient(recipient, me: me, using: system)
+                let callee = try await Self.recipient(recipient, me: me, in: space, using: system)
                 switch (request, callee) {
                 case (.call(let message, let arguments, let type), .made(let callee)):
                     return try await callee.respond(
@@ -504,7 +563,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             },
             // An object its code names by id is the one with that id.
             makes: { type, id in
-                .actor(try await DynamicObject.make(type, id: id, on: system), type: type.rawValue)
+                .actor(try await DynamicObject.make(type, id: id, in: space, on: system), type: type.rawValue)
             },
             // A tool's function, run here, in the chain of the call its code is handling.
             tools: { function, input in try await system.toolsAPI.call(function, with: input, on: system) },
@@ -525,48 +584,49 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         process = .stopped(generation: process.generation)
     }
 
-    /// Starts the task its code started as `id`, on this actor, as a Swift task inherits the actor
-    /// it's made on. What it changes is journaled; when it fails, that's journaled, and its code
-    /// stops.
+    /// Starts the task its code started as `id`, kept going by its node: it comes back with the
+    /// object after a restart. What it changes is journaled; when it fails, that's journaled, and
+    /// its code stops.
     private func startTask(_ id: Int, of generation: Int) {
-        guard case .running(let instance, generation, var tasks) = process else { return }
-        tasks[id] = Task {
-            let origin = Origin.task(at: Date())
-            do {
-                // A task's starter doesn't wait on it: its calls start a chain of their own, on
-                // behalf of whoever made it.
-                let chain = try await ownChain().entering(objectID.callActor)
-                let system = actorSystem
-                let announced = try await CallChain.$current.withValue(chain) {
-                    do {
-                        return try await instance.runTask(id)
-                    } catch let refusal as EffectDenied {
-                        // It opened this scope: what it needed that the scope didn't allow, it asks
-                        // the scope's space for.
-                        if let request = ExactRequest(refusal: refusal.refusal) {
-                            _ = try await Space.resolve(on: system, id: chain.scope.space).needed(request)
-                        }
-                        throw refusal
-                    }
-                }
-                let after = try await instance.fields()
-                taskEnded(id, of: generation)
-                if let event = try state.live.handling(origin, holding: after) { try await emit(event: event) }
-                try await announce(announced)
-                refollow()
-            } catch is EffectDenied {
-                // Not its code failing: what the task did is undone.
-                taskEnded(id, of: generation)
-                guard case .running(_, generation, _) = process else { return }
-                stop()
-            } catch {
-                taskEnded(id, of: generation)
-                guard case .running(_, generation, _) = process else { return }
-                stop()
-                try? await emit(event: .failed(origin, problem: String(describing: error)))
-            }
+        guard case .running(let instance, generation, var tasks) = process, let maker = try? state.live.maker else {
+            return
+        }
+        tasks[id] = actorSystem.runningActors.keep(
+            DynamicObject.self, id: Self.actorID(for: own, in: home), dependency: Config(space: home, identity: own),
+            for: maker
+        ) { [weak self] in
+            await self?.whenLocal { await $0.runTask(id, of: generation) }
         }
         process = .running(instance, generation: generation, tasks: tasks)
+    }
+
+    /// The task its code started as `id`, run on this actor, as its own doing: none once its code
+    /// stopped or changed.
+    private func runTask(_ id: Int, of generation: Int) async {
+        guard case .running(let instance, generation, _) = process else { return }
+        let origin = Origin.task(at: Date())
+        do {
+            // A task's starter doesn't wait on it: its calls start a chain of their own, on
+            // behalf of whoever made it.
+            let chain = try await ownChain().entering(objectID.callActor)
+            // What it needs that isn't allowed, whoever decides refuses, and asks who may allow it.
+            let announced = try await CallChain.$current.withValue(chain) { try await instance.runTask(id) }
+            let after = try await instance.fields()
+            taskEnded(id, of: generation)
+            if let event = try state.live.handling(origin, holding: after) { try await emit(event: event) }
+            try await announce(announced)
+            refollow()
+        } catch is EffectDenied {
+            // Not its code failing: what the task did is undone.
+            taskEnded(id, of: generation)
+            guard case .running(_, generation, _) = process else { return }
+            stop()
+        } catch {
+            taskEnded(id, of: generation)
+            guard case .running(_, generation, _) = process else { return }
+            stop()
+            try? await emit(event: .failed(origin, problem: String(describing: error)))
+        }
     }
 
     private func cancelTask(_ id: Int, of generation: Int) {
@@ -603,9 +663,14 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         for (field, source) in wanted where followers[field] == nil {
             // It follows for as long as the object lives and its node runs: the task holds it only
             // while following, so the object can go, and the task with it.
+            let maker = object.maker
             followers[field] = Follower(
                 source: source,
-                task: Task { [weak self] in
+                // Kept going by its node: it comes back with the object after a restart.
+                task: actorSystem.runningActors.keep(
+                    DynamicObject.self, id: Self.actorID(for: own, in: home),
+                    dependency: Config(space: home, identity: own), for: maker
+                ) { [weak self] in
                     while !Task.isCancelled {
                         guard let self, !self.actorSystem.isTerminated else { return }
                         guard
@@ -689,7 +754,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         }
         for (property, schedule) in wanted where scheduled[property] != schedule {
             guard let maker else { continue }
-            let id = ObjectFiring.scheduleID(of: own, property)
+            let id = ObjectFiring.scheduleID(of: own, in: home, property)
             do {
                 // One that changed is made again: a schedule that's there keeps what it was made with.
                 if scheduled[property] != nil {
@@ -698,7 +763,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                 try await workflows.schedule(
                     id: id, recurrence: try schedule.rule(), workflow: ObjectScheduleWorkflow.self,
                     input: ObjectFiring(
-                        object: own, property: property, maker: maker.person, space: maker.space,
+                        object: own, property: property, maker: maker.person, space: maker.space, scope: maker,
                         due: .schedule(schedule), place: place),
                     overlapPolicy: .skip)
                 scheduled[property] = schedule
@@ -715,7 +780,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             }
         }
         for property in scheduled.keys where wanted[property] == nil {
-            let id = ObjectFiring.scheduleID(of: own, property)
+            let id = ObjectFiring.scheduleID(of: own, in: home, property)
             try? await workflows.cancelSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
             scheduled[property] = nil
             if let maker { await actorSystem.tellTasks(in: maker.space, .ended(.schedule(id))) }
@@ -725,15 +790,15 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             guard let maker else { continue }
             do {
                 if let before = timed[property] {
-                    let id = ObjectFiring.timerID(of: own, property, at: before.date)
+                    let id = ObjectFiring.timerID(of: own, in: home, property, at: before.date)
                     try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
                     await actorSystem.tellTasks(in: maker.space, .ended(.timer(id)))
                 }
-                let id = ObjectFiring.timerID(of: own, property, at: timer.date)
+                let id = ObjectFiring.timerID(of: own, in: home, property, at: timer.date)
                 try await workflows.start(
                     type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id),
                     input: ObjectFiring(
-                        object: own, property: property, maker: maker.person, space: maker.space,
+                        object: own, property: property, maker: maker.person, space: maker.space, scope: maker,
                         due: .timer(timer), place: place))
                 timed[property] = timer
                 // A timer that's due already fires as it starts, and isn't one any more.
@@ -752,24 +817,23 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             }
         }
         for (property, timer) in timed where wantedTimers[property] == nil {
-            let id = ObjectFiring.timerID(of: own, property, at: timer.date)
+            let id = ObjectFiring.timerID(of: own, in: home, property, at: timer.date)
             try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
             timed[property] = nil
             if let maker { await actorSystem.tellTasks(in: maker.space, .ended(.timer(id))) }
         }
     }
 
-    /// The scope of a chain its own doing starts: whoever made it, as their space settles it now.
-    private func makersScope() async throws -> CallScope {
-        let maker = try state.live.maker
-        return try await Space.resolve(on: actorSystem, id: maker.space).opening(
-            scopeOf: maker.person, for: .actor(Self.callActor(for: own)))
+    /// Who its own doing is on behalf of: its maker. What they may do is decided as it's done, by
+    /// whoever decides for their space.
+    private func makersScope() throws -> CallScope {
+        try state.live.maker
     }
 
     /// The chain of what it does itself, its tasks and the events it follows: on behalf of its
     /// maker, in the conversation it was made in.
     private func ownChain() async throws -> CallChain {
-        CallChain.own(Self.callActor(for: own), for: try await makersScope(), in: try state.live.madeIn)
+        CallChain.own(Self.callActor(for: own, in: home), for: try makersScope(), in: try state.live.madeIn)
     }
 
     /// Delivers the events of the object `field` holds that the code has a method for, named like
@@ -788,7 +852,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     private func following(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
         do {
             _ = try state.live
-            let source = try await Self.discoverable(reference, me: try await me(), using: actorSystem)
+            let source = try await Self.discoverable(reference, me: try await me(), in: home, using: actorSystem)
             let events = try await source.describe().events.keys.filter { handlers.contains(Self.handler(for: $0)) }
             guard !events.isEmpty else { return false }
             let pulls = events.map { event in Task { await pull(event, from: source, into: field) } }
@@ -863,9 +927,9 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     }
 
     /// Who a call goes to: a living actor, an object by its name, or itself.
-    private static func recipient(_ recipient: ObjectReference, me: ActorReference, using system: ClusterSystem)
-        async throws -> Callee
-    {
+    private static func recipient(
+        _ recipient: ObjectReference, me: ActorReference, in space: SpaceID, using system: ClusterSystem
+    ) async throws -> Callee {
         switch recipient {
         case .actor(let reference, _):
             return try callee(try reference.resolve(using: system), using: system)
@@ -875,10 +939,10 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             throw DynamicObjectError.noReference("a `\(type)` not made yet")
         case .named(let name, _):
             // One made by that name, or else one that checked in under it.
-            if let identity = try await DynamicObjects.resolve(on: system).object(named: name) {
-                return .made(try await DynamicObject.resolve(on: system, identity: identity))
+            if let identity = try await DynamicObjects.of(space, on: system).object(named: name) {
+                return .made(try await DynamicObject.identified(by: identity, in: space, on: system))
             }
-            guard let found = try await ObjectNames.object(named: name, using: system) else {
+            guard let found = try await ObjectNames.object(named: name, in: space, using: system) else {
                 throw DynamicObjectError.noObjectNamed(name)
             }
             return .other(found.object)
@@ -886,10 +950,10 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     }
 
     /// The object a reference is to, as any object is reached: to describe, and to subscribe to.
-    private static func discoverable(_ reference: ObjectReference, me: ActorReference, using system: ClusterSystem)
-        async throws -> DiscoverableObject
-    {
-        switch try await recipient(reference, me: me, using: system) {
+    private static func discoverable(
+        _ reference: ObjectReference, me: ActorReference, in space: SpaceID, using system: ClusterSystem
+    ) async throws -> DiscoverableObject {
+        switch try await recipient(reference, me: me, in: space, using: system) {
         case .made(let object): try DiscoverableObject.resolve(id: object.id, using: system)
         case .other(let object): object
         }

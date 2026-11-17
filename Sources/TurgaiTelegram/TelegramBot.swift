@@ -17,6 +17,8 @@ public actor TelegramConnection {
     public typealias InputStream = AsyncChannel<ConversationInputDelivery>
 
     public let id: String
+    /// The space the chat's conversation is one of: the one its bot is a way into.
+    public let space: SpaceID
     public let conversationID: ConversationID
     public let inbound: InputStream
 
@@ -27,10 +29,12 @@ public actor TelegramConnection {
 
     init(
         conversationID: ConversationID,
+        in space: SpaceID,
         publisher: TelegramEventPublisher,
         logger: Logger
     ) {
         self.id = conversationID.stableKey
+        self.space = space
         self.conversationID = conversationID
         self.publisher = publisher
         self.logger = logger
@@ -110,9 +114,6 @@ public actor TelegramConnection {
         case .command(let command):
             return await sendToApplication(.command(command))
 
-        case .chat(let conversationID, let name, let admins, let person):
-            return await sendToApplication(.chat(conversationID: conversationID, named: name, admins: admins, by: person))
-
         case .answer(let conversationID, let id, let answer, let person):
             return await sendToApplication(.answer(conversationID: conversationID, id, answer, by: person))
 
@@ -138,7 +139,7 @@ public actor TelegramConnection {
     }
 
     func connect() async -> Bool {
-        await sendToApplication(.connect(conversationID))
+        await sendToApplication(.connectChat(conversationID))
     }
 
     /// Sends a channel-neutral Turgai event over this Telegram chat.
@@ -156,7 +157,8 @@ public actor TelegramConnection {
             logger.debug(
                 "Sending Telegram failure",
                 metadata: [
-                    "conversation": "\(conversationID.stableKey)", "turn": "\(turnID.map { "\($0.rawValue)" } ?? "none")",
+                    "conversation": "\(conversationID.stableKey)",
+                    "turn": "\(turnID.map { "\($0.rawValue)" } ?? "none")",
                 ])
         default:
             break
@@ -182,10 +184,7 @@ public actor TelegramConnection {
         let receiptID = UUID()
         pendingReceipts[receiptID] = receipt
         await inbound.send(
-            ConversationInputDelivery(
-                input: input,
-                receipt: receipt
-            )
+            ConversationInputDelivery(in: space, input: input, receipt: receipt)
         )
         let accepted = await receipt.wait()
         pendingReceipts[receiptID] = nil
@@ -226,6 +225,8 @@ public actor TelegramBot {
     public typealias CallbackHandler = @Sendable (TelegramCallbackQuery) async -> Bool
 
     private let client: TelegramAPIClient
+    /// The space it's a way into: each chat's conversation is one of its.
+    private let space: SpaceID
     private let allowedChatIDs: Set<Int64>
     private let conversationChannel: ChannelID
     private let initialOffset: Int64?
@@ -239,18 +240,16 @@ public actor TelegramBot {
     private let connectionContinuation: ConnectionStream.Continuation
     private var activeConnections: [ConversationID: TelegramConnection] = [:]
     private var connectionsSubscribed = false
-    /// When each chat was last said, with its admins: it's said again after a while.
-    private var chatsSaid: [Int64: ContinuousClock.Instant] = [:]
     /// The bot itself, once Telegram has said: mentions and replies to it are to its agent.
     private var me: TelegramUser?
     /// Who each username is, in each chat, as people have written there since it started: a
     /// mention says only the username.
     private var usernames: [Int64: [String: Int64]] = [:]
-    private static let chatKeptFor: Duration = .seconds(600)
     private var runTask: Task<Void, any Error>?
 
     public init(
         client: TelegramAPIClient,
+        into space: SpaceID,
         conversationChannel: ChannelID,
         allowedChatIDs: Set<Int64> = [],
         initialOffset: Int64? = nil,
@@ -261,6 +260,7 @@ public actor TelegramBot {
         callbackHandler: @escaping CallbackHandler = { _ in false }
     ) {
         self.client = client
+        self.space = space
         self.conversationChannel = conversationChannel
         self.allowedChatIDs = allowedChatIDs
         self.initialOffset = initialOffset
@@ -380,8 +380,10 @@ public actor TelegramBot {
                 guard entity.offset >= 0, entity.length > 1, entity.offset + entity.length <= written.count else {
                     continue
                 }
-                let name = String(decoding: written[(entity.offset + 1)..<(entity.offset + entity.length)], as: UTF16.self)
-                    .lowercased()
+                let name = String(
+                    decoding: written[(entity.offset + 1)..<(entity.offset + entity.length)], as: UTF16.self
+                )
+                .lowercased()
                 if name == bot?.username?.lowercased() {
                     toBot = true
                 } else if let id = usernames[name] {
@@ -605,7 +607,9 @@ public actor TelegramBot {
         if me == nil { me = try? await client.me() }
         // Who's called what here, from whoever writes and whoever is replied to.
         for user in [update.message?.from, update.message?.replyToMessage?.from].compactMap({ $0 }) {
-            if let username = user.username, !user.isBot { usernames[chatID, default: [:]][username.lowercased()] = user.id }
+            if let username = user.username, !user.isBot {
+                usernames[chatID, default: [:]][username.lowercased()] = user.id
+            }
         }
         guard
             let event = Self.event(
@@ -619,11 +623,6 @@ public actor TelegramBot {
             )
         else { return true }
         let connection = connection(for: event.conversationID)
-        // What the chat is and who decides for it, before what's said in it: its first says it
-        // starts. It's said again after a while, or with the next update if it wasn't taken.
-        if let said = await chatEvent(for: update), await connection.receive(said), let chat = update.message?.chat {
-            chatsSaid[chat.id] = ContinuousClock.now
-        }
         logger.debug(
             "Telegram update handed on",
             metadata: ["update": "\(update.updateID)", "conversation": "\(event.conversationID.stableKey)"])
@@ -665,35 +664,6 @@ public actor TelegramBot {
         }
     }
 
-    /// The chat as it is, when it's due to be said, the first time and again after a while: called
-    /// its title, or a private chat's one person's name; with its admins, that person, or a group's
-    /// administrators as Telegram lists them. None when it's not time yet, or Telegram can't say.
-    private func chatEvent(for update: TelegramUpdate) async -> TelegramInboundEvent? {
-        guard let message = update.message, let sender = message.from else { return nil }
-        let chat = message.chat
-        let conversationID = ConversationID(
-            channel: conversationChannel, externalAddress: ExternalConversationAddress(String(chat.id)))
-        func person(_ user: TelegramUser) -> UserID { .telegram(user.id) }
-        let called = chat.title ?? [sender.firstName, sender.lastName].compactMap { $0 }.joined(separator: " ")
-        guard let name = SpaceName(String(called.trimmed().prefix(SpaceName.maximumLength))) else {
-            logger.warning("A Telegram chat has no name a space can have", metadata: ["chat": "\(chat.id)"])
-            return nil
-        }
-        if let said = chatsSaid[chat.id], said + Self.chatKeptFor > ContinuousClock.now { return nil }
-        if chat.type == "private" {
-            return .chat(conversationID: conversationID, named: name, admins: [person(sender)], by: person(sender))
-        }
-        do {
-            let administrators = try await client.getChatAdministrators(chat.id)
-            return .chat(
-                conversationID: conversationID, named: name,
-                admins: Set(administrators.filter { !$0.isBot }.map(person)), by: person(sender))
-        } catch {
-            logger.warning("Could not ask Telegram for the chat's administrators: \(error)")
-            return nil
-        }
-    }
-
     private func attachments(for message: TelegramMessage?) -> [Attachment] {
         guard let message else { return [] }
 
@@ -732,6 +702,7 @@ public actor TelegramBot {
         }
         let connection = TelegramConnection(
             conversationID: conversationID,
+            in: space,
             publisher: publisher,
             logger: logger
         )
@@ -795,7 +766,6 @@ extension TelegramInboundEvent {
         case .context(let conversationID, _, _): conversationID
         case .diagnose(let conversationID, _, _): conversationID
         case .answer(let conversationID, _, _, _): conversationID
-        case .chat(let conversationID, _, _, _): conversationID
         case .command(let command):
             switch command {
             case .link(_, let conversationID, _, _),

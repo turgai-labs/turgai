@@ -20,12 +20,12 @@ extension Agent: @retroactive DiscoverableActor {
     private static let objectType = "Agent"
 
     public distributed func describe() -> ObjectDescription {
-        Self.objectDescription
+        Self.describe()
     }
 
     /// What every agent is and takes, the same on every node running this code: whoever knows an
     /// object is an agent reads it here, and doesn't start the agent to ask.
-    static let objectDescription: ObjectDescription = {
+    static func describe() -> ObjectDescription {
         let respond = "Ask the agent, and wait for its answer."
         return ObjectDescription(
             type: Agent.objectType,
@@ -47,7 +47,7 @@ extension Agent: @retroactive DiscoverableActor {
                     effects: [.async, .throws])
             ],
             events: [:])
-    }()
+    }
 
     @discardableResult
     public distributed func invoke(
@@ -60,7 +60,8 @@ extension Agent: @retroactive DiscoverableActor {
         switch action {
         case "respond":
             try _DiscoverySupport.validate(arguments, allowedKeys: ["request"])
-            let request = try _DiscoverySupport.argument(String.self, "request", in: arguments, actorSystem: actorSystem)
+            let request = try _DiscoverySupport.argument(
+                String.self, "request", in: arguments, actorSystem: actorSystem)
             // A call that came from its own answer: it can't answer it until it has answered.
             if CallChain.current?.contains(Self.objectID(of: agentID).callActor) == true {
                 throw AgentAskError.askedByItself(agentID.role)
@@ -94,7 +95,7 @@ extension Agent: @retroactive DiscoverableActor {
 /// Every agent is read by everyone and written by no one, until agents have makers: every call to
 /// one is on someone's behalf.
 extension Agent: AccessControlled {
-    public func access(for chain: CallChain) -> Access { .readByEveryone }
+    public distributed func access(for chain: CallChain) -> Access { .readByEveryone }
 }
 
 /// Why an agent asked as an object didn't answer.
@@ -114,14 +115,9 @@ public enum AgentAskError: Error, Sendable, Equatable, Codable, CustomStringConv
 }
 
 extension Agent {
-    /// The agent of `role` asked as an object.
-    static func asked(_ role: Role) -> AgentID {
-        AgentID(role: role, contextID: AgentContext.asked(as: role).contextID)
-    }
-
-    /// The id an asked agent is listed by: its virtual actor's.
-    static func objectID(_ role: Role) -> ObjectID {
-        objectID(of: asked(role))
+    /// The agent of `role` asked as an object in `space`.
+    static func asked(_ role: Role, in space: SpaceID) -> AgentID {
+        AgentID(role: role, contextID: AgentContext.asked(as: role, in: space).contextID)
     }
 
     /// The id the agent with `id` is known by, as an object and in call chains: its virtual actor's.
@@ -129,30 +125,24 @@ extension Agent {
         .virtual(VirtualActorID(rawValue: id.rawValue))
     }
 
-    /// Runs `body`, a turn of the agent with `id`, with the agent entered into the chain it's
-    /// asked in: what its turn calls comes from it, and the agent is left as the turn ends.
-    public static func answering<Value: Sendable>(
-        as id: AgentID, _ body: () async throws -> Value
-    ) async throws -> Value {
-        try await CallChain.$current.withValue(try CallChain.entering(objectID(of: id).callActor)) {
-            try await body()
-        }
-    }
-
-    /// The agents of `roles`, asked as objects, as their objects are listed: each checked in where
-    /// made objects are, where code finds it by its name, and described as every agent is. None
-    /// starts until it's asked.
-    public static func offered(_ roles: [Role], on system: ClusterSystem) async throws -> [ObjectEntry] {
+    /// The agents of `roles`, bots of `space`, asked as objects there, as their objects are listed:
+    /// each checked in where made objects are, where code finds it by its name, and described as
+    /// every agent is. None starts until it's asked.
+    public static func offered(_ roles: [Role], in space: SpaceID, on system: ClusterSystem) async throws
+        -> [ObjectEntry]
+    {
         var entries: [ObjectEntry] = []
+        let description = describe()
         for role in roles {
-            let agent = try await system.agent(asked(role))
+            let agentID = asked(role, in: space)
+            let agent = try await system.agent(agentID)
             let object = try DiscoverableObject.resolve(id: agent.id, using: system)
-            await system.receptionist.checkIn(object, with: .virtualObjects)
+            await system.receptionist.checkIn(object, with: .virtualObjects(in: space))
             entries.append(
                 ObjectEntry(
-                    id: objectID(role), object: object, type: objectType,
-                    description: objectDescription.description,
-                    actions: objectDescription.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
+                    id: objectID(of: agentID), object: object, type: objectType,
+                    description: description.description,
+                    actions: description.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
                         .sorted()))
         }
         return entries

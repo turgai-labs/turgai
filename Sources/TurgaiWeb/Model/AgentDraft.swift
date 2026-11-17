@@ -1,7 +1,9 @@
 import Hail
+import TurgaiAgents
 import TurgaiApplication
 import TurgaiDomain
 import TurgaiHail
+import TurgaiModels
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -9,17 +11,14 @@ import TurgaiHail
     import Foundation
 #endif
 
-/// An agent as its form shows it and sends it back: a new one, a saved one, or what was just
+/// A bot as its form shows it and sends it back: a new one, a saved one, or what was just
 /// submitted, shown again when saving it failed. What's typed stays as typed; it's read into a
-/// profile only when it's saved.
+/// bot only when it's saved.
 struct AgentDraft: Sendable, Equatable {
     var name: String
-    var persona: String
     var instructions: String
     var provider: AgentProvider
     var modelID: String
-    /// The chosen level's name: empty is the provider's default.
-    var reasoningEffort: String
     var settings: ProviderSettingsDraft
 }
 
@@ -44,17 +43,17 @@ extension AgentDraft {
     /// A new agent called `name`, on Ollama on this machine.
     static func new(named name: String) -> AgentDraft {
         AgentDraft(
-            name: name, persona: "", instructions: "",
+            name: name, instructions: "",
             provider: .ollama,
-            modelID: "", reasoningEffort: "",
+            modelID: "",
             settings: ProviderSettingsDraft(
                 address: "", compatibleAPI: OpenAICompatibleAPI.chatCompletions.rawValue, modelFile: "",
                 gpuLayers: "-1", contextWindow: "", requestLimit: "", apiKey: "", savedKeyProvider: nil))
     }
 
-    /// The saved `profile`, whose provider account takes `requestLimit` requests at once.
-    init(_ profile: TurgaiAgentProfile, requestLimit: Int?) {
-        let configuration = profile.providerConfiguration
+    /// The saved `bot`, whose provider account takes `requestLimit` requests at once.
+    init(_ bot: TurgaiDomain.Bot, requestLimit: Int?) {
+        let configuration = bot.model.location
         var settings = ProviderSettingsDraft(
             address: "", compatibleAPI: OpenAICompatibleAPI.chatCompletions.rawValue, modelFile: "", gpuLayers: "-1",
             contextWindow: "", requestLimit: requestLimit.map(String.init) ?? "", apiKey: "",
@@ -76,9 +75,8 @@ extension AgentDraft {
             break
         }
         self.init(
-            name: profile.name, persona: profile.persona ?? "", instructions: profile.instructions,
-            provider: configuration.provider, modelID: profile.model.id.rawValue,
-            reasoningEffort: profile.reasoningEffort?.rawValue ?? "", settings: settings)
+            name: bot.name.rawValue, instructions: bot.instructions, provider: configuration.provider,
+            modelID: bot.model.name.rawValue, settings: settings)
     }
 
     /// What was submitted, over `saved`: a key not typed again stays the saved one.
@@ -88,11 +86,9 @@ extension AgentDraft {
         }
         self = saved
         name = form["name"]?.first ?? saved.name
-        persona = form["persona"]?.first ?? saved.persona
         instructions = form["instructions"]?.first ?? saved.instructions
         provider = typed("provider").flatMap(AgentProvider.init(name:)) ?? saved.provider
         modelID = typed("modelID") ?? saved.modelID
-        reasoningEffort = typed("reasoningEffort") ?? saved.reasoningEffort
         settings.address = typed("address") ?? saved.settings.address
         settings.compatibleAPI = typed("compatibleAPI") ?? saved.settings.compatibleAPI
         settings.modelFile = typed("modelFile") ?? saved.settings.modelFile
@@ -100,5 +96,41 @@ extension AgentDraft {
         settings.contextWindow = typed("contextWindow") ?? saved.settings.contextWindow
         settings.requestLimit = typed("requestLimit") ?? saved.settings.requestLimit
         settings.apiKey = typed("apiKey") ?? ""
+    }
+}
+
+extension AgentDraft {
+    /// `configuration`, a bot as an app gives it, as its form would: a server that speaks OpenAI's
+    /// API with its chat completions.
+    init(_ configuration: TurgaiModels.BotConfiguration) {
+        let model = configuration.model
+        self.init(
+            name: configuration.name, instructions: configuration.instructions,
+            provider: AgentProvider(name: model.provider.rawValue) ?? .ollama, modelID: model.model,
+            settings: ProviderSettingsDraft(
+                address: model.address ?? "", compatibleAPI: OpenAICompatibleAPI.chatCompletions.rawValue,
+                modelFile: model.model, gpuLayers: "", contextWindow: model.contextWindow.map(String.init) ?? "",
+                requestLimit: "", apiKey: model.apiKey ?? "", savedKeyProvider: nil))
+    }
+
+    /// The bot it describes, `saved` changed, or a new one: its model checked where it runs with
+    /// its key; and a key typed now, which is kept before the bot is saved.
+    ///
+    /// - Throws: ``FormValidationError`` for a name that isn't one, ``ModelRefusal`` when the model
+    ///   can't be used there.
+    func bot(over saved: TurgaiDomain.Bot?, credentials: AgentCredentialStore) async throws -> (
+        bot: TurgaiDomain.Bot, newKey: (reference: AgentCredentialReference, value: String)?
+    ) {
+        guard let botName = BotName(name) else { throw FormValidationError.invalidValue("name") }
+        let checked = try await OnboardingInput.submission(from: self, saved: saved?.model.location)
+            .checked(credentials: credentials)
+        guard let modelName = ModelName(checked.model.rawValue) else {
+            throw FormValidationError.invalidValue("model")
+        }
+        let model = BotModel(location: checked.configuration, name: modelName)
+        let bot =
+            saved.map { TurgaiDomain.Bot(id: $0.id, name: botName, instructions: instructions, model: model) }
+            ?? TurgaiDomain.Bot(name: botName, instructions: instructions, model: model)
+        return (bot, checked.newKey)
     }
 }

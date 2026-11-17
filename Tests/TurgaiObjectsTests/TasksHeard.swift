@@ -10,16 +10,22 @@ actor TasksHeard {
     func add(_ notice: TasksNotice) {
         notices.append(notice)
     }
+
+    /// The notices once `count` have come, or as they are after two seconds: they're pulled a
+    /// moment after they're told.
+    func notices(_ count: Int) async -> [TasksNotice] {
+        for _ in 0..<100 where notices.count < count { try? await Task.sleep(for: .milliseconds(20)) }
+        return notices
+    }
 }
 
-/// A listener following `space`'s tasks on `node`, once the node finds it there, with what it's
-/// told: kept for as long as the test holds it.
-func listening(to space: SpaceID, on node: ClusterSystem) async throws -> (TasksListener, TasksHeard) {
+/// `space`'s tasks on `node`, followed from now on, with what's heard of them: until the returned
+/// task is cancelled.
+func listening(to space: SpaceID, on node: ClusterSystem) async throws -> (Task<Void, Never>, TasksHeard) {
     let heard = TasksHeard()
-    let listener = await TasksListener(actorSystem: node, following: space) { await heard.add($0) }
-    for _ in 0..<50 {
-        if await node.receptionist.lookup(.tasks(in: space)).contains(listener) { break }
-        try await Task.sleep(for: .milliseconds(50))
+    let changes = try await SpaceTasks.identified(by: space, on: node).subscription()
+    let following = Task {
+        for await notice in changes { await heard.add(notice) }
     }
-    return (listener, heard)
+    return (following, heard)
 }

@@ -5,6 +5,7 @@ import Hummingbird
 import HummingbirdElementary
 import NIOCore
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiPersistence
 
@@ -16,7 +17,7 @@ import TurgaiPersistence
 #endif
 
 struct AgentRuntimeSummary: HTML, Sendable {
-    let profile: TurgaiAgentProfile
+    let bot: Bot
     let runtime: [TurgaiAgentRuntimeSnapshot]
 
     var body: some HTML {
@@ -35,7 +36,8 @@ struct AgentRuntimeSummary: HTML, Sendable {
                 Fact(label: "Routing", value: "Selected per channel")
                 Fact(
                     label: "Context limit",
-                    value: profile.contextWindow.map { "\($0.formatted()) tokens" } ?? "The provider's, not said")
+                    value: bot.model.location.contextWindow.map { "\($0.formatted()) tokens" }
+                        ?? "The provider's, not said")
             }
         }
     }

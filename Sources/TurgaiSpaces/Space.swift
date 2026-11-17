@@ -1,5 +1,11 @@
+import Distributed
+import DistributedCluster
+import EventSourcing
 import TurgaiCalls
+import TurgaiConversations
 import TurgaiDomain
+import TurgaiObjects
+import VirtualActors
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -7,344 +13,349 @@ import TurgaiDomain
     import Foundation
 #endif
 
-/// What happened in a space: to its members, and to what's asked of its admins.
-public enum SpaceEvent: Hashable, Codable, Sendable {
-    /// Someone is in it, with their role.
-    case joined(UserID, as: SpaceRole)
-    /// Someone's role changed.
-    case roleChanged(UserID, to: SpaceRole)
-    /// Someone asked its admins to run exactly what they may not run yet: themselves, or an
-    /// object's own work, done for them.
-    case asked(AccessRequest, by: Asker)
-    /// An admin answered.
-    case answered(AccessRequestID, AccessAnswer, by: UserID)
-    /// What was allowed once ran.
-    case spent(AccessRequestID)
-    /// It's called `name`, as whoever made it, or an admin since, named it.
-    case named(SpaceName)
-    /// Someone left it.
-    case left(UserID)
-    /// An admin made an invite.
-    case invited(SpaceInvite)
-    /// Someone joined with the invite, which is spent.
-    case inviteUsed(SpaceInviteID, by: UserID)
-    /// An admin took the invite back.
-    case inviteTakenBack(SpaceInviteID)
-    /// An admin archived it: it's kept to be read, and nothing new happens in it.
-    case archived(by: UserID)
-    /// An admin brought it back into use.
-    case unarchived(by: UserID)
-}
+/// A space, in a journal of its own: its state is what its events fold to from empty, and each
+/// command is decided from it. It settles each chain's scope as the chain starts.
+@EventSourced
+@VirtualActor
+public distributed actor Space: ConversationOwner {
+    public typealias Event = SpaceEvent
+    public typealias ActorSystem = ClusterSystem
+    public typealias State = SpaceState
+    public typealias Dependency = SpaceID
 
-/// A space a person is in, as their list shows it: what it's called, and the role they have.
-public struct SpaceListing: Hashable, Codable, Sendable {
-    public let id: SpaceID
-    public let name: SpaceName
-    public let role: SpaceRole
-    public let status: SpaceStatus
+    public var state: SpaceState
+    /// One change of its state at a time: each decides from the state the one before left.
+    private let changes = AsyncSemaphore(value: 1)
 
-    public init(id: SpaceID, name: SpaceName, role: SpaceRole, status: SpaceStatus) {
-        self.id = id
-        self.name = name
-        self.role = role
-        self.status = status
-    }
-}
+    public let snapshotting: Snapshotting<SpaceEvent, SpaceState> = .every(
+        numberOfEvents: 50,
+        retention: .keepLast(2)
+    )
 
-/// Why a space didn't do what it was asked.
-public enum SpaceRefusal: Error, Equatable, Codable, Sendable, CustomStringConvertible {
-    /// It's made already: it has a name, or people.
-    case alreadyMade
-    /// A guest neither makes a space nor joins one.
-    case guestsStayOut
-    /// Only its admins may.
-    case onlyAdmins
-    /// They're not in it.
-    case notInIt
-    /// They're its last admin: someone else has to be one first.
-    case lastAdmin
-    /// No invite like it works: it was used, taken back, or ran out, or there never was one.
-    case inviteDoesNotWork
-    /// It's archived: it's read, and nothing new happens in it.
-    case archived
-    /// It's Turgai's own, where every account is: it stays in use.
-    case turgaisOwn
+    /// Every space's events, which the space directory is kept from.
+    public let tagging: Tagging<SpaceEvent> = .always(.space)
 
-    public var description: String {
-        switch self {
-        case .alreadyMade: "This space is made already."
-        case .guestsStayOut: "A guest can't make or join a space: sign in first."
-        case .onlyAdmins: "Only its admins can do that."
-        case .notInIt: "You're not in this space."
-        case .lastAdmin: "You're its last admin: make someone else an admin first."
-        case .inviteDoesNotWork: "This invite doesn't work: it's been used, taken back, or has run out."
-        case .archived: "This space is archived: what's in it can be read, and nothing new happens in it."
-        case .turgaisOwn: "Turgai's own space stays in use: it can't be archived."
-        }
-    }
-}
-
-/// A space: the people in it, each with their role; who may run each exact request it decides,
-/// as an object's access says who may use it; and what's asked of its admins until they answer.
-/// Who's in it is the platform's to say, as whoever can write there; who decides for it is too,
-/// where the platform knows.
-public struct SpaceState: Hashable, Codable, Sendable {
-    public let id: SpaceID
-    /// What it's called: none until it's made.
-    public private(set) var name: SpaceName?
-    public private(set) var members: [UserID: SpaceRole]
-    /// The invites its admins made that aren't spent, by id.
-    public private(set) var invites: [SpaceInviteID: SpaceInvite]
-    /// What each exact request it decided allows; the rest are its admins' alone.
-    public private(set) var access: [ExactRequest: Access]
-    /// What's asked of its admins: waiting for an answer, or allowed once and not yet run.
-    public private(set) var requests: [AccessRequestID: AccessRequest]
-    /// Who asked each: the one what it allows once goes to.
-    public private(set) var askers: [AccessRequestID: Asker]
-    /// Whether it's in use.
-    public private(set) var status: SpaceStatus = .active
-
-    public init(id: SpaceID) {
-        self.id = id
-        self.name = nil
-        self.members = [:]
-        self.invites = [:]
-        self.access = [:]
-        self.requests = [:]
-        self.askers = [:]
+    public init(actorSystem: ClusterSystem, dependency id: SpaceID) async throws {
+        self.actorSystem = actorSystem
+        self.state = SpaceDecider.initial(id)
+        try await actorSystem.journal.register(actor: self, with: Self.persistenceID(for: id))
     }
 
-    /// The role `person` has here, if they're in it.
-    public func role(of person: UserID) -> SpaceRole? {
-        members[person]
+    /// Its objects, as `person`, who's in it, works with them: its own registry, handed out to
+    /// someone in it. The calls they make on it are on their behalf, as their chain says.
+    public distributed func objects(for person: UserID) async throws -> DynamicObjects {
+        _ = try made().scope(of: person)
+        return try await DynamicObjects.of(state.id, on: actorSystem)
     }
 
-    /// Who's in it, each with their role, as `person`, one of them, sees them: guests aren't
-    /// among them. Refused when they're not in it.
-    public func people(for person: UserID) throws(SpaceRefusal) -> [UserID: SpaceRole] {
-        guard members[person] != nil else { throw .notInIt }
-        return members.filter { !$0.key.isGuest }
+    public static func actorID(for id: SpaceID) -> VirtualActorID {
+        VirtualActorID(rawValue: "space:\(id.rawValue.uuidString)")
     }
 
-    /// The people who decide for the space.
-    public var admins: Set<UserID> {
-        Set(members.filter { $0.value == .admin }.keys)
+    public static func persistenceID(for id: SpaceID) -> String {
+        "turgai-space-\(id.rawValue.uuidString)"
     }
 
-    /// Whom a call `person` makes here is on behalf of: them, in this space, with the role they
-    /// have in it now and the exact requests shared with them. Refused when they're not in it.
-    public func scope(of person: UserID) throws(SpaceRefusal) -> CallScope {
-        guard let role = role(of: person) else { throw .notInIt }
-        let asThem = CallScope(person, in: id, as: role, allowed: [])
-        let shared = access.filter { $0.value.allows(asThem, .read) }.keys
-        return CallScope(person, in: id, as: role, allowed: Set(shared))
+    /// The space whose journal is `persistenceID`: the inverse of `persistenceID(for:)`.
+    public static func space(persistedAs persistenceID: PersistenceID) throws(SpaceDirectoryError) -> SpaceID {
+        guard persistenceID.hasPrefix("turgai-space-"),
+            let id = UUID(uuidString: String(persistenceID.dropFirst("turgai-space-".count)))
+        else { throw .notASpace(persistenceID) }
+        return SpaceID(rawValue: id)
     }
 
-    /// The scope of a chain `person` starts here for `asker`, as it opens: theirs, with what an
-    /// admin allowed `asker` once besides, which opening it spends. What another asked for, even
-    /// for them, it doesn't take.
-    public func opening(scopeOf person: UserID, for asker: Asker) throws(SpaceRefusal) -> (CallScope, [SpaceEvent]) {
-        let scope = try scope(of: person)
-        let once = requests.values.filter {
-            $0.by == person && askers[$0.id] == asker && $0.standing == .allowedOnce
-        }
-            .sorted { $0.id.rawValue.uuidString < $1.id.rawValue.uuidString }
-        return (
-            CallScope(person, in: id, as: scope.role, allowed: scope.allowed.union(once.map(\.request))),
-            once.map { .spent($0.id) }
-        )
+    /// The space `id`, wherever and whenever it runs.
+    public static func identified(by id: SpaceID, on actorSystem: ClusterSystem) async throws -> Space {
+        try await actorSystem.virtualActors.getActor(identifiedBy: actorID(for: id), dependency: id)
     }
 
-    /// `person` taking part, as someone writing in the space does: a member. None for someone
-    /// already in it.
-    public func admitting(_ person: UserID) -> SpaceEvent? {
-        members[person] == nil ? .joined(person, as: .member) : nil
+    // MARK: Commands
+
+    /// It made by its platform, called `name`, with `admins` deciding for it, `groups` besides its
+    /// members group, and `bot` its first bot.
+    public distributed func make(
+        named name: SpaceName, admins: NonEmptySet<UserID>, groups: [GroupID: Permissions] = [:], bot: Bot,
+        installing builtIns: [BuiltInKind] = []
+    ) async throws {
+        try await run(.makeForPlatform(named: name, admins: admins, groups: groups, bot: bot))
+        try await DynamicObjects.of(state.id, on: actorSystem).install(defaults: builtIns)
     }
 
-    /// The space's admins becoming exactly `admins`: whoever isn't in it yet joins as one, and each
-    /// whose role differs has it changed. Nothing when they already are.
-    public func having(admins: Set<UserID>) -> [SpaceEvent] {
-        let joining = admins.subtracting(members.keys).sorted { $0.key < $1.key }
-            .map { SpaceEvent.joined($0, as: .admin) }
-        let changing = members.keys.sorted { $0.key < $1.key }.compactMap { person -> SpaceEvent? in
-            let role: SpaceRole = admins.contains(person) ? .admin : .member
-            return members[person] == role ? nil : .roleChanged(person, to: role)
-        }
-        return joining + changing
+    /// It made, called `name`, with `person` its first admin and `bot` its first bot.
+    public distributed func make(
+        named name: SpaceName, by person: UserID, bot: Bot, installing builtIns: [BuiltInKind] = []
+    ) async throws {
+        try await run(.make(named: name, by: person, bot: bot))
+        try await DynamicObjects.of(state.id, on: actorSystem).install(defaults: builtIns)
     }
 
-    /// Turgai's own space as its accounts say it is: called `name`, and the accounts in it exactly
-    /// `accounts`, each with its role. Whoever isn't in it joins, each whose role differs has it
-    /// changed, and an account that's not among them leaves; anyone who isn't an account stays.
-    public func following(accounts: [UserID: SpaceRole], named name: SpaceName) -> [SpaceEvent] {
-        let naming: [SpaceEvent] = self.name == name ? [] : [.named(name)]
-        let joiningOrChanging = accounts.sorted { $0.key.key < $1.key.key }.compactMap { person, role in
-            setting(role, of: person)
-        }
-        let leaving = members.keys.filter { person in
-            if case .account = person { accounts[person] == nil } else { false }
-        }
-        .sorted { $0.key < $1.key }.map(SpaceEvent.left)
-        return naming + joiningOrChanging + leaving
+    /// `bot` one of its bots, as `person`, who may configure them, adds it.
+    public distributed func addBot(_ bot: Bot, by person: UserID) async throws {
+        try await run(.addBot(bot, by: person))
     }
 
-    /// `person` having `role`, as the space's platform says: joining with it, or changing to it.
-    /// None when they already have it.
-    public func setting(_ role: SpaceRole, of person: UserID) -> SpaceEvent? {
-        switch members[person] {
-        case nil: .joined(person, as: role)
-        case role?: nil
-        case _?: .roleChanged(person, to: role)
-        }
+    /// Its bot as `bot` says from now on, as `person`, who may configure them, changes it.
+    public distributed func changeBot(_ bot: Bot, by person: UserID) async throws {
+        try await run(.changeBot(bot, by: person))
     }
 
-    /// It made by its platform, called `name`, with `admins` deciding for it, as the platform says.
-    public func making(named name: SpaceName, admins: Set<UserID>) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard self.name == nil, members.isEmpty else { throw .alreadyMade }
-        return [.named(name)] + admins.sorted { $0.key < $1.key }.map { .joined($0, as: .admin) }
+    /// The bot `id` removed, as `person`, who may configure them, asks: it's in none of its
+    /// conversations any more.
+    public distributed func removeBot(_ id: BotID, by person: UserID) async throws {
+        try await run(.removeBot(id, by: person))
     }
 
-    /// It made, called `name`, with `person` its first admin.
-    public func making(named name: SpaceName, by person: UserID) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard !person.isGuest else { throw .guestsStayOut }
-        guard self.name == nil, members.isEmpty else { throw .alreadyMade }
-        return [.named(name), .joined(person, as: .admin)]
+    /// The bot `id` its main from now on, as `person`, who may configure them, chooses it.
+    public distributed func chooseMain(_ id: BotID, by person: UserID) async throws {
+        try await run(.chooseMain(id, by: person))
     }
 
-    /// It called `name` from now on, as its admin `person` renames it.
-    public func renaming(to name: SpaceName, by person: UserID) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard members[person] == .admin else { throw .onlyAdmins }
-        return name == self.name ? [] : [.named(name)]
+    /// Its admins exactly `admins` from now on, as its platform says.
+    public distributed func setAdmins(_ admins: NonEmptySet<UserID>) async throws {
+        try await run(.setAdmins(admins))
     }
 
-    /// `invite` open, as its admin made it: refused while it's archived.
-    public func inviting(_ invite: SpaceInvite) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard members[invite.by] == .admin else { throw .onlyAdmins }
-        guard status == .active else { throw .archived }
-        return [.invited(invite)]
+    /// `person` taking part, as someone writing in it does, in `groups`, as the way they came in
+    /// says: unless they're in it already.
+    public distributed func admit(_ person: UserID, into groups: NonEmptySet<GroupID>) async throws {
+        try await run(.admit(person, into: groups))
     }
 
-    /// It archived by its admin `person`: none when it is already.
-    public func archiving(by person: UserID) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard members[person] == .admin else { throw .onlyAdmins }
-        return status == .archived ? [] : [.archived(by: person)]
+    /// It called `name` from now on, as `person`, who may configure it, asks.
+    public distributed func rename(to name: SpaceName, by person: UserID) async throws {
+        try await run(.rename(to: name, by: person))
     }
 
-    /// It in use again, as its admin `person` asks: none when it is already.
-    public func unarchiving(by person: UserID) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard members[person] == .admin else { throw .onlyAdmins }
-        return status == .active ? [] : [.unarchived(by: person)]
+    /// A group called `group`, which may what `permissions` says, as `person` makes it.
+    public distributed func makeGroup(_ group: GroupID, may permissions: Permissions, by person: UserID) async throws {
+        try await run(.makeGroup(group, permissions, by: person))
     }
 
-    /// The invite `id` taken back by its admin `person`: none when it's spent already.
-    public func takingBack(_ id: SpaceInviteID, by person: UserID) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard members[person] == .admin else { throw .onlyAdmins }
-        return invites[id] == nil ? [] : [.inviteTakenBack(id)]
-    }
-
-    /// `person` joining as a member with the invite whose token hashes to `hash`, which that spends:
-    /// none for someone in it already, who leaves the invite for another.
-    public func joining(with hash: SpaceInviteHash, as person: UserID, at now: Date) throws(SpaceRefusal)
-        -> [SpaceEvent]
+    /// `group` may what `permissions` says from now on, as `person` sets it.
+    public distributed func setPermissions(of group: GroupID, to permissions: Permissions, by person: UserID)
+        async throws
     {
-        guard !person.isGuest else { throw .guestsStayOut }
-        guard status == .active else { throw .archived }
-        guard let invite = invites.values.first(where: { $0.hash == hash }), invite.works(at: now) else {
-            throw .inviteDoesNotWork
-        }
-        guard members[person] == nil else { return [] }
-        return [.inviteUsed(invite.id, by: person), .joined(person, as: .member)]
+        try await run(.setPermissions(group, permissions, by: person))
     }
 
-    /// `person` leaving: refused when they're not in it, or they're its last admin.
-    public func leaving(_ person: UserID) throws(SpaceRefusal) -> [SpaceEvent] {
-        guard let role = members[person] else { throw .notInIt }
-        guard role != .admin || admins.count > 1 else { throw .lastAdmin }
-        return [.left(person)]
+    /// `group` removed, as `person` asks: no one is in it any more.
+    public distributed func removeGroup(_ group: GroupID, by person: UserID) async throws {
+        try await run(.removeGroup(group, by: person))
     }
 
-    /// The invites that still work at `now`, as its admins see them, the earliest made first.
-    public func openInvites(at now: Date) -> [SpaceInvite] {
-        invites.values.filter { $0.works(at: now) }.sorted { $0.id.rawValue.uuidString < $1.id.rawValue.uuidString }
+    /// `person`, one of its members, in exactly `groups` from now on, as `placer`, who manages its
+    /// people, places them.
+    public distributed func place(_ person: UserID, in groups: NonEmptySet<GroupID>, by placer: UserID) async throws {
+        try await run(.place(person, inGroups: groups, by: placer))
     }
 
-    /// Who may run exactly `request` here, and who decides that.
-    public func access(to request: ExactRequest) -> Access {
-        access[request] ?? Access(decidedBy: id)
+    /// `person` one of its admins, as `maker` makes them.
+    public distributed func makeAdmin(_ person: UserID, by maker: UserID) async throws {
+        try await run(.makeAdmin(person, by: maker))
     }
 
-    /// The request `asker` asked for exactly `request` with, for `person`, while it's open.
-    public func request(for request: ExactRequest, by person: UserID, as asker: Asker) -> AccessRequest? {
-        requests.values.first { $0.request == request && $0.by == person && askers[$0.id] == asker }
+    /// `person` no longer one of its admins, as `remover` asks.
+    public distributed func removeAdmin(_ person: UserID, by remover: UserID) async throws {
+        try await run(.removeAdmin(person, by: remover))
     }
 
-    /// `asker` asking its admins, for `person`, to run exactly `request`, which their scope didn't
-    /// allow: a new request, `id`, unless it's already asked for it or it's since been shared with them.
-    public func requesting(_ request: ExactRequest, by person: UserID, as asker: Asker, id: AccessRequestID)
-        throws(SpaceRefusal) -> [SpaceEvent]
-    {
-        guard self.request(for: request, by: person, as: asker) == nil, try !scope(of: person).allows(request) else {
-            return []
-        }
-        return [.asked(AccessRequest(id: id, request: request, by: person, standing: .waiting), by: asker)]
+    /// `invite` open, as whoever made it, who manages its people, asks.
+    public distributed func invite(_ invite: SpaceInvite) async throws {
+        try await run(.invite(invite))
     }
 
-    /// `answer` to the request `id`, by a call on behalf of `scope`: nothing unless it waits and
-    /// they may decide for what it asks, as writing it.
-    public func answering(_ id: AccessRequestID, _ answer: AccessAnswer, by scope: CallScope) -> [SpaceEvent] {
-        guard let open = requests[id], open.standing == .waiting,
-            access(to: open.request).allows(scope, .write)
-        else { return [] }
-        return [.answered(id, answer, by: scope.person)]
+    /// The invite `id` taken back, as `person`, who manages its people, asks.
+    public distributed func takeBack(_ id: SpaceInviteID, by person: UserID) async throws {
+        try await run(.takeBack(id, by: person))
     }
 
-    /// The space after `events`, in order.
-    public func applying(_ events: [SpaceEvent]) -> SpaceState {
-        events.reduce(self) { $0.applying($1) }
+    /// `person` joining with the invite whose token hashes to `hash`.
+    public distributed func join(with hash: SpaceInviteHash, as person: UserID) async throws {
+        try await run(.join(with: hash, as: person, at: Date()))
     }
 
-    /// The space after `event`: the one place it changes.
-    public func applying(_ event: SpaceEvent) -> SpaceState {
-        var next = self
-        switch event {
-        case .joined(let person, let role), .roleChanged(let person, let role):
-            next.members[person] = role
-        case .asked(let request, let asker):
-            next.requests[request.id] = request
-            next.askers[request.id] = asker
-        case .answered(let id, let answer, _):
-            guard let open = requests[id] else { return next }
-            switch answer {
-            case .once:
-                next.requests[id] = open.standing(.allowedOnce)
-            case .always:
-                next.requests[id] = nil
-                next.askers[id] = nil
-                next.access[open.request] = access(to: open.request).sharing(with: .person(open.by), .read)
-            case .everyone:
-                next.requests[id] = nil
-                next.askers[id] = nil
-                next.access[open.request] = access(to: open.request).sharing(with: .space(self.id), .read)
-            case .no:
-                next.requests[id] = nil
-                next.askers[id] = nil
+    /// `person` leaving it.
+    public distributed func leave(_ person: UserID) async throws {
+        try await run(.leave(person))
+    }
+
+    /// It archived, as `person`, who may configure it, asks.
+    public distributed func archive(by person: UserID) async throws {
+        try await run(.archive(by: person))
+    }
+
+    /// It in use again, as `person`, who may configure it, asks.
+    public distributed func unarchive(by person: UserID) async throws {
+        try await run(.unarchive(by: person))
+    }
+
+    /// Exactly `request`, made through `chain`, decided now, as whoever decides for the space has
+    /// it: granted by what its person may do, by what's shared with them, or by an allowance for
+    /// exactly that asker, which it spends; refused otherwise, asking whoever decides, and the
+    /// request it opens, when it opens one. Decided once no other change is being made.
+    public distributed func decide(_ request: ExactRequest, for chain: CallChain) async throws -> RequestDecision {
+        try await changing {
+            let space = try made()
+            switch try space.deciding(request, for: chain.scope.person, asker: chain.asker) {
+            case .allowed:
+                return .granted
+            case .allowedOnce(let id):
+                try await emit(event: .spent(id))
+                return .granted
+            case .notAllowed:
+                let asking = SpaceCommand.ask(
+                    request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID()))
+                let events = try SpaceDecider.decide(asking, state)
+                for event in events { try await emit(event: event) }
+                let asked = events.lazy.compactMap { if case .asked(let asked, _) = $0 { asked } else { nil } }.first
+                return .refused(asked)
             }
-        case .spent(let id):
-            next.requests[id] = nil
-            next.askers[id] = nil
-        case .named(let name):
-            next.name = name
-        case .left(let person):
-            next.members[person] = nil
-        case .invited(let invite):
-            next.invites[invite.id] = invite
-        case .inviteUsed(let id, _), .inviteTakenBack(let id):
-            next.invites[id] = nil
-        case .archived:
-            next.status = .archived
-        case .unarchived:
-            next.status = .active
         }
-        return next
     }
+
+    /// Whether a call through `chain` may go as far as `level` with something `access` says who may
+    /// use, as the space has its person now: the groups they're in and what they may do. Not if
+    /// they're not in it. Decided once no other change is being made.
+    public distributed func decide(_ access: Access, _ level: AccessLevel, for chain: CallChain) async -> Bool {
+        await changing {
+            guard let space = try? made(), let scope = try? space.scope(of: chain.scope.person) else { return false }
+            return access.allows(chain.settled(as: scope), level)
+        }
+    }
+
+    /// Whoever this call is on behalf of needing exactly `request`, which their scope didn't allow:
+    /// it waits for whoever decides for it. The request it opens, when it opens one.
+    public distributed func needed(_ request: ExactRequest) async throws -> AccessRequest? {
+        guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .actor(id)) }
+        let events = try await run(
+            .ask(request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID())))
+        // Asked already, as deciding it refused it: the request that's open is the one waited for.
+        return events.lazy.compactMap { if case .asked(let asked, _) = $0 { asked } else { nil } }.first
+            ?? state.space?.request(for: request, by: chain.scope.person, as: chain.asker).flatMap {
+                $0.standing == .waiting ? $0 : nil
+            }
+    }
+
+    /// `person`'s answer to the request `id`, as the link they answered through, in its
+    /// conversation `conversation`, says: only an answer by whoever may decide for what it asks
+    /// counts. The conversation's links show it, and the turn that waited for it continues.
+    public distributed func answer(
+        _ id: AccessRequestID, _ answer: AccessAnswer, by person: UserID, in conversation: ConversationID
+    ) async throws {
+        guard let open = state.space?.requests[id], !(try await run(.answer(id, answer, by: person))).isEmpty
+        else { return }
+        try await self.conversation(conversation).answered(open, answer, by: person, from: self)
+    }
+
+    /// The scope of a chain `person` starts here for `asker`, settled as it starts: what's allowed
+    /// `asker` once is in it, and spent.
+    public distributed func opening(scopeOf person: UserID, for asker: Asker) async throws -> CallScope {
+        try await changing {
+            let (scope, spent) = try made().opening(scopeOf: person, for: asker)
+            for event in spent { try await emit(event: event) }
+            return scope
+        }
+    }
+
+    // MARK: Queries
+
+    /// Whom a call `person` makes here is on behalf of, and what's shared with them: refused when
+    /// they're not in it.
+    public distributed func scope(of person: UserID) throws -> CallScope {
+        try made().scope(of: person)
+    }
+
+    /// Whether it's in use: none before it's made.
+    public distributed func status() -> SpaceStatus? {
+        state.status
+    }
+
+    /// It as `person`'s list shows it: none before it's made, or when they're not in it.
+    public distributed func listing(for person: UserID) -> SpaceListing? {
+        state.listing(for: person)
+    }
+
+    /// Who's in it, as `person`, who may see its people, sees them: guests aren't among them.
+    public distributed func people(for person: UserID) throws -> [UserID: Set<GroupID>] {
+        try made().people(for: person)
+    }
+
+    /// Its bots, the main first, as `person`, who may use them, sees them.
+    public distributed func bots(for person: UserID) throws -> [Bot] {
+        let space = try made()
+        guard let permissions = space.permissions(of: person) else { throw SpaceRefusal.notInIt }
+        guard permissions.bots != nil else { throw SpaceRefusal.notAllowed }
+        return space.bots.all
+    }
+
+    /// Its bot `id`, as it is now: none once it's removed, or when it never was one of its bots.
+    public distributed func bot(_ id: BotID) -> Bot? {
+        state.space?.bots[id]
+    }
+
+    /// Its main bot: who answers when no other is asked for.
+    public distributed func mainBot() throws -> Bot {
+        try made().bots.main
+    }
+
+    /// Its groups, each with what it may, as `person`, one of its people, sees them.
+    public distributed func groups(for person: UserID) throws -> [GroupID: Permissions] {
+        let space = try made()
+        guard space.permissions(of: person) != nil else { throw SpaceRefusal.notInIt }
+        return space.groups
+    }
+
+    /// The invites that still work, as `person`, who manages its people, sees them.
+    public distributed func openInvites(for person: UserID) throws -> [SpaceInvite] {
+        let space = try made()
+        guard let permissions = space.permissions(of: person) else { throw SpaceRefusal.notInIt }
+        guard permissions.people == .manage else { throw SpaceRefusal.notAllowed }
+        return space.openInvites(at: Date())
+    }
+
+    /// What waits for an answer.
+    public distributed func waiting() -> [AccessRequest] {
+        (state.space?.requests.values.filter { $0.standing == .waiting } ?? []).sorted {
+            $0.id.rawValue.uuidString < $1.id.rawValue.uuidString
+        }
+    }
+
+    // MARK: Running
+
+    /// What `command` makes happen, decided from its state and emitted, once no other change is
+    /// being made.
+    @discardableResult
+    func run(_ command: SpaceCommand) async throws -> [SpaceEvent] {
+        let events = try await changing {
+            let events = try SpaceDecider.decide(command, state)
+            for event in events { try await emit(event: event) }
+            return events
+        }
+        return events
+    }
+
+    /// It, once it's made: refused before.
+    func made() throws(SpaceRefusal) -> SpaceState.Space {
+        guard let space = state.space else { throw .notMadeYet }
+        return space
+    }
+
+    /// Makes `change` to its state once no other change is being made: it reads the state, decides
+    /// and emits, calling nothing that could call back.
+    func changing<Result>(_ change: () async throws -> Result) async rethrows -> Result {
+        await changes.wait()
+        defer { changes.signal() }
+        return try await change()
+    }
+
+    public func handleEvent(_ event: SpaceEvent) {
+        state = SpaceDecider.evolve(state, event)
+    }
+}
+
+/// How the space decided exactly a request.
+public enum RequestDecision: Codable, Hashable, Sendable {
+    case granted
+    /// Refused, with the request it opened for whoever decides, when it opened one.
+    case refused(AccessRequest?)
 }

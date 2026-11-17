@@ -103,7 +103,8 @@ public struct Bot: Codable, Equatable, Sendable, Identifiable {
 
 public struct Conversation: Codable, Equatable, Sendable, Identifiable {
     public let id: ConversationID
-    public let botID: BotID
+    /// The bot that answers in it: none once its bot has left, until another is brought in.
+    public let botID: BotID?
     /// Its title, or else the first line of the first thing said in it: none until either.
     public let title: String?
     /// The space it's in.
@@ -111,7 +112,7 @@ public struct Conversation: Codable, Equatable, Sendable, Identifiable {
     /// How many people are in it.
     public let people: Int
 
-    public init(id: ConversationID, botID: BotID, title: String? = nil, spaceID: SpaceID, people: Int) {
+    public init(id: ConversationID, botID: BotID?, title: String? = nil, spaceID: SpaceID, people: Int) {
         self.id = id
         self.botID = botID
         self.title = title
@@ -203,13 +204,13 @@ public struct ReplySoFar: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// A conversation to start: answered by `botID`, or the default bot, in the space `spaceID`, or
-/// Turgai's own.
+/// A conversation to start: in the space `spaceID`, answered by its bot `botID`, or its main one.
 public struct CreateConversationRequest: Codable, Equatable, Sendable {
     public let botID: BotID?
-    public let spaceID: SpaceID?
+    /// The space it starts in.
+    public let spaceID: SpaceID
 
-    public init(botID: BotID? = nil, spaceID: SpaceID? = nil) {
+    public init(botID: BotID? = nil, spaceID: SpaceID) {
         self.botID = botID
         self.spaceID = spaceID
     }
@@ -266,9 +267,10 @@ public struct AccessRequest: Codable, Equatable, Sendable, Identifiable {
 
 /// What a client sends over the chat socket.
 public enum ChatCommand: Codable, Equatable, Sendable {
-    /// The conversation the connection shows from now on, instead of the one before: its history
-    /// and live turns come, and messages and answers go to it.
-    case open(conversationID: ConversationID)
+    /// The conversation `conversationID` of the space `spaceID` the connection shows from now on,
+    /// instead of the one before: its history and live turns come, and messages and answers go to
+    /// it.
+    case open(spaceID: SpaceID, conversationID: ConversationID)
     case message(SendMessageRequest)
     /// An admin's answer to an access request.
     case answer(id: UUID, answer: AccessAnswer)
@@ -291,7 +293,9 @@ public enum ChatCommand: Codable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         switch try values.decode(Kind.self, forKey: .type) {
         case .open:
-            self = .open(conversationID: try values.decode(ConversationID.self, forKey: .conversationID))
+            self = .open(
+                spaceID: try values.decode(SpaceID.self, forKey: .space),
+                conversationID: try values.decode(ConversationID.self, forKey: .conversationID))
         case .message:
             self = .message(
                 SendMessageRequest(
@@ -316,17 +320,23 @@ public enum ChatCommand: Codable, Equatable, Sendable {
                 case .archiveSpace: .archiveSpace(try values.decode(SpaceID.self, forKey: .space))
                 case .unarchiveSpace: .unarchiveSpace(try values.decode(SpaceID.self, forKey: .space))
                 case .leaveConversation:
-                    .leaveConversation(try values.decode(ConversationID.self, forKey: .conversationID))
+                    .leaveConversation(
+                        try values.decode(ConversationID.self, forKey: .conversationID),
+                        of: try values.decode(SpaceID.self, forKey: .space))
                 case .deleteConversation:
-                    .deleteConversation(try values.decode(ConversationID.self, forKey: .conversationID))
+                    .deleteConversation(
+                        try values.decode(ConversationID.self, forKey: .conversationID),
+                        of: try values.decode(SpaceID.self, forKey: .space))
                 case .changeSchedule:
                     .changeSchedule(
                         in: try values.decode(TaskListing.Chat.self, forKey: .chat),
+                        of: try values.decode(SpaceID.self, forKey: .space),
                         named: try values.decode(String.self, forKey: .name),
                         try values.decode(ScheduleChange.self, forKey: .change))
                 case .cancelReminder:
                     .cancelReminder(
                         in: try values.decode(TaskListing.Chat.self, forKey: .chat),
+                        of: try values.decode(SpaceID.self, forKey: .space),
                         named: try values.decode(String.self, forKey: .name))
                 }
             self = .push(ref: try values.decode(PushRef.self, forKey: .ref), ask: ask)
@@ -338,14 +348,16 @@ public enum ChatCommand: Codable, Equatable, Sendable {
         switch try values.decode(ChatTopic.Name.self, forKey: .topic) {
         case .memory: .memory
         case .tasks: .tasks(space: try values.decode(SpaceID.self, forKey: .space))
+        case .objects: .objects(space: try values.decode(SpaceID.self, forKey: .space))
         }
     }
 
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .open(let conversationID):
+        case .open(let spaceID, let conversationID):
             try values.encode(Kind.open, forKey: .type)
+            try values.encode(spaceID, forKey: .space)
             try values.encode(conversationID, forKey: .conversationID)
         case .message(let request):
             try values.encode(Kind.message, forKey: .type)
@@ -363,18 +375,24 @@ public enum ChatCommand: Codable, Equatable, Sendable {
             switch ask {
             case .join(let topic), .leave(let topic):
                 try values.encode(topic.name, forKey: .topic)
-                if case .tasks(let space) = topic { try values.encode(space, forKey: .space) }
+                switch topic {
+                case .tasks(let space), .objects(let space): try values.encode(space, forKey: .space)
+                case .memory: break
+                }
             case .setRemembering(let remembering): try values.encode(remembering, forKey: .remembering)
             case .archiveSpace(let space), .unarchiveSpace(let space):
                 try values.encode(space, forKey: .space)
-            case .leaveConversation(let conversation), .deleteConversation(let conversation):
+            case .leaveConversation(let conversation, let space), .deleteConversation(let conversation, let space):
                 try values.encode(conversation, forKey: .conversationID)
-            case .changeSchedule(let chat, let name, let change):
+                try values.encode(space, forKey: .space)
+            case .changeSchedule(let chat, let space, let name, let change):
                 try values.encode(chat, forKey: .chat)
+                try values.encode(space, forKey: .space)
                 try values.encode(name, forKey: .name)
                 try values.encode(change, forKey: .change)
-            case .cancelReminder(let chat, let name):
+            case .cancelReminder(let chat, let space, let name):
                 try values.encode(chat, forKey: .chat)
+                try values.encode(space, forKey: .space)
                 try values.encode(name, forKey: .name)
             case .memory, .forgetMemory: break
             }
@@ -404,6 +422,7 @@ public enum ChatEventKind: String, Codable, Sendable {
     case conversationDeleted = "conversation.deleted"
     case reply
     case memoryChanged = "memory.changed"
+    case objectsChanged = "objects.changed"
     case tasks
     case taskKept = "task.kept"
     case taskEnded = "task.ended"
@@ -426,7 +445,8 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         /// The conversation is open, for `you`: the id of the person the client is.
         case ready(
             conversationID: ConversationID,
-            botID: BotID,
+            /// The bot that answers in it: none once it's left.
+            botID: BotID?,
             status: ConversationStatus,
             you: String
         )
@@ -500,6 +520,9 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         /// What's remembered about the person changed, or whether they're remembered: to a connection
         /// that joined ``ChatTopic/memory``.
         case memoryChanged
+        /// The objects the person may read changed: to a connection that joined
+        /// ``ChatTopic/objects``.
+        case objectsChanged
         /// The tasks of the space with this id the person may change, as they are as a connection
         /// joins ``ChatTopic/tasks``: each change follows.
         case tasks(space: SpaceID, tasks: [TaskListing])
@@ -531,6 +554,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             case .conversationDeleted: .conversationDeleted
             case .reply: .reply
             case .memoryChanged: .memoryChanged
+            case .objectsChanged: .objectsChanged
             case .tasks: .tasks
             case .taskKept: .taskKept
             case .taskEnded: .taskEnded
@@ -562,7 +586,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case .ready:
             payload = .ready(
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID),
-                botID: try values.decode(BotID.self, forKey: .botID),
+                botID: try values.decodeIfPresent(BotID.self, forKey: .botID),
                 status: try values.decode(ConversationStatus.self, forKey: .status),
                 you: try values.decode(String.self, forKey: .you)
             )
@@ -655,6 +679,8 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             payload = .reply(ref: try values.decode(PushRef.self, forKey: .ref), reply: reply)
         case .memoryChanged:
             payload = .memoryChanged
+        case .objectsChanged:
+            payload = .objectsChanged
         case .tasks:
             payload = .tasks(
                 space: try values.decode(SpaceID.self, forKey: .space),
@@ -683,7 +709,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         switch payload {
         case .ready(let conversationID, let botID, let status, let you):
             try values.encode(conversationID, forKey: .conversationID)
-            try values.encode(botID, forKey: .botID)
+            try values.encodeIfPresent(botID, forKey: .botID)
             try values.encode(status, forKey: .status)
             try values.encode(you, forKey: .you)
         case .history(let conversationID, let messages):
@@ -751,7 +777,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
                 try values.encode(ChatReply.Status.failed, forKey: .status)
                 try values.encode(error, forKey: .error)
             }
-        case .memoryChanged:
+        case .memoryChanged, .objectsChanged:
             break
         case .tasks(let space, let tasks):
             try values.encode(space, forKey: .space)

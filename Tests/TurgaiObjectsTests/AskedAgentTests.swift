@@ -6,8 +6,12 @@ import Testing
 import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
+import TurgaiSpaces
 
 @testable import TurgaiApplication
+
+/// The space the agents are asked in.
+private let askedIn = AsAPerson.person.space
 
 @Suite(.asAPerson)
 struct AskedAgentTests {
@@ -18,9 +22,12 @@ struct AskedAgentTests {
     func agentsAreListedAndFoundByTheirIds() async throws {
         let started = StartedAgents()
         try await withAgentNodes(started) { objects, sessionNode in
-            _ = try await Agent.offered([Role("conversation")], on: objects)
-            let offered = try await Agent.offered([Role("planner"), Role("chef")], on: sessionNode)
-            let session = ObjectSession(actorSystem: sessionNode, agents: offered)
+            _ = try await Agent.offered([Role("conversation")], in: askedIn, on: objects)
+            let offered = try await Agent.offered([Role("planner"), Role("chef")], in: askedIn, on: sessionNode)
+            let session = ObjectSession(
+                in: AsAPerson.person.space,
+                objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
+                    for: AsAPerson.person.person), actorSystem: sessionNode, agents: offered)
 
             var page = ""
             for _ in 0..<50 {
@@ -42,8 +49,11 @@ struct AskedAgentTests {
             #expect(await started.roles.isEmpty)
 
             // Code in a shared object finds one by its name; two of one type never collide.
-            let found = try #require(try await ObjectNames.object(named: "chef", using: sessionNode))
-            #expect(found.object.id.virtualActorID.map { ObjectID.virtual($0) } == Agent.objectID(Role("chef")))
+            let found = try #require(
+                try await ObjectNames.object(named: "chef", in: AsAPerson.person.space, using: sessionNode))
+            #expect(
+                found.object.id.virtualActorID.map { ObjectID.virtual($0) }
+                    == Agent.objectID(of: Agent.asked(Role("chef"), in: askedIn)))
             #expect(await started.roles == ["chef"])
         }
     }
@@ -55,16 +65,20 @@ extension AskedAgentTests {
     @Test(.timeLimit(.minutes(1)))
     func anAgentOfferedFromTwoNodesIsOneObject() async throws {
         try await withAgentNodes(StartedAgents()) { objects, sessionNode in
-            _ = try await Agent.offered([Role("planner")], on: objects)
-            _ = try await Agent.offered([Role("planner")], on: sessionNode)
+            _ = try await Agent.offered([Role("planner")], in: askedIn, on: objects)
+            _ = try await Agent.offered([Role("planner")], in: askedIn, on: sessionNode)
             for node in [objects, sessionNode] {
-                for _ in 0..<50 where await node.receptionist.lookup(.virtualObjects).count < 2 {
+                for _ in 0..<50
+                where await node.receptionist.lookup(.virtualObjects(in: AsAPerson.person.space)).count < 2 {
                     try await Task.sleep(for: .milliseconds(100))
                 }
-                #expect(await node.receptionist.lookup(.virtualObjects).count == 2)
+                #expect(await node.receptionist.lookup(.virtualObjects(in: AsAPerson.person.space)).count == 2)
 
-                let found = try #require(try await ObjectNames.object(named: "planner", using: node))
-                #expect(found.object.id.virtualActorID.map { ObjectID.virtual($0) } == Agent.objectID(Role("planner")))
+                let found = try #require(
+                    try await ObjectNames.object(named: "planner", in: AsAPerson.person.space, using: node))
+                #expect(
+                    found.object.id.virtualActorID.map { ObjectID.virtual($0) }
+                        == Agent.objectID(of: Agent.asked(Role("planner"), in: askedIn)))
                 #expect(found.object.id.node == node.cluster.node)
             }
         }
@@ -90,7 +104,7 @@ private func withAgentNodes(
             await started.start(agentID)
             return AgentSpawnConfig(agentID: agentID)
         },
-        modelSelectionProvider: { _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
+        modelSelectionProvider: { _, _ in ModelConfiguration(model: try AgentModel("ollama/test")) },
         authority: { _ in TurgaiAuthority() })
     try await withClusterSystem(
         "objects", store: store, hostsVirtualActors: true, installing: { $0.plugins.install(plugin: agents) }

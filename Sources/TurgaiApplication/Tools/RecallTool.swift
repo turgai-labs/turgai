@@ -20,7 +20,8 @@ public struct RecallTool: HailCore.Tool {
     /// The human it's about: the person it talks with, and everyone linked to them.
     let persons: [TurgaiDomain.UserID]
     public let name = "recall"
-    public let description = "Recall what you remember about the person you're talking with, from earlier conversations."
+    public let description =
+        "Recall what you remember about the person you're talking with, from earlier conversations."
 
     public func effect(for input: Input) throws -> RecallEffect {
         RecallEffect(actorSystem: actorSystem, persons: persons)
@@ -44,7 +45,7 @@ public struct RecallEffect: ScopedEffect, Sendable {
         let (actorSystem, persons) = token.withConfiguration { ($0.actorSystem, $0.persons) }
         var facts: [MemoryFact] = []
         for person in persons {
-            let user = try await User.resolve(on: actorSystem, userID: person)
+            let user = try await User.identified(by: person, on: actorSystem)
             if try await user.recallable() { facts += try await user.remembered().facts }
         }
         var recalled: [MemoryFact] = []

@@ -54,8 +54,8 @@ public struct MemoryObservation: Hashable, Codable, Sendable {
     public let sourceID: MemorySourceID
     /// The conversation it was in: it's read with the rest of that conversation.
     public let conversation: ConversationID
-    /// The agent that answered, whose model reads it.
-    public let heardBy: AgentProfileID
+    /// The bot that answered, whose model reads it.
+    public let heardBy: BotID
     /// Its message's id in the channel it came through: where it's marked once something's noted.
     public let channelMessageID: ChannelMessageID?
     public let text: String
@@ -66,7 +66,7 @@ public struct MemoryObservation: Hashable, Codable, Sendable {
         id: ObservationID = ObservationID(),
         sourceID: MemorySourceID,
         conversation: ConversationID,
-        heardBy: AgentProfileID,
+        heardBy: BotID,
         channelMessageID: ChannelMessageID? = nil,
         text: String,
         response: String? = nil,

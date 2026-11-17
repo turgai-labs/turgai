@@ -1,7 +1,9 @@
 import Elementary
 import ElementaryHTMX4
 import Hail
+import TurgaiAgents
 import TurgaiApplication
+import TurgaiDomain
 
 /// Each provider's own settings. Only the selected provider's fieldset is enabled,
 /// so the fields it shares with others, such as `apiKey`, submit only its values.
@@ -12,6 +14,8 @@ struct ProviderConfigurationFields: HTML, Sendable {
     /// The saved bot these are the settings of, when they're a saved one's: its models are asked
     /// for with its saved key, when the key isn't typed again.
     let profileID: String?
+    /// Where typing a setting asks again.
+    let asking: ModelAsking
     let part: Part
 
     /// Which of a provider's settings these are: how it's reached, before the model is chosen;
@@ -55,26 +59,27 @@ struct ProviderConfigurationFields: HTML, Sendable {
             AddressField(
                 address: draft(for: .ollama)?.address ?? "", placeholder: ServerAddress.localOllama.description,
                 hint: "Leave empty for Ollama on this machine; Ollama's cloud is at \(ServerAddress.ollamaCloud).",
-                profileID: profileID)
+                profileID: profileID, asking: asking)
             APIKeyField(
                 hasSavedKey: settings.savedKeyProvider == .ollama, placeholder: "Only for Ollama's cloud",
-                profileID: profileID)
+                profileID: profileID, asking: asking)
         }
         section(.openAICompatible) {
             AddressField(
                 address: draft(for: .openAICompatible)?.address ?? "", placeholder: "",
-                hint: "The address its API is under, such as its /v1.", profileID: profileID)
+                hint: "The address its API is under, such as its /v1.", profileID: profileID, asking: asking)
             CompatibleAPIField(
                 api: draft(for: .openAICompatible).flatMap { OpenAICompatibleAPI(rawValue: $0.compatibleAPI) }
                     ?? .chatCompletions)
             APIKeyField(
                 hasSavedKey: settings.savedKeyProvider == .openAICompatible,
-                placeholder: "Only when the server asks for one", profileID: profileID)
+                placeholder: "Only when the server asks for one", profileID: profileID, asking: asking)
         }
         for cloud in [AgentProvider.openAI, .anthropic, .gemini] {
             section(cloud) {
                 APIKeyField(
-                    hasSavedKey: settings.savedKeyProvider == cloud, placeholder: "Paste API key", profileID: profileID)
+                    hasSavedKey: settings.savedKeyProvider == cloud, placeholder: "Paste API key", profileID: profileID,
+                    asking: asking)
             }
         }
     }
@@ -103,13 +108,14 @@ private struct AddressField: HTML, Sendable {
     let placeholder: String
     let hint: String
     let profileID: String?
+    let asking: ModelAsking
 
     var body: some HTML {
         label(.class("form-field")) {
             span(.class("field-label")) { "Server address" }
             input(
                 attributes: [.type(.url), .name("address"), .value(address), .placeholder(placeholder)]
-                    + ModelSearchRequest.attributes(on: .typing, profileID: profileID))
+                    + ModelSearchRequest.attributes(on: .typing, profileID: profileID, asking: asking))
             p(.class("hint")) { hint }
         }
     }
@@ -140,6 +146,7 @@ private struct APIKeyField: HTML, Sendable {
     let hasSavedKey: Bool
     let placeholder: String
     let profileID: String?
+    let asking: ModelAsking
 
     var body: some HTML {
         label(.class("form-field")) {
@@ -148,7 +155,7 @@ private struct APIKeyField: HTML, Sendable {
                 attributes: [
                     .type(.password), .name("apiKey"), .autocomplete(.off),
                     .placeholder(hasSavedKey ? "Leave blank to keep the saved key" : placeholder),
-                ] + ModelSearchRequest.attributes(on: .typing, profileID: profileID))
+                ] + ModelSearchRequest.attributes(on: .typing, profileID: profileID, asking: asking))
             p(.class("hint")) { "The key is stored as a secret and never shown again." }
         }
     }

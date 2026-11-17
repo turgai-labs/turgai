@@ -2,6 +2,7 @@ import DiscoverableActors
 import Distributed
 import DistributedCluster
 import TurgaiCalls
+import TurgaiDomain
 import VirtualActors
 
 /// Which object something is, as the system knows it, and as models and people are shown it: the
@@ -80,67 +81,8 @@ public struct ObjectEntry: Codable, Sendable {
     }
 }
 
-/// Lists the objects: the ones the directory holds, and the ones that check in with the cluster
-/// receptionist themselves, each described on behalf of whoever lists them. Actor references are
-/// resolved from IDs when requested, so the catalog doesn't keep root actors alive.
-public distributed actor ObjectCatalog: LifecycleWatch {
-    public typealias ActorSystem = ClusterSystem
-
-    /// The objects that checked in, until each is gone.
-    private var checkedIn: Set<ClusterSystem.ActorID> = []
-    private var listing: Task<Void, Never>?
-    private var observers: [AsyncStream<Void>.Continuation] = []
-
-    public init(actorSystem: ActorSystem) async {
-        self.actorSystem = actorSystem
-        self.startListing()
-    }
-
-    public func terminated(actor id: ActorID) async {
-        self.checkedIn.remove(id)
-        self.notifyObservers()
-    }
-
-    /// Yields now and whenever an object joins or leaves the catalog.
-    public func changes() -> AsyncStream<Void> {
-        let (changes, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        continuation.yield()
-        self.observers.append(continuation)
-        return changes
-    }
-
-    /// An object the directory holds was made, changed or removed: whoever follows changes looks again.
-    public distributed func changed() {
-        notifyObservers()
-    }
-
-    private func notifyObservers() {
-        self.observers.removeAll { observer in
-            if case .terminated = observer.yield() { true } else { false }
-        }
-    }
-
-    deinit {
-        self.listing?.cancel()
-    }
-
-    private func startListing() {
-        let system = actorSystem
-        self.listing = Task { [weak self] in
-            for await object in await system.receptionist.listing(of: .objects) {
-                guard !Task.isCancelled else { return }
-                await self?.whenLocal { $0.checkIn(object) }
-            }
-        }
-    }
-
-    /// An object that checked in: listed from now on, until it's gone.
-    private func checkIn(_ object: DiscoverableObject) {
-        guard checkedIn.insert(object.id).inserted else { return }
-        watchTermination(of: object)
-        notifyObservers()
-    }
-
+/// How a space's objects are listed to a model: each action as a short signature.
+public enum ObjectCatalog {
     /// An action with its argument names, such as `add(title, notes?)`, so a model
     /// can call it without describing the object first.
     public static func signature(_ key: String, input: JSONValue?) -> String {
@@ -164,35 +106,5 @@ public distributed actor ObjectCatalog: LifecycleWatch {
                 "\(name)" + (properties[name]!.swiftType.map { ": \($0)?" } ?? "?")
             }
         return "\(name)(\(written.joined(separator: ", ")))"
-    }
-
-    /// The objects: those the directory holds, and the objects that checked in themselves, from
-    /// the receptionist.
-    public distributed func entries() async throws -> [ObjectEntry] {
-        var entries: [ObjectEntry] = []
-        var seen: Set<ClusterSystem.ActorID> = []
-        let made = try await DynamicObjects.resolve(on: actorSystem).held()
-        for held in made where seen.insert(held.object.id).inserted {
-            entries.append(held)
-        }
-        // Each described on behalf of whoever lists: one they may not read isn't listed to them.
-        for id in checkedIn where seen.insert(id).inserted {
-            guard let object = try? DiscoverableObject.resolve(id: id, using: actorSystem),
-                let description = try? await object.describe()
-            else { continue }
-            entries.append(
-                ObjectEntry(
-                    // A virtual actor by its id; any other, the one of its kind here, by its id with
-                    // its type, which it's found by.
-                    id: id.virtualActorID.map(ObjectID.virtual) ?? .actor(id, type: description.type),
-                    object: object,
-                    type: description.type,
-                    description: description.description,
-                    actions: description.actions.map { Self.signature($0.key, input: $0.value.input) }.sorted(),
-                    events: description.events.keys.sorted()
-                ))
-        }
-        // By id, which is the same in every run, as an actor's path isn't.
-        return entries.sorted { $0.id < $1.id }
     }
 }

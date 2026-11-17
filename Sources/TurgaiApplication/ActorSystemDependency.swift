@@ -4,6 +4,7 @@ import Hail
 import Synchronization
 import TurgaiDomain
 import TurgaiPeople
+import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -52,13 +53,13 @@ public struct ActorSystemDependency<Effect: ScopedEffect>: Sendable {
         ActorSystemDependency<Effect>(
             virtualActors: VirtualActorActions(
                 resolveUser: { userID in
-                    try await User.resolve(on: actorSystem, userID: userID)
+                    try await User.identified(by: userID, on: actorSystem)
                 },
-                notify: { conversationID, text in
-                    try await Conversation.resolve(on: actorSystem, conversationID: conversationID).notify(text)
+                notify: { space, conversationID, text in
+                    try await Space.identified(by: space, on: actorSystem).notify(conversationID, text)
                 },
-                ask: { conversationID, question in
-                    try await models.ask(question, in: conversationID, on: actorSystem)
+                ask: { space, conversationID, question in
+                    try await models.ask(question, in: conversationID, of: space, on: actorSystem)
                 }
             )
         )
@@ -69,16 +70,16 @@ public struct ActorSystemDependency<Effect: ScopedEffect>: Sendable {
 /// only the actors Turgai's tools actually address are exposed.
 public struct VirtualActorActions: Sendable {
     public var resolveUser: @Sendable (TurgaiDomain.UserID) async throws -> User
-    /// Says text in a conversation, as its connections deliver what it says.
-    public var notify: @Sendable (ConversationID, String) async throws -> Void
-    /// Asks the model of the agent that answers a conversation one question, on its own: what it
-    /// answers.
-    public var ask: @Sendable (ConversationID, String) async throws -> String
+    /// Says text in a conversation of a space, as its connections deliver what it says.
+    public var notify: @Sendable (SpaceID, ConversationID, String) async throws -> Void
+    /// Asks the model of the bot that answers a conversation of a space one question, on its own:
+    /// what it answers.
+    public var ask: @Sendable (SpaceID, ConversationID, String) async throws -> String
 
     public init(
         resolveUser: @escaping @Sendable (TurgaiDomain.UserID) async throws -> User,
-        notify: @escaping @Sendable (ConversationID, String) async throws -> Void,
-        ask: @escaping @Sendable (ConversationID, String) async throws -> String
+        notify: @escaping @Sendable (SpaceID, ConversationID, String) async throws -> Void,
+        ask: @escaping @Sendable (SpaceID, ConversationID, String) async throws -> String
     ) {
         self.resolveUser = resolveUser
         self.notify = notify

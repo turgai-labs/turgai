@@ -3,11 +3,11 @@ import DurableWorkflows
 import EventSourcing
 import Foundation
 import Testing
+import TurgaiCalls
 import TurgaiDomain
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
-import TurgaiCalls
 
 /// A chat's timers, by the names they're given in it: each due once, listed there, and cancelled by
 /// whoever set it, or the chat's admins.
@@ -16,8 +16,8 @@ struct TimersTests {
     static let chat = ConversationID(
         channel: ChannelID(provider: "telegram", instanceID: "bot"), externalAddress: ExternalConversationAddress("42"))
     static let space = SpaceID()
-    static let ann = CallScope(UserID.ann, in: space, as: .member, allowed: [])
-    static let bob = CallScope(UserID.bob, in: space, as: .member, allowed: [])
+    static let ann = CallScope.member(UserID.ann, in: space)
+    static let bob = CallScope.member(UserID.bob, in: space)
 
     private func `as`<Answer: Sendable>(_ scope: CallScope, _ body: () async throws -> Answer) async throws -> Answer {
         try await CallChain.$current.withValue(.start(scope, in: Self.chat)) { try await body() }
@@ -30,9 +30,9 @@ struct TimersTests {
             "timers-object", store: store, hostsVirtualActors: true, people: [Self.ann, Self.bob],
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
-            let timers = try await Timers.resolve(on: node)
+            let timers = try await Timers.of(Self.space, on: node)
             let (listener, heard) = try await listening(to: Self.space, on: node)
-            defer { _ = listener }
+            defer { listener.cancel() }
             let set = try await self.as(Self.ann) {
                 try await timers.after(name: "Tea", minutes: 30, then: .say(text: "Tea's ready"))
             }
@@ -61,9 +61,9 @@ struct TimersTests {
             #expect(try await self.as(Self.ann) { try await timers.list().chat }.isEmpty)
 
             // Whoever follows the space's tasks is told it's set, then that it isn't due any more.
-            let id = ChatTimer.id(in: Self.chat, named: "tea", at: set.date)
+            let id = ChatTimer.id(in: Self.chat, of: Self.space, named: "tea", at: set.date)
             #expect(
-                await heard.notices == [
+                await heard.notices(2) == [
                     .kept(
                         KeptTask(
                             id: .timer(id), of: .chat(Self.chat, name: "tea", does: "says Tea's ready"),

@@ -42,3 +42,23 @@ struct CredentialsFormValues: Sendable, Equatable {
         password = form["password"]?.first ?? ""
     }
 }
+
+/// A new account's username and password, the password typed twice.
+struct NewCredentialsFormValues: Sendable, Equatable {
+    let username: String
+    let password: String
+    /// The password typed again.
+    let passwordAgain: String
+
+    init(form: [String: [String]]) {
+        username = form["username"]?.first?.trimmed() ?? ""
+        password = form["password"]?.first ?? ""
+        passwordAgain = form["passwordAgain"]?.first ?? ""
+    }
+
+    /// Whether both passwords are the same.
+    var passwordsMatch: Bool { password == passwordAgain }
+
+    /// What's said when they aren't.
+    static let passwordsDiffer = "The two passwords differ. Type the same password in both."
+}

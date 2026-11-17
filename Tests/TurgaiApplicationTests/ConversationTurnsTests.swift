@@ -4,7 +4,7 @@ import Testing
 import TurgaiDomain
 import TurgaiHail
 
-@testable import TurgaiApplication
+@testable import TurgaiConversations
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

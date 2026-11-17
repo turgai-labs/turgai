@@ -73,7 +73,7 @@ public enum DueInChatError: Error, Codable, Sendable, Equatable, CustomStringCon
     /// Whether `chain`'s person may change what `owner` made: whoever made it, or an admin of the
     /// chat's space.
     static func mayChange(madeBy owner: UserID, _ chain: CallChain) -> Bool {
-        owner == chain.scope.person || chain.scope.role == .admin
+        owner == chain.scope.person || chain.scope.permissions.tasks == .manage
     }
 }
 
@@ -83,26 +83,23 @@ public enum DueInChatError: Error, Codable, Sendable, Equatable, CustomStringCon
 @VirtualActor
 public distributed actor Scheduler {
     public typealias ActorSystem = ClusterSystem
-    public typealias Dependency = ObjectIdentity
+    public typealias Dependency = SpaceID
 
-    public init(actorSystem: ActorSystem, dependency: ObjectIdentity) async throws {
+    public static let kind = BuiltInKind(rawValue: "Scheduler")
+
+    /// The space whose it is.
+    private let space: SpaceID
+
+    /// `space`'s scheduler, wherever and whenever it runs.
+    public static func of(_ space: SpaceID, on actorSystem: ClusterSystem) async throws -> Scheduler {
+        try await actorSystem.virtualActors.getActor(
+            identifiedBy: VirtualActorID(rawValue: "builtin/\(space.rawValue.uuidString)/scheduler"), dependency: space)
+    }
+
+    public init(actorSystem: ActorSystem, dependency space: SpaceID) async throws {
         self.actorSystem = actorSystem
+        self.space = space
     }
-
-    /// The one scheduler, by the id it always has.
-    public static func resolve(on actorSystem: ClusterSystem) async throws -> Scheduler {
-        try await actorSystem.virtualActors.getActor(identifiedBy: actorID, dependency: identity)
-    }
-
-    /// Lists it among the objects by its lasting reference.
-    public static func start(on actorSystem: ClusterSystem) async throws {
-        let scheduler = try await resolve(on: actorSystem)
-        let object = try DiscoverableObject.resolve(id: scheduler.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: .objects)
-    }
-
-    static let identity = ObjectIdentity(rawValue: "scheduler")
-    static let actorID = VirtualActorID(rawValue: "builtin/scheduler")
 
     /// Makes the schedule `name` in this chat, or makes it again: due as `schedule` says, doing
     /// `then` each time.
@@ -118,14 +115,15 @@ public distributed actor Scheduler {
         let name = ObjectNames.handle(for: name)
         guard !name.trimmed().isEmpty else { throw DueInChatError.unnamed }
         let rule = try schedule.rule()
-        let id = ChatSchedule.id(in: chat, named: name)
+        let id = ChatSchedule.id(in: chat, of: chain.scope.space, named: name)
         let workflows = actorSystem.workflows
         if let made = try await made(id) {
             guard DueInChatError.mayChange(madeBy: made.ownerID, chain) else { throw DueInChatError.notTheirs(name) }
             try await workflows.cancelSchedule(id: id, workflow: ScheduleWorkflow.self)
         }
         let entry = ChatSchedule(
-            name: name, schedule: schedule, then: then, ownerID: chain.scope.person, conversationID: chat)
+            name: name, schedule: schedule, then: then, ownerID: chain.scope.person, in: chain.scope.space,
+            conversationID: chat)
         try await workflows.schedule(
             id: id, recurrence: rule, workflow: ScheduleWorkflow.self, input: entry,
             retryPolicy: ChatSchedule.retryPolicy, overlapPolicy: .skip)
@@ -137,13 +135,13 @@ public distributed actor Scheduler {
     /// What's scheduled in this chat: its schedules, and its objects'.
     @DiscoverableAction(safe: true, idempotent: true)
     public distributed func list() async throws -> SchedulesInChat {
-        let (_, chat) = try DueInChatError.chat()
+        let (chain, chat) = try DueInChatError.chat()
         let workflows = actorSystem.workflows
         let decoder = JSONDecoder()
         let schedules = try await workflows.listSchedules(workflow: ScheduleWorkflow.self).compactMap {
             description -> ScheduleInChat? in
             guard let entry = try? decoder.decode(ChatSchedule.self, from: description.inputData),
-                entry.conversationID == chat
+                entry.space == chain.scope.space, entry.conversationID == chat
             else { return nil }
             return ScheduleInChat(
                 name: entry.name, schedule: entry.schedule, then: entry.then, next: description.nextFireAt,
@@ -197,7 +195,7 @@ public distributed actor Scheduler {
     ) async throws -> ScheduleInChat {
         let (chain, chat) = try DueInChatError.chat()
         let name = ObjectNames.handle(for: written)
-        let id = ChatSchedule.id(in: chat, named: name)
+        let id = ChatSchedule.id(in: chat, of: chain.scope.space, named: name)
         guard let made = try await made(id) else {
             throw DueInChatError.none(kind: "schedule", written, named: try await list().chat.map(\.name))
         }
@@ -215,7 +213,8 @@ public distributed actor Scheduler {
 
     /// The schedule made as `id`, while there is one.
     private func made(_ id: ScheduleID) async throws -> ChatSchedule? {
-        guard let description = try await actorSystem.workflows.describeSchedule(id: id, workflow: ScheduleWorkflow.self)
+        guard
+            let description = try await actorSystem.workflows.describeSchedule(id: id, workflow: ScheduleWorkflow.self)
         else { return nil }
         return try? JSONDecoder().decode(ChatSchedule.self, from: description.inputData)
     }
@@ -224,5 +223,8 @@ public distributed actor Scheduler {
 
 /// Read by everyone: what each may change, it decides.
 extension Scheduler: AccessControlled {
-    public func access(for chain: CallChain) -> Access { .readByEveryone }
+    /// Everyone in its space may use it, and no one from another.
+    public distributed func access(for chain: CallChain) -> Access {
+        chain.scope.space == space ? .readByEveryone : .nobody
+    }
 }

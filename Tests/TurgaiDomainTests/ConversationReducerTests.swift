@@ -15,6 +15,8 @@ struct ConversationReducerTests {
     )
     private let participantID = ParticipantID("user-1")
     private let person = UserID.telegram(1)
+    /// The bot that answers in these turns.
+    private let answering = BotID()
     /// When the model answers, in these turns.
     private let replied = Date(timeIntervalSince1970: 3)
     /// The agent's turn that answers, in these turns.
@@ -39,7 +41,7 @@ struct ConversationReducerTests {
         let turn = TurnID()
         var state = step(
             ConversationState(conversationID: conversationID),
-            .receive(message: asked, turnID: turn, agentRole: "conversation")
+            .receive(message: asked, turnID: turn, bot: answering)
         ).0
         let forecast = ExactRequest.http(method: "GET", url: "https://example.com/forecast", body: Data())
         let request = AccessRequest(
@@ -67,21 +69,21 @@ struct ConversationReducerTests {
             ConversationDecision(.answered(request, .no, turnID: TurnID(), at: Date()), in: continued).events.isEmpty)
     }
 
-    /// The only one in a conversation, or an admin of its space, deletes it; anyone else may only
+    /// The only one in a conversation, or someone who may delete any in its space, deletes it; anyone else may only
     /// leave it. Deleted, no one reads it.
     @Test
-    func theOnlyOneOrAnAdminDeletesIt() throws {
+    func theOnlyOneOrWhoeverMayDeleteAnyDeletesIt() throws {
         let other = UserID.telegram(2)
         var state = ConversationState(conversationID: conversationID)
-        state = state.applying(try state.starting(in: SpaceID(), answeredBy: AgentProfileID("a"), by: person))
-        #expect(throws: ConversationRefusal.notInIt) { try state.deleting(by: other, role: .admin) }
+        state = state.applying(try state.starting(with: BotID(), by: person))
+        #expect(throws: ConversationRefusal.notInIt) { try state.deleting(by: other, mayDeleteAny: true) }
 
         let alone = state
-        #expect(try alone.deleting(by: person, role: .member) == [.deleted(by: person)])
+        #expect(try alone.deleting(by: person, mayDeleteAny: false) == [.deleted(by: person)])
 
         state = state.applying([.joined(.person(other))])
-        #expect(throws: ConversationRefusal.othersAreInIt) { try state.deleting(by: person, role: .member) }
-        state = state.applying(try state.deleting(by: other, role: .admin))
+        #expect(throws: ConversationRefusal.othersAreInIt) { try state.deleting(by: person, mayDeleteAny: false) }
+        state = state.applying(try state.deleting(by: other, mayDeleteAny: true))
         #expect(throws: ConversationRefusal.deleted) { try state.reading(by: person) }
         #expect(throws: ConversationRefusal.deleted) { try state.leaving(person) }
     }
@@ -124,8 +126,10 @@ struct ConversationReducerTests {
             channel: ChannelID("telegram"),
             externalAddress: ExternalConversationAddress("chat:42")
         )
-        let persistenceID = ConversationPersistenceID(conversationID: original)
+        let space = SpaceID()
+        let persistenceID = ConversationPersistenceID(space: space, conversationID: original)
 
+        #expect(ConversationPersistenceID(rawValue: persistenceID.rawValue)?.space == space)
         #expect(
             ConversationPersistenceID(rawValue: persistenceID.rawValue)?.conversationID
                 == original
@@ -162,7 +166,7 @@ struct ConversationReducerTests {
 
         let (next, effects) = step(
             state,
-            .receive(message: makeMessage(text: "  hello  "), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: "  hello  "), turnID: makeTurnID(1), bot: answering)
         )
 
         guard case .running(let turnID) = next.inbox.status else {
@@ -186,7 +190,7 @@ struct ConversationReducerTests {
         let initial = ConversationState(conversationID: conversationID)
         let (running, _) = step(
             initial,
-            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), bot: answering)
         )
         guard case .running(let firstTurnID) = running.inbox.status else {
             Issue.record("Expected first turn to be running")
@@ -195,7 +199,7 @@ struct ConversationReducerTests {
 
         let (queued, _) = step(
             running,
-            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
+            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), bot: answering)
         )
         #expect(queued.inbox.pendingMessages.count == 1)
 
@@ -232,7 +236,7 @@ struct ConversationReducerTests {
             .receive(
                 message: message,
                 turnID: makeTurnID(1),
-                agentRole: "test"
+                bot: answering
             )
         )
         guard case .running(let turnID) = running.inbox.status else {
@@ -253,7 +257,7 @@ struct ConversationReducerTests {
             .receive(
                 message: message,
                 turnID: makeTurnID(2),
-                agentRole: "test"
+                bot: answering
             )
         )
 
@@ -266,7 +270,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = step(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), bot: answering)
         )
         guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected a running turn")
@@ -309,7 +313,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = step(
             state,
-            .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: "work"), turnID: makeTurnID(1), bot: answering)
         )
         guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected a running turn")
@@ -341,7 +345,7 @@ struct ConversationReducerTests {
         let pending = PendingConversationMessage(
             message: makeMessage(text: "hello"),
             turnID: makeTurnID(1),
-            agentRole: "test"
+            bot: answering
         )
         let running = ConversationState(conversationID: conversationID).applying([.inbox(.turnStarted(pending))])
 
@@ -355,7 +359,7 @@ struct ConversationReducerTests {
                         conversationID: conversationID,
                         turnID: pending.turnID,
                         message: pending.message,
-                        agentRole: pending.agentRole
+                        bot: pending.bot
                     )
                 )
             ])
@@ -366,7 +370,7 @@ struct ConversationReducerTests {
         let pending = PendingConversationMessage(
             message: makeMessage(text: "queued"),
             turnID: makeTurnID(1),
-            agentRole: "test"
+            bot: answering
         )
         // Queued, and then the process stopped before its turn started.
         let state = ConversationState(conversationID: conversationID).applying([.inbox(.queued(pending))])
@@ -390,7 +394,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = step(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), bot: answering)
         )
         let staleTurnID = makeTurnID(99)
 
@@ -414,11 +418,11 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = step(
             state,
-            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: "first"), turnID: makeTurnID(1), bot: answering)
         )
         let (queued, _) = step(
             running,
-            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), agentRole: "test")
+            .receive(message: makeMessage(text: "second"), turnID: makeTurnID(2), bot: answering)
         )
         let failure = ConversationFailure(kind: .model, message: "Ollama unavailable")
         let (next, effects) = step(
@@ -443,7 +447,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = step(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), bot: answering)
         )
         guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected a running turn")
@@ -463,7 +467,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (next, effects) = step(
             state,
-            .receive(message: makeMessage(text: " \n\t "), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: " \n\t "), turnID: makeTurnID(1), bot: answering)
         )
 
         #expect(next == state)
@@ -486,7 +490,7 @@ struct ConversationReducerTests {
         let state = ConversationState(conversationID: conversationID)
         let (running, _) = step(
             state,
-            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), agentRole: "test")
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), bot: answering)
         )
         guard case .running(let turnID) = running.inbox.status else {
             Issue.record("Expected a running turn")
@@ -495,7 +499,7 @@ struct ConversationReducerTests {
 
         let (next, effects) = step(
             running,
-            .receive(message: makeMessage(text: "  "), turnID: makeTurnID(2), agentRole: "test")
+            .receive(message: makeMessage(text: "  "), turnID: makeTurnID(2), bot: answering)
         )
 
         #expect(next == running)

@@ -14,7 +14,7 @@ struct MemoryTests {
     private let factID = MemoryFactID(rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!)
     private let check = ConversationID(stableKey: "turgai:check")!
     private let skylark = ConversationID(stableKey: "turgai:skylark")!
-    private let turgai = AgentProfileID("turgai")
+    private let turgai = BotID()
 
     /// A fact learned on `day`, days since 1970.
     private func fact(

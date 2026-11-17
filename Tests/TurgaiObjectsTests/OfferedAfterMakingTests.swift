@@ -4,9 +4,10 @@ import DistributedCluster
 import Foundation
 import Hail
 import Testing
-@testable import TurgaiObjects
+import TurgaiSpaces
 
 @testable import TurgaiApplication
+@testable import TurgaiObjects
 
 /// Making an object offers the root's tools again, with it among the objects they choose from, in
 /// the result of making it: the turn that made it can change it, share it and remove it.
@@ -16,11 +17,13 @@ struct OfferedAfterMakingTests {
     func makingAnObjectOffersItAtTheRoot() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem("offered", store: store, hostsVirtualActors: true) { node in
-            let objects = try await DynamicObjects.resolve(on: node)
+            let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
             _ = try await objects.create(
                 name: "Tea", spec: .new(try Script(code: "actor Tea {\n    var cups = 0\n}", type: "Tea")))
             let session = ObjectSession(
-                actorSystem: node,
+                in: AsAPerson.person.space,
+                objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
+                    for: AsAPerson.person.person), actorSystem: node,
                 writer: ObjectWriter(endpoint: WritesCode(code: "actor Coffee {\n    var cups = 0\n}")))
             let offered = try await ObjectTools(session: session).offered()
             #expect(try Self.choices(of: "edit_object", in: offered) == ["tea"])

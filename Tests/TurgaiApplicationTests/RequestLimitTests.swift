@@ -1,6 +1,8 @@
 import Foundation
 import Hail
 import Testing
+import TurgaiAgents
+import TurgaiDomain
 
 @testable import TurgaiApplication
 

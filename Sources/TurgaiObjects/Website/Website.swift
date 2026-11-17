@@ -2,59 +2,75 @@ import DiscoverableActors
 import DistributedCluster
 import Foundation
 import TurgaiCalls
+import TurgaiDomain
 import VirtualActors
 
-/// A website on this machine: one page of rows, columns, texts and buttons. A page shown
-/// replaces the one before in every open browser, and a button pressed there is announced.
+/// A website: one page of rows, columns, texts and buttons, at its own address, by its name. A
+/// page shown replaces the one before in every open browser, and a button pressed there is
+/// announced. Its name is its space's while it's there: no other space's website has it.
 @Discoverable(events: ButtonPressed.self)
 @VirtualActor
 public distributed actor Website {
     public typealias ActorSystem = ClusterSystem
-    public typealias Dependency = WebsitePort
 
-    private let host: PageHost
-    private var shown = Page.start
-    private let server: Task<Void, Never>
-    private let port: WebsitePort
+    public static let kind = BuiltInKind(rawValue: "Website")
 
-    /// Serves on `port`, showing the page it starts with.
-    public init(actorSystem: ActorSystem, dependency port: WebsitePort) async throws {
+    /// Which website it is: its space's, by its name.
+    public struct Config: Codable, Sendable, Hashable {
+        public let space: SpaceID
+        public let name: SiteName
+
+        public init(space: SpaceID, name: SiteName) {
+            self.space = space
+            self.name = name
+        }
+    }
+    public typealias Dependency = Config
+
+    private let config: Config
+    /// What its visitors reach.
+    private let site: Site
+    private var shown: Page
+    /// Following its site's presses, to announce them.
+    private var following: Task<Void, Never>?
+
+    /// `space`'s website named `name`, wherever and whenever it runs: showing nothing until it
+    /// holds its name, ``claim()``.
+    package static func named(_ name: SiteName, in space: SpaceID, on actorSystem: ClusterSystem) async throws
+        -> Website
+    {
+        try await actorSystem.virtualActors.getActor(
+            identifiedBy: actorID(for: name, in: space), dependency: Config(space: space, name: name))
+    }
+
+    /// The id of `space`'s website named `name`: the name last, as objects are named by.
+    package static func actorID(for name: SiteName, in space: SpaceID) -> VirtualActorID {
+        VirtualActorID(rawValue: "website/\(space.rawValue.uuidString)/\(name.rawValue)")
+    }
+
+    public init(actorSystem: ActorSystem, dependency config: Config) async throws {
         self.actorSystem = actorSystem
-        let host = PageHost()
-        self.host = host
-        self.port = port
-        await host.show(try Layout(.start))
-        self.server = try await PageServer.start(host, port: port.rawValue, logger: actorSystem.log)
-        Task { [weak self] in
-            for await press in host.presses {
+        self.config = config
+        let site = try await Site.named(config.name, on: actorSystem)
+        self.site = site
+        self.shown = try await site.page
+        following = Task { [weak self] in
+            guard let presses = try? await site.presses() else { return }
+            for await press in presses {
                 await self?.whenLocal { await $0.announce(press) }
             }
         }
     }
 
-    /// Lists it among the objects by its lasting reference: the one website, by the id it always
-    /// has, so a reference to it reaches it after any restart. It serves on `port` once something
-    /// first calls it, which activates it.
-    public static func start(on actorSystem: ClusterSystem, port: WebsitePort) async throws {
-        let website: Website = try await actorSystem.virtualActors.getActor(
-            identifiedBy: VirtualActorID(rawValue: "builtin/website"), dependency: port)
-        let object = try DiscoverableObject.resolve(id: website.id, using: actorSystem)
-        await actorSystem.receptionist.checkIn(object, with: .objects)
+    deinit {
+        following?.cancel()
     }
 
-    /// It's there for as long as its node runs: what holds it finds it, and its page stays served.
+    /// It's there for as long as its node runs: what follows it is told each press.
     public func shouldDeactivate() async -> Bool { false }
 
-    deinit {
-        server.cancel()
-        let host = host
-        Task { await host.end() }
-    }
-
-    /// Where the website is, to open in a browser.
-    public distributed var address: String {
-        "http://localhost:\(port.rawValue)"
-    }
+    /// Where the website is on this server, to open in a browser.
+    public distributed var address: String { "/websites/\(config.name.rawValue)/" }
 
     /// The page it shows.
     public distributed var page: Page { shown }
@@ -63,18 +79,20 @@ public distributed actor Website {
     /// send the current one with your changes.
     /// - Parameter page: The page to show.
     public distributed func show(_ page: Page) async throws {
-        let layout = try Layout(page)
+        try await site.show(page, by: config.space)
         shown = page
-        await host.show(layout)
     }
-}
 
-/// The port a website serves on, on this machine.
-public struct WebsitePort: RawRepresentable, Hashable, Codable, Sendable {
-    public let rawValue: Int
+    /// Its name held for its space, from now on: refused while another space holds it.
+    package distributed func claim() async throws {
+        try await site.claim(for: config.space)
+        shown = try await site.page
+    }
 
-    public init(rawValue: Int) {
-        self.rawValue = rawValue
+    /// Its name given up: free for any space from then on.
+    package distributed func release() async throws {
+        following?.cancel()
+        try await site.release(by: config.space)
     }
 }
 
@@ -89,17 +107,10 @@ public struct ButtonPressed: Codable, Sendable, Equatable {
     }
 }
 
-public enum WebsiteError: Error, Codable, Equatable, Sendable, CustomStringConvertible {
-    case cannotServe(port: Int, reason: String)
-
-    public var description: String {
-        switch self {
-        case .cannotServe(let port, let reason): "Can't serve a website on port \(port): \(reason)."
-        }
-    }
-}
-
-/// Read by everyone and written by no one, until whoever runs its node is known.
+/// Used by everyone in its space, and by no one from another.
 extension Website: AccessControlled {
-    public func access(for chain: CallChain) -> Access { .readByEveryone }
+    /// Everyone in its space may use it, and no one from another.
+    public distributed func access(for chain: CallChain) -> Access {
+        chain.scope.space == config.space ? .readByEveryone : .nobody
+    }
 }

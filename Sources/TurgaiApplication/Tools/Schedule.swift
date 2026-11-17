@@ -5,6 +5,7 @@ import DurableWorkflows
 import Hail
 import TurgaiDomain
 import TurgaiObjects
+import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -30,28 +31,32 @@ public struct ChatSchedule: Codable, Sendable, Equatable {
     public let then: WhenDue
     /// Who made it: whose message an `ask` is, and who may change it, besides the chat's admins.
     public let ownerID: TurgaiDomain.UserID
+    /// The space whose chat it's in, which it does what it does through.
+    public let space: SpaceID
     public let conversationID: ConversationID
     public let participantID: ParticipantID
-    public let agentDirectoryID: AgentDirectoryID
 
     public init(
         name: String, schedule: TurgaiObjects.Schedule, then: WhenDue, ownerID: TurgaiDomain.UserID,
-        conversationID: ConversationID, agentDirectoryID: AgentDirectoryID = "agent-directory"
+        in space: SpaceID, conversationID: ConversationID
     ) {
         self.name = name
         self.schedule = schedule
         self.then = then
         self.ownerID = ownerID
+        self.space = space
         self.conversationID = conversationID
         self.participantID = ParticipantID(channel: conversationID.channel, rawValue: ownerID.key)
-        self.agentDirectoryID = agentDirectoryID
     }
 
-    /// The durable schedule named `name` in `conversation`: one for each name in each chat.
-    static func id(in conversation: ConversationID, named name: String) -> ScheduleID {
+    /// The durable schedule named `name` in `conversation` of `space`: one for each name in each
+    /// chat.
+    static func id(in conversation: ConversationID, of space: SpaceID, named name: String) -> ScheduleID {
         ScheduleID(
             rawValue: "turgai-schedule-"
-                + turgaiDeterministicUUID(conversation.stableKey + "\u{1F}" + name).uuidString)
+                + turgaiDeterministicUUID(
+                    space.rawValue.uuidString + "/" + conversation.stableKey + "\u{1F}" + name
+                ).uuidString)
     }
 
     /// A connection outage shouldn't silently consume a scheduled delivery: the workflow retries
@@ -96,11 +101,7 @@ public struct ScheduleWorkflow {
 
 @ActivityContainer
 public struct ScheduleActivities {
-    private let agentProfiles: TurgaiAgentProfileStore
-
-    public init(agentProfiles: TurgaiAgentProfileStore) {
-        self.agentProfiles = agentProfiles
-    }
+    public init() {}
 
     @Activity
     public func deliver(
@@ -108,9 +109,8 @@ public struct ScheduleActivities {
         context: ActivityContext
     ) async throws -> DurableVoid {
         try await WhenDue.doing(
-            input.then, in: input.conversationID, for: input.ownerID, as: input.participantID,
-            directory: input.agentDirectoryID, run: context.workflowID, agentProfiles: agentProfiles,
-            on: context.system)
+            input.then, in: input.conversationID, of: input.space, for: input.ownerID, as: input.participantID,
+            run: context.workflowID, on: context.system)
         return DurableVoid()
     }
 }
@@ -124,39 +124,37 @@ extension WhenDue {
         }
     }
 
-    /// Does `then` in `conversation`, as the run `workflow` of something due there: says its
-    /// text, or asks the chat's agent, as a message from `owner`.
+    /// Does `then` in `conversation`, through its space `space`, as the run `workflow` of
+    /// something due there: says its text, or asks the chat's bot, as a message from `owner`.
     static func doing(
-        _ then: WhenDue, in conversation: ConversationID, for owner: TurgaiDomain.UserID,
-        as participant: ParticipantID, directory: AgentDirectoryID, run workflow: WorkflowID,
-        agentProfiles: TurgaiAgentProfileStore, on system: ClusterSystem
+        _ then: WhenDue, in conversation: ConversationID, of space: SpaceID, for owner: TurgaiDomain.UserID,
+        as participant: ParticipantID, run workflow: WorkflowID, on system: ClusterSystem
     ) async throws {
-        let chat = try await Conversation.resolve(on: system, conversationID: conversation, agentDirectoryID: directory)
+        let space = try await Space.identified(by: space, on: system)
         switch then {
         case .say(let text):
-            try await chat.notify(text)
+            try await space.notify(conversation, text)
         case .ask(let instruction):
             let message = InboundMessage(
                 id: MessageID(rawValue: turgaiDeterministicUUID("message:\(workflow.rawValue)")),
                 conversationID: conversation, participantID: participant, userID: owner, author: nil,
                 text: instruction, receivedAt: Date())
-            try await chat.send(
-                message, turnID: TurgaiDomain.TurnID(rawValue: turgaiDeterministicUUID("turn:\(workflow.rawValue)")),
-                configuration: Conversation.TurnConfiguration(agentModel: nil))
+            try await space.say(
+                message, turnID: TurgaiDomain.TurnID(rawValue: turgaiDeterministicUUID("turn:\(workflow.rawValue)")))
         }
     }
 }
 
 extension KeptTask {
     /// `schedule`, a chat's, kept as `id`: paused, or not.
-    init(_ schedule: ChatSchedule, id: ScheduleID, paused: Bool) {
+    public init(_ schedule: ChatSchedule, id: ScheduleID, paused: Bool) {
         self.init(
             id: .schedule(id), of: .chat(schedule.conversationID, name: schedule.name, does: schedule.then.described),
             due: .schedule(schedule.schedule), paused: paused, maker: schedule.ownerID)
     }
 
     /// `timer`, a chat's, kept as `id`.
-    init(_ timer: ChatTimer, id: WorkflowID) {
+    public init(_ timer: ChatTimer, id: WorkflowID) {
         self.init(
             id: .timer(id), of: .chat(timer.conversationID, name: timer.name, does: timer.then.described),
             due: .timer(.at(timer.date)), paused: false, maker: timer.ownerID)

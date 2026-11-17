@@ -24,11 +24,19 @@ typealias DiscoveryJSON = DiscoverableActors.JSONValue
 /// return.
 public actor ObjectSession {
     let actorSystem: ClusterSystem
-    private var objectCatalog: ObjectCatalog?
+    /// The space it's in: only its objects, and the built-in ones, are reached from it.
+    let space: SpaceID
+    /// The space's objects, as the space handed them to whoever this session is for.
+    let spaceObjects: DynamicObjects
     /// The agents its own agent can ask: the other agents working for the same person, never
     /// itself, which it can't ask while it answers. They're described as every agent is, so none
     /// starts to be listed.
     let agents: [ObjectEntry]
+    /// The built-in objects installed in its space, offered there.
+    let builtIns: [ObjectEntry]
+    /// The built-in types installed in its space whose objects code makes by name, `Type(id:)`, as
+    /// each type describes itself: known before any object of it is.
+    let madeByName: [ObjectDescription]
 
     /// The objects met, by id.
     private var objects: [ObjectID: DiscoverableObject] = [:]
@@ -59,15 +67,21 @@ public actor ObjectSession {
     let request: String?
 
     public init(
+        in space: SpaceID,
+        objects: DynamicObjects,
         actorSystem: ClusterSystem,
-        objectCatalog: ObjectCatalog? = nil,
         agents: [ObjectEntry] = [],
+        builtIns: [ObjectEntry] = [],
+        madeByName: [ObjectDescription] = [],
         writer: ObjectWriter? = nil,
         request: String? = nil
     ) {
+        self.space = space
+        self.spaceObjects = objects
         self.actorSystem = actorSystem
-        self.objectCatalog = objectCatalog
         self.agents = agents
+        self.builtIns = builtIns
+        self.madeByName = madeByName
         self.writer = writer
         self.request = request
     }
@@ -142,10 +156,9 @@ public actor ObjectSession {
     /// The objects made by name that this turn's person may read, by handle.
     private func runtimeObjects() async throws -> [ObjectID] {
         var out: [DynamicObject] = []
-        let objects = try await DynamicObjects.resolve(on: actorSystem)
-        for entry in try await objects.held() {
-            guard let identity = try await objects.identity(of: entry.object.id) else { continue }
-            out.append(try await objects.held(identity))
+        for entry in try await spaceObjects.held() {
+            guard let identity = try await spaceObjects.identity(of: entry.object.id) else { continue }
+            out.append(try await spaceObjects.held(identity))
         }
         return try await names(of: out)
     }
@@ -195,7 +208,7 @@ public actor ObjectSession {
 
     /// What an object says it is and does.
     func described(_ handle: ObjectID) async throws -> ObjectDescription {
-        if agents.contains(where: { $0.id == handle }) { return Agent.objectDescription }
+        if agents.contains(where: { $0.id == handle }) { return Agent.describe() }
         return try await call(handle) { try await $0.describe() }
     }
 
@@ -329,14 +342,11 @@ public actor ObjectSession {
         returned[type] ?? []
     }
 
-    /// The roots this session can see, from the cluster receptionist, in the same
-    /// order every time, so each gets the same handle in every session, including the
-    /// summary shown to the model.
+    /// The roots this session can see: its space's objects made by name, the agents it can ask, and
+    /// the built-in objects installed in the space. By id, which is the same in every run, so each
+    /// gets the same handle in every session, including the summary shown to the model.
     private func entries() async throws -> [ObjectEntry] {
-        if objectCatalog == nil { objectCatalog = await ObjectCatalog(actorSystem: actorSystem) }
-        guard let objectCatalog else { return [] }
-        // By id, as the catalog lists its own, so each is in the same place every time.
-        let entries = (try await objectCatalog.entries() + agents).sorted { $0.id < $1.id }
+        let entries = (try await spaceObjects.held() + agents + builtIns).sorted { $0.id < $1.id }
         checkedIn = Dictionary(entries.map { ($0.object.id, $0.id) }) { first, _ in first }
         return entries
     }
@@ -363,7 +373,7 @@ public actor ObjectSession {
         let written = ObjectNames.handle(for: name)
         if let id = try? await id(written: written) { return id }
         guard
-            let made = try await DynamicObjects.resolve(on: actorSystem).existing(ObjectIdentity(rawValue: written)),
+            let made = try await spaceObjects.existing(ObjectIdentity(rawValue: written)),
             let virtual = made.id.virtualActorID
         else { throw ObjectToolError.unknownHandle(written) }
         let id = ObjectID.virtual(virtual)
@@ -526,6 +536,14 @@ public actor ObjectSession {
             lasting.insert(unmade)
             summaries[unmade] = Self.given(description.description)
         }
+        // Built-in types code makes by name, as each says it is: a website, before there's one.
+        for description in madeByName
+        where description.type != type && !objects.contains(where: { $0.type == description.type }) {
+            objects.append(Uses.Object(description: description, publishes: true))
+            lasting.insert(description.type)
+            summaries[description.type] = Self.given(description.description)
+            descriptions[description.type] = description
+        }
         // The object being written declares its own types: they aren't declared for it again.
         // The tools this node has, which code calls as `Tools.<tool>.<function>`.
         let tools = actorSystem.toolsAPI.tools
@@ -608,7 +626,6 @@ public actor ObjectSession {
     private func replace(_ handle: ObjectID, with source: Script) async throws {
         let identity = try await dynamicObject(handle).identity
         try await making { try await $0.update(identity, source: source) }
-        await changed()
     }
 
     /// What an edit changed, in a line: the messages it now takes or no longer takes, and the data
@@ -687,15 +704,7 @@ public actor ObjectSession {
         let handle = id(
             of: try DiscoverableObject.resolve(id: object.id, using: actorSystem), type: try await object.source.type)
         made[handle] = object
-        await changed()
         return handle
-    }
-
-    /// Tells whoever follows the catalog that this session made or changed an object, which its
-    /// scope's objects list as it is now.
-    private func changed() async {
-        if objectCatalog == nil { objectCatalog = await ObjectCatalog(actorSystem: actorSystem) }
-        try? await objectCatalog?.changed()
     }
 
     /// An object's values now, all of them.
@@ -819,8 +828,24 @@ public actor ObjectSession {
             session: self, handle: handle, type: (try? await described(handle).type) ?? handle.description)
     }
 
-    /// Removes an object made with create, for good.
+    /// The websites made in its space that this turn's person may take out, by id: all of them,
+    /// when they may configure the space, or none.
+    func removableSites() async throws -> [ObjectID: SiteName] {
+        guard CallChain.current?.scope.permissions.configureSpace == true else { return [:] }
+        var sites: [ObjectID: SiteName] = [:]
+        for name in try await spaceObjects.sites {
+            sites[.virtual(Website.actorID(for: name, in: space))] = name
+        }
+        return sites
+    }
+
+    /// Removes an object made with create, for good, or takes out a website, giving up its name.
     func remove(_ handle: ObjectID) async throws -> DiscoveryJSON {
+        if let site = try await removableSites()[handle] {
+            try await making { try await $0.removeSite(site) }
+            objects[handle] = nil
+            return "removed"
+        }
         let identity = try await dynamicObject(handle).identity
         try await making { try await $0.remove(identity) }
         made[handle] = nil
@@ -830,7 +855,7 @@ public actor ObjectSession {
 
     /// Runs `body` on the directory where objects are made, with its errors as the model reads them.
     private func making<Result: Sendable>(_ body: (DynamicObjects) async throws -> Result) async throws -> Result {
-        let directory = try await DynamicObjects.resolve(on: actorSystem)
+        let directory = spaceObjects
         do {
             return try await body(directory)
         } catch let error as CodeProblem {
@@ -849,7 +874,7 @@ public actor ObjectSession {
     private func dynamicObject(_ handle: ObjectID) async throws -> DynamicObject {
         // One code named by its id is reached by it too.
         if (try? await madeObject(handle)) == nil, case .virtual = handle {
-            if let named = try await DynamicObjects.resolve(on: actorSystem).existing(
+            if let named = try await spaceObjects.existing(
                 ObjectIdentity(rawValue: handle.name))
             {
                 return named
@@ -867,7 +892,7 @@ public actor ObjectSession {
         if let known = made[handle] { return known }
         let object = try await object(handle)
         // One the directory holds, made by name.
-        let directory = try await DynamicObjects.resolve(on: actorSystem)
+        let directory = spaceObjects
         guard let identity = try await directory.identity(of: object.id) else { return nil }
         let made = try await directory.held(identity)
         self.made[handle] = made
@@ -971,7 +996,8 @@ public actor ObjectSession {
             let agentEntries = listed.filter { text($0["object_id"]).map(agentIDs.contains) ?? false }
             let entries = listed.filter { !(text($0["object_id"]).map(agentIDs.contains) ?? false) }
             if !entries.isEmpty {
-                let more = entries.count > limit ? ["…and \(entries.count - limit) more; search_objects finds them."] : []
+                let more =
+                    entries.count > limit ? ["…and \(entries.count - limit) more; search_objects finds them."] : []
                 lines.append((["Available objects:"] + entries.prefix(limit).map(line) + more).joined(separator: "\n"))
             }
             if !agentEntries.isEmpty {
@@ -1047,7 +1073,7 @@ public actor ObjectSession {
 
     /// Whether the directory holds `object`, made by name.
     private func isHeld(_ object: DiscoverableObject) async throws -> Bool {
-        try await DynamicObjects.resolve(on: actorSystem).identity(of: object.id) != nil
+        try await spaceObjects.identity(of: object.id) != nil
     }
 
     /// An object another holds, as its holder shows it: its type, and what it holds.
@@ -1425,8 +1451,8 @@ public enum SharingAudience: String, CaseIterable, Sendable, Equatable {
     /// Who it is for a call that came in through `space`.
     func audience(in space: SpaceID) -> Audience {
         switch self {
-        case .members: .space(space)
-        case .admins: .admins(of: space)
+        case .members: .group(space, .members)
+        case .admins: .deciders(of: space)
         case .everyone: .everyone
         }
     }
@@ -1504,13 +1530,18 @@ public struct ObjectTools: Sendable {
             ListObjectsTool(session: session), SearchObjectsTool(session: session),
             try CreateObjectTool(session: session),
         ]
-        guard !objects.isEmpty else { return always }
-        return always + [
-            try UseObjectTool(session: session, objects: objects),
-            try EditObjectTool(session: session, objects: objects),
-            try ShareObjectTool(session: session, objects: objects),
-            try RemoveObjectTool(session: session, objects: objects),
-        ]
+        // Websites are taken out as objects are removed, by whoever may configure the space.
+        let removable = objects + (try await session.removableSites()).keys.sorted()
+        var tools = always
+        if !objects.isEmpty {
+            tools += [
+                try UseObjectTool(session: session, objects: objects),
+                try EditObjectTool(session: session, objects: objects),
+                try ShareObjectTool(session: session, objects: objects),
+            ]
+        }
+        if !removable.isEmpty { tools.append(try RemoveObjectTool(session: session, objects: removable)) }
+        return tools
     }
 
     /// The tools a turn offers at its root: all of these but `use_object`, which each object's own

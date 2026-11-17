@@ -20,9 +20,15 @@ struct SidebarDialogs: ViewModifier {
         let inviting = adding.sheet(
             item: $store.scope(\.$destination, action: \.destination).inviting
         ) { InviteSheet(store: $0, done: dismiss) }
-        return inviting.sheet(
+        let choosing = inviting.sheet(
             item: $store.scope(\.$destination, action: \.destination).choosingSpace
         ) { SpacesSheet(store: $0, sections: store.spaceSections, pick: pick, submit: submit, done: dismiss) }
+        let configuringBots = choosing.sheet(
+            item: $store.scope(\.$destination, action: \.destination).bots
+        ) { SpaceBotsSheet(store: $0, done: dismiss) }
+        return configuringBots.sheet(
+            item: $store.scope(\.$destination, action: \.destination).connections
+        ) { SpaceConnectionsSheet(store: $0, done: dismiss) }
     }
 
     private func pick(_ space: SpaceID) {
@@ -62,35 +68,63 @@ private struct RenameSheet: View {
     }
 }
 
-/// A space to add: a new one, by its name, or one joined, by an invite's link; why it didn't work
-/// when it didn't.
+/// A space to add: a new one, by its name and then its first bot, or one joined, by an invite's
+/// link; why it didn't work when it didn't.
 private struct AddSpaceSheet: View {
     @Bindable var store: StoreOf<SidebarFeature.AddingSpace>
     let cancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("New space").font(.headline)
-            HStack {
-                TextField("Name", text: $store.name).onSubmit { store.send(.makeTapped) }
-                Button("Make") { store.send(.makeTapped) }.disabled(!store.canMake)
-            }
-            Divider()
-            Text("Join a space").font(.headline)
-            HStack {
-                TextField("turgai://join/…", text: $store.link).onSubmit { store.send(.joinTapped) }
-                Button("Join") { store.send(.joinTapped) }.disabled(!store.canJoin)
+            if let bot = store.scope(\.bot, action: \.bot) {
+                Text("Its bot").font(.headline)
+                BotFields(store: bot)
+            } else {
+                NamingStep(store: store)
             }
             if let problem = store.problem {
                 Text(problem).font(.callout).foregroundStyle(Color.turgaiAccent)
             }
-            HStack {
-                Spacer()
-                Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
-            }
+            AddSpaceButtons(store: store, cancel: cancel)
         }
         .padding(20)
-        .frame(width: 380)
+        .frame(width: 420)
+    }
+}
+
+/// A new space's name, or an invite's link to join one.
+private struct NamingStep: View {
+    @Bindable var store: StoreOf<SidebarFeature.AddingSpace>
+
+    var body: some View {
+        Text("New space").font(.headline)
+        TextField("Name", text: $store.name).onSubmit { store.send(.nextTapped) }
+        Divider()
+        Text("Join a space").font(.headline)
+        HStack {
+            TextField("turgai://join/…", text: $store.link).onSubmit { store.send(.joinTapped) }
+            Button("Join") { store.send(.joinTapped) }.disabled(!store.canJoin)
+        }
+    }
+}
+
+/// What the dialog's step can do: cancel, go on to the bot, back to the name, or make the space.
+private struct AddSpaceButtons: View {
+    let store: StoreOf<SidebarFeature.AddingSpace>
+    let cancel: () -> Void
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+            if store.bot == nil {
+                Button("Next") { store.send(.nextTapped) }.keyboardShortcut(.defaultAction).disabled(!store.canNext)
+            } else {
+                Button("Back") { store.send(.backTapped) }
+                Button("Make Space") { store.send(.makeTapped) }
+                    .keyboardShortcut(.defaultAction).disabled(!store.canMake)
+            }
+        }
     }
 }
 

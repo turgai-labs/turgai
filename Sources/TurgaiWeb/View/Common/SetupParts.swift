@@ -43,5 +43,12 @@ struct CredentialFields: HTML, Sendable {
             input(.type(.password), .name("password"), .autocomplete(passwordAutocomplete), .required)
             if let hint { p(.class("hint")) { hint } }
         }
+        // A new password is typed twice, so a slip in one isn't what's saved.
+        if case .new = password {
+            label(.class("form-field")) {
+                span(.class("field-label")) { "Password again" }
+                input(.type(.password), .name("passwordAgain"), .autocomplete("new-password"), .required)
+            }
+        }
     }
 }

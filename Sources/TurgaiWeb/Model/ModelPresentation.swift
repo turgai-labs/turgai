@@ -1,5 +1,7 @@
 import Hail
+import TurgaiAgents
 import TurgaiApplication
+import TurgaiDomain
 
 #if canImport(FoundationModels)
     import FoundationModels

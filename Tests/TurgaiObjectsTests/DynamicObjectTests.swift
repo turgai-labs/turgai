@@ -4,14 +4,15 @@ import EventSourcing
 import Foundation
 import Hail
 import Testing
+import TurgaiCalls
 import TurgaiDomain
+import TurgaiSpaces
 import VirtualActors
 
 import struct AnyLanguageModel.GeneratedContent
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
-import TurgaiCalls
 
 @Suite(.serialized, .asAPerson)
 struct DynamicObjectTests {
@@ -39,7 +40,7 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 _ = try await objects.create(
                     name: "Wallet",
                     spec: .new(try Script(code: "actor Wallet {\n    func balance() -> Int { 5 }\n}", type: "Wallet")))
@@ -66,13 +67,13 @@ struct DynamicObjectTests {
                     """
                 let tellerID = try await objects.create(
                     name: "Teller", spec: .new(try Script(code: teller, type: "Teller", uses: others)))
-                let desk = try await DynamicObjects.resolve(on: node).held(tellerID)
+                let desk = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(tellerID)
 
                 let paid = try await desk.respond("check", arguments: ["wallet": ["object": "Wallet"]])
                 #expect(paid.reply == .integer(5))
                 // A reference that says what it is is refused where it's given, before the method
                 // runs, wherever it is in what's given.
-                let clock = try await DynamicObjects.resolve(on: node).held(clockID)
+                let clock = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(clockID)
                 let bare = try JSONValue(encoding: try ActorReference(clock))
                 guard case .object(var typed) = bare else { throw CancellationError() }
                 typed["type"] = "Clock"
@@ -109,20 +110,23 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 let counter =
                     "actor CoffeeCounter {\n    var count = 0\n\n    /// A cup was added.\n    @Event\n    struct CupAdded {\n        var count: Int\n    }\n\n    func addCup() {\n        count += 1\n        announce(CupAdded(count: count))\n    }\n}"
                 let logger =
                     "actor CupLogger {\n    @Subscribed var counter = CoffeeCounter(id: \"coffee-counter\")\n    var lastCount = 0\n\n    func onCupAdded(_ cupAdded: CoffeeCounter.CupAdded) {\n        lastCount = cupAdded.count\n    }\n}"
                 let counterID = try await objects.create(
                     name: "CoffeeCounter", spec: .new(try Script(code: counter, type: "CoffeeCounter")))
-                let coffee = try await DynamicObjects.resolve(on: node).held(counterID)
+                let coffee = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(counterID)
                 // The logger is written against the counter's spec, as Turgai gives it the types
                 // there are: its event is the type it's declared as, in its actor.
-                let counterSpec = Uses.interface(of: [Uses.Object(description: try await coffee.describe(), publishes: true)])
+                let counterSpec = Uses.interface(of: [
+                    Uses.Object(description: try await coffee.describe(), publishes: true)
+                ])
                 #expect(
                     counterSpec.source.contains(
-                        "    /// A cup was added.\n    @Event struct CupAdded: Codable {\n        var count: Int\n    }"),
+                        "    /// A cup was added.\n    @Event struct CupAdded: Codable {\n        var count: Int\n    }"
+                    ),
                     "\(counterSpec.source)")
                 let loggerID = try await objects.create(
                     name: "CupLogger",
@@ -130,7 +134,7 @@ struct DynamicObjectTests {
                         try Script(
                             code: logger, type: "CupLogger",
                             uses: Uses(interface: counterSpec, objects: [:], lasting: ["CoffeeCounter"]))))
-                let log = try await DynamicObjects.resolve(on: node).held(loggerID)
+                let log = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(loggerID)
 
                 #expect(try await coffee.describe().events.keys.sorted() == ["CupAdded"])
                 // The logger follows once it has subscribed; until then an event isn't missed, but
@@ -155,18 +159,18 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 let bell =
                     "actor Bell {\n    @Event enum Rang {\n        case once\n        case twice(loud: Bool)\n    }\n\n    func ring(loud: Bool) {\n        announce(Rang.twice(loud: loud))\n    }\n}"
                 let bellID = try await objects.create(name: "Bell", spec: .new(try Script(code: bell, type: "Bell")))
-                let ringing = try await DynamicObjects.resolve(on: node).held(bellID)
+                let ringing = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(bellID)
                 let spec = Uses.interface(of: [Uses.Object(description: try await ringing.describe(), publishes: true)])
                 let listener =
                     "actor Listener {\n    @Subscribed var bell = Bell(id: \"bell\")\n    var heard = \"\"\n\n    func onRang(_ rang: Bell.Rang) {\n        switch rang {\n        case .once: heard = \"once\"\n        case .twice(let loud): heard = loud ? \"loud\" : \"soft\"\n        }\n    }\n}"
                 let script = try Script(
                     code: listener, type: "Listener", uses: Uses(interface: spec, objects: [:], lasting: ["Bell"]))
                 #expect(await ScriptInstance.problems(in: script).isEmpty)
-                let listening = try await DynamicObjects.resolve(on: node).held(
+                let listening = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(
                     try await objects.create(name: "Listener", spec: .new(script)))
                 try await eventually { try await listening.read(property: "heard") == "" }
                 try await Task.sleep(for: .seconds(2))
@@ -192,17 +196,19 @@ struct DynamicObjectTests {
                 ObjectIdentity(rawValue: "ledger"): "Ledger",
             ], lasting: ["CoffeeCounter", "Clock", "Ledger"])
         func refusals(_ property: String) async throws -> [String] {
-            let code = "actor CupLogger {\n    \(property)\n\n    func onCupAdded(_ cupAdded: CoffeeCounter.CupAdded) {}\n}"
+            let code =
+                "actor CupLogger {\n    \(property)\n\n    func onCupAdded(_ cupAdded: CoffeeCounter.CupAdded) {}\n}"
             return await ScriptInstance.problems(in: try Script(code: code, type: "CupLogger", uses: uses)).map(
                 \.message)
         }
         #expect(try await refusals("@Subscribed var tea = CoffeeCounter(id: \"tea-counter\")").isEmpty)
         // Swift says it, as the macro the runtime declares, and the runtime says why.
         #expect(
-            try await refusals("@Subscribed(id: \"tea-counter\") var tea = CoffeeCounter(id: \"tea-counter\")").sorted() == [
-                "@Subscribed takes no arguments: it follows the object its property holds",
-                "argument passed to macro expansion that takes no arguments",
-            ])
+            try await refusals("@Subscribed(id: \"tea-counter\") var tea = CoffeeCounter(id: \"tea-counter\")").sorted()
+                == [
+                    "@Subscribed takes no arguments: it follows the object its property holds",
+                    "argument passed to macro expansion that takes no arguments",
+                ])
         #expect(
             try await refusals("@Subscribed var tea = Clock(id: \"clock\")") == [
                 "no function handles the events of clock: onTicked(_ ticked: Clock.Ticked)"
@@ -319,7 +325,8 @@ struct DynamicObjectTests {
             interface: ModuleInterface(
                 name: Uses.module,
                 source:
-                    "actor Website {\n    init(id: String)\n    @Event struct ButtonPressed: Codable {\n        var label: String\n    }\n}"),
+                    "actor Website {\n    init(id: String)\n    @Event struct ButtonPressed: Codable {\n        var label: String\n    }\n}"
+            ),
             objects: [ObjectIdentity(rawValue: "website"): "Website"], lasting: ["Website"])
         let code =
             "actor PressCounter {\n    var presses = 0\n    @Subscribed var website: Website\n\n    func onButtonPressed(_ buttonPressed: Website.ButtonPressed) {\n        presses += 1\n    }\n}"
@@ -355,8 +362,29 @@ struct DynamicObjectTests {
             try await withDynamicNode(joining: shop, store: store) { node in
                 let player = try await Player.start(on: node)
                 let board = try await Board.start(on: node)
+                // The space's built-in objects, given to the session as a turn's tools give them.
+                let playerObject = try DiscoverableObject.resolve(id: player.id, using: node)
+                let playerDescribed = try await playerObject.describe()
+                let playerEntry = ObjectEntry(
+                    id: .virtual(try #require(player.id.virtualActorID)), object: playerObject,
+                    type: playerDescribed.type,
+                    description: playerDescribed.description,
+                    actions: playerDescribed.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
+                        .sorted(),
+                    events: playerDescribed.events.keys.sorted())
+                let boardObject = try DiscoverableObject.resolve(id: board.id, using: node)
+                let boardDescribed = try await boardObject.describe()
+                let boardEntry = ObjectEntry(
+                    id: .virtual(try #require(board.id.virtualActorID)), object: boardObject, type: boardDescribed.type,
+                    description: boardDescribed.description,
+                    actions: boardDescribed.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
+                        .sorted(),
+                    events: boardDescribed.events.keys.sorted())
                 let session = ObjectSession(
-                    actorSystem: node, objectCatalog: await ObjectCatalog(actorSystem: node))
+                    in: AsAPerson.person.space,
+                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
+                        for: AsAPerson.person.person), actorSystem: node,
+                    builtIns: [playerEntry, boardEntry])
                 try await eventually { (try await session.list().arrayValue?.count ?? 0) >= 2 }
 
                 let others = await session.others(except: "Bridge")
@@ -380,7 +408,9 @@ struct DynamicObjectTests {
                     words.contains("- Card: what a board shows. One of:\n    .piece(Piece)\n    .row(items: [Piece])"))
                 #expect(!words.contains("struct"))
                 // A built-in object's card is its spec.
-                guard case .markdown(let card) = try await session.card(try await session.id(written: "player")) else { return }
+                guard case .markdown(let card) = try await session.card(try await session.id(written: "player")) else {
+                    return
+                }
                 #expect(card.contains("takes:\n- 'play(track: Track) async throws'"))
                 #expect(card.contains("publishes:\n- 'playing: Track? { get async throws }'"))
                 #expect(card.contains("announces:\n- 'TrackChanged(track: Track?)'"), "\(card)")
@@ -413,8 +443,8 @@ struct DynamicObjectTests {
                 let script = try Script(code: code, type: "Bridge", uses: others.uses)
                 #expect(await ScriptInstance.problems(in: script).isEmpty)
 
-                let objects = try await DynamicObjects.resolve(on: node)
-                let bridge = try await DynamicObjects.resolve(on: node).held(
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
+                let bridge = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(
                     try await objects.create(name: "Bridge", spec: .new(script)))
                 try await eventually { try await bridge.read(property: "shown") == "" }
                 try await Task.sleep(for: .seconds(2))
@@ -442,7 +472,8 @@ struct DynamicObjectTests {
             interface: ModuleInterface(
                 name: Uses.module,
                 source:
-                    "actor Shop {\n    init(id: String)\n    @Event struct RefundRequested: Codable {\n        var order: Int\n    }\n}"),
+                    "actor Shop {\n    init(id: String)\n    @Event struct RefundRequested: Codable {\n        var order: Int\n    }\n}"
+            ),
             objects: [ObjectIdentity(rawValue: "shop"): "Shop"], lasting: ["Shop"])
         for (code, refusal) in [
             (
@@ -481,7 +512,9 @@ struct DynamicObjectTests {
         #expect(function == ["'extension' macro cannot be attached to instance method ('rang')"], "\(function)")
         let outside = try await refusals("actor Bell {\n    func ring() {}\n}\n\n@Event struct Rang {}")
         #expect(
-            outside == ["@Event is a struct's or an enum's, declared in `actor Bell`: `announce(_:)` sends a value of it"],
+            outside == [
+                "@Event is a struct's or an enum's, declared in `actor Bell`: `announce(_:)` sends a value of it"
+            ],
             "\(outside)")
         let notAnEvent = try await refusals(
             "actor Bell {\n    struct Rang {}\n\n    func ring() {\n        announce(Rang())\n    }\n}")
@@ -503,7 +536,8 @@ struct DynamicObjectTests {
         func refusals(_ handler: String) async throws -> [String] {
             let code =
                 "actor Follower {\n    @Subscribed var check = Check(id: \"check\")\n\n    \(handler) {}\n}"
-            return await ScriptInstance.problems(in: try Script(code: code, type: "Follower", uses: uses)).map(\.message)
+            return await ScriptInstance.problems(in: try Script(code: code, type: "Follower", uses: uses)).map(
+                \.message)
         }
         #expect(try await refusals("func onMorning(_ morning: Check.Morning)").isEmpty, "\(interface.source)")
         #expect(
@@ -520,10 +554,14 @@ struct DynamicObjectTests {
             interface: ModuleInterface(name: Uses.module, source: "Holds:\n• nothing\nactor Check {\n}"),
             objects: [:], lasting: [])
         let problems = await ScriptInstance.problems(
-            in: try Script(code: "actor A {\n    func f() {\n        let x: Int = \"s\"\n        _ = x\n    }\n}", type: "A", uses: uses)
+            in: try Script(
+                code: "actor A {\n    func f() {\n        let x: Int = \"s\"\n        _ = x\n    }\n}", type: "A",
+                uses: uses)
         ).map(\.message)
         #expect(problems.count == 1, "\(problems)")
-        #expect(problems.first?.hasPrefix("Turgai couldn't declare what this code is written against: Objects.swift") == true)
+        #expect(
+            problems.first?.hasPrefix("Turgai couldn't declare what this code is written against: Objects.swift")
+                == true)
     }
 
     /// An attribute is Swift's, or a macro the runtime declares: any other is refused as Swift
@@ -546,11 +584,14 @@ struct DynamicObjectTests {
         let uses = Uses(
             interface: ModuleInterface(
                 name: Uses.module,
-                source: "actor Check {\n    init(id: String)\n    @Event struct Morning: Codable {\n        var temperature: Double\n    }\n}"),
+                source:
+                    "actor Check {\n    init(id: String)\n    @Event struct Morning: Codable {\n        var temperature: Double\n    }\n}"
+            ),
             objects: [ObjectIdentity(rawValue: "check"): "Check"], lasting: ["Check"])
         func refusals(_ member: String) async throws -> [String] {
             let code = "actor Follower {\n    var heard = 0\n\n    \(member)\n}"
-            return await ScriptInstance.problems(in: try Script(code: code, type: "Follower", uses: uses)).map(\.message)
+            return await ScriptInstance.problems(in: try Script(code: code, type: "Follower", uses: uses)).map(
+                \.message)
         }
         // On a function, Swift refuses it, as the macro the runtime declares.
         #expect(
@@ -579,7 +620,7 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 let ann = """
                     actor Ann {
                         var budget = 1000
@@ -604,7 +645,9 @@ struct DynamicObjectTests {
                     """
                 let annID = try await objects.create(name: "Ann", spec: .new(try Script(code: ann, type: "Ann")))
                 let session = ObjectSession(
-                    actorSystem: node, objectCatalog: await ObjectCatalog(actorSystem: node))
+                    in: AsAPerson.person.space,
+                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
+                        for: AsAPerson.person.person), actorSystem: node)
                 let others = await session.others(except: "Bob")
                 let bob = """
                     actor Bob {
@@ -629,13 +672,16 @@ struct DynamicObjectTests {
                 let bobID = try await objects.create(name: "Bob", spec: .new(bobScript))
                 // Each describes itself, and each is listed.
                 for identity in [annID, bobID] {
-                    _ = try await DynamicObjects.resolve(on: node).held(identity).describe()
+                    _ = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(identity).describe()
                 }
                 try await eventually { (try? await session.yourObjects())?.map(\.name) == ["ann", "bob"] }
                 #expect(try await session.yourObjects().map(\.name) == ["ann", "bob"])
                 // Each one's card, as `/objects` shows it, shows its own Swift: the followed one's and
                 // the follower's.
-                let shown = ObjectSession(actorSystem: node)
+                let shown = ObjectSession(
+                    in: AsAPerson.person.space,
+                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
+                        for: AsAPerson.person.person), actorSystem: node)
                 for (object, code) in zip(try await shown.yourObjects(), [ann, bob]) {
                     guard case .markdown(let card) = try await shown.card(object) else { continue }
                     #expect(card.hasSuffix("```swift\n\(code)\n```"), "\(object): \(card)")
@@ -683,7 +729,7 @@ struct DynamicObjectTests {
             objects: [:], lasting: ["Counter"])
         try await withShopNodes(store: store) { shop, _ in
             let drinksID = try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 _ = try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
                 let drinksID = try await objects.create(
                     name: "Drinks", spec: .new(try Script(code: drinks, type: "Drinks", uses: counterUses)))
@@ -711,7 +757,7 @@ struct DynamicObjectTests {
                 return drinksID
             }
             try await withDynamicNode(joining: shop, store: store) { node in
-                let desk = try await DynamicObjects.resolve(on: node).held(drinksID)
+                let desk = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(drinksID)
                 #expect(try await desk.respond("addTea", arguments: [:]).reply == .integer(4))
                 #expect(try await desk.respond("addCoffee", arguments: [:]).reply == .integer(2))
                 #expect(try await desk.respond("add", arguments: ["to": "juice"]).reply == .integer(3))
@@ -725,7 +771,7 @@ struct DynamicObjectTests {
     @Test(.timeLimit(.minutes(2)))
     func anObjectKeepsWhoMadeIt() async throws {
         let store = MemoryEventStore()
-        let ann = CallScope(UserID.ann, in: SpaceID(), as: .admin, allowed: [])
+        let ann = CallScope.admin(UserID.ann, in: SpaceID())
         let counter = "actor Counter {\n    var count = 0\n}"
         let drinks = "actor Drinks {\n    private let tea = Counter(id: \"tea\")\n}"
         let uses = Uses(
@@ -735,7 +781,7 @@ struct DynamicObjectTests {
             let drinksID = try await withDynamicNode(joining: shop, store: store) { _ in
                 // Made from a node that hosts no objects: the call carries Ann to the one that does.
                 try await CallChain.$current.withValue(.start(ann, in: nil)) {
-                    let objects = try await DynamicObjects.resolve(on: customers)
+                    let objects = try await DynamicObjects.of(ann.space, on: customers)
                     _ = try await objects.create(
                         name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
                     return try await objects.create(
@@ -745,19 +791,19 @@ struct DynamicObjectTests {
             try await withDynamicNode(joining: shop, store: store) { node in
                 // Hers alone: read as her.
                 try await CallChain.$current.withValue(.start(ann, in: nil)) {
-                    let objects = try await DynamicObjects.resolve(on: node)
+                    let objects = try await DynamicObjects.of(ann.space, on: node)
                     #expect(try await objects.held(drinksID).maker == ann)
                     #expect(try await objects.held(drinksID).access == Access(madeBy: ann))
                     let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
-                    let made = try await DynamicObject.resolve(on: node, identity: tea)
+                    let made = try await DynamicObject.identified(by: tea, in: ann.space, on: node)
                     // Not hers to call: it's what Drinks holds.
                     await #expect(throws: NotAllowed(.read)) { _ = try await made.maker }
                 }
                 // Read as Drinks: made on Ann's behalf, and Drinks' alone.
-                let drinks = DynamicObject.callActor(for: drinksID)
+                let drinks = DynamicObject.callActor(for: drinksID, in: ann.space)
                 try await CallChain.$current.withValue(try CallChain.start(ann, in: nil).entering(drinks)) {
                     let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
-                    let made = try await DynamicObject.resolve(on: node, identity: tea)
+                    let made = try await DynamicObject.identified(by: tea, in: ann.space, on: node)
                     #expect(try await made.maker == ann)
                     #expect(try await made.access == Access(heldBy: drinks))
                 }
@@ -781,7 +827,7 @@ struct DynamicObjectTests {
             objects: [:], lasting: ["Counter"])
         try await withShopNodes(store: store) { shop, _ in
             let (drinksID, tea) = try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 _ = try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
                 let drinksID = try await objects.create(
                     name: "Drinks", spec: .new(try Script(code: drinks, type: "Drinks", uses: uses)))
@@ -798,7 +844,9 @@ struct DynamicObjectTests {
     private static func heldIdentity(_ field: String, of identity: ObjectIdentity, on node: ClusterSystem) async throws
         -> ObjectIdentity?
     {
-        let holder = try await DynamicObjects.resolve(on: node).held(identity)
+        // In the space of whoever the current call is on behalf of.
+        let space = CallChain.current?.scope.space ?? AsAPerson.person.space
+        let holder = try await DynamicObjects.of(space, on: node).held(identity)
         guard case .actor(let reference, _)? = ObjectReference(try await holder.read(property: field)) else {
             return nil
         }
@@ -877,7 +925,7 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 let uses = Uses(
                     interface: ModuleInterface(
                         name: Uses.module,
@@ -902,7 +950,7 @@ struct DynamicObjectTests {
                 let script = try Script(code: code, type: "Shop", uses: uses)
                 #expect(await ScriptInstance.problems(in: script).isEmpty)
                 let identity = try await objects.create(name: "Shop", spec: .new(script))
-                let made = try await DynamicObjects.resolve(on: node).held(identity)
+                let made = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(identity)
                 #expect(try await made.respond("order", arguments: [:]).reply == ["status": "placed"])
             }
         }
@@ -914,9 +962,9 @@ struct DynamicObjectTests {
     func aReferenceToAnotherKindOfActorFails() async throws {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { node, _ in
-            let catalog = await ObjectCatalog(actorSystem: node)
+            let other = OtherKindOfActor(actorSystem: node)
             await #expect(throws: ResolveError.self) {
-                _ = try await DynamicObject.resolve(id: catalog.id, using: node).identity
+                _ = try await DynamicObject.resolve(id: other.id, using: node).identity
             }
         }
     }
@@ -928,9 +976,11 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 let session = ObjectSession(
-                    actorSystem: node, objectCatalog: await ObjectCatalog(actorSystem: node))
+                    in: AsAPerson.person.space,
+                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
+                        for: AsAPerson.person.person), actorSystem: node)
                 let desk = """
                     actor Desk {
                         protocol RefundManager {
@@ -968,7 +1018,9 @@ struct DynamicObjectTests {
 
                 // Only Ann conforms: she's what the shift's argument offers.
                 #expect(
-                    await session.conforming(to: ObjectProtocolName(rawValue: "Desk.RefundManager")) == [try await session.id(written: "ann")])
+                    await session.conforming(to: ObjectProtocolName(rawValue: "Desk.RefundManager")) == [
+                        try await session.id(written: "ann")
+                    ])
 
                 let deskObject = try await objects.held(deskID)
                 let annObject = try await objects.held(annID)
@@ -998,12 +1050,14 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 let ann =
                     "actor Ann {\n    var budget = 1000\n\n    func approve(amount: Int) -> Bool {\n        amount < 100\n    }\n}"
                 _ = try await objects.create(name: "Ann", spec: .new(try Script(code: ann, type: "Ann")))
                 let session = ObjectSession(
-                    actorSystem: node, objectCatalog: await ObjectCatalog(actorSystem: node))
+                    in: AsAPerson.person.space,
+                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
+                        for: AsAPerson.person.person), actorSystem: node)
                 let others = await session.others(except: "Bob")
                 let bob = """
                     actor Bob {
@@ -1035,7 +1089,7 @@ struct DynamicObjectTests {
                 let bobScript = try Script(code: bob, type: "Bob", uses: others.uses)
                 #expect(await ScriptInstance.problems(in: bobScript).isEmpty)
                 let bobID = try await objects.create(name: "Bob", spec: .new(bobScript))
-                let bobObject = try await DynamicObjects.resolve(on: node).held(bobID)
+                let bobObject = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(bobID)
                 _ = try await bobObject.respond("hire", arguments: [:])
                 #expect(try await bobObject.respond("ask", arguments: ["amount": 50]).reply == .bool(true))
                 // What another object holds is read, as another actor's property is.
@@ -1052,11 +1106,11 @@ struct DynamicObjectTests {
         let store = MemoryEventStore()
         try await withShopNodes(store: store) { shop, _ in
             try await withDynamicNode(joining: shop, store: store) { node in
-                let objects = try await DynamicObjects.resolve(on: node)
+                let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 let code =
                     "actor Ann {\n    func loop() async throws -> Int {\n        return try await Ann(id: \"ann\").loop()\n    }\n}"
                 let identity = try await objects.create(name: "Ann", spec: .new(try Script(code: code, type: "Ann")))
-                let ann = try await DynamicObjects.resolve(on: node).held(identity)
+                let ann = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(identity)
 
                 await #expect(throws: (any Error).self) { try await ann.respond("loop", arguments: [:]) }
                 guard case .failing(let failure) = try await ann.health else {
@@ -1240,21 +1294,28 @@ distributed actor Board {
     }
 }
 
-/// The built-in object `name`, as a virtual actor, listed among the objects by its lasting reference.
+/// The built-in object `name`, as a virtual actor, offered in the test's space, where its code
+/// finds it by name.
 private func builtIn<Object: VirtualActor>(_ name: String, on actorSystem: ClusterSystem) async throws -> Object {
     let object: Object = try await actorSystem.virtualActors.getActor(
         identifiedBy: VirtualActorID(rawValue: "builtin/\(name)"), dependency: ObjectIdentity(rawValue: name))
     await actorSystem.receptionist.checkIn(
-        try DiscoverableObject.resolve(id: object.id, using: actorSystem), with: .objects)
+        try DiscoverableObject.resolve(id: object.id, using: actorSystem),
+        with: .virtualObjects(in: AsAPerson.person.space))
     return object
 }
 
 /// Read by everyone and written by no one, as any built-in object.
 extension Player: AccessControlled {
-    func access(for chain: CallChain) -> Access { .readByEveryone }
+    distributed func access(for chain: CallChain) -> Access { .readByEveryone }
 }
 
 /// Read by everyone and written by no one, as any built-in object.
 extension Board: AccessControlled {
-    func access(for chain: CallChain) -> Access { .readByEveryone }
+    distributed func access(for chain: CallChain) -> Access { .readByEveryone }
+}
+
+/// An actor that isn't an object: what a reference to an object can't be.
+private distributed actor OtherKindOfActor {
+    typealias ActorSystem = ClusterSystem
 }

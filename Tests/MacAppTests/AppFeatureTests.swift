@@ -140,12 +140,14 @@ struct RegistrationTests {
         let store = TestStore(
             initialState: AppFeature.State(
                 account: .signedOut,
-                login: AppFeature.LoginForm(mode: .register, username: "ada", password: "correct horse battery")
+                login: AppFeature.LoginForm(
+                    mode: .register, username: "ada", password: "correct horse battery",
+                    passwordAgain: "correct horse battery")
             )
         ) {
             AppFeature()
         } withDependencies: {
-            $0.server.register = { username, _ in
+            $0.server.register = { username, _, _ in
                 registered.withValue { $0.append(username) }
                 return session
             }
@@ -181,7 +183,7 @@ struct RegistrationTests {
         let store = TestStore(
             initialState: AppFeature.State(
                 account: .signedOut,
-                login: AppFeature.LoginForm(mode: .register, username: "ada", password: "short")
+                login: AppFeature.LoginForm(mode: .register, username: "ada", password: "short", passwordAgain: "short")
             )
         ) {
             AppFeature()
@@ -198,17 +200,38 @@ struct RegistrationTests {
         }
     }
 
+    /// A new password typed differently the second time is caught before anything's sent.
+    @Test
+    func differingPasswordsAreCaughtBeforeRegistering() async {
+        let store = TestStore(
+            initialState: AppFeature.State(
+                account: .signedOut,
+                login: AppFeature.LoginForm(
+                    mode: .register, username: "ada", password: "correct horse battery",
+                    passwordAgain: "correct horse battey")
+            )
+        ) {
+            AppFeature()
+        }
+
+        await store.send(.submitTapped) {
+            $0.login.notice = .passwordsDiffer
+        }
+    }
+
     @Test
     func refusedRegistrationSaysTheNameMayBeTaken() async {
         let store = TestStore(
             initialState: AppFeature.State(
                 account: .signedOut,
-                login: AppFeature.LoginForm(mode: .register, username: "ada", password: "correct horse battery")
+                login: AppFeature.LoginForm(
+                    mode: .register, username: "ada", password: "correct horse battery",
+                    passwordAgain: "correct horse battery")
             )
         ) {
             AppFeature()
         } withDependencies: {
-            $0.server.register = { _, _ in throw AccountError.rejected }
+            $0.server.register = { _, _, _ in throw AccountError.rejected }
         }
 
         await store.send(.submitTapped) {

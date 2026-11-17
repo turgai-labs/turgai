@@ -16,7 +16,7 @@ struct AsAPerson: SuiteTrait, TestTrait, TestScoping {
     }
 
     /// Whom a test's calls are on behalf of.
-    static let person = CallScope(UserID.tester, in: SpaceID(), as: .admin, allowed: [])
+    static let person = CallScope.admin(UserID.tester, in: SpaceID())
 }
 
 extension Trait where Self == AsAPerson {

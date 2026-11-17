@@ -5,6 +5,7 @@ import HummingbirdElementary
 import HummingbirdWebSocket
 import NIOCore
 import TurgaiApplication
+import TurgaiDomain
 import TurgaiHail
 import TurgaiPersistence
 import TurgaiTelegram
@@ -16,22 +17,21 @@ import TurgaiTelegram
 #endif
 
 extension TurgaiOnboardingWebApp {
-    func registerOnboardingRoutes(
-        on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
-    ) {
+    func registerOnboardingRoutes(on router: Router<BasicWebSocketRequestContext>) {
         let onboarding = router.group("onboarding")
-        registerWelcome(on: onboarding, dependencies: dependencies)
-        registerAdminStep(on: onboarding.group("register"), dependencies: dependencies)
-        registerModelStep(on: onboarding.group("model"), dependencies: dependencies)
-        registerStorageStep(on: onboarding.group("storage"), dependencies: dependencies)
-        registerFinishStep(on: onboarding.group("finish"), dependencies: dependencies)
+        registerWelcome(on: onboarding)
+        registerAdminStep(on: onboarding.group("register"))
+        registerModelStep(on: onboarding.group("model"))
+        registerModelAsking(on: onboarding.group("model"))
+        registerStorageStep(on: onboarding.group("storage"))
+        registerFinishStep(on: onboarding.group("finish"))
     }
 
     /// Setting up: the administrator account.
     private func registerAdminStep(
-        on step: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+        on step: RouterGroup<BasicWebSocketRequestContext>
     ) {
-        let auth = dependencies.auth
+        let auth = self.auth
         step.get { request, context in
             guard !(try await auth.hasAdmin()) else {
                 return TurgaiWebSupport.redirect(to: "/login")
@@ -51,7 +51,15 @@ extension TurgaiOnboardingWebApp {
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
             let challenge = form["challenge"]?.first ?? ""
             let confirmation = request.cookies[TurgaiWebSupport.bootstrapChallengeCookieName]?.value ?? ""
-            let credentials = CredentialsFormValues(form: form)
+            let credentials = NewCredentialsFormValues(form: form)
+            guard credentials.passwordsMatch else {
+                let challenge = await auth.issueBootstrapChallenge()
+                var response = HTMLResponse {
+                    RegisterPage(challenge: challenge, error: NewCredentialsFormValues.passwordsDiffer)
+                }.response(from: request, context: context)
+                response.setCookie(TurgaiWebSupport.bootstrapChallengeCookie(challenge))
+                return response
+            }
             do {
                 _ = try await auth.bootstrap(
                     username: credentials.username,
@@ -64,7 +72,7 @@ extension TurgaiOnboardingWebApp {
                     password: credentials.password
                 )
                 var response = TurgaiWebSupport.redirect(
-                    to: "/onboarding/model",
+                    to: "/onboarding/storage",
                     settingCookie: TurgaiWebSupport.sessionCookie(session.token)
                 )
                 response.setCookie(TurgaiWebSupport.expiredBootstrapChallengeCookie())
@@ -83,89 +91,118 @@ extension TurgaiOnboardingWebApp {
         }
     }
 
-    /// Setting up: the first bot and its model.
+    /// Setting up: the first space, its name and its first bot. Kept with setting up until the
+    /// space is made, as Turgai starts, by whoever set it up, as anyone makes a space.
     private func registerModelStep(
-        on step: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+        on step: RouterGroup<BasicWebSocketRequestContext>
     ) {
-        let auth = dependencies.auth
-        let agentProfiles = dependencies.agentProfiles
-        let agentCredentials = dependencies.agentCredentials
+        let auth = self.auth
+        let setup = self.setup
+        let agentCredentials = self.agentCredentials
         step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            let profile = try await agentProfiles.defaultProfile()
-            let draft = profile.map { AgentDraft($0, requestLimit: nil) }
+            let first = await setup.firstSpace
             return HTMLResponse {
-                ModelPage(draft: draft ?? .new(named: "Turgai"), profileID: profile?.id)
+                ModelPage(
+                    spaceName: first?.name.rawValue ?? "",
+                    draft: first.map { AgentDraft($0.bot, requestLimit: nil) } ?? .new(named: "Turgai"),
+                    profileID: first?.bot.id.description)
             }.response(from: request, context: context)
         }
 
         step.post { request, context in
-            guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
+            guard let user = await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
             let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
-            let existingProfile = try await agentProfiles.defaultProfile()
+            let first = await setup.firstSpace
+            let existing = first?.bot
             let draft = AgentDraft(
-                form: form,
-                over: existingProfile.map { AgentDraft($0, requestLimit: nil) } ?? .new(named: "Turgai"))
+                form: form, over: existing.map { AgentDraft($0, requestLimit: nil) } ?? .new(named: "Turgai"))
+            let written = form["spaceName"]?.first ?? ""
+            guard let name = SpaceName(written) else {
+                return HTMLResponse {
+                    ModelPage(
+                        spaceName: written, draft: draft, profileID: existing?.id.description,
+                        error: "Give the space a name.")
+                }.response(from: request, context: context)
+            }
             var pendingCredential: AgentCredentialReference?
             do {
-                let reasoningEffort = try OnboardingInput.reasoningEffort(from: draft)
-                let checked = try await OnboardingInput.submission(
-                    from: draft, saved: existingProfile?.providerConfiguration
-                ).checked(credentials: agentCredentials)
-                if let key = checked.newKey {
-                    pendingCredential = key.reference
-                    try await agentCredentials.save(key.value, for: key.reference)
+                let (bot, newKey) = try await draft.bot(over: existing, credentials: agentCredentials)
+                if let newKey {
+                    pendingCredential = newKey.reference
+                    try await agentCredentials.save(newKey.value, for: newKey.reference)
                 }
-                if var profile = try await agentProfiles.defaultProfile() {
-                    let oldReference = profile.providerConfiguration.credentialReference
-                    try profile.use(checked.configuration, model: checked.model)
-                    profile.reasoningEffort = reasoningEffort
-                    profile.name = draft.name
-                    profile.persona = draft.persona
-                    profile.instructions = draft.instructions
-                    try await agentProfiles.update(profile)
-                    pendingCredential = nil
-                    if let oldReference,
-                        oldReference != checked.configuration.credentialReference
-                    {
-                        try? await agentCredentials.remove(oldReference)
-                    }
-                } else {
-                    _ = try await agentProfiles.create(
-                        name: draft.name,
-                        providerConfiguration: checked.configuration,
-                        modelID: checked.model,
-                        reasoningEffort: reasoningEffort,
-                        persona: draft.persona,
-                        instructions: draft.instructions
-                    )
-                    pendingCredential = nil
+                try await setup.setFirstSpace(
+                    FirstSpace(id: first?.id ?? SpaceID(), name: name, maker: .account(user.id), bot: bot))
+                pendingCredential = nil
+                if let old = existing?.model.location.credentialReference,
+                    old != bot.model.location.credentialReference
+                {
+                    try? await agentCredentials.remove(old)
                 }
-                return Response(status: .seeOther, headers: [.location: "/onboarding/storage"])
+                return Response(status: .seeOther, headers: [.location: "/onboarding/finish"])
             } catch {
                 if let pendingCredential { try? await agentCredentials.remove(pendingCredential) }
                 return HTMLResponse {
                     ModelPage(
-                        draft: draft,
-                        profileID: existingProfile?.id,
-                        error: TurgaiWebSupport.profileErrorMessage(error)
-                    )
+                        spaceName: written, draft: draft, profileID: existing?.id.description,
+                        error: TurgaiWebSupport.profileErrorMessage(error))
                 }.response(from: request, context: context)
             }
         }
     }
 
+    /// Setting up: the chosen provider's models, and the chosen model's window, as the model step's
+    /// form has them while it's filled in, answered under the model field; asked with the key
+    /// typed, or else the one the first bot keeps.
+    private func registerModelAsking(
+        on step: RouterGroup<BasicWebSocketRequestContext>
+    ) {
+        let auth = self.auth
+        let setup = self.setup
+        let agentCredentials = self.agentCredentials
+        /// Where the first bot's model runs, when the form is the first bot's.
+        @Sendable func saved(_ form: [String: [String]]) async -> AgentProviderConfiguration? {
+            guard let first = await setup.firstSpace?.bot, form["id"]?.first == first.id.description else {
+                return nil
+            }
+            return first.model.location
+        }
+        step.post("models") { request, context in
+            guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
+                return Response(status: .unauthorized)
+            }
+            let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
+            let outcome = await ModelSearch.search(
+                AgentDraft(form: form, over: .new(named: "")), saved: await saved(form),
+                credentials: agentCredentials)
+            return HTMLResponse { ModelSearchAnswer(outcome: outcome) }.response(from: request, context: context)
+        }
+        step.post("models/window") { request, context in
+            guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
+                return Response(status: .unauthorized)
+            }
+            let form = try await TurgaiWebSupport.decodeForm(from: request, context: context)
+            let draft = AgentDraft(form: form, over: .new(named: ""))
+            let model = await ModelWindow.ask(draft, saved: await saved(form), credentials: agentCredentials)
+            return HTMLResponse {
+                ContextWindowField(
+                    provider: draft.provider, tokens: draft.settings.contextWindow, model: model, replacing: true)
+            }.response(from: request, context: context)
+        }
+    }
+
     /// Setting up: where memory is kept.
     private func registerStorageStep(
-        on step: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+        on step: RouterGroup<BasicWebSocketRequestContext>
     ) {
-        let auth = dependencies.auth
-        let setup = dependencies.setup
-        let directory = dependencies.directory
+        let auth = self.auth
+        let setup = self.setup
+        let directory = self.directory
         step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
@@ -188,7 +225,7 @@ extension TurgaiOnboardingWebApp {
             do {
                 let storage = try OnboardingInput.storageConfiguration(from: form)
                 try await setup.setStorage(storage)
-                return Response(status: .seeOther, headers: [.location: "/onboarding/finish"])
+                return Response(status: .seeOther, headers: [.location: "/onboarding/model"])
             } catch {
                 return HTMLResponse {
                     StoragePage(
@@ -203,17 +240,17 @@ extension TurgaiOnboardingWebApp {
 
     /// Setting up: the last step.
     private func registerFinishStep(
-        on step: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+        on step: RouterGroup<BasicWebSocketRequestContext>
     ) {
-        let auth = dependencies.auth
-        let setup = dependencies.setup
-        let agentProfiles = dependencies.agentProfiles
+        let auth = self.auth
+        let setup = self.setup
         step.get { request, context in
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            guard await setup.isReady, try await agentProfiles.defaultProfile() != nil else {
-                return TurgaiWebSupport.redirect(to: "/onboarding/model")
+            guard await setup.isReady else {
+                return TurgaiWebSupport.redirect(
+                    to: await setup.storageConfiguration == nil ? "/onboarding/storage" : "/onboarding/model")
             }
             guard !(await setup.isComplete) else {
                 return TurgaiWebSupport.redirect(to: "/")
@@ -226,25 +263,27 @@ extension TurgaiOnboardingWebApp {
             guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                 return TurgaiWebSupport.redirect(to: try await auth.hasAdmin() ? "/login" : "/onboarding")
             }
-            guard await setup.isReady, try await agentProfiles.defaultProfile() != nil else {
-                return TurgaiWebSupport.redirect(to: "/onboarding/model")
+            guard await setup.isReady else {
+                return TurgaiWebSupport.redirect(
+                    to: await setup.storageConfiguration == nil ? "/onboarding/storage" : "/onboarding/model")
             }
             try await setup.complete()
-            return TurgaiWebSupport.redirect(to: "/")
+            // Setting up ends here, and Turgai starts: the page waits until it answers.
+            return HTMLResponse { StartingPage() }.response(from: request, context: context)
         }
     }
 
     /// Setting up: where it starts.
     private func registerWelcome(
-        on welcome: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+        on welcome: RouterGroup<BasicWebSocketRequestContext>
     ) {
-        let auth = dependencies.auth
+        let auth = self.auth
         welcome.get { request, context in
             if try await auth.hasAdmin() {
                 guard await TurgaiWebSupport.authenticatedAdminUser(from: request, auth: auth) != nil else {
                     return TurgaiWebSupport.redirect(to: "/login")
                 }
-                return TurgaiWebSupport.redirect(to: "/onboarding/model")
+                return TurgaiWebSupport.redirect(to: "/onboarding/storage")
             }
             return HTMLResponse { OnboardingPage() }.response(from: request, context: context)
         }

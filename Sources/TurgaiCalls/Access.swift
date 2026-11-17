@@ -16,11 +16,10 @@ public enum AccessLevel: Int, Codable, Sendable, Comparable {
 public enum Audience: Hashable, Codable, Sendable {
     /// Anyone at all.
     case everyone
-    /// Anyone a call says is in the space, but a guest: what's shared with a whole space isn't
-    /// shared with whoever came into it as one.
-    case space(SpaceID)
-    /// Only those a call says are the space's admins.
-    case admins(of: SpaceID)
+    /// Whoever a call says is in a group of the space.
+    case group(SpaceID, GroupID)
+    /// Whoever a call says may answer what's asked of the space: who decides for it.
+    case deciders(of: SpaceID)
     /// One person, in whichever space they come in through.
     case person(UserID)
     /// An actor, when it's the one calling directly.
@@ -30,8 +29,8 @@ public enum Audience: Hashable, Codable, Sendable {
     func includes(_ scope: CallScope) -> Bool {
         switch self {
         case .everyone: true
-        case .space(let space): space == scope.space && !scope.person.isGuest
-        case .admins(let space): space == scope.space && scope.role == .admin
+        case .group(let space, let group): space == scope.space && scope.groups.contains(group)
+        case .deciders(let space): space == scope.space && scope.permissions.requests != nil
         case .person(let person): person == scope.person
         case .actor: false
         }
@@ -43,9 +42,10 @@ public enum Audience: Hashable, Codable, Sendable {
 public struct Access: Hashable, Codable, Sendable {
     public private(set) var levels: [Audience: AccessLevel]
 
-    /// What a space decides for: its admins', which no one else uses until they share it.
+    /// What a space decides for: whoever may answer what's asked of it, which no one else uses
+    /// until they share it.
     public init(decidedBy space: SpaceID) {
-        levels = [.admins(of: space): .write]
+        levels = [.deciders(of: space): .write]
     }
 
     /// A new object's access: its maker's alone.
@@ -62,6 +62,9 @@ public struct Access: Hashable, Codable, Sendable {
     /// Read by everyone and written by no one: what a built-in object and an agent allow, until
     /// whoever runs the node, and whoever made the agent, are known.
     public static let readByEveryone = Access(levels: [.everyone: .read])
+
+    /// Read and written by no one: what an object allows a call from another space.
+    public static let nobody = Access(levels: [:])
 
     private init(levels: [Audience: AccessLevel]) {
         self.levels = levels
