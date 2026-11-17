@@ -420,6 +420,9 @@ public enum ChatEventKind: String, Codable, Sendable {
     case conversationTitled = "conversation.titled"
     case conversationLeft = "conversation.left"
     case conversationDeleted = "conversation.deleted"
+    case spaceJoined = "space.joined"
+    case spaceListed = "space.listed"
+    case spaceLeft = "space.left"
     case reply
     case memoryChanged = "memory.changed"
     case objectsChanged = "objects.changed"
@@ -515,6 +518,13 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case conversationLeft(conversationID: ConversationID)
         /// It was deleted: it's gone from everyone's list, the one open too.
         case conversationDeleted(conversationID: ConversationID)
+        /// The person is in one more space, as it lists itself for them now.
+        case spaceJoined(space: SpaceSummary)
+        /// One of the person's spaces lists itself differently for them now: renamed, archived, or
+        /// what they may do in it.
+        case spaceListed(space: SpaceSummary)
+        /// The person is no longer in the space with this id.
+        case spaceLeft(spaceID: SpaceID)
         /// The answer to the push `ref`.
         case reply(ref: PushRef, reply: ChatReply)
         /// What's remembered about the person changed, or whether they're remembered: to a connection
@@ -552,6 +562,9 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             case .conversationTitled: .conversationTitled
             case .conversationLeft: .conversationLeft
             case .conversationDeleted: .conversationDeleted
+            case .spaceJoined: .spaceJoined
+            case .spaceListed: .spaceListed
+            case .spaceLeft: .spaceLeft
             case .reply: .reply
             case .memoryChanged: .memoryChanged
             case .objectsChanged: .objectsChanged
@@ -575,7 +588,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case status, phase, activity, message, messages, error, reply
         case request, requestID, answer
         case turns, step, conversation
-        case ref, memory, tasks, task, id, space
+        case ref, memory, tasks, task, id, space, listing
     }
 
     public init(from decoder: Decoder) throws {
@@ -669,6 +682,12 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case .conversationDeleted:
             payload = .conversationDeleted(
                 conversationID: try values.decode(ConversationID.self, forKey: .conversationID))
+        case .spaceJoined:
+            payload = .spaceJoined(space: try values.decode(SpaceSummary.self, forKey: .listing))
+        case .spaceListed:
+            payload = .spaceListed(space: try values.decode(SpaceSummary.self, forKey: .listing))
+        case .spaceLeft:
+            payload = .spaceLeft(spaceID: try values.decode(SpaceID.self, forKey: .space))
         case .reply:
             let reply: ChatReply =
                 switch try values.decode(ChatReply.Status.self, forKey: .status) {
@@ -765,6 +784,10 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             try values.encode(conversation, forKey: .conversation)
         case .conversationLeft(let conversationID), .conversationDeleted(let conversationID):
             try values.encode(conversationID, forKey: .conversationID)
+        case .spaceJoined(let space), .spaceListed(let space):
+            try values.encode(space, forKey: .listing)
+        case .spaceLeft(let spaceID):
+            try values.encode(spaceID, forKey: .space)
         case .reply(let ref, let reply):
             try values.encode(ref, forKey: .ref)
             switch reply {

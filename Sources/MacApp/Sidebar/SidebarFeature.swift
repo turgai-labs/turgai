@@ -263,6 +263,12 @@ struct SidebarFeature {
         case conversationTitled(Conversation)
         /// They're no longer in the conversation: they left it, or it was deleted.
         case conversationLeft(ConversationID)
+        /// They're in `space` now.
+        case spaceJoined(SpaceSummary)
+        /// `space` lists itself differently for them now.
+        case spaceListed(SpaceSummary)
+        /// They're no longer in the space `id`.
+        case spaceLeft(SpaceID)
         /// Something picked from a conversation's menu.
         case conversationMenuPicked(ConversationID, ConversationMenuItem)
         /// Something picked from the shown space's menu.
@@ -369,6 +375,21 @@ struct SidebarFeature {
             state.conversations[id: conversation.id]?.title = conversation.title
             return .none
 
+        case .spaceJoined(let space), .spaceListed(let space):
+            // A new one comes last, as the latest joined; one listed already is as it lists itself now.
+            if let index = state.spaces.firstIndex(where: { $0.id == space.id }) {
+                state.spaces[index] = space
+            } else {
+                state.spaces.append(space)
+            }
+            return .none
+
+        case .spaceLeft(let id):
+            // The rail's first is shown in its place.
+            state.spaces.removeAll { $0.id == id }
+            if state.shownSpaceID == id { state.shownSpaceID = nil }
+            return .none
+
         case .conversationLeft(let id):
             // The next in its space opens in its place.
             guard let row = state.conversations.remove(id: id), state.selected == id else { return .none }
@@ -471,6 +492,9 @@ struct SidebarFeature {
                 case .conversationSaid(let conversation): await send(.conversationSaid(conversation))
                 case .conversationTitled(let conversation): await send(.conversationTitled(conversation))
                 case .conversationLeft(let id), .conversationDeleted(let id): await send(.conversationLeft(id))
+                case .spaceJoined(let space): await send(.spaceJoined(space))
+                case .spaceListed(let space): await send(.spaceListed(space))
+                case .spaceLeft(let id): await send(.spaceLeft(id))
                 default: break
                 }
             }

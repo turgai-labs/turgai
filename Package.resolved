@@ -1,5 +1,5 @@
 {
-  "originHash" : "ab168ce80cdd8719ee7feb59088d82b49a6d7ba6580fbfe2b1d52d8449b19394",
+  "originHash" : "f1377ac8ebd72094cc456bef51402dd1d6855afcd11926ec6de56e71a91171bf",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -115,7 +115,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "4893a48941da5fe548f4896c8224112fe65a6c9d"
+        "revision" : "dc3a3c82b940108973135e6caa8b16f60ad6c807"
       }
     },
     {

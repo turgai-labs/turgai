@@ -53,6 +53,25 @@ struct SidebarFeatureTests {
         await store.finish()
     }
 
+    /// The rail follows the person's spaces as the connection tells of them: one joined is added
+    /// last, one listed differently is as it lists itself now, and one left goes, the first shown
+    /// in its place.
+    @Test
+    func theRailFollowsTheirSpaces() async {
+        var state = SidebarFeature.State()
+        state.spaces = [turgai]
+        let store = TestStore(initialState: state) { SidebarFeature() }
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: memberMay, status: .active)
+        await store.send(.spaceJoined(family)) { $0.spaces = [self.turgai, family] }
+        await store.send(.spaceSwitched(familySpace)) { $0.shownSpaceID = familySpace }
+        let home = SpaceSummary(id: familySpace, name: "Home", permissions: memberMay, status: .archived)
+        await store.send(.spaceListed(home)) { $0.spaces = [self.turgai, home] }
+        await store.send(.spaceLeft(familySpace)) {
+            $0.spaces = [self.turgai]
+            $0.shownSpaceID = nil
+        }
+    }
+
     /// With no conversations yet, one is started in the space shown, and opened.
     @Test
     func withNoneOneIsStarted() async {

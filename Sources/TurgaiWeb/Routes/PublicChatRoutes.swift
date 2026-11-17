@@ -246,6 +246,34 @@ extension TurgaiMainWebApp {
                     telling.cancel()
                     await notices.cancel()
                 }
+                // The person's spaces as they change: each as it lists itself for them now.
+                let spaces = try await dependencies.system.singleton.proxy(
+                    SpaceDirectory.self, name: SpaceDirectory.singletonName
+                ).subscription(for: person)
+                let system = dependencies.system
+                let spacesTelling = Task {
+                    for await notice in spaces {
+                        let payload: TurgaiModels.ChatEvent.Payload?
+                        switch notice {
+                        case .joined(let id):
+                            payload = try? await Space.identified(by: id, on: system).listing(for: person).map {
+                                .spaceJoined(space: SpaceSummary($0))
+                            }
+                        case .listed(let id):
+                            payload = try? await Space.identified(by: id, on: system).listing(for: person).map {
+                                .spaceListed(space: SpaceSummary($0))
+                            }
+                        case .left(let id):
+                            payload = .spaceLeft(spaceID: id.api)
+                        }
+                        guard let payload else { continue }
+                        try? await writer.write(.init(payload: payload))
+                    }
+                }
+                defer {
+                    spacesTelling.cancel()
+                    Task { await spaces.cancel() }
+                }
                 // What it's told about besides the conversation it shows, while it's joined.
                 let topics = JoinedTopics()
                 defer { await topics.leaveAll() }

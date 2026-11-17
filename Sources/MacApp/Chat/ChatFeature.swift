@@ -353,7 +353,8 @@ struct ChatFeature {
             case .received(let event):
                 switch event.payload {
                 case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft,
-                    .conversationDeleted, .memoryChanged, .objectsChanged, .tasks, .taskKept, .taskEnded:
+                    .conversationDeleted, .spaceJoined, .spaceListed, .spaceLeft, .memoryChanged, .objectsChanged,
+                    .tasks, .taskKept, .taskEnded:
                     // What the sidebar and the profile hear for themselves.
                     return .none
                 case .reply:
@@ -494,7 +495,8 @@ struct ChatFeature {
         case .notice(_, _, let error):
             state.error = error
         case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft, .conversationDeleted,
-            .memoryChanged, .objectsChanged, .tasks, .taskKept, .taskEnded, .reply:
+            .spaceJoined, .spaceListed, .spaceLeft, .memoryChanged, .objectsChanged, .tasks, .taskKept, .taskEnded,
+            .reply:
             // Not the conversation's.
             break
         }
@@ -640,7 +642,8 @@ extension ChatEvent {
             id
         case .notice(let id, _, _):
             id
-        case .reply, .memoryChanged, .objectsChanged, .tasks, .taskKept, .taskEnded:
+        case .reply, .spaceJoined, .spaceListed, .spaceLeft, .memoryChanged, .objectsChanged, .tasks, .taskKept,
+            .taskEnded:
             nil
         case .conversationJoined(let conversation), .conversationSaid(let conversation),
             .conversationTitled(let conversation):

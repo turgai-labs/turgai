@@ -2,7 +2,8 @@ import Elementary
 import TurgaiDomain
 import TurgaiSpaces
 
-/// The spaces you're in, each to open, and making a new one.
+/// The spaces you're in, each to open, and making a new one: kept as they are, as you join one,
+/// leave one, or one's renamed or archived.
 struct SpacesPage: HTMLDocument, Sendable {
     let user: AuthenticatedUser
     let spaces: [SpaceListing]
@@ -24,16 +25,44 @@ struct SpacesPage: HTMLDocument, Sendable {
                     }
                     a(.href("/spaces/new"), .class("button button-accent")) { "+ New space" }
                 }
-                if spaces.isEmpty {
-                    NoSpaces()
-                } else {
-                    section(.class("bot-grid")) {
-                        for space in spaces { SpaceTile(space: space) }
+                div(.id("spaces")) {
+                    if spaces.isEmpty {
+                        NoSpaces()
+                    } else {
+                        section(.class("bot-grid")) {
+                            for space in spaces { SpaceTile(space: space) }
+                        }
                     }
                 }
             }
+            script { HTMLRaw(Self.following) }
         }
     }
+
+    /// Follows the person's spaces on the app's connection: each change to them, the list shown
+    /// again as the server lists it now.
+    static let following = """
+        (() => {
+          const shown = document.getElementById('spaces');
+          const relist = async () => {
+            const page = await fetch(location.pathname, { credentials: 'same-origin' });
+            if (!page.ok) return;
+            const listed = new DOMParser().parseFromString(await page.text(), 'text/html').getElementById('spaces');
+            if (listed) shown.replaceChildren(...listed.childNodes);
+          };
+          const follow = () => {
+            const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+            const socket = new WebSocket(`${scheme}://${location.host}/api/v1/live`);
+            socket.addEventListener('message', (message) => {
+              const event = JSON.parse(message.data);
+              if (typeof event.type === 'string' && event.type.startsWith('space.')) relist();
+            });
+            // Followed again a moment after it closes: what changed meanwhile is read then.
+            socket.addEventListener('close', () => setTimeout(() => { relist(); follow(); }, 2000));
+          };
+          follow();
+        })();
+        """
 }
 
 /// One space, to open.
