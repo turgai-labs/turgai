@@ -73,13 +73,19 @@ struct StartingPage: HTMLDocument, Sendable {
     }
 
     /// Asks whether Turgai is set up and running, every second, and opens it once it says so:
-    /// while it starts, nothing answers.
+    /// while it starts, nothing answers. Each ask gives up after two seconds, and never reads an
+    /// earlier answer kept by the browser: one left hanging as setting up hands over to Turgai
+    /// would stop the asking, and the page would wait for good.
     private static let waitScript = """
         <script>
         (() => {
             const wait = async () => {
                 try {
-                    const response = await fetch("/api/v1/status", { headers: { "Accept": "application/json" } });
+                    const response = await fetch("/api/v1/status", {
+                        headers: { "Accept": "application/json" },
+                        cache: "no-store",
+                        signal: AbortSignal.timeout(2000),
+                    });
                     if (response.ok && (await response.json()).setup === "complete") {
                         window.location.assign("/");
                         return;
