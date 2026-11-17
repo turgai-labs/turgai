@@ -29,7 +29,7 @@ public struct ConnectionLabel: Hashable, Codable, Sendable, CustomStringConverti
 
     /// `written`, trimmed: none when it's empty or too long.
     public init?(_ written: String) {
-        let trimmed = written.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = written.trimmed()
         guard !trimmed.isEmpty, trimmed.count <= Self.maximumLength else { return nil }
         self.rawValue = trimmed
     }

@@ -487,7 +487,7 @@ public struct DynamicObjectsState: Codable, Sendable {
     }
 
     private static func key(_ name: String) -> String {
-        name.trimmingCharacters(in: .whitespaces).lowercased()
+        name.trimmed().lowercased()
     }
 
     mutating func apply(_ event: DynamicObjectsEvent) {

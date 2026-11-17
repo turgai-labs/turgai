@@ -17,7 +17,7 @@ public actor AgentCredentialStore {
     }
 
     public func save(_ value: String, for reference: AgentCredentialReference) async throws {
-        let value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = value.trimmed()
         guard !value.isEmpty else { throw TurgaiAgentCredentialError.empty }
         try await storage.save(value, reference)
     }
