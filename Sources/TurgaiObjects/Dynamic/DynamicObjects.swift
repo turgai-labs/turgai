@@ -78,7 +78,11 @@ public distributed actor DynamicObjects {
 
     /// Creates an object named `name`, running a new type, a named type, or the type of an object
     /// here, shared from then on.
-    /// - Parameter start: Values it holds instead of its type's starting ones, where given.
+    /// - Parameters:
+    ///   - name: What it's called: its id is the name's handle.
+    ///   - description: What it was made for, as it's listed.
+    ///   - spec: Where its type comes from.
+    ///   - start: Values it holds instead of its type's starting ones, where given.
     public distributed func create(
         name: String, description: String? = nil, spec: Spec, start: [String: JSONValue] = [:]
     ) async throws

@@ -531,10 +531,10 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         /// that joined ``ChatTopic/memory``.
         case memoryChanged
         /// The objects the person may read changed: to a connection that joined
-        /// ``ChatTopic/objects``.
+        /// ``ChatTopic/objects(space:)``.
         case objectsChanged
         /// The tasks of the space with this id the person may change, as they are as a connection
-        /// joins ``ChatTopic/tasks``: each change follows.
+        /// joins ``ChatTopic/tasks(space:)``: each change follows.
         case tasks(space: SpaceID, tasks: [TaskListing])
         /// One of them is kept due as it says now: new, or changed.
         case taskKept(space: SpaceID, task: TaskListing)

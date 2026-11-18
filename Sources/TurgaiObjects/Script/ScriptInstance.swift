@@ -51,9 +51,8 @@ public final class ScriptInstance {
     /// values elsewhere, with its checks holding. It's made with its `init()`, as a Swift actor is
     /// each time it starts; building it makes no object, since what it holds is its object's: what
     /// its `init()` makes is `unmade` until its object makes it. From then on, `makes` makes them.
-    /// - Parameters:
-    ///   - schedules: Told the id of each `Task { … }` its code starts, which its object runs with
-    ///     ``runTask(_:)``; `cancels`, of each it cancels.
+    /// `schedules` is told the id of each `Task { … }` its code starts, which its object runs;
+    /// `cancels`, of each it cancels.
     public static func start(
         _ source: Script, as identity: ObjectIdentity, holding fields: [String: JSONValue] = [:],
         reaches: @escaping Reaches,

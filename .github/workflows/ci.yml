@@ -1,0 +1,32 @@
+# Tests Turgai on macOS with the image's Xcode 27 and its Swift, the Mac app included, and builds
+# its server on Linux, x86-64 and arm64, as a Raspberry Pi runs it.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+      - name: Swift
+        run: swift --version
+      - name: test
+        timeout-minutes: 45
+        run: swift test
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    container: swift:6.4-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: the server
+        timeout-minutes: 45
+        run: swift build --product Turgai

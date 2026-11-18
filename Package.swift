@@ -110,6 +110,8 @@ let package = Package(
             url: "https://github.com/swiftwasm/WasmKit.git",
             from: "0.3.1"
         ),
+        // `swift package generate-documentation`: only for building the docs.
+        .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.4.0"),
     ],
     targets: [
         .target(name: "TurgaiModels"),

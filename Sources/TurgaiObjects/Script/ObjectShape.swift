@@ -11,8 +11,8 @@ public struct CodeProblem: Error, Codable, Sendable, Equatable, CustomStringConv
     public let message: String
     public let phrasing: Phrasing
 
-    /// How the message reads with its code: as the reason after it, or as a statement about it,
-    /// `` `ann.approveRaise(amount)` needs await ``.
+    /// How the message reads with its code: as the reason after it, or as a statement about it, the
+    /// code quoted first: "`ann.approveRaise(amount)` needs await".
     public enum Phrasing: Codable, Sendable, Equatable { case reason, statement }
 
     public init(line: Int? = nil, span: String? = nil, _ message: String, phrasing: Phrasing = .reason) {
@@ -25,8 +25,8 @@ public struct CodeProblem: Error, Codable, Sendable, Equatable, CustomStringConv
     public var description: String { line.map { "line \($0): \(message)" } ?? message }
 
     /// What's wrong, at the code of `code` it's about, quoted: the span within its line, as
-    /// `` `Ann.approveRaise` in `if Ann.approveRaise(amount) {`: … ``, or the line alone. Whoever
-    /// reads it needn't have the code.
+    /// "`Ann.approveRaise` in `if Ann.approveRaise(amount) {`: …", or the line alone. Whoever reads
+    /// it needn't have the code.
     public func written(in code: String) -> String {
         let lines = code.split(separator: "\n", omittingEmptySubsequences: false)
         guard let line, lines.indices.contains(line - 1) else { return description }
