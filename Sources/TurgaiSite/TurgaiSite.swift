@@ -646,7 +646,8 @@ struct TurgaiSite {
 
         """
         .write(to: output.appending(path: "_headers"), atomically: true, encoding: .utf8)
-        // How Cloudflare serves the folder, deployed from it; neither file is served itself.
+        // How Cloudflare serves the folder, deployed from it; neither file is served itself, nor the wrangler
+        // that GitHub Actions installs into the folder to deploy it.
         try """
         {
           "name": "gentle-star-447a",
@@ -658,7 +659,7 @@ struct TurgaiSite {
 
         """
         .write(to: output.appending(path: "wrangler.jsonc"), atomically: true, encoding: .utf8)
-        try "wrangler.jsonc\n.wrangler\n.assetsignore\n"
+        try "wrangler.jsonc\n.wrangler\n.assetsignore\nnode_modules\npackage.json\npackage-lock.json\n"
             .write(to: output.appending(path: ".assetsignore"), atomically: true, encoding: .utf8)
         print("Generated \(output.path)")
     }
