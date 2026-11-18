@@ -594,7 +594,7 @@ private struct AgentsText: HTML {
             "Since everything else is an object, the agent needs no special treatment. In Turgai’s agent layer, Hail, each agent is a distributed virtual actor like any other object, with its own name, journal and history."
         }
         p {
-            "It handles a message, calls tools and goes idle, and a turn cut short by a crash or restart is issued again when it next wakes. The model sits behind one interface, so an agent can move from a cloud API to a model on your own machine and keep its name, history and rules. A different model still behaves differently and has to be evaluated before you rely on it."
+            "It handles a message, calls tools and goes idle, and after a crash or restart it comes back with its history; a turn the crash cut short is closed rather than run twice. The model sits behind one interface, so an agent can move from a cloud API to a model on your own machine and keep its name, history and rules. A different model still behaves differently and has to be evaluated before you rely on it."
         }
         p { "Other agents and Turgai’s conversations ask an agent for work in the same way, with one call." }
     }

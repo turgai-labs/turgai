@@ -11,8 +11,9 @@
 Turgai is an agent harness in which everything is an actor.
 
 Each agent, object, space and conversation has its own identity and journal, so after a crash or
-restart it carries on where it stopped. Every action an agent takes is a typed effect that runs
-only once it's granted, and secrets never reach the model.
+restart it comes back with everything it knew, and schedules and timers keep running. Every action
+an agent takes is a typed effect, nothing runs until it's granted, and secrets never reach the
+model.
 
 Agents answer each message in one turn, use typed tools, talk to each other, and run on any
 model. The code they write is a Swift actor that Turgai type-checks and runs as a live object,
@@ -61,8 +62,9 @@ doing. A space with websites installed can serve an object's page at `/websites/
 ### Bots and agents
 
 A bot's agent runs on Hail: one turn at a time, tools answered inside the model's request, each
-effect decided by the space. What an agent did is journaled, so a turn cut short by a restart is
-resumed.
+effect decided by the space. What an agent did is journaled, so it comes back with its history
+after a restart. A turn a crash cut short is closed rather than resumed, so nothing in it runs
+twice.
 
 ## Ways in
 
