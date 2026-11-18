@@ -7,6 +7,7 @@ import TurgaiApplication
 import TurgaiConversations
 import TurgaiDomain
 import TurgaiHail
+import TurgaiObjects
 import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
@@ -63,9 +64,9 @@ extension TurgaiMainWebApp {
                     try await agentCredentials.save(newKey.value, for: newKey.reference)
                 }
                 let id = SpaceID()
-                // It starts with its chats' reminders and schedules.
+                // It starts with every built-in object there is.
                 try await Space.identified(by: id, on: system).make(
-                    named: name, by: .account(user.id), bot: bot, installing: [Scheduler.kind, Timers.kind])
+                    named: name, by: .account(user.id), bot: bot, installing: BuiltInKind.installedInNewSpaces)
                 pendingCredential = nil
                 return TurgaiWebSupport.redirect(to: "/spaces/\(id.rawValue.uuidString)")
             } catch {

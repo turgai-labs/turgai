@@ -613,9 +613,9 @@ extension TurgaiMainWebApp {
                 let id = TurgaiDomain.SpaceID()
                 let space = try await Space.identified(by: id, on: system)
                 do {
-                    // It starts with its chats' reminders and schedules.
+                    // It starts with every built-in object there is.
                     try await space.make(
-                        named: name, by: person, bot: made.bot, installing: [Scheduler.kind, Timers.kind])
+                        named: name, by: person, bot: made.bot, installing: BuiltInKind.installedInNewSpaces)
                 } catch {
                     if let newKey = made.newKey { try? await dependencies.agentCredentials.remove(newKey.reference) }
                     throw error
@@ -1008,24 +1008,26 @@ extension TurgaiMainWebApp {
                         installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
                     }
                 }
-                var builtIns: [ObjectEntry] = []
-                for object in installedObjects {
-                    await system.receptionist.checkIn(object, with: .virtualObjects(in: id))
-                    guard let virtual = object.id.virtualActorID, let description = try? await object.describe() else {
-                        continue
-                    }
-                    builtIns.append(
-                        ObjectEntry(
-                            id: .virtual(virtual), object: object, type: description.type,
-                            description: description.description,
-                            actions: description.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
+                // Each asked on the person's behalf, as every call to an object is: one on no one's is refused.
+                let entries = try await CallChain.$current.withValue(.start(scope, in: nil)) {
+                    var builtIns: [ObjectEntry] = []
+                    for object in installedObjects {
+                        await system.receptionist.checkIn(object, with: .virtualObjects(in: id))
+                        // One they may not read isn't theirs to see.
+                        guard let virtual = object.id.virtualActorID, let description = try? await object.describe()
+                        else { continue }
+                        builtIns.append(
+                            ObjectEntry(
+                                id: .virtual(virtual), object: object, type: description.type,
+                                description: description.description,
+                                actions: description.actions.map {
+                                    ObjectCatalog.signature($0.key, input: $0.value.input)
+                                }
                                 .sorted(),
-                            events: description.events.keys.sorted()))
+                                events: description.events.keys.sorted()))
+                    }
+                    return builtIns + (try await objects.held())
                 }
-                let made = try await CallChain.$current.withValue(.start(scope, in: nil)) {
-                    try await objects.held()
-                }
-                let entries = builtIns + made
                 return try publicAPIResponse(entries.map(ObjectListing.init))
             }
         }

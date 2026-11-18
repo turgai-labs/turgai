@@ -206,6 +206,11 @@ struct AppFeature {
         Scope(\.sidebar, action: \.sidebar) {
             SidebarFeature()
         }
+        // The objects window lists the space the sidebar shows, from the first it shows: at
+        // launch, on a switch, and when the shown one is archived.
+        .onChange(of: \.sidebar.shownSpace?.id) { _, shown in
+            Reduce { _, _ in shown.map { .send(.objects(.spaceChanged($0))) } ?? .none }
+        }
         Scope(\.chat, action: \.chat) {
             ChatFeature()
         }
@@ -230,7 +235,7 @@ struct AppFeature {
         case .sidebar(.delegate(.close(let space))):
             return .send(.chat(.close(in: space)))
         case .sidebar(.delegate(.spaceChanged(let space))):
-            return .merge(.send(.chat(.spaceChanged(space))), .send(.objects(.spaceChanged(space.id))))
+            return .send(.chat(.spaceChanged(space)))
         case .chat(.delegate(.connected)):
             return .send(.profile(.connected))
 

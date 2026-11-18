@@ -501,6 +501,31 @@ struct ShownMessageTests {
         #expect(state.shown.last?.text == "Here's one.")
         #expect(state.shown.last?.caption == said.formatted(date: .omitted, time: .shortened))
     }
+
+    /// The objects window lists the space the sidebar shows from the first it shows, not only once
+    /// a space changes.
+    @Test
+    func theObjectsWindowListsTheSpaceShownFirst() async {
+        let family = SpaceSummary(
+            id: SpaceID(rawValue: "family"), name: "Family",
+            permissions: SpacePermissions(
+                people: .see, bots: .use, requests: nil, tasks: nil, connections: false,
+                deleteConversations: false, configureSpace: false),
+            status: .active)
+        let mac = ObjectRow(
+            id: "mac", title: "Mac", made: nil, summary: nil, actions: [], events: [], node: "127.0.0.1:52034")
+        let store = TestStore(initialState: AppFeature.State()) {
+            AppFeature()
+        } withDependencies: {
+            $0.chat.events = { .finished }
+            $0.chat.ask = { _ in throw CancellationError() }
+            $0.objects.list = { space in space == family.id ? [mac] : [] }
+        }
+
+        await store.send(.sidebar(.loaded([family], []))) { $0.sidebar.spaces = [family] }
+        await store.receive(\.objects.spaceChanged) { $0.objects.space = family.id }
+        await store.receive(\.objects.changed) { $0.objects.listing = .live([mac]) }
+    }
 }
 
 struct ScreenTests {
