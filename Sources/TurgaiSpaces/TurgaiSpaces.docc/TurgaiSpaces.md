@@ -4,7 +4,12 @@ Spaces: who's in them, what each may do, and everything that lives in them.
 
 ## Overview
 
-A ``Space`` holds its people, each in some of its groups; what each group may do; its bots, one
+A ``Space`` is a world of its own inside Turgai: its own objects, agents, connections and rules,
+running beside other spaces on the same server, with nothing reaching from one into another. It's
+what you extend, and extending by asking is only safe with permissions, so a space decides what
+happens in it.
+
+A space holds its people, each in some of its groups; what each group may do; its bots, one
 of them its main; its connections; and the requests it's been asked. Its conversations and objects
 are its own too, and are reached only through it.
 

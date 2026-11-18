@@ -28,7 +28,10 @@ Small bird, big possibilities.
 
 ### Spaces
 
-A space is a workspace, like a family's or a team's. Each space has:
+A space is a world of its own inside Turgai: its own objects, agents, connections and rules,
+running beside other spaces on the same server, with nothing reaching from one into another. It's
+what you extend, and extending by asking is only safe with permissions, so a space decides what
+happens in it. Each space has:
 
 - **people**, each in some of its groups. Every space starts with its admins, who may do
   everything; `members`, which whoever joins is in; and `guests`, allowed nothing until the admins
@@ -39,7 +42,7 @@ A space is a workspace, like a family's or a team's. Each space has:
   in the space;
 - **objects** and **websites** its bots make.
 
-Nothing reaches into a space except through it, and nothing in one space reaches another.
+Nothing reaches into a space except through it.
 
 ### Permissions
 
