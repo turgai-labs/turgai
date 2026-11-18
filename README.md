@@ -24,12 +24,6 @@ API, the web, the Mac app or Telegram.
 
 Small bird, big possibilities.
 
-```sh
-TURGAI_SECRET_KEY=$(openssl rand -base64 32) swift run Turgai serve
-```
-
-Then open <http://127.0.0.1:3333> to set it up. [Run](#run) says more.
-
 ## How it fits together
 
 ### Spaces
