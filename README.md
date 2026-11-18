@@ -8,15 +8,19 @@
 > versions, and parts of it are unfinished. Use it with caution, and don't rely on it for anything
 > important yet.
 
-Turgai is an agent harness built on objects.
+Turgai is an agent harness in which everything is an actor.
 
-Plug agents into what you already run. Ask for a rule, a tool or a whole feature, and an agent
-writes it as an object: a small live part that keeps its own data, does its one job, and keeps
-running, through restarts and while you change it. What already works keeps working.
+Each agent, object, space and conversation has its own identity and journal, so after a crash or
+restart it carries on where it stopped. Every action an agent takes is a typed effect that runs
+only once it's granted, and secrets never reach the model.
 
-The rules are kept by Turgai, not left to the model. Everything happens in a space, with its
-people, groups and bots, and nothing runs that the space hasn't allowed. Run it on your machines,
-in your own storage, on any model, local or cloud.
+Agents answer each message in one turn, use typed tools, talk to each other, and run on any
+model. The code they write is a Swift actor that Turgai type-checks and runs as a live object,
+and other agents can use it as tools.
+
+Spaces hold the people, bots and objects, and decide every action as it happens. Anything not yet
+allowed is asked of whoever decides. Turgai is self-hosted on macOS or Linux, reached through its
+API, the web, the Mac app or Telegram.
 
 Small bird, big possibilities.
 
