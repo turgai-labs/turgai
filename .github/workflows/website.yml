@@ -1,0 +1,25 @@
+# Deploys the website, as committed in Clients/Website, to Cloudflare whenever it changes on master:
+# https://turg.ai. Needs the repo secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+name: website
+on:
+  push:
+    branches: [master]
+    paths: ["Clients/Website/**"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: website
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: Clients/Website
+          command: deploy
