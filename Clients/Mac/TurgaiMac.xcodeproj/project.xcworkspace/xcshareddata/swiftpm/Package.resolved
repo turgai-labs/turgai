@@ -1,5 +1,5 @@
 {
-  "originHash" : "d9c2bb703ebb14d522453bc2b0d1f88e82345296ad1f1c99d79885068c3398e0",
+  "originHash" : "f6381359ad266dfa9ea288594b2c1e67991b77511bc920f20c4c5b96f25289b0",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -35,6 +35,15 @@
       "state" : {
         "branch" : "turgai-integration",
         "revision" : "c85a6e7de34c53ca3d42b61d077873b9de1a1015"
+      }
+    },
+    {
+      "identity" : "cluster-running-actors",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/turgai-labs/cluster-running-actors.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "cb383521fa6d1cece269a26a9f880ec161a6cdbf"
       }
     },
     {
