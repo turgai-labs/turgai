@@ -1,113 +1,46 @@
 # Turgai
 
-Turgai is a personal AI companion built in Swift. It currently uses Telegram as
-its primary interface and combines a durable Hail agent runtime, provider-aware
-model routing, personal memory, and a small set of host-owned tools.
+> [!WARNING]
+> Turgai is at an early stage. Its APIs, storage and behaviour change without notice between
+> versions, and parts of it are unfinished. Use it with caution, and don't rely on it for anything
+> important yet.
 
-The project is intentionally being built as an application rather than as a
-general-purpose agent framework. Its design follows functional core,
-imperative shell: domain decisions are represented by typed values and pure
-transitions, while Telegram, model, filesystem, and cluster operations stay at
-the boundaries. Protocols are introduced where they provide a useful
-typeclass-like contract.
+Turgai is a place where people and bots talk, and where bots build things that keep running.
 
-## Current capabilities
+- **Spaces.** Everything lives in a space: its people and their groups, its bots, its
+  conversations, its connections and its objects. A space decides who may do what, as it's done.
+- **Bots on your models.** Apple's on-device model, Ollama, a server that speaks OpenAI's API,
+  OpenAI, Anthropic or Gemini.
+- **Live objects.** A bot writes Swift, and it runs as a live object: state, actions, events,
+  schedules, websites. Objects keep running across restarts.
+- **Ways in.** A web app, a Mac app, Telegram, and an API for your own clients.
 
-- Durable, recoverable conversations backed by file journals and snapshots.
-- Telegram polling, replies, reactions, attachments, HTML formatting, and
-  folded partial responses.
-- Provider-aware model routing through [Hail](../hail): Apple Foundation
-  Models on supported macOS, local Ollama, and OpenAI-compatible API models.
-- Automatic semantic memory with provenance, retrieval, revisions, and
-  background extraction where the selected provider supports it.
-- Web search, URL fetching, attachment fetching, and Open-Meteo weather.
-- Composable typed effects, including the clock and network effects used by
-  the weather tool.
-- Swift 6.4 structured concurrency and tests for the core boundaries.
-
-This is an active personal project. The architecture and APIs are still
-evolving.
-
-## Requirements
-
-- macOS 26 or newer.
-- Swift 6.4.
-- A checkout of [Hail](../hail) next to this repository; `Package.swift` uses
-  that local package dependency.
-- A model provider: Ollama, Apple Foundation Models, or an OpenAI API account.
-- A Telegram bot token from BotFather when Telegram is enabled.
-
-The onboarding dashboard chooses the first bot's model. Providers that need an
-endpoint store that endpoint with the bot; Ollama defaults to
-`http://127.0.0.1:11434`.
+It's written in Swift on distributed actors, with [Hail](https://github.com/akbashev/hail) as its
+agent runtime.
 
 ## Run
 
-Start Ollama, then run Turgai from the repository root. On first launch the
-process serves the local Turgai dashboard and waits for onboarding to finish:
+Turgai needs Swift 6.4 and macOS 26.4, or Linux.
 
 ```sh
-ollama serve
-swift run Turgai
+TURGAI_SECRET_KEY=$(openssl rand -base64 32) swift run Turgai serve
 ```
 
-For an A/B test that disables Qwen's extended reasoning while preserving the
-normal provider behavior by default:
+Then open <http://127.0.0.1:3333> to set it up: your account, where memory is kept, and your first
+space with its first bot. Keep the key: every secret Turgai keeps is sealed with it. Data lives in
+`~/.turgai`.
 
-```sh
-TURGAI_QWEN_FAST_MODE=1 swift run Turgai
-```
-
-The dashboard stores the Telegram token and persistence settings locally. It
-offers the default file store (with an editable `file://` directory) or
-PostgreSQL for both journals and snapshots. PostgreSQL credentials are kept in
-separate local secret files.
-
-The Telegram chat allow-list, model, persona, and context window are configured
-in the dashboard. Background memory extraction follows the configured provider
-when an extraction adapter is available. If the allow-list is empty, the bot
-accepts messages from every chat. The dashboard's default file store and the Telegram polling
-checkpoint live below `.turgai/` unless you choose another file-store URL.
-That directory is local runtime data and is intentionally ignored by Git.
+On a Mac, the app in `Clients/Mac` runs all of Turgai in its own process. For a Raspberry Pi,
+`scripts/build-pi.sh` builds a Linux arm64 release into `dist/pi`, with an installer.
 
 ## Test
-
-Run the complete test suite with:
 
 ```sh
 swift test
 ```
 
-The tests do not require a live Telegram bot or model provider server.
-
-## Architecture
-
-| Module | Responsibility |
-| --- | --- |
-| `TurgaiDomain` | Identities, messages, coordination values, and reducers |
-| `TurgaiMemory` | Facts, observations, memory events, policy, and retrieval |
-| `TurgaiHail` | Hail adapters, runtime configuration, and host tools |
-| `TurgaiApplication` | Durable conversations, reply scopes, and memory orchestration |
-| `TurgaiTelegram` | Telegram transport, mapping, formatting, and publishing |
-| `TurgaiPersistence` | File- or PostgreSQL-backed journals and snapshots |
-| `Turgai` | Composition, live connections, and delivery coordination |
-
-Hail owns durable agent communication, model turns, tool execution, and
-generic runtime extension points. Turgai owns user identity, persona, memory,
-channel policy, and application composition.
-
-## Persistence and recovery
-
-Turgai treats the journal as the source of truth for conversation recovery.
-Snapshots accelerate replay but do not replace the journal. On startup, the
-application discovers unfinished conversation state, recreates Telegram
-connections, and retries recoverable turns. Personal memory is stored in its
-own durable projection and is not part of the Telegram transport state.
-
-Do not commit `.turgai/`; it can contain private conversation history and local
-credentials/checkpoints.
+The tests need no model, Telegram bot or network.
 
 ## License
 
-Turgai is licensed under the Apache License, Version 2.0. See
-[LICENSE.txt](LICENSE.txt).
+Apache License, Version 2.0. See [LICENSE.txt](LICENSE.txt).
