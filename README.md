@@ -1,7 +1,7 @@
 # Turgai
 **Turgai extends your product.**
 
-<img width="640" alt="The word turgai over a blue sky with clouds" src="Clients/Website/assets/preview.jpg">
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/banner-dark.png"><img width="492" alt="Turgai, an agent harness built on objects: the skylark beside the word turgai" src="assets/banner-light.png"></picture>
 
 > [!WARNING]
 > Turgai is at an early stage. Its APIs, storage and behaviour change without notice between
