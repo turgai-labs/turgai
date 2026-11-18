@@ -28,6 +28,7 @@ let package = Package(
             url: "https://github.com/akbashev/discoverable-distributed-actors.git", branch: "turgai-integration",
             traits: ["ClusterSystem"]),
         .package(url: "https://github.com/akbashev/cluster-durable-workflows.git", branch: "turgai-integration"),
+        .package(url: "https://github.com/turgai-labs/cluster-running-actors.git", branch: "main"),
         // Objects are Swift actors, checked as Swift checks them and run by Doppel.
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
@@ -236,19 +237,10 @@ let package = Package(
                 .process("Resources")
             ]
         ),
-        // Actors that run by themselves while they have work, brought back after a restart.
-        .target(
-            name: "RunningActors",
-            dependencies: [
-                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
-                .product(name: "EventSourcing", package: "cluster-event-sourcing"),
-                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
-            ]
-        ),
         .target(
             name: "TurgaiObjects",
             dependencies: [
-                "RunningActors",
+                .product(name: "RunningActors", package: "cluster-running-actors"),
                 "TurgaiCalls",
                 "TurgaiDomain",
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
@@ -311,7 +303,7 @@ let package = Package(
         .target(
             name: "TurgaiApplication",
             dependencies: [
-                "RunningActors",
+                .product(name: "RunningActors", package: "cluster-running-actors"),
                 .product(name: "SQLiteNIO", package: "sqlite-nio"),
                 "TurgaiAgents",
                 "TurgaiConversations",
@@ -353,7 +345,7 @@ let package = Package(
         .target(
             name: "TurgaiServer",
             dependencies: [
-                "RunningActors",
+                .product(name: "RunningActors", package: "cluster-running-actors"),
                 "TurgaiAgents",
                 "TurgaiCalls",
                 "TurgaiConversations",

@@ -107,7 +107,6 @@ Turgai is a set of Swift modules, with dependencies one way, from the domain up 
 | `TurgaiSpaces` | Spaces: their people, groups, bots, connections and requests |
 | `TurgaiMemory` | What's remembered about each person |
 | `TurgaiObjects` | Objects: checking their code, and running it as live actors |
-| `RunningActors` | Keeping actors' long-running work going across restarts |
 | `TurgaiHail` | Turgai's side of Hail: conversations' agents, and bots' roles |
 | `TurgaiApplication` | Tools, built-in objects, Telegram connections, authority |
 | `TurgaiTelegram` | Telegram's API |

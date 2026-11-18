@@ -1,5 +1,5 @@
 {
-  "originHash" : "c379027775c52f769acf174549dc01ce8c6a6bdbaebc7342893a7f8ae2b0c8ce",
+  "originHash" : "bcc695315905436164bb0e971afec54c1acea742206e35aff57568161d6a879e",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -35,6 +35,15 @@
       "state" : {
         "branch" : "turgai-integration",
         "revision" : "c85a6e7de34c53ca3d42b61d077873b9de1a1015"
+      }
+    },
+    {
+      "identity" : "cluster-running-actors",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/turgai-labs/cluster-running-actors.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "cb383521fa6d1cece269a26a9f880ec161a6cdbf"
       }
     },
     {
@@ -161,15 +170,6 @@
       "state" : {
         "revision" : "4c6f2467d5bc72b062c7a9b7e4cd77a09635ea8b",
         "version" : "1.3.1"
-      }
-    },
-    {
-      "identity" : "llama.swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mattt/llama.swift",
-      "state" : {
-        "revision" : "716419d4d7aa542fce301e809cde7234c68ddbc6",
-        "version" : "2.10549.0"
       }
     },
     {
