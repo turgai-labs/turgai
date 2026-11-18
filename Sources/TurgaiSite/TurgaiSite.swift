@@ -76,10 +76,10 @@ struct SiteBar: HTML {
     }
 }
 
-/// The tag saying Turgai isn't out yet, on the headline and on the last page.
-struct ComingSoon: HTML {
+/// The tag saying Turgai is at an early stage, on the headline and on the last page.
+struct EarlyStage: HTML {
     var body: some HTML {
-        span(.class("soon")) { "Coming soon" }
+        span(.class("early-stage")) { "Early stage" }
     }
 }
 
@@ -105,7 +105,6 @@ enum SitePage: CaseIterable {
 }
 
 /// The top bar's links: the current page marked, and GitHub as a small tilted sticker with its mark.
-/// The code isn't public yet, so the sticker says "soon" and goes nowhere.
 struct SiteNav: HTML {
     let current: SitePage
 
@@ -121,18 +120,20 @@ struct SiteNav: HTML {
                     a(.class("nav-link"), .href(page.link(from: current))) { page.label }
                 }
             }
-            span(
-                .class("github"), .init(name: "aria-disabled", value: "true"),
-                .init(name: "aria-label", value: "GitHub, coming soon"), .title("Coming soon")
-            ) {
+            a(.class("github"), .href(SiteLink.github), .init(name: "aria-label", value: "Turgai on GitHub")) {
                 HTMLRaw(
                     "<svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z\"/></svg>"
                 )
                 span(.class("github-label")) { "GitHub" }
-                span(.class("github-soon")) { "soon" }
             }
         }
     }
+}
+
+/// Where the site links to outside it.
+enum SiteLink {
+    /// Turgai's code.
+    static let github = "https://github.com/turgai-labs/turgai"
 }
 
 /// Where generated files live, relative to the site root. Pages, and the files crawlers, browsers and Cloudflare
@@ -208,7 +209,7 @@ struct ChapterSection: HTML {
             .init(name: "style", value: "view-timeline-name: \(chapter.timeline)")
         ) {
             div(.class("copy")) {
-                if let tag = chapter.tag { span(.class("chapter-tag")) { tag } }
+                span(.class("chapter-tag"), GeometryAngles.tilt()) { chapter.tag }
                 h2 { chapter.heading }
                 chapter.claim
             }
@@ -234,11 +235,14 @@ extension Chapter {
         }
     }
 
-    /// A sticker above the title naming the chapter's idea; only independence gets one, in place of the plain bar.
-    var tag: String? {
+    /// A sticker above the title naming the chapter's idea, as the tech page tags its parts.
+    var tag: String {
         switch self {
+        case .inside: "Pluggable"
+        case .grows: "Extensible"
+        case .trust: "Durable"
         case .yours: "Independent"
-        case .inside, .grows, .trust, .why: nil
+        case .why: "Objects"
         }
     }
 
@@ -573,6 +577,12 @@ struct GeometryAngles {
     var css: String {
         String(format: ":root { --ga1: %.1fdeg; --ga2: %.1fdeg; --ga3: %.1fdeg; }", primary, secondary, tertiary)
     }
+
+    /// A tilt of its own for one tag, leaning visibly one way or the other.
+    static func tilt<Tag>() -> HTMLAttribute<Tag> {
+        let degrees = Double.random(in: 2...6) * (Bool.random() ? 1 : -1)
+        return .init(name: "style", value: String(format: "--tilt: %.1fdeg", degrees))
+    }
 }
 
 @main
@@ -636,6 +646,20 @@ struct TurgaiSite {
 
         """
         .write(to: output.appending(path: "_headers"), atomically: true, encoding: .utf8)
+        // How Cloudflare serves the folder, deployed from it; neither file is served itself.
+        try """
+        {
+          "name": "gentle-star-447a",
+          "compatibility_date": "2026-10-06",
+          "assets": {
+            "directory": "."
+          }
+        }
+
+        """
+        .write(to: output.appending(path: "wrangler.jsonc"), atomically: true, encoding: .utf8)
+        try "wrangler.jsonc\n.wrangler\n.assetsignore\n"
+            .write(to: output.appending(path: ".assetsignore"), atomically: true, encoding: .utf8)
         print("Generated \(output.path)")
     }
 
@@ -661,7 +685,7 @@ private struct SkyIntro: HTML {
                 div(.class("sky-copy")) {
                     p(.class("eyebrow")) {
                         "Turgai, an agent harness built on objects"
-                        ComingSoon()
+                        EarlyStage()
                     }
                     h1 {
                         "Turgai extends "
@@ -684,7 +708,7 @@ private struct Finale: HTML {
             .init(name: "style", value: "view-timeline-name: \(Layer.constellation.timeline)")
         ) {
             div(.class("finale-main")) {
-                ComingSoon()
+                EarlyStage()
                 p(.class("big")) {
                     "Small bird."
                     br()
@@ -694,10 +718,7 @@ private struct Finale: HTML {
                     p(.class("belief")) { "Being independent should never mean settling for less." }
                     p { "Turgai is in early alpha. Tell us what you’re building." }
                     div(.class("cta")) {
-                        span(
-                            .class("button button-accent off"), .init(name: "aria-disabled", value: "true"),
-                            .title("Coming soon")
-                        ) { "See it on GitHub" }
+                        a(.class("button button-accent"), .href(SiteLink.github)) { "See it on GitHub" }
                         a(.class("button button-secondary"), .href("mailto:hello@turg.ai")) { "Write to us" }
                     }
                 }

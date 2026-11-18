@@ -10,9 +10,9 @@ struct TechPage: HTMLDocument {
     let angles: GeometryAngles
 
     static let path = "tech/"
-    /// Whether the site publishes it: off until the patent application is filed, so the build
-    /// leaves out the page, its links and its sitemap entry. Turn it back on to publish it again.
-    static let isPublished = false
+    /// Whether the site publishes it: its page, its links and its sitemap entry. Off, the build
+    /// leaves all three out.
+    static let isPublished = true
     static let title = "How Turgai works — objects, actors, Swift"
     static let description =
         "Everything in Turgai is an object, run by a small core: why objects, why distributed actors, why Swift, and how agents, behaviors and permissions fit into your product."
@@ -267,7 +267,7 @@ struct TechSection: HTML {
             .class("tech-topic"), .id(topic.rawValue),
             .init(name: "style", value: "view-timeline-name: --t-\(topic.rawValue)")
         ) {
-            div(.class("rail")) { p(.class("kicker")) { topic.kicker } }
+            div(.class("rail")) { p(.class("kicker"), GeometryAngles.tilt()) { topic.kicker } }
             div(.class("topic-body")) {
                 h2 { topic.title }
                 if let note = topic.note { note }
@@ -738,7 +738,7 @@ private struct TechNight: HTML {
 private struct TechEnd: HTML {
     var body: some HTML {
         div(.class("tech-end")) {
-            ComingSoon()
+            EarlyStage()
             p(.class("big")) {
                 "Start small."
                 br()

@@ -1,22 +1,30 @@
 # Turgai
+**Turgai extends your product.**
+
+<img width="640" alt="The word turgai over a blue sky with clouds" src="Clients/Website/assets/preview.jpg">
 
 > [!WARNING]
 > Turgai is at an early stage. Its APIs, storage and behaviour change without notice between
 > versions, and parts of it are unfinished. Use it with caution, and don't rely on it for anything
 > important yet.
 
-Turgai is a place where people and bots talk, and where bots build things that keep running.
+Turgai is an agent harness built on objects.
 
-- **Spaces.** Everything lives in a space: its people and their groups, its bots, its
-  conversations, its connections and its objects. A space decides who may do what, as it's done.
-- **Bots on your models.** Apple's on-device model, Ollama, a server that speaks OpenAI's API,
-  OpenAI, Anthropic or Gemini.
-- **Live objects.** A bot writes Swift, and it runs as a live object: state, actions, events,
-  schedules, websites. Objects keep running across restarts.
-- **Ways in.** A web app, a Mac app, Telegram, and an API for your own clients.
+Plug agents into what you already run. Ask for a rule, a tool or a whole feature, and an agent
+writes it as an object: a small live part that keeps its own data, does its one job, and keeps
+running, through restarts and while you change it. What already works keeps working.
 
-It's written in Swift on distributed actors, with [Hail](https://github.com/akbashev/hail) as its
-agent runtime.
+The rules are kept by Turgai, not left to the model. Everything happens in a space, with its
+people, groups and bots, and nothing runs that the space hasn't allowed. Run it on your machines,
+in your own storage, on any model, local or cloud.
+
+Small bird, big possibilities.
+
+```sh
+TURGAI_SECRET_KEY=$(openssl rand -base64 32) swift run Turgai serve
+```
+
+Then open <http://127.0.0.1:3333> to set it up. [Run](#run) says more.
 
 ## How it fits together
 

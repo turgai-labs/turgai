@@ -139,8 +139,9 @@ h2::before {
   content: ""; display: block; width: 2.6rem; height: .7rem; margin-bottom: 1.1rem;
   background: var(--c, var(--signal-coral)); transform: rotate(var(--ga1));
 }
-.beat:nth-of-type(3n+1) h2 { --c: var(--signal-yellow); }
-.beat:nth-of-type(3n+2) h2 { --c: var(--signal-blue); }
+/* the chapters take turns: yellow, blue, coral */
+.beat:nth-of-type(3n+1) { --c: var(--signal-yellow); --c-ink: var(--ink); }
+.beat:nth-of-type(3n+2) { --c: var(--signal-blue); }
 .beat:nth-of-type(3n+3) h2::before { transform: rotate(var(--ga2)); }
 /* the way from the story into the tech page */
 .copy .more {
@@ -148,11 +149,11 @@ h2::before {
   font-weight: 700; color: var(--ink); text-decoration: none;
 }
 .copy .more:hover { border-bottom-color: var(--ink); }
-/* a chapter with a sticker shows it in place of the bar */
+/* each chapter's sticker, naming its idea, in place of the bar: in the bar's colour, with a tilt of its own */
 .chapter-tag {
-  justify-self: start; display: inline-block; padding: .32rem .6rem;
-  font: 700 .72rem/1 var(--font-code); letter-spacing: .12em; text-transform: uppercase;
-  color: #fff; background: var(--ink); transform: rotate(var(--ga3));
+  justify-self: start; display: inline-block; padding: .3rem .55rem;
+  font: 700 .72rem/1 var(--font-code); letter-spacing: .14em; text-transform: uppercase;
+  color: var(--c-ink, #fff); background: var(--c, var(--signal-coral)); transform: rotate(var(--tilt, 3deg));
 }
 .copy:has(.chapter-tag) h2::before { display: none; }
 p { color: var(--muted); text-wrap: pretty; }
@@ -231,12 +232,12 @@ p strong { color: var(--ink); font-weight: 650; }
 /* links to what isn't public yet: greyed out and not clickable */
 .off { cursor: default; pointer-events: none; opacity: .4; filter: grayscale(1); }
 /* a small coral sticker, tilted like the flags */
-.soon {
+.early-stage {
   display: inline-block; justify-self: start; margin-left: .7rem; padding: .32rem .6rem; vertical-align: .1em;
   font: 700 .7rem/1 var(--font-code); letter-spacing: .1em; text-transform: uppercase;
   color: #fff; background: var(--signal-coral); border-radius: 6px; transform: rotate(var(--ga3));
 }
-.finale-main > .soon { margin-left: 0; font-size: .8rem; padding: .4rem .75rem; }
+.finale-main > .early-stage { margin-left: 0; font-size: .8rem; padding: .4rem .75rem; }
 .big { margin: 0; max-width: min(60rem, 100%); font: 900 clamp(2.8rem, 8vw, 7.4rem)/.92 var(--font-ui); letter-spacing: -.055em; color: var(--ink); }
 .big .flag::before { background: var(--signal-coral); transform: rotate(var(--ga2)); }
 .close { display: grid; gap: 1.2rem; max-width: 42rem; }
@@ -399,19 +400,18 @@ rect.t-ink, rect.t-life, circle.t-ink, circle.t-life, circle.t-message { stroke-
 .bar { --link-current: var(--ink); }
 .bar .nav-link-active { color: var(--link-current); }
 
-/* GitHub: one of the brand's tilted stickers, ink with a hard coral shadow, the mark and a "soon" chip */
+/* GitHub: one of the brand's tilted stickers, ink with a hard coral shadow, and the mark */
 .github {
-  display: inline-flex; align-items: center; gap: .45rem; padding: .36rem .5rem .36rem .6rem; cursor: default; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: .45rem; padding: .36rem .6rem; white-space: nowrap; text-decoration: none;
   font: 700 .7rem/1 var(--font-code); letter-spacing: .1em; text-transform: uppercase;
   color: var(--canvas); background: var(--ink); box-shadow: 3px 3px 0 var(--signal-coral);
   /* translateZ puts it on its own GPU layer: inside the blurred bar Safari only anti-aliases a rotated box there */
   transform: rotate(var(--ga3, -2deg)) translateZ(0); will-change: transform;
 }
 .github svg { width: .95rem; height: .95rem; fill: currentColor; flex: none; }
-.github-soon { padding: .18rem .3rem; font-size: .58rem; color: #fff; background: var(--signal-coral); }
-/* on narrow phones the sticker keeps only the mark and "soon", so the links fit beside the logo */
+/* on narrow phones the sticker keeps only the mark, so the links fit beside the logo */
 @media (max-width: 430px) { .github-label { display: none; } }
 
 /* tilted stickers: WebKit doesn't smooth the edges of a rotated box drawn in place; drawing it as its own
    layer (backface-visibility) and padding its edge with a transparent outline makes them anti-aliased */
-.github, .soon, .chapter-tag, .cta .button-accent { -webkit-backface-visibility: hidden; backface-visibility: hidden; outline: 1px solid transparent; }
+.github, .early-stage, .chapter-tag, .cta .button-accent { -webkit-backface-visibility: hidden; backface-visibility: hidden; outline: 1px solid transparent; }
