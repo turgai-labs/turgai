@@ -21,5 +21,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # the version that deploys it from a Mac; the action's own default is too old for an assets-only site
+          wranglerVersion: "4.164.0"
           workingDirectory: Clients/Website
           command: deploy
