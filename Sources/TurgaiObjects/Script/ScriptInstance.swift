@@ -192,14 +192,23 @@ public final class ScriptInstance {
             let takes = shape.messages.map(\.written).joined(separator: ", ")
             throw CodeProblem("It takes no `\(name)`; it takes \(takes.isEmpty ? "nothing yet" : takes).")
         }
-        var values: [(label: String?, value: Portable)] = []
+        // What's left out, as its description says it may be: its default, or else `nil`.
+        var values: [(label: String?, value: Portable?)] = []
         for (index, parameter) in message.parameters.enumerated() {
-            guard let argument = given[parameter.name] ?? parameter.label.flatMap({ given[$0] }) ?? given["_\(index)"],
-                argument != .null
-            else {
+            let argument = given[parameter.name] ?? parameter.label.flatMap({ given[$0] }) ?? given["_\(index)"]
+            let isOptional = SwiftTypeSchema.isOptional(parameter.resolved)
+            switch argument {
+            case let value? where value != .null:
+                values.append((parameter.label, host.portable(value)))
+            case .some where isOptional:
+                values.append((parameter.label, .null))
+            case _ where parameter.hasDefault:
+                values.append((parameter.label, nil))
+            case _ where isOptional:
+                values.append((parameter.label, .null))
+            default:
                 throw CodeProblem("`\(message.name)` needs `\(parameter.name)`. It's \(message.written).")
             }
-            values.append((parameter.label, host.portable(argument)))
         }
         let run = Run()
         do {

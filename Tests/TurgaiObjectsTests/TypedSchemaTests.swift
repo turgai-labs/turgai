@@ -179,6 +179,29 @@ struct TypedSchemaTests {
         #expect(error?.message == "`refund.reason`: \"early\" isn't a case of 'RefundDesk.Reason'")
     }
 
+    /// What its description says may be left out can be: a parameter with a default gets it, an
+    /// optional one without gets `nil`, and one with neither is still needed.
+    @Test func whatMayBeLeftOutCanBe() async throws {
+        let code = """
+            actor Forecaster {
+                func forecast(place: String, days: Int = 3, country: String?) -> String {
+                    "\\(place) \\(days) \\(country ?? "-")"
+                }
+            }
+            """
+        let instance = try await ScriptInstance.start(
+            try Script(code: code, type: "Forecaster"), as: ObjectIdentity(rawValue: "forecaster"),
+            reaches: { _, _ in .null },
+            makes: { type, _ in throw CodeProblem("\(type) isn't made here") },
+            tools: { function, _ in throw CodeProblem("\(function) isn't here") }, schedules: { _ in },
+            cancels: { _ in })
+        #expect(try await instance.handle("forecast", arguments: ["place": "Vienna"]).reply == "Vienna 3 -")
+        #expect(
+            try await instance.handle("forecast", arguments: ["place": "Tokyo", "days": 1, "country": "JP"]).reply
+                == "Tokyo 1 JP")
+        await #expect(throws: CodeProblem.self) { try await instance.handle("forecast", arguments: ["days": 1]) }
+    }
+
     /// A type of the object being written that another object's methods use is its own: the
     /// module it imports doesn't declare it again.
     @Test func anObjectsOwnTypesArentDeclaredAgain() async throws {

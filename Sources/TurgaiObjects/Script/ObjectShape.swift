@@ -70,6 +70,8 @@ public struct ObjectShape: Sendable, Equatable {
         public var schema: JSONValue = [:]
         /// It may be left out: it's optional, or has a default.
         public var optional = false
+        /// It has a default, which a call that leaves it out gets.
+        public var hasDefault = false
         /// Its type as code elsewhere names it, `RefundDesk.Refund`: `nil` for any object, which
         /// is written as it's declared.
         public var qualified: String? = nil
@@ -361,6 +363,7 @@ public struct ObjectShape: Sendable, Equatable {
             parameter.resolved = resolved.type
             parameter.schema = SwiftTypeSchema.schema(of: resolved.type, in: declarations)
             parameter.optional = SwiftTypeSchema.isOptional(resolved.type) || resolved.hasDefault
+            parameter.hasDefault = resolved.hasDefault
             parameter.qualified = SwiftTypeSchema.written(resolved.type)
             if case .named(let name, _) = resolved.type.unwrapped, case .actor? = declarations[name] {
                 parameter.object = .of(ObjectTypeName(rawValue: name))
