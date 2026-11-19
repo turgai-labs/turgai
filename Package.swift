@@ -33,8 +33,9 @@ let package = Package(
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
-            url: "https://github.com/huggingface/AnyLanguageModel.git",
-            from: "1.4.0",
+            // A response that says it reached its token limit, until upstream has it.
+            url: "https://github.com/akbashev/AnyLanguageModel.git",
+            branch: "response-says-why-it-ended",
             traits: ["AsyncHTTPClient", .trait(name: "Llama", condition: .when(traits: ["Llama"]))]
         ),
         .package(
