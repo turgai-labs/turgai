@@ -84,14 +84,16 @@ public enum DynamicObjectState: Codable, Sendable {
     case unmade
     /// Living: its code, its maker, who may use it, and what it holds.
     case live(LiveObject)
-    /// Removed for good: what it was, kept with its history.
+    /// Removed: what it was, kept with its history. Its name is free, and an object made by it
+    /// again is a new life of it, as a name reaches whichever object is there now.
     case removed(LiveObject)
 
     /// The state after `event`. An event the state can't follow from never reaches it, since
     /// every event is decided from the state it follows; it leaves the state as it is.
     public func applying(_ event: DynamicObjectEvent) -> DynamicObjectState {
         switch (self, event) {
-        case (.unmade, .adopted(let type, let code, let starts, let maker, let place, let holder)):
+        case (.unmade, .adopted(let type, let code, let starts, let maker, let place, let holder)),
+            (.removed, .adopted(let type, let code, let starts, let maker, let place, let holder)):
             .live(LiveObject(type: type, code: code, fields: starts, maker: maker, madeIn: place, heldBy: holder))
         case (.unmade, _): self
         case (.live(let object), .removed): .removed(object)
@@ -111,12 +113,12 @@ public enum DynamicObjectState: Codable, Sendable {
         }
     }
 
-    /// Who may read it and who may write it, for a call through `chain`: an object not made yet is
-    /// the caller's to make.
+    /// Who may read it and who may write it, for a call through `chain`: an object not made yet,
+    /// or removed, is the caller's to make.
     func access(for chain: CallChain) -> Access {
         switch self {
-        case .unmade: Access(madeBy: chain.scope)
-        case .live(let object), .removed(let object): object.access
+        case .unmade, .removed: Access(madeBy: chain.scope)
+        case .live(let object): object.access
         }
     }
 
@@ -130,14 +132,15 @@ public enum DynamicObjectState: Codable, Sendable {
         -> DynamicObjectEvent
     {
         switch self {
-        case .unmade:
-            let holder = chain.actors.last.map(ObjectID.init).flatMap { DynamicObject.identity(of: $0) == nil ? nil : $0 }
+        // Not made yet, or removed: a new life, its maker's.
+        case .unmade, .removed:
+            let holder = chain.actors.last.map(ObjectID.init).flatMap {
+                DynamicObject.identity(of: $0) == nil ? nil : $0
+            }
             return .adopted(type, code, starts: starts, by: chain.scope, in: chain.place, heldBy: holder)
         case .live(let object):
             try object.changeable(by: chain)
             return .adopted(type, code, starts: starts, by: chain.scope, in: chain.place, heldBy: nil)
-        case .removed:
-            throw DynamicObjectError.removed
         }
     }
 
@@ -145,9 +148,8 @@ public enum DynamicObjectState: Codable, Sendable {
     var held: [String: JSONValue] {
         get throws(DynamicObjectError) {
             switch self {
-            case .unmade: [:]
+            case .unmade, .removed: [:]
             case .live(let object): object.fields
-            case .removed: throw .removed
             }
         }
     }

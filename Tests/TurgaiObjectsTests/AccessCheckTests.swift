@@ -1,3 +1,4 @@
+import DiscoverableActors
 import DistributedCluster
 import Foundation
 import Testing
@@ -52,6 +53,101 @@ struct AccessCheckTests {
             await #expect(throws: NotAllowed(.write)) {
                 try await self.as(bob) { try await objects.remove(id) }
             }
+        }
+    }
+
+    /// A removed object's name is free: an object made by it again is a new one, its maker's,
+    /// starting from its code, as a name reaches whichever object is there now.
+    @Test(.timeLimit(.minutes(1)))
+    func aRemovedObjectsNameCanBeMadeAgain() async throws {
+        let store = MemoryEventStore()
+        try await withClusterSystem("objects", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
+            let objects = try await DynamicObjects.of(family, on: node)
+            let id = try await self.as(ann) {
+                try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
+            }
+            let object = try await objects.held(id)
+            #expect(try await self.as(ann) { try await object.respond("add", arguments: [:]).reply } == .integer(1))
+            try await self.as(ann) { try await objects.remove(id) }
+
+            let again = try await self.as(bob) {
+                try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
+            }
+            #expect(again == id)
+            // A new one: Bob's, from its code's start, and not Ann's to reach.
+            #expect(try await self.as(bob) { try await object.respond("add", arguments: [:]).reply } == .integer(1))
+            await #expect(throws: NotAllowed(.read)) {
+                try await self.as(ann) { _ = try await object.respond("add", arguments: [:]) }
+            }
+            #expect(try await listed(objects, to: bob) == ["counter"])
+            #expect(try await listed(objects, to: ann).isEmpty)
+        }
+    }
+
+    /// A call is a message by name to whichever object is there: when what it calls changes or
+    /// goes, the call fails with why, and the caller is as it was. Nothing tells it before.
+    @Test(.timeLimit(.minutes(1)))
+    func aCallToWhatChangedFailsWithWhy() async throws {
+        let store = MemoryEventStore()
+        func weather(_ forecast: String) -> String { "actor Weather {\n    \(forecast)\n}" }
+        let uses = Uses(
+            interface: ModuleInterface(
+                name: Uses.module,
+                source: "actor Weather {\n    init(id: String)\n    func forecast(days: Int) async throws -> String\n}"),
+            objects: [:], lasting: ["Weather"])
+        let briefing = """
+            actor Briefing {
+                var mornings = 0
+
+                func morning() async throws -> String {
+                    mornings += 1
+                    return try await Weather(id: "weather").forecast(days: 3)
+                }
+            }
+            """
+        try await withClusterSystem("objects", store: store, hostsVirtualActors: true, people: [ann, bob]) { node in
+            let objects = try await DynamicObjects.of(family, on: node)
+            let weatherID = try await self.as(ann) {
+                try await objects.create(
+                    name: "Weather",
+                    spec: .new(
+                        try Script(code: weather("func forecast(days: Int) -> String { \"sunny\" }"), type: "Weather")))
+            }
+            let briefingID = try await self.as(ann) {
+                try await objects.create(
+                    name: "Briefing", spec: .new(try Script(code: briefing, type: "Briefing", uses: uses)))
+            }
+            let desk = try await objects.held(briefingID)
+            func morning() async throws -> JSONValue {
+                try await self.as(ann) { try await desk.respond("morning", arguments: [:]).reply }
+            }
+            func failure() async -> String {
+                do {
+                    _ = try await morning()
+                    return "it didn't fail"
+                } catch {
+                    return String(describing: error)
+                }
+            }
+            #expect(try await morning() == .string("sunny"))
+
+            // What it called is gone, takes another type, or answers with another.
+            for (changed, why) in [
+                ("func summary() -> String { \"sunny\" }", "takes no `forecast`"),
+                ("func forecast(days: String) -> String { \"sunny\" }", "`days`"),
+                ("func forecast(days: Int) -> Int { 7 }", "isn't"),
+            ] {
+                try await self.as(ann) {
+                    try await objects.update(weatherID, source: try Script(code: weather(changed), type: "Weather"))
+                }
+                let failed = await failure()
+                #expect(failed.contains(why), "\(changed): \(failed)")
+            }
+            // And when it's gone with its type: no object or type of it is here.
+            try await self.as(ann) { try await objects.remove(weatherID) }
+            #expect(await failure().contains("Weather"))
+            // Each failed call left the caller as it was: only the first morning counted.
+            #expect(try await self.as(ann) { try await desk.read(property: "mornings") } == .integer(1))
         }
     }
 

@@ -123,9 +123,9 @@ public distributed actor DynamicObjects {
             // It's there, but not the caller's to see: another's, or what another object holds.
             throw DynamicObjectsError.nameTaken(name)
         } catch is DynamicObjectError {
-            // Not made yet, or removed for good, which what follows refuses.
+            // Not made yet, or removed, whose name is free.
         }
-        guard !state.identities.contains(identity), !state.removed.contains(identity),
+        guard !state.identities.contains(identity),
             try await ObjectNames.object(named: identity.rawValue, in: home, using: actorSystem) == nil
         else { throw DynamicObjectsError.nameTaken(name) }
         let made = try await DynamicObject.identified(by: identity, in: home, on: actorSystem)
@@ -468,8 +468,6 @@ public struct DynamicObjectsState: Codable, Sendable {
     /// The objects made by name, oldest first: what's listed and found here. An
     /// object that code made with `Type()` isn't one of them: it's reached through what holds it.
     public var entries: [Entry] = []
-    /// The objects removed from here: their ids are theirs for good, never given to another.
-    public var removed: Set<ObjectIdentity> = []
     /// The built-in objects its space installed.
     public var installed: Set<BuiltInKind> = []
     /// The websites made here, by name.
@@ -509,7 +507,6 @@ public struct DynamicObjectsState: Codable, Sendable {
             if let index = entries.firstIndex(where: { $0.identity == identity }) { entries[index].access = access }
         case .removed(let identity):
             entries.removeAll { $0.identity == identity }
-            removed.insert(identity)
         case .installed(let kind):
             installed.insert(kind)
         case .uninstalled(let kind):
@@ -538,7 +535,7 @@ public enum DynamicObjectsError: Error, Codable, Equatable, Sendable, CustomStri
         case .exists(let id, let type):
             "`\(id)` already exists: it's a `\(type)`. Change it with edit_object."
         case .nameTaken(let name):
-            "An object or type named \(name) already exists. To change it, write it with its id, or choose another name."
+            "An object or type named \(name) already exists. Change it with edit_object, or choose another name."
         case .unknownType(let name):
             "There's no object or type \(name) here."
         case .notInstalled(let kind):
