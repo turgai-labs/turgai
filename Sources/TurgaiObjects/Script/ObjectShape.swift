@@ -408,7 +408,16 @@ public struct ObjectShape: Sendable, Equatable {
         var checks = false
         for member in actor.members.members {
             if let function = member.decl.as(FunctionDeclSyntax.self), function.name.text == "_check" { checks = true }
-            if let structure = member.decl.as(StructDeclSyntax.self), Self.carries(structure.attributes, RuntimeMacros.event) {
+            // What's static is the type's: it isn't the object's state, and isn't asked of it.
+            let modifiers =
+                member.decl.as(VariableDeclSyntax.self)?.modifiers ?? member.decl.as(FunctionDeclSyntax.self)?.modifiers
+            if modifiers?.contains(where: { [.keyword(.static), .keyword(.class)].contains($0.name.tokenKind) }) == true
+            {
+                continue
+            }
+            if let structure = member.decl.as(StructDeclSyntax.self),
+                Self.carries(structure.attributes, RuntimeMacros.event)
+            {
                 events.append(Event(name: structure.name.text, summary: Self.summary(of: structure.leadingTrivia)))
             }
             if let enumeration = member.decl.as(EnumDeclSyntax.self),

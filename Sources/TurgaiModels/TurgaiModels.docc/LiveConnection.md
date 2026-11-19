@@ -28,8 +28,8 @@ access request the conversation asked (`access.requested`), for whoever may deci
 ### Asking, and topics
 
 ``ChatCommand/push(ref:ask:)`` asks something, a ``ChatAsk``, and is answered by a `reply`
-carrying the same ``PushRef``: archiving a space, leaving or deleting a conversation, changing a
-schedule, and joining or leaving a ``ChatTopic``.
+carrying the same ``PushRef``: archiving a space, leaving or deleting a conversation, stopping the
+reply a conversation is working on, changing a schedule, and joining or leaving a ``ChatTopic``.
 
 A topic is told only while it's joined:
 

@@ -43,4 +43,24 @@ struct AgentModelEndpointFactoryTests {
         try await credentials.save("secret", for: key)
         _ = try await factory.endpoint(model: model, configuration: cloud, temperature: 0)
     }
+
+    /// A cloud model answers as long as its provider says its answers may be, when checking it
+    /// said so; otherwise as long as the provider lets it.
+    @Test
+    func aCloudModelAnswersAsLongAsItsProviderSays() async throws {
+        let credentials = AgentCredentialStore(storage: .test)
+        let factory = AgentModelEndpointFactory(credentials: credentials)
+        let model = try AgentModel(provider: .anthropic, id: "claude-sonnet")
+        let key = AgentCredentialReference.new()
+        try await credentials.save("secret", for: key)
+        for (details, answerSize) in [
+            (ModelDetails(contextSize: 1_000_000, answerSize: 128_000), 128_000),
+            (ModelDetails(contextSize: 1_000_000), nil),
+        ] as [(ModelDetails, Int?)] {
+            let configuration = try ModelLocation.cloud(.anthropic).configuration(
+                key: key, model: model.id, typed: nil, details: details)
+            let endpoint = try await factory.endpoint(model: model, configuration: configuration, temperature: 0)
+            #expect((endpoint as? AnyLanguageModelEndpoint)?.answerSize == answerSize)
+        }
+    }
 }

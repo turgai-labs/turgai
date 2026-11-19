@@ -345,6 +345,17 @@ public actor LiveSession {
                 return false
             }
 
+        case .stop(let conversationID, let person):
+            // The session's own conversation, as it's attached to it: its space decides who may.
+            do {
+                try await space(spaceID, for: conversationID).stop(conversationID, by: person)
+                return true
+            } catch {
+                await publish(
+                    .reply(.failed(conversationID: conversationID, turnID: nil, message: String(describing: error))))
+                return false
+            }
+
         case .answer(let conversationID, let id, let answer, let person):
             // Only a conversation this session is attached to hears its answer; its space decides
             // whose answer counts.

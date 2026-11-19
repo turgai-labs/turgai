@@ -98,4 +98,30 @@ struct ObjectsFeatureTests {
         await store.receive(\.shareRefused) { $0.refusal = "Only someone who may change it can share it." }
         await store.send(.refusalPresented(false)) { $0.refusal = nil }
     }
+
+    /// Right-clicking an object shows its card: asked of the server by the handle it's listed by,
+    /// its heading, text and blocks of code shown as the card says them; closed, it's gone.
+    @Test
+    func anObjectsCardShowsWhatItIs() async {
+        let asked = LockIsolated<[String]>([])
+        var state = ObjectsFeature.State()
+        state.space = family
+        let store = TestStore(initialState: state) {
+            ObjectsFeature()
+        } withDependencies: {
+            $0.objects.card = { _, handle in
+                asked.withValue { $0.append(handle) }
+                return ObjectCard(markdown: "# Mac\n\nThis computer.\n\n```yaml\ntakes:\n- status()\n```\n")
+            }
+        }
+
+        await store.send(.cardTapped(mac)) { $0.card = ObjectsFeature.Card(title: "Mac") }
+        await store.receive(\.cardLoaded) {
+            $0.card?.content = .shown([
+                .heading("Mac"), .text("This computer."), .code(language: "yaml", "takes:\n- status()"),
+            ])
+        }
+        #expect(asked.value == ["Mac"])
+        await store.send(.cardPresented(false)) { $0.card = nil }
+    }
 }

@@ -169,14 +169,26 @@ private struct Composer: View {
                 .onKeyPress(.downArrow) { suggestionsKey(.markMoved(by: 1)) }
                 .onKeyPress(.upArrow) { suggestionsKey(.markMoved(by: -1)) }
                 .onKeyPress(.tab) { suggestionsKey(.submitted) }
-                Button {
-                    store.send(.sendTapped)
-                } label: {
-                    Image(systemName: "arrow.up").font(.title3.weight(.bold))
+                switch store.composerButton {
+                case .stop:
+                    Button {
+                        store.send(.stopTapped)
+                    } label: {
+                        Image(systemName: "stop.fill").font(.title3.weight(.bold))
+                    }
+                    .buttonStyle(SendStampStyle())
+                    .keyboardShortcut(.cancelAction)
+                    .help("Stop the reply")
+                case .send:
+                    Button {
+                        store.send(.sendTapped)
+                    } label: {
+                        Image(systemName: "arrow.up").font(.title3.weight(.bold))
+                    }
+                    .buttonStyle(SendStampStyle())
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(!store.canSend)
                 }
-                .buttonStyle(SendStampStyle())
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(!store.canSend)
             }
         }
     }

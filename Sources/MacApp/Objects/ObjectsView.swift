@@ -18,6 +18,7 @@ struct ObjectsView: View {
                 List(rows) { row in
                     ObjectRowView(row: row)
                         .contextMenu {
+                            Button("Show Card…") { store.send(.cardTapped(row)) }
                             if let made = row.made { SharingMenu(made: made, store: store) }
                         }
                 }
@@ -27,6 +28,11 @@ struct ObjectsView: View {
         .scrollContentBackground(.hidden)
         .task { store.send(.appeared) }
         .alert(store.refusal ?? "", isPresented: $store.isRefused.sending(\.refusalPresented)) {}
+        .sheet(isPresented: $store.isShowingCard.sending(\.cardPresented)) {
+            if let card = store.card {
+                CardView(card: card) { store.send(.cardPresented(false)) }
+            }
+        }
     }
 }
 
@@ -96,5 +102,68 @@ private struct ObjectRowView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// An object's card: its title, then its parts as the card says them, each block of code in a
+/// scrollable monospaced box of its own.
+private struct CardView: View {
+    let card: ObjectsFeature.Card
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(card.title).font(.title2.weight(.semibold)).foregroundStyle(Color.turgaiInk)
+                Spacer()
+                Button("Done", action: close).keyboardShortcut(.cancelAction)
+            }
+            switch card.content {
+            case .loading:
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .missing:
+                Text("This object's card can't be shown.")
+                    .font(.callout)
+                    .foregroundStyle(Color.turgaiMuted)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .shown(let blocks):
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(blocks.indices, id: \.self) { index in
+                            CardBlockView(block: blocks[index])
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 520, idealWidth: 640, minHeight: 420, idealHeight: 560)
+    }
+}
+
+/// One part of a card.
+private struct CardBlockView: View {
+    let block: ObjectsFeature.CardBlock
+
+    var body: some View {
+        switch block {
+        case .heading(let text):
+            Text(text).font(.headline).foregroundStyle(Color.turgaiInk)
+        case .text(let text):
+            Text(LocalizedStringKey(text)).font(.body).foregroundStyle(Color.turgaiMuted).textSelection(.enabled)
+        case .code(let language, let code):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(language.uppercased()).font(.caption2.weight(.semibold)).foregroundStyle(Color.turgaiMuted)
+                ScrollView(.horizontal) {
+                    Text(code)
+                        .font(.callout.monospaced())
+                        .foregroundStyle(Color.turgaiInk)
+                        .textSelection(.enabled)
+                        .padding(10)
+                }
+                .background(Color.turgaiInk.opacity(0.05), in: .rect(cornerRadius: 8))
+            }
+        }
     }
 }

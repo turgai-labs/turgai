@@ -19,6 +19,29 @@ struct ChatLiveActivity: HTML, Sendable {
     }
 }
 
+/// The composer's one button: send, or, while a reply is worked on, stop it, through the stop form.
+struct ChatComposerButton: HTML, Sendable {
+    let stops: Bool
+
+    var body: some HTML {
+        if stops {
+            button(
+                .id("chat-send"), .hx.swapOOB(.outerHTML), .type(.submit), .init(name: "form", value: "chat-stop"),
+                .class("button button-accent chat-send"), .init(name: "aria-label", value: "Stop the reply")
+            ) {
+                span(.class("chat-send-icon"), .init(name: "aria-hidden", value: "true")) { "■" }
+            }
+        } else {
+            button(
+                .id("chat-send"), .hx.swapOOB(.outerHTML), .type(.submit),
+                .class("button button-accent chat-send"), .init(name: "aria-label", value: "Send message")
+            ) {
+                span(.class("chat-send-icon"), .init(name: "aria-hidden", value: "true")) { "↑" }
+            }
+        }
+    }
+}
+
 struct ChatLiveActivityClear: HTML, Sendable {
     var body: some HTML {
         div(.id("conversation-activity"), .hx.swapOOB(.outerHTML), .class("chat-activity")) {}
@@ -226,7 +249,7 @@ enum ChatLiveFragment {
     }
 
     static func started() -> String {
-        ChatLiveActivity(text: "Thinking").render()
+        ChatLiveActivity(text: "Thinking").render() + ChatComposerButton(stops: true).render()
     }
 
     static func phase(_ phase: ConversationPhase) -> String {
@@ -247,11 +270,12 @@ enum ChatLiveFragment {
 
     static func completed(_ message: Message, turnID: TurnID) -> String {
         ChatLiveReply(turnID: turnID, content: ChatLiveMessageBody(message: message)).render()
-            + ChatLiveActivityClear().render()
+            + ChatLiveActivityClear().render() + ChatComposerButton(stops: false).render()
     }
 
     static func appendedCompleted(_ message: Message, turnID: TurnID) -> String {
         appended(ChatLiveMessageBody(message: message), turnID: turnID) + ChatLiveActivityClear().render()
+            + ChatComposerButton(stops: false).render()
     }
 
     /// `content` as a turn's reply, after the messages.
@@ -266,9 +290,10 @@ enum ChatLiveFragment {
 
     static func failed(_ message: String) -> String {
         ChatLiveError(message: message).render() + ChatLiveActivityClear().render()
+            + ChatComposerButton(stops: false).render()
     }
 
     static func cleared() -> String {
-        ChatLiveActivityClear().render()
+        ChatLiveActivityClear().render() + ChatComposerButton(stops: false).render()
     }
 }

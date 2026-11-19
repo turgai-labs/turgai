@@ -111,7 +111,7 @@ public distributed actor AgentParticipant {
                 _ = try await withScope(scope) { error in Self.modelFailure(for: error) }
                 return
             } catch is CancellationError {
-                failure = ConversationFailure(kind: .cancelled, message: "The model request was cancelled.")
+                failure = ConversationFailure(kind: .cancelled, message: "Stopped.")
             } catch let thrown as ConversationFailure {
                 failure = thrown
                 Self.log(failure.message, of: request, on: actorSystem)

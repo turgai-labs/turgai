@@ -155,7 +155,7 @@ private actor ChatSocket {
         case .join(let topic): joined.insert(topic)
         case .leave(let topic): joined.remove(topic)
         case .memory, .forgetMemory, .setRemembering, .archiveSpace, .unarchiveSpace, .leaveConversation,
-            .deleteConversation, .changeSchedule, .cancelReminder:
+            .deleteConversation, .stopConversation, .changeSchedule, .cancelReminder:
             break
         }
         let ref = PushRef()

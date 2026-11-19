@@ -2,6 +2,7 @@ import Hummingbird
 import HummingbirdWebSocket
 import Logging
 import ServiceLifecycle
+import Synchronization
 import TurgaiAgents
 import TurgaiApplication
 import TurgaiModels
@@ -13,10 +14,10 @@ import TurgaiPeople
     import Foundation
 #endif
 
-/// Setting Turgai up, on its own web server: its steps, signing in and out, and whether it's
-/// done. It serves until setting up is complete; Turgai's cluster, and its main web app, start
-/// after it.
-public struct TurgaiOnboardingWebApp: Sendable {
+/// Setting Turgai up: its steps, signing in and out, and whether it's done. Turgai's one web server
+/// answers with its routes until Turgai's own are handed to it; its run ends once setting up is
+/// complete, and Turgai starts after it.
+public struct TurgaiOnboardingWebApp: Service, Sendable {
     let directory: URL
     let auth: TurgaiAuth
     let setup: TurgaiSetupStore
@@ -34,25 +35,21 @@ public struct TurgaiOnboardingWebApp: Sendable {
         self.agentCredentials = agentCredentials
     }
 
-    /// Serves setting up on `port` until it's complete, or the server stops first: then its server
-    /// has stopped, and the port is free again.
-    public func run(port: Int, logger: Logger) async throws {
-        guard !(await setup.isComplete) else { return }
+    /// Its routes, which Turgai's web server answers with until Turgai's own are handed to it.
+    public func router() -> Router<BasicWebSocketRequestContext> {
         let router = Router(context: BasicWebSocketRequestContext.self)
         router.addMiddleware { FileMiddleware(TurgaiWebAssets.publicRoot, searchForIndexHtml: false) }
         registerRoutes(on: router)
-        let server = ServiceGroup(
-            services: [TurgaiWebServer.application(router: router, port: port)], gracefulShutdownSignals: [],
-            logger: logger)
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { try await server.run() }
-            await withTaskCancellationOrGracefulShutdownHandler {
-                await setup.waitUntilComplete()
-            } onCancelOrGracefulShutdown: {
-                Task { await setup.stopWaiting() }
-            }
-            await server.triggerGracefulShutdown()
-            try await group.waitForAll()
+        return router
+    }
+
+    /// Waits until setting up is complete, or it's stopped first. Done before, it returns at once.
+    public func run() async throws {
+        guard !(await setup.isComplete) else { return }
+        await withTaskCancellationOrGracefulShutdownHandler {
+            await setup.waitUntilComplete()
+        } onCancelOrGracefulShutdown: {
+            Task { await setup.stopWaiting() }
         }
     }
 
@@ -67,14 +64,43 @@ public struct TurgaiOnboardingWebApp: Sendable {
     }
 }
 
-/// Turgai's web servers: setting up's, then the main app's, each on the same port in turn.
-public enum TurgaiWebServer {
-    /// The server for `router` on `port`, on this machine only.
-    public static func application(router: Router<BasicWebSocketRequestContext>, port: Int) -> some Service {
+/// Turgai's one web server, on one port for the whole run: it answers with setting up's routes, and
+/// then with Turgai's, once they're handed to it. Nothing stops in between, so a page waiting for
+/// Turgai to start simply gets it on its next request.
+public final class TurgaiWebServer: Sendable {
+    private let routes: Mutex<RouterResponder<BasicWebSocketRequestContext>>
+    private let port: Int
+
+    /// Answering on `port`, on this machine only, with `router`'s routes.
+    public init(serving router: Router<BasicWebSocketRequestContext>, port: Int) {
+        routes = Mutex(router.buildResponder())
+        self.port = port
+    }
+
+    /// Its routes from now on: `router`'s, for requests and WebSockets alike.
+    public func serve(_ router: Router<BasicWebSocketRequestContext>) {
+        let responder = router.buildResponder()
+        routes.withLock { $0 = responder }
+    }
+
+    /// It, run as a service.
+    public var service: some Service {
         Application(
-            router: router,
-            server: .http1WebSocketUpgrade(webSocketRouter: router),
+            responder: Current(server: self),
+            server: .http1WebSocketUpgrade(webSocketRouter: Current(server: self)),
             configuration: .init(address: .hostname("127.0.0.1", port: port))
         )
+    }
+
+    /// Whichever routes it answers with now.
+    private struct Current: HTTPResponder, HTTPResponderBuilder {
+        let server: TurgaiWebServer
+
+        func respond(to request: Request, context: BasicWebSocketRequestContext) async throws -> Response {
+            let routes = server.routes.withLock { $0 }
+            return try await routes.respond(to: request, context: context)
+        }
+
+        func buildResponder() -> Current { self }
     }
 }

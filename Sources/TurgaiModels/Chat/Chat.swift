@@ -327,6 +327,10 @@ public enum ChatCommand: Codable, Equatable, Sendable {
                     .deleteConversation(
                         try values.decode(ConversationID.self, forKey: .conversationID),
                         of: try values.decode(SpaceID.self, forKey: .space))
+                case .stopConversation:
+                    .stopConversation(
+                        try values.decode(ConversationID.self, forKey: .conversationID),
+                        of: try values.decode(SpaceID.self, forKey: .space))
                 case .changeSchedule:
                     .changeSchedule(
                         in: try values.decode(TaskListing.Chat.self, forKey: .chat),
@@ -382,7 +386,8 @@ public enum ChatCommand: Codable, Equatable, Sendable {
             case .setRemembering(let remembering): try values.encode(remembering, forKey: .remembering)
             case .archiveSpace(let space), .unarchiveSpace(let space):
                 try values.encode(space, forKey: .space)
-            case .leaveConversation(let conversation, let space), .deleteConversation(let conversation, let space):
+            case .leaveConversation(let conversation, let space), .deleteConversation(let conversation, let space),
+                .stopConversation(let conversation, let space):
                 try values.encode(conversation, forKey: .conversationID)
                 try values.encode(space, forKey: .space)
             case .changeSchedule(let chat, let space, let name, let change):

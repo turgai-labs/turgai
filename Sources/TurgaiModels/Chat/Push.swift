@@ -63,6 +63,8 @@ public enum ChatAsk: Equatable, Sendable {
     /// The conversation of the space deleted for everyone: by the only person in it, or someone
     /// the space lets delete anyone's.
     case deleteConversation(ConversationID, of: SpaceID)
+    /// The reply the conversation of the space is working on stopped; everything said in it stays.
+    case stopConversation(ConversationID, of: SpaceID)
     /// The schedule with this name in the space's chat changed, by whoever made it or someone who
     /// manages the space's tasks.
     case changeSchedule(in: TaskListing.Chat, of: SpaceID, named: String, ScheduleChange)
@@ -93,6 +95,7 @@ extension ChatAsk {
         case unarchiveSpace = "space.unarchive"
         case leaveConversation = "conversation.leave"
         case deleteConversation = "conversation.delete"
+        case stopConversation = "conversation.stop"
         case changeSchedule = "schedule.change"
         case cancelReminder = "reminder.cancel"
     }
@@ -108,6 +111,7 @@ extension ChatAsk {
         case .unarchiveSpace: .unarchiveSpace
         case .leaveConversation: .leaveConversation
         case .deleteConversation: .deleteConversation
+        case .stopConversation: .stopConversation
         case .changeSchedule: .changeSchedule
         case .cancelReminder: .cancelReminder
         }

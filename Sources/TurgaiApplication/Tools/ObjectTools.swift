@@ -60,21 +60,13 @@ public actor ObjectSession {
         case action(ObjectID, String)
     }
 
-    /// Writes an object's Swift from what it should do, in a session of its own.
-    let writer: ObjectWriter?
-    /// What the person asked for in the turn this session serves: an object's writer sees it, as
-    /// whoever writes one part of something sees what the whole is for.
-    let request: String?
-
     public init(
         in space: SpaceID,
         objects: DynamicObjects,
         actorSystem: ClusterSystem,
         agents: [ObjectEntry] = [],
         builtIns: [ObjectEntry] = [],
-        madeByName: [ObjectDescription] = [],
-        writer: ObjectWriter? = nil,
-        request: String? = nil
+        madeByName: [ObjectDescription] = []
     ) {
         self.space = space
         self.spaceObjects = objects
@@ -82,8 +74,6 @@ public actor ObjectSession {
         self.agents = agents
         self.builtIns = builtIns
         self.madeByName = madeByName
-        self.writer = writer
-        self.request = request
     }
 
     /// The directory's roots, with handles, titles, and descriptions.
@@ -391,51 +381,105 @@ public actor ObjectSession {
 
     // MARK: Making objects
 
-    /// Makes an object named `name` that does `task`: its Swift is written in a session of its
-    /// own, whose answer is the code, until it's saved. Code that's never saved makes nothing.
+    /// Makes an object named `name` that does `task`: an empty actor, live from now on, landed on
+    /// its code page, where its Swift is written and saved.
     func make(_ name: String, described task: String) async throws -> CallReturn {
         if let existing = try await madeObject(named: name) {
             let type = try await existing.object.source.type
             throw ObjectToolError.failed(
                 DynamicObjectsError.exists(existing.handle.description, type: type).description)
         }
-        guard let writer else { throw ObjectToolError.failed("Objects can't be written here.") }
         let type = Self.typeName(of: name)
-        var handle: ObjectID?
         let others = await others(except: type)
-        let outcome = try await writer.write(
-            type: type, task: task, current: nil, others: others.declarations, tools: others.tools,
-            values: others.uses.valuesInWords, request: request
-        ) { code in
-            do {
-                let source = try Script(code: code, type: type, uses: others.uses)
-                let problems = await ScriptInstance.problems(in: source)
-                guard problems.isEmpty else { return problems.map { $0.written(in: code) }.joined(separator: "\n") }
-                if let made = handle {
-                    try await self.replace(made, with: source)
-                } else {
-                    handle = try await self.create(name, described: task, spec: .new(source))
-                }
-                return nil
-            } catch let problem as CodeProblem {
-                return problem.written(in: code)
-            } catch {
-                return Self.problem(error)
+        let handle = try await create(
+            name, described: task, spec: .new(try Script(code: "actor \(type) {}", type: type, uses: others.uses)))
+        return landing("Made \(handle): an empty `actor \(type)`, on its code page.", on: .code(handle: handle))
+    }
+
+    /// The code of `handle` saved as `code`: checked as Swift is, against what its code can use,
+    /// then run. What's wrong with it is thrown, each at its line; saved, it lands on the object.
+    func save(_ code: String, to handle: ObjectID) async throws -> CallReturn {
+        let object = try await dynamicObject(handle)
+        let current = try await object.source
+        let before = try? ObjectShape(current)
+        let others = await others(except: current.type)
+        let wrong: String?
+        do {
+            let source = try Script(code: code, type: current.type, uses: others.uses)
+            let problems = await ScriptInstance.problems(in: source)
+            if problems.isEmpty {
+                try await replace(handle, with: source)
+                wrong = nil
+            } else {
+                wrong = problems.map { $0.written(in: code) }.joined(separator: "\n")
             }
+        } catch let problem as CodeProblem {
+            wrong = problem.written(in: code)
+        } catch {
+            wrong = Self.problem(error)
         }
-        // What went wrong with the code stays with its writer: what's said here is what can be
-        // done about it, which is asking again.
-        guard case .saved = outcome, let handle else {
-            throw ObjectToolError.failed("\(name) wasn't made: its code couldn't be written from this description.")
-        }
-        let shape = try? ObjectShape(try await dynamicObject(handle).source)
+        if let wrong { throw ObjectToolError.failed("\(handle) wasn't saved:\n\(wrong)") }
+        let changed = try await object.source
+        let said = Self.changes(from: before, to: try? ObjectShape(changed), now: try await currentValues(handle))
         return landing(
-            "Saved \(handle): \(Self.contents(of: shape, now: try await currentValues(handle))).",
+            "Saved \(handle): \(said).\(Self.codeChanges(from: current.code, to: changed.code))",
             on: .object(handle: handle))
     }
 
-    /// Changes an object made here as `change` says: its Swift is rewritten in a session of its
-    /// own, from its code now, until it's saved. A change that's never saved leaves it as it was.
+    /// An object's code page: what it's for, how it last failed, how the runtime runs it, its code
+    /// now, and what its code can use, each by name; its links show one of those in full, and
+    /// save new code.
+    func codePage(of handle: ObjectID) async throws -> ToolPage {
+        let object = try await dynamicObject(handle)
+        let current = try await object.source
+        let declared = await others(except: current.type).declared
+        var parts = [
+            "`actor \(current.type)`" + (Self.given(try? await described(handle).description).map { ": \($0)" } ?? "")
+        ]
+        if case .failing(let failure) = try await object.health { parts.append("It last failed: \(failure.written)") }
+        parts.append("How the runtime runs it:\n" + ObjectWriter.runtime.map { "- \($0)" }.joined(separator: "\n"))
+        parts.append(RuntimeMacros.declared)
+        parts.append("Its code now:\n```swift\n\(current.code)\n```")
+        if !declared.isEmpty {
+            parts.append(
+                "What its code can use:\n"
+                    + declared.map { "- `\($0.name)`" + ($0.summary.isEmpty ? "" : ": \($0.summary)") }
+                    .joined(separator: "\n"))
+        }
+        var links: [any HailCore.Tool] = []
+        if !declared.isEmpty {
+            links.append(try OpenDeclarationTool(session: self, handle: handle, names: declared.map(\.name)))
+        }
+        links.append(SaveCodeTool(session: self, handle: handle))
+        return .text(parts.joined(separator: "\n\n"), links: links)
+    }
+
+    /// One thing `handle`'s code can use, in full, with the others it names, to show next.
+    func declaration(_ name: String, for handle: ObjectID) async throws -> String {
+        let declared = await others(except: try await dynamicObject(handle).source.type).declared
+        guard let found = declared.first(where: { $0.name == name }) else {
+            throw ObjectToolError.failed("Nothing called `\(name)` is there for its code to use.")
+        }
+        let next = declared.filter { $0.name != name && Self.names(found.words, $0.name) }
+        return found.words
+            + (next.isEmpty ? "" : "\n\nIt names: " + next.map { "`\($0.name)`" }.joined(separator: ", "))
+    }
+
+    /// Whether `text` names `name` as a word of its own, not inside a longer one.
+    private static func names(_ text: String, _ name: String) -> Bool {
+        var rest = text[...]
+        while let range = rest.range(of: name) {
+            let before = range.lowerBound == text.startIndex ? nil : text[text.index(before: range.lowerBound)]
+            let after = range.upperBound == text.endIndex ? nil : text[range.upperBound]
+            let edge: (Character?) -> Bool = { $0.map { !($0.isLetter || $0.isNumber || $0 == "_") } ?? true }
+            if edge(before) && edge(after) { return true }
+            rest = text[range.upperBound...]
+        }
+        return false
+    }
+}
+
+extension ObjectSession {
     /// Shares `handle` with `audience` as far as `level`, or takes their access away: on behalf of
     /// whoever the turn is for, in the space they came in through. Only one who may change it does.
     func share(_ handle: ObjectID, with audience: SharingAudience, _ level: SharingLevel) async throws -> CallReturn {
@@ -453,38 +497,11 @@ public actor ObjectSession {
         }
     }
 
-    func edit(_ handle: ObjectID, change: String) async throws -> CallReturn {
-        let object = try await dynamicObject(handle)
-        guard let writer else { throw ObjectToolError.failed("Objects can't be written here.") }
-        let current = try await object.source
-        let before = try? ObjectShape(current)
-        let others = await others(except: current.type)
-        let failure = if case .failing(let failure) = try await object.health { failure.written } else { String?.none }
-        let outcome = try await writer.write(
-            type: current.type, task: change, current: current.code, failure: failure, others: others.declarations,
-            tools: others.tools, values: others.uses.valuesInWords, request: request
-        ) { code in
-            do {
-                let source = try Script(code: code, type: current.type, uses: others.uses)
-                let problems = await ScriptInstance.problems(in: source)
-                guard problems.isEmpty else { return problems.map { $0.written(in: code) }.joined(separator: "\n") }
-                try await self.replace(handle, with: source)
-                return nil
-            } catch let problem as CodeProblem {
-                return problem.written(in: code)
-            } catch {
-                return Self.problem(error)
-            }
-        }
-        if case .failed = outcome {
-            throw ObjectToolError.failed("\(handle) wasn't changed: the code for this change couldn't be written.")
-        }
-        let changed = try await object.source
-        let after = try? ObjectShape(changed)
-        let said = Self.changes(from: before, to: after, now: try await currentValues(handle))
-        return landing(
-            "Saved \(handle): \(said).\(Self.codeChanges(from: current.code, to: changed.code))",
-            on: .object(handle: handle))
+    /// An object made here, to change: landed on its code page, where its Swift is changed and
+    /// saved.
+    func edit(_ handle: ObjectID) async throws -> CallReturn {
+        _ = try await dynamicObject(handle)
+        return landing("\(handle)'s code page.", on: .code(handle: handle))
     }
 
     /// The objects that exist here but `type`, as code written here meets them: one spec, read
@@ -498,6 +515,16 @@ public actor ObjectSession {
         var uses = Uses.nothing
         /// Each tool function code can call, in a few lines: as code calls it, and what it does.
         var tools: [String] = []
+        /// Everything code can use, each by the name it's written by: objects, tool functions and
+        /// value types, as a code page lists them and `open_declaration` shows them.
+        var declared: [Declared] = []
+    }
+
+    /// One thing code can use: the name code writes it by, what it is in a line, and in full.
+    struct Declared {
+        let name: String
+        let summary: String
+        let words: String
     }
 
     func others(except type: String) async -> Others {
@@ -555,6 +582,10 @@ public actor ObjectSession {
                 var lines = ["- \(Uses.tools).\(tool.name).\(call)"]
                 if let description = function.description { lines.append("  \(description)") }
                 others.tools.append(lines.joined(separator: "\n"))
+                others.declared.append(
+                    Declared(
+                        name: "\(Uses.tools).\(tool.name).\(function.name)", summary: function.description ?? "",
+                        words: lines.joined(separator: "\n")))
             }
         }
         // In words, from the spec itself.
@@ -596,6 +627,15 @@ public actor ObjectSession {
                 declaration.append("  Events:\n" + announces.map { "    \($0)" }.joined(separator: "\n"))
             }
             others.declarations.append(declaration.joined(separator: "\n"))
+            others.declared.append(
+                Declared(
+                    name: actor.name, summary: summaries[actor.name] ?? "", words: declaration.joined(separator: "\n")))
+        }
+        // The values they send and take, each by its name: its first line says what it is.
+        for (name, words) in others.uses.valuesNamed {
+            let first = words.prefix { $0 != "\n" }
+            let summary = first.firstRange(of: ": ").map { String(first[$0.upperBound...]) } ?? ""
+            others.declared.append(Declared(name: name, summary: summary, words: words))
         }
         return others
     }
@@ -1329,14 +1369,23 @@ enum ObjectAddress: Hashable {
     /// The objects: what's here, and the tools to find, make and use them.
     case objects
     case object(handle: ObjectID)
+    /// An object's code: what it runs, and what its code can use, to write and save it.
+    case code(handle: ObjectID)
 
     private static let objectsName = "objects"
+    private static let codePrefix = "code:"
 
     var address: ToolPageAddress {
         switch self {
         case .objects: ToolPageAddress(rawValue: Self.objectsName)
         case .object(let handle): ToolPageAddress(rawValue: handle.description)
+        case .code(let handle): ToolPageAddress(rawValue: Self.codePrefix + handle.description)
         }
+    }
+
+    /// The object whose code page `address` is, as written: none for any other page.
+    static func codeHandle(of address: ToolPageAddress) -> String? {
+        address.rawValue.hasPrefix(codePrefix) ? String(address.rawValue.dropFirst(codePrefix.count)) : nil
     }
 
     /// Whether `address` is the objects page's: any other is an object's, by its id as written.
@@ -1350,6 +1399,9 @@ extension ObjectSession: ToolPages {
     public func open(_ address: ToolPageAddress) async throws(ToolPageUnavailable) -> ToolPage {
         do {
             if ObjectAddress.isObjects(address) { return try await objectsPage() }
+            if let written = ObjectAddress.codeHandle(of: address) {
+                return try await codePage(of: try await id(written: written))
+            }
             return try await usingPage(of: try await id(written: address.rawValue))
         } catch ObjectToolError.unknownHandle {
             throw .gone
@@ -1419,10 +1471,33 @@ public struct EditObjectEffect: ScopedEffect, Sendable {
     public let name = "objects.edit"
     let session: ObjectSession
     let handle: ObjectID
-    let change: String
     public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
-        let (session, handle, change) = token.withConfiguration { ($0.session, $0.handle, $0.change) }
-        return try await session.edit(handle, change: change)
+        let (session, handle) = token.withConfiguration { ($0.session, $0.handle) }
+        return try await session.edit(handle)
+    }
+}
+
+/// One thing an object's code can use, shown in full: reading it reaches nothing.
+public struct ObjectDeclarationEffect: ScopedEffect, Sendable {
+    public let name = "objects.declaration"
+    let session: ObjectSession
+    let handle: ObjectID
+    let declared: String
+    public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
+        let (session, handle, declared) = token.withConfiguration { ($0.session, $0.handle, $0.declared) }
+        return .text(try await session.declaration(declared, for: handle))
+    }
+}
+
+/// An object's code saved: the object checks who may change it, as it does any change.
+public struct SaveObjectCodeEffect: ScopedEffect, Sendable {
+    public let name = "objects.save"
+    let session: ObjectSession
+    let handle: ObjectID
+    let code: String
+    public static func run(in token: borrowing EffectToken<Self>) async throws -> CallReturn {
+        let (session, handle, code) = token.withConfiguration { ($0.session, $0.handle, $0.code) }
+        return try await session.save(code, to: handle)
     }
 }
 
@@ -1592,7 +1667,8 @@ public struct CreateObjectTool: HailCore.Tool {
 
     let session: ObjectSession
     public let name = "create_object"
-    public let description = "Create an object that holds and does what's described: its Swift code is written from it."
+    public let description =
+        "Make an empty object for what's described, and open its code page, where its Swift is written and saved."
 
     init(session: ObjectSession) throws {
         self.session = session
@@ -1883,12 +1959,11 @@ public struct UseObjectTool: HailCore.Tool {
 /// Changes one of your objects to its new Swift code.
 public struct EditObjectTool: HailCore.Tool {
     public typealias Input = GeneratedContent
-    static let changeProperty = "change"
     let session: ObjectSession
     /// Your objects, to choose from: the only ones it can change.
     let objects: YourObject
     public let name = "edit_object"
-    public let description = "Change what an object holds or does: its Swift code is rewritten for it."
+    public let description = "Open an object's code page, where its Swift is changed and saved."
     private let parameters: GenerationSchema
 
     init(session: ObjectSession, objects: [ObjectID]) throws {
@@ -1896,21 +1971,14 @@ public struct EditObjectTool: HailCore.Tool {
         self.objects = YourObject(objects: objects)
         self.parameters = try GenerationSchema(
             root: DynamicGenerationSchema(
-                name: "EditObject",
-                properties: [
-                    self.objects.property("The object to change."),
-                    .init(name: Self.changeProperty, description: "What to change.", schema: .init(type: String.self)),
-                ]),
+                name: "EditObject", properties: [self.objects.property("The object to change.")]),
             dependencies: [])
     }
 
     public var schema: ToolDefinition { ToolDefinition(name: name, description: description, parameters: parameters) }
 
     public func effect(for input: Input) throws -> EditObjectEffect {
-        guard let change = try input.text(Self.changeProperty) else {
-            throw ObjectToolError.missingArguments(name, missing: [Self.changeProperty], unexpected: [])
-        }
-        return EditObjectEffect(session: session, handle: try objects.object(in: input, for: name), change: change)
+        EditObjectEffect(session: session, handle: try objects.object(in: input, for: name))
     }
     public func run(
         _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<EditObjectEffect>
@@ -2059,4 +2127,70 @@ extension GeneratedContent {
 public struct ObjectToolsFindInput: Sendable {
     @Guide(description: "Words for what you need, in your own words.")
     public let query: String
+}
+
+/// Shows one thing an object's code can use in full, as its code page lists them: an object, a
+/// tool function or a value type.
+public struct OpenDeclarationTool: HailCore.Tool {
+    public typealias Input = GeneratedContent
+    static let property = "name"
+    let session: ObjectSession
+    let handle: ObjectID
+    public let name = "open_declaration"
+    public let description = "Show one thing its code can use in full, by its name on the code page."
+    private let parameters: GenerationSchema
+
+    init(session: ObjectSession, handle: ObjectID, names: [String]) throws {
+        self.session = session
+        self.handle = handle
+        self.parameters = try GenerationSchema(
+            root: DynamicGenerationSchema(
+                name: "OpenDeclaration",
+                properties: [
+                    .init(
+                        name: Self.property, description: "Its name, as the code page lists it.",
+                        schema: .init(type: String.self, guides: [.anyOf(names)]))
+                ]),
+            dependencies: [])
+    }
+
+    public var schema: ToolDefinition { ToolDefinition(name: name, description: description, parameters: parameters) }
+
+    public func effect(for input: Input) throws -> ObjectDeclarationEffect {
+        guard let declared = try input.text(Self.property) else {
+            throw ObjectToolError.missingArguments(name, missing: [Self.property], unexpected: [])
+        }
+        return ObjectDeclarationEffect(session: session, handle: handle, declared: declared)
+    }
+    public func run(
+        _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<ObjectDeclarationEffect>
+    ) async throws -> CallReturn {
+        try await ObjectDeclarationEffect.run(in: token)
+    }
+}
+
+/// Checks Swift as the object's whole code and saves it: run from now on, or not saved, with what's
+/// wrong at its line.
+public struct SaveCodeTool: HailCore.Tool {
+    /// The object's code, whole.
+    @Generable(description: "The object's code.")
+    public struct Input: Sendable {
+        @Guide(description: "The whole file: the object's actor.")
+        public let code: String
+    }
+
+    let session: ObjectSession
+    let handle: ObjectID
+    public let name = "save_code"
+    public let description =
+        "Check this Swift as the object's whole code and run it from now on. What's wrong comes back at its line."
+
+    public func effect(for input: Input) throws -> SaveObjectCodeEffect {
+        SaveObjectCodeEffect(session: session, handle: handle, code: input.code)
+    }
+    public func run(
+        _ input: Input, in scope: borrowing ToolScope<Never>, token: borrowing EffectToken<SaveObjectCodeEffect>
+    ) async throws -> CallReturn {
+        try await SaveObjectCodeEffect.run(in: token)
+    }
 }

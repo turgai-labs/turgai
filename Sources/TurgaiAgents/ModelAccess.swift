@@ -52,11 +52,12 @@ public enum ModelLocation: Sendable, Equatable {
     /// A bot's `model` here, reached with the key `key` refers to, with the context it gets: where
     /// you choose, `typed`, when the model takes that many, or else as many as it takes, and on an
     /// Ollama server, which keeps memory for the whole window, no more than
-    /// ``ContextWindow/standard``; anywhere else the provider's own window, `modelTakes` when the
-    /// provider says it.
+    /// ``ContextWindow/standard``; anywhere else the provider's own window, as `details` say when
+    /// they do, and on a cloud the most its answers take, when they say that.
     public func configuration(
-        key: AgentCredentialReference?, model: AgentModelID, typed: ContextWindow?, modelTakes: Int?
+        key: AgentCredentialReference?, model: AgentModelID, typed: ContextWindow?, details: ModelDetails?
     ) throws(ModelConfigurationError) -> AgentProviderConfiguration {
+        let modelTakes = details?.contextSize
         switch self {
         case .appleSystem:
             return .local(.appleSystem)
@@ -73,7 +74,10 @@ public enum ModelLocation: Sendable, Equatable {
             return .server(ModelServer(software: software, address: address, key: key, context: context))
         case .cloud(let provider):
             guard let key else { throw .keyNeeded }
-            return .cloud(CloudAccount(provider: provider, key: key, window: ProviderWindow(modelTakes: modelTakes)))
+            return .cloud(
+                CloudAccount(
+                    provider: provider, key: key, window: ProviderWindow(modelTakes: modelTakes),
+                    answerSize: details?.answerSize.flatMap { AnswerSize(tokens: $0) }))
         }
     }
 

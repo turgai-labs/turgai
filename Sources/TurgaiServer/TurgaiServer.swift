@@ -17,12 +17,13 @@ import TurgaiWeb
     import Foundation
 #endif
 
-/// The whole local Turgai server: the cluster daemon, setting up's web app until it's done, then
-/// the runtime with the main web app on it.
+/// The whole local Turgai server: its one web server, the cluster daemon, and the runtime, which
+/// waits until setting up is done, then starts Turgai and hands the web server Turgai's routes.
 /// The `turgai` command and the Mac app both run its services in a `ServiceGroup`.
 public struct TurgaiServer: Sendable {
-    /// Run in this order: `ServiceGroup` shuts services down in reverse, so the runtime, whose web
-    /// app stops first, stops before the daemon, and the database closes last.
+    /// Run in this order: `ServiceGroup` shuts services down in reverse, so the web server stops
+    /// first and no request reaches a draining cluster, then the runtime and the daemon, and the
+    /// database closes last.
     public let services: [any Service]
 
     /// Forgets every secret Turgai keeps in `directory`, and the key they were sealed with, to start
@@ -61,12 +62,14 @@ public struct TurgaiServer: Sendable {
         let linking = PersonLinking(storage: try await .live(in: persistence))
         let channelSecrets = ChannelSecretStore(storage: try await .live(in: persistence, key: secretKey))
         let setup = try TurgaiSetupStore(directory: directory)
-        let onboardingWebApp = TurgaiOnboardingWebApp(
+        let onboarding = TurgaiOnboardingWebApp(
             auth: auth,
             directory: directory,
             agentCredentials: agentCredentials,
             setup: setup
         )
+        // One web server for the whole run: setting up's routes until Turgai hands it its own.
+        let web = TurgaiWebServer(serving: onboarding.router(), port: port)
         let appService = TurgaiAppService(
             environment: environment,
             workspaceRoot: workspaceRoot,
@@ -82,16 +85,14 @@ public struct TurgaiServer: Sendable {
             memoryNotices: try await .live(named: "memory-notices", in: persistence),
             connectionPolicy: try await .live(named: "connection-policy", in: persistence),
             setup: setup,
-            port: port,
+            web: web,
             api: api,
             logLevel: logLevel
         )
-        let runtimeService = TurgaiRuntimeService(
-            onboarding: onboardingWebApp,
-            application: appService,
-            port: port
-        )
-        self.services = [Database(persistence: persistence), Daemon(logLevel: logLevel), runtimeService]
+        self.services = [
+            Database(persistence: persistence), Daemon(logLevel: logLevel),
+            TurgaiRuntimeService(onboarding: onboarding, application: appService), web.service,
+        ]
     }
 
     /// Where Turgai keeps its data unless told otherwise: `~/.turgai`.
@@ -101,16 +102,13 @@ public struct TurgaiServer: Sendable {
     }
 }
 
-/// Setting up, on its own web server until it's done; then the runtime, which serves the main web
-/// app on the same port once its cluster runs.
+/// Setting up until it's done, then Turgai: unless Turgai is stopped first.
 private struct TurgaiRuntimeService: Service, Sendable {
     let onboarding: TurgaiOnboardingWebApp
     let application: TurgaiAppService
-    let port: Int
 
     func run() async throws {
-        try await onboarding.run(port: port, logger: Logger(label: "turgai.onboarding"))
-        // Onboarding also ends when the server stops before it's done: then nothing runs after it.
+        try await onboarding.run()
         guard !Task.isShuttingDownGracefully, !Task.isCancelled else { return }
         try await application.run()
     }

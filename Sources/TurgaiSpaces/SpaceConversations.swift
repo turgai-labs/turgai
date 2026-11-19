@@ -107,6 +107,12 @@ extension Space {
         try await conversation(id).title(title, by: person)
     }
 
+    /// The turn its conversation `id` is running stopped by `person`, one of its people.
+    public distributed func stop(_ id: ConversationID, by person: UserID) async throws {
+        _ = try permissions(of: person)
+        try await conversation(id).stop(by: person)
+    }
+
     /// Its conversation `id` emptied by `person`, one of its people.
     public distributed func reset(_ id: ConversationID, by person: UserID) async throws {
         _ = try permissions(of: person)

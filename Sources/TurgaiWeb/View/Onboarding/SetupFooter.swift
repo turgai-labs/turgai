@@ -96,14 +96,12 @@ struct ChatFooterContent: HTML, Sendable {
                     .init(name: "rows", value: "1"),
                     .required
                 ) {}
-                button(
-                    .type(.submit),
-                    .class("button button-accent chat-send"),
-                    .init(name: "aria-label", value: "Send message")
-                ) {
-                    span(.class("chat-send-icon"), .init(name: "aria-hidden", value: "true")) { "↑" }
-                }
+                ChatComposerButton(stops: false)
             }
+        }
+        // What the button sends while a reply is worked on: a form of its own, outside the message's.
+        form(.id("chat-stop"), .hx.ws.send, .hidden) {
+            input(.type(.hidden), .name("command"), .value("stop"))
         }
     }
 }

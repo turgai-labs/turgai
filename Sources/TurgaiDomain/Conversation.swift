@@ -444,6 +444,8 @@ public enum ConversationInput: Sendable, Equatable {
     case detach(ConversationID)
     /// `by` emptying it.
     case reset(ConversationID, by: UserID)
+    /// `by` stopping the reply it's working on, everything said kept.
+    case stop(ConversationID, by: UserID)
     /// Someone answered an access request of its space, as the link they answered through says.
     case answer(conversationID: ConversationID, AccessRequestID, AccessAnswer, by: UserID)
     case memory(
@@ -1206,6 +1208,9 @@ public enum ConversationAction: Sendable {
     /// The model failed the turn `at` then, in the agent's turn `agentTurn` when it had opened one.
     case modelFailed(turnID: TurnID, failure: ConversationFailure, agentTurn: AgentTurnID?, at: Date)
     case reset
+    /// The turn running now stopped, the conversation kept: the model's failure, as cancelled,
+    /// closes the turn.
+    case stop
     case resume
 }
 
@@ -1313,6 +1318,9 @@ extension ConversationDecision {
             let cancel = state.inbox.activeTurnID.map { [ConversationEffect.cancelModel($0)] } ?? []
             return ConversationDecision(
                 events: [.reset], effects: cancel + [.publish(.reset(conversationID: state.conversationID))])
+
+        case .stop:
+            return ConversationDecision(effects: state.inbox.activeTurnID.map { [.cancelModel($0)] } ?? [])
 
         case .resume:
             switch state.inbox.status {

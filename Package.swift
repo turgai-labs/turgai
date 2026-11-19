@@ -33,9 +33,8 @@ let package = Package(
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
-            // Ollama's API key (#414) and no key for an empty one (#417), until a release has them.
             url: "https://github.com/huggingface/AnyLanguageModel.git",
-            branch: "main",
+            from: "1.4.0",
             traits: ["AsyncHTTPClient", .trait(name: "Llama", condition: .when(traits: ["Llama"]))]
         ),
         .package(

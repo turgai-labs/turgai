@@ -88,6 +88,7 @@ public struct TurgaiAuthority: Authority {
     private static let checkedWhereTheyGo: Set<ObjectIdentifier> = [
         ObjectIdentifier(FindObjectsEffect.self), ObjectIdentifier(ListObjectsEffect.self),
         ObjectIdentifier(MakeObjectEffect.self), ObjectIdentifier(EditObjectEffect.self),
+        ObjectIdentifier(ObjectDeclarationEffect.self), ObjectIdentifier(SaveObjectCodeEffect.self),
         ObjectIdentifier(ShareObjectEffect.self), ObjectIdentifier(UseObjectEffect.self),
         ObjectIdentifier(RemoveObjectEffect.self), ObjectIdentifier(InvokeObjectEffect.self),
         ObjectIdentifier(ToolPageEffect.self), ObjectIdentifier(RecallEffect.self),

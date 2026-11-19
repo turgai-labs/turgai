@@ -25,7 +25,6 @@ public enum ConversationTools {
         wasmRunnerURL: URL? = nil,
         userTools: UserToolRegistry? = nil,
         actorSystem: ClusterSystem? = nil,
-        writer: ObjectWriter? = nil,
         agents: [Role] = [],
         linking: PersonLinking? = nil,
         includeConversationTools: Bool = true
@@ -54,43 +53,8 @@ public enum ConversationTools {
             // The other agents, which it can ask: never itself.
             let askable = try await Agent.offered(
                 agents.filter { $0 != context.agentID.role }, in: space, on: actorSystem)
-            // The built-in objects installed in the space, each started and checked in there, where the
-            // space's code finds it by name.
+            let builtIns = try await BuiltIn.entries(installedIn: space, objects, on: actorSystem)
             let installed = Set(try await objects.installed)
-            var installedObjects: [DiscoverableObject] = []
-            if installed.contains(Weather.kind) {
-                let object = try await Weather.of(space, on: actorSystem)
-                installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
-            }
-            if installed.contains(Scheduler.kind) {
-                let object = try await Scheduler.of(space, on: actorSystem)
-                installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
-            }
-            if installed.contains(Timers.kind) {
-                let object = try await Timers.of(space, on: actorSystem)
-                installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
-            }
-            // Each website made in the space, by its name.
-            if installed.contains(Website.kind) {
-                for name in try await objects.sites {
-                    let object = try await Website.named(name, in: space, on: actorSystem)
-                    installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
-                }
-            }
-            var builtIns: [ObjectEntry] = []
-            for object in installedObjects {
-                await actorSystem.receptionist.checkIn(object, with: .virtualObjects(in: space))
-                guard let virtual = object.id.virtualActorID, let description = try? await object.describe() else {
-                    continue
-                }
-                builtIns.append(
-                    ObjectEntry(
-                        id: .virtual(virtual), object: object, type: description.type,
-                        description: description.description,
-                        actions: description.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
-                            .sorted(),
-                        events: description.events.keys.sorted()))
-            }
             let session = ObjectSession(
                 in: space,
                 objects: objects,
@@ -98,9 +62,7 @@ public enum ConversationTools {
                 agents: askable,
                 builtIns: builtIns,
                 // What code makes by name in the space: a website, as it says it is.
-                madeByName: installed.contains(Website.kind) ? [Website.describe()] : [],
-                writer: writer,
-                request: context.input.text
+                madeByName: installed.contains(Website.kind) ? [Website.describe()] : []
             )
             // What objects can be: found, listed, made, changed and removed, at the root; and the
             // objects themselves, each a tool to read it.

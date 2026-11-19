@@ -55,6 +55,12 @@ actor Fan {
 `@Event` marks a struct or an enum in the object. `@Subscribed` marks a stored property holding
 another object; each of its events calls the follower's function named `on` and the event's name.
 
+### JSON
+
+An object reads and writes JSON as Swift does: `JSONDecoder().decode(Forecast.self, from: data)`
+into a `Codable` type of its own, and `JSONEncoder().encode(value)` back. JSON that doesn't fit the
+type throws an error saying where, such as `daily.time[0]`.
+
 ### Due work
 
 A ``Schedule`` or ``Timer`` property makes the object's `on<Property>Fired(at:)` be called when
@@ -87,7 +93,6 @@ whoever may decide.
 
 ### What isn't there yet
 
-- Turning a JSON body into the object's own types.
 - Pages that type, play audio, or differ per visitor.
 - Following a source that pushes: WebSockets, server-sent events, webhooks.
 - Schedules more often than every minute.

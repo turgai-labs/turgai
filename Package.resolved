@@ -1,13 +1,13 @@
 {
-  "originHash" : "bcc695315905436164bb0e971afec54c1acea742206e35aff57568161d6a879e",
+  "originHash" : "434155e9b689a67b0710b018d7502a8ce5505853f9cf45d0401bb47e13f1bfd9",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/AnyLanguageModel.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "6f9387a974c5254ac58c918b747f672463d252fb"
+        "revision" : "810efa3a6c17328ce2ec821d846c80e14a47de75",
+        "version" : "1.4.0"
       }
     },
     {
@@ -88,7 +88,7 @@
       "location" : "https://github.com/turgai-labs/doppel.git",
       "state" : {
         "branch" : "main",
-        "revision" : "20deb657378ca8c628a948a71d3cd3862174dcce"
+        "revision" : "4a006f0c105209ba786a51017c9a46a2cd24176a"
       }
     },
     {
@@ -124,7 +124,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "dc3a3c82b940108973135e6caa8b16f60ad6c807"
+        "revision" : "18dfe5e9cbed0543a40f2618317ccaf686113638"
       }
     },
     {

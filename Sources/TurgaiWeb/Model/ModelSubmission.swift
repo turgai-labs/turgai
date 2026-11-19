@@ -48,13 +48,13 @@ struct ModelSubmission: Sendable {
     /// - Throws: ``ModelRefusal``, when the model can't be used there, or the window doesn't fit
     ///   it; `CancellationError`, when it's cancelled.
     func checked(credentials: AgentCredentialStore) async throws -> CheckedModel {
-        let modelTakes: Int?
+        let details: ModelDetails?
         switch try await location.checkAvailability(of: model, key: await key.value(in: credentials)) {
-        case .available(let details):
-            modelTakes = details.contextSize
+        case .available(let checked):
+            details = checked
         case .unavailable(let reason):
             guard Self.mayComeLater.contains(reason.kind) else { throw ModelRefusal.unavailable(reason) }
-            modelTakes = nil
+            details = nil
         }
         let reference: AgentCredentialReference?
         let newKey: (reference: AgentCredentialReference, value: String)?
@@ -69,7 +69,7 @@ struct ModelSubmission: Sendable {
         }
         do throws(ModelConfigurationError) {
             let configuration = try location.configuration(
-                key: reference, model: model, typed: contextWindow, modelTakes: modelTakes)
+                key: reference, model: model, typed: contextWindow, details: details)
             return CheckedModel(configuration: configuration, model: model, newKey: newKey)
         } catch {
             throw ModelRefusal.configuration(error)

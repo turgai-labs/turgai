@@ -638,6 +638,13 @@ public distributed actor Conversation {
         try await dispatch(.reset)
     }
 
+    /// The turn it's running stopped by `person`, everything said kept: refused unless they're one
+    /// of its people.
+    public distributed func stop(by person: TurgaiDomain.UserID) async throws {
+        _ = try state.reading(by: person)
+        try await dispatch(.stop)
+    }
+
     /// Shows only the requesting user's bounded active memory. The command is
     /// handled here rather than sent through the model, so it cannot create a
     /// turn or become a new memory observation.

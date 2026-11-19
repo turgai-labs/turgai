@@ -86,6 +86,7 @@ public actor AgentModelEndpointFactory {
                     modelIdentifier: model,
                     temperature: temperature,
                     effectiveContextWindow: contextWindow,
+                    answerSize: configuration.answerSize,
                     generationOptions: try ModelRouter.generationOptions(
                         provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
                     ),
@@ -98,6 +99,7 @@ public actor AgentModelEndpointFactory {
                     modelIdentifier: model,
                     temperature: temperature,
                     effectiveContextWindow: contextWindow,
+                    answerSize: configuration.answerSize,
                     failures: .openAICompatible
                 )
             }
@@ -111,6 +113,7 @@ public actor AgentModelEndpointFactory {
                     modelIdentifier: model,
                     temperature: temperature,
                     effectiveContextWindow: contextWindow,
+                    answerSize: configuration.answerSize,
                     generationOptions: try ModelRouter.generationOptions(
                         provider: .openAI, model: model, temperature: temperature, reasoning: reasoning
                     ),
@@ -122,6 +125,7 @@ public actor AgentModelEndpointFactory {
                     modelIdentifier: model,
                     temperature: temperature,
                     effectiveContextWindow: contextWindow,
+                    answerSize: configuration.answerSize,
                     generationOptions: try ModelRouter.generationOptions(
                         provider: .anthropic, model: model, temperature: temperature, reasoning: reasoning
                     ),
@@ -133,6 +137,7 @@ public actor AgentModelEndpointFactory {
                     modelIdentifier: model,
                     temperature: temperature,
                     effectiveContextWindow: contextWindow,
+                    answerSize: configuration.answerSize,
                     generationOptions: try ModelRouter.geminiGenerationOptions(
                         model: model, temperature: temperature, reasoning: reasoning
                     ),

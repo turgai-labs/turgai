@@ -105,7 +105,7 @@ struct AgentFormTests {
         #expect(ModelSubmission.Key(typed: "", at: .cloud(.openAI), saved: saved) == ModelSubmission.Key.none)
 
         let openAI = AgentProviderConfiguration.cloud(
-            CloudAccount(provider: .openAI, key: reference, window: .unsaid))
+            CloudAccount(provider: .openAI, key: reference, window: .unsaid, answerSize: nil))
         #expect(ModelSubmission.Key(typed: "", at: .cloud(.openAI), saved: openAI) == .kept(reference))
         #expect(ModelSubmission.Key(typed: "", at: .cloud(.anthropic), saved: openAI) == ModelSubmission.Key.none)
     }

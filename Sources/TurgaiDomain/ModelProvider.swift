@@ -78,6 +78,11 @@ public enum AgentProviderConfiguration: Codable, Sendable, Hashable {
         }
     }
 
+    /// The most tokens one of its answers may take, when its provider says.
+    public var answerSize: Int? {
+        if case .cloud(let account) = self { account.answerSize?.tokens } else { nil }
+    }
+
     /// How many tokens a prompt may use with it, when that's known: a provider that doesn't say
     /// its window has none, and the conversation is shortened when it refuses a request.
     public var contextWindow: Int? {
@@ -146,11 +151,17 @@ public struct CloudAccount: Codable, Sendable, Hashable {
     public var key: AgentCredentialReference
     /// A cloud runs a model with its own window.
     public var window: ProviderWindow
+    /// The most one of the model's answers may take, when the provider says: none leaves it to
+    /// the provider.
+    public var answerSize: AnswerSize?
 
-    public init(provider: Provider, key: AgentCredentialReference, window: ProviderWindow) {
+    public init(
+        provider: Provider, key: AgentCredentialReference, window: ProviderWindow, answerSize: AnswerSize?
+    ) {
         self.provider = provider
         self.key = key
         self.window = window
+        self.answerSize = answerSize
     }
 }
 
@@ -279,6 +290,31 @@ public struct ContextWindow: Codable, Sendable, Hashable, Comparable {
 
 public enum ContextWindowError: Error, Equatable, Sendable {
     case notPositive(Int)
+}
+
+/// The most tokens one answer may take, thinking included: at least one.
+public struct AnswerSize: Codable, Sendable, Hashable {
+    public let tokens: Int
+
+    /// `tokens`, when an answer can take that many.
+    public init?(tokens: Int) {
+        guard tokens > 0 else { return nil }
+        self.tokens = tokens
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let tokens = try container.decode(Int.self)
+        guard let size = Self(tokens: tokens) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "\(tokens) isn't an answer's size")
+        }
+        self = size
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(tokens)
+    }
 }
 
 /// A key kept sealed with the server's secrets, by the id it's kept under: never the key itself.

@@ -23,8 +23,7 @@ struct OfferedAfterMakingTests {
             let session = ObjectSession(
                 in: AsAPerson.person.space,
                 objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
-                    for: AsAPerson.person.person), actorSystem: node,
-                writer: ObjectWriter(endpoint: WritesCode(code: "actor Coffee {\n    var cups = 0\n}")))
+                    for: AsAPerson.person.person), actorSystem: node)
             let offered = try await ObjectTools(session: session).offered()
             #expect(try Self.choices(of: "edit_object", in: offered) == ["tea"])
 
@@ -36,6 +35,51 @@ struct OfferedAfterMakingTests {
                 #expect(try Self.choices(of: tool, in: made.offered) == ["coffee", "tea"], "\(tool)")
             }
             #expect(!made.offered.map(\.name).contains("use_object"))
+        }
+    }
+
+    /// Making an object lands on its code page: its code now, what its code can use by name, and
+    /// tools to show one of those in full and to save code. Code that's wrong isn't saved, and
+    /// what's wrong comes back; code that's right is saved, and runs.
+    @Test(.timeLimit(.minutes(1)))
+    func makingAnObjectOpensItsCodePage() async throws {
+        let store = MemoryEventStore()
+        try await withClusterSystem("code-page", store: store, hostsVirtualActors: true) { node in
+            let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
+            _ = try await objects.create(
+                name: "Tea", spec: .new(try Script(code: "actor Tea {\n    var cups = 0\n}", type: "Tea")))
+            let session = ObjectSession(
+                in: AsAPerson.person.space,
+                objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
+                    for: AsAPerson.person.person), actorSystem: node)
+            _ = try await withEffect(
+                MakeObjectEffect(session: session, objectName: "Coffee", task: "Counts cups of coffee."),
+                authority: TurgaiAuthority()
+            ) { try await MakeObjectEffect.run(in: $0) }
+
+            let page = try await session.open(ToolPageAddress(rawValue: "code:coffee"))
+            let text = page.output.textRepresentation
+            #expect(text.contains("actor Coffee {}"))
+            #expect(text.contains("- `Tea`"))
+            #expect(page.links.map(\.name) == ["open_declaration", "save_code"])
+
+            let open = try #require(page.links.first { $0.name == "open_declaration" } as? OpenDeclarationTool)
+            let tea = try await open.runOutput(
+                input: GeneratedContent(properties: ["name": "Tea"]), authority: TurgaiAuthority())
+            #expect(tea.result.textRepresentation.contains("Tea(id:"))
+
+            let save = try #require(page.links.first { $0.name == "save_code" } as? SaveCodeTool)
+            await #expect(throws: ObjectToolError.self) {
+                _ = try await save.runOutput(
+                    input: SaveCodeTool.Input(code: "actor Coffee {\n    var cups = nothing\n}"),
+                    authority: TurgaiAuthority())
+            }
+            #expect(
+                try await session.open(ToolPageAddress(rawValue: "code:coffee")).output.textRepresentation.contains(
+                    "actor Coffee {}"))
+            let saved = try await save.runOutput(
+                input: SaveCodeTool.Input(code: "actor Coffee {\n    var cups = 0\n}"), authority: TurgaiAuthority())
+            #expect(saved.result.textRepresentation.hasPrefix("Saved coffee"))
         }
     }
 
@@ -56,28 +100,5 @@ struct OfferedAfterMakingTests {
         }
         let options: [Value] = object?["anyOf"]?.arrayValue ?? []
         return options.compactMap { (option: Value) -> String? in option["const"]?.stringValue }.sorted()
-    }
-}
-
-/// A model that writes the same code, whatever it's asked.
-private struct WritesCode: ModelEndpoint {
-    let code: String
-    let model = "test/writer"
-    let effectiveContextWindow: Int? = 16_384
-    var tokenCounting: TokenCounting { .unavailable }
-
-    func stream<Input, Output>(
-        request: ModelRequest<Input>,
-        tools: [AnyTool],
-        authority: any Authority,
-        generating: Output.Type,
-        purpose: ModelRequestPurpose
-    ) -> AsyncStream<ModelEvent<Output>>
-    where Input: Sendable, Output: Codable & Sendable & Generable, Output.PartiallyGenerated: Sendable {
-        let code = self.code
-        return AsyncStream { continuation in
-            continuation.yield(.generated(try! Output(GeneratedContent(code))))
-            continuation.finish()
-        }
     }
 }

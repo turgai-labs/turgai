@@ -462,6 +462,30 @@ struct ConversationReducerTests {
         #expect(effects.contains(.publish(.reset(conversationID: conversationID))))
     }
 
+    /// Stopping cancels the turn running and keeps everything said; the model's failure, as
+    /// cancelled, then closes the turn. With nothing running, it does nothing.
+    @Test
+    func stopCancelsTheRunningTurnAndKeepsTheConversation() {
+        let state = ConversationState(conversationID: conversationID)
+        let (running, _) = step(
+            state,
+            .receive(message: makeMessage(text: "hello"), turnID: makeTurnID(1), bot: answering)
+        )
+        guard case .running(let turnID) = running.inbox.status else {
+            Issue.record("Expected a running turn")
+            return
+        }
+
+        let (stopped, effects) = step(running, .stop)
+
+        #expect(stopped == running)
+        #expect(effects == [.cancelModel(turnID)])
+
+        let (idle, idleEffects) = step(state, .stop)
+        #expect(idle == state)
+        #expect(idleEffects.isEmpty)
+    }
+
     @Test
     func emptyInputProducesErrorWithoutChangingState() {
         let state = ConversationState(conversationID: conversationID)

@@ -34,6 +34,24 @@ struct TypedSchemaTests {
         return try #require(shape.messages.first { $0.name == name })
     }
 
+    /// What's `static` is the type's, not the object's: a static function can't be asked of an
+    /// object, and a static property isn't its state.
+    @Test func whatsStaticIsntTheObjects() throws {
+        let code = """
+            actor Weather {
+                static let unit = "°C"
+                var last = 0
+
+                static func describe(weatherCode code: Int?) -> String { "clear" }
+
+                func forecast(days: Int) -> String { Weather.describe(weatherCode: days) }
+            }
+            """
+        let shape = try ObjectShape(try Script(code: code, type: "Weather"))
+        #expect(shape.messages.map(\.name) == ["forecast"])
+        #expect(shape.fields.map(\.name) == ["last"])
+    }
+
     @Test func aStructParameterIsDescribedByItsFields() throws {
         let refund = try #require(try Self.message("review").input?["properties"]?["refund"])
         #expect(refund["title"] == "RefundDesk.Refund")

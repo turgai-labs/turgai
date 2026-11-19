@@ -32,7 +32,7 @@ struct RequestLimitTests {
             compatible.account(for: try AgentModel(provider: .openAICompatible, id: "deepseek-chat"))
                 == ModelAccount(rawValue: "api.deepseek.com"))
         let anthropic = AgentProviderConfiguration.cloud(
-            CloudAccount(provider: .anthropic, key: .new(), window: .unsaid))
+            CloudAccount(provider: .anthropic, key: .new(), window: .unsaid, answerSize: nil))
         #expect(
             anthropic.account(for: try AgentModel(provider: .anthropic, id: "claude-sonnet-5-5"))
                 == ModelAccount(rawValue: "anthropic"))

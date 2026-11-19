@@ -66,6 +66,7 @@ Bodies and answers are JSON. A refusal answers an error with a `code` and a `mes
 | Route | |
 | --- | --- |
 | `GET /api/v1/spaces/:space/objects` | The space's objects they may read. |
+| `GET /api/v1/spaces/:space/objects/:object/card` | One of them, by its handle: an ``ObjectCard``. |
 | `POST /api/v1/spaces/:space/objects/:object/share` | Sharing one: ``ObjectSharingRequest``. |
 
 For what changes while a client is open, follow the live connection: <doc:LiveConnection>.

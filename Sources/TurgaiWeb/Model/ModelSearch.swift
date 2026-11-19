@@ -61,13 +61,14 @@ enum ModelWindow {
         let model = AgentModelID(rawValue: draft.modelID)
         let key = ModelSubmission.Key(typed: draft.settings.apiKey, at: location, saved: saved)
         let availability = try? await location.checkAvailability(of: model, key: await key.value(in: credentials))
-        let takes: Int?
-        if case .available(let details)? = availability { takes = details.contextSize } else { takes = nil }
+        let details: ModelDetails?
+        if case .available(let checked)? = availability { details = checked } else { details = nil }
+        let takes = details?.contextSize
         guard location.choosesWindow(for: model) else {
             guard case .available? = availability else { return .providers(model, nil) }
             return .providers(model, ProviderWindow(modelTakes: takes))
         }
-        let empty = (try? location.configuration(key: nil, model: model, typed: nil, modelTakes: takes))?.contextWindow
+        let empty = (try? location.configuration(key: nil, model: model, typed: nil, details: details))?.contextWindow
         return .chosen(model, takes: takes, empty: empty.flatMap { try? ContextWindow(tokens: $0) })
     }
 }

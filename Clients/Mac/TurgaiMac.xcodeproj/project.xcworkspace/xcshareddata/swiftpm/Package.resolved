@@ -1,13 +1,13 @@
 {
-  "originHash" : "f6381359ad266dfa9ea288594b2c1e67991b77511bc920f20c4c5b96f25289b0",
+  "originHash" : "793a8aa1d627037e476b098152538c1ca23c71e6ff6972b9bd91489c1aaaf089",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/huggingface/AnyLanguageModel.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "6f9387a974c5254ac58c918b747f672463d252fb"
+        "revision" : "810efa3a6c17328ce2ec821d846c80e14a47de75",
+        "version" : "1.4.0"
       }
     },
     {
@@ -88,7 +88,7 @@
       "location" : "https://github.com/turgai-labs/doppel.git",
       "state" : {
         "branch" : "main",
-        "revision" : "20deb657378ca8c628a948a71d3cd3862174dcce"
+        "revision" : "4a006f0c105209ba786a51017c9a46a2cd24176a"
       }
     },
     {
@@ -124,7 +124,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "dc3a3c82b940108973135e6caa8b16f60ad6c807"
+        "revision" : "18dfe5e9cbed0543a40f2618317ccaf686113638"
       }
     },
     {
@@ -177,8 +177,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/mattt/llama.swift",
       "state" : {
-        "revision" : "716419d4d7aa542fce301e809cde7234c68ddbc6",
-        "version" : "2.10549.0"
+        "revision" : "dc5b8cb58bfe028f88ade84d1ad0c10842644fb4",
+        "version" : "3.0.0"
       }
     },
     {

@@ -221,10 +221,17 @@ extension Uses {
     /// The structs and enums the code imports, each in a few lines, as the writer is told them:
     /// what it is, then its fields or its cases, each with its type as Swift writes it. Words,
     /// never declarations to copy.
-    public var valuesInWords: [String] {
-        interface.valueDeclarations.compactMap { (name: String, declaration: DeclSyntax) -> String? in
-            if let structure = declaration.as(StructDeclSyntax.self) { return Self.inWords(structure, named: name) }
-            if let enumeration = declaration.as(EnumDeclSyntax.self) { return Self.inWords(enumeration, named: name) }
+    public var valuesInWords: [String] { valuesNamed.map(\.words) }
+
+    /// The same, each with the name code writes it by.
+    public var valuesNamed: [(name: String, words: String)] {
+        interface.valueDeclarations.compactMap { (name: String, declaration: DeclSyntax) -> (String, String)? in
+            if let structure = declaration.as(StructDeclSyntax.self) {
+                return (name, Self.inWords(structure, named: name))
+            }
+            if let enumeration = declaration.as(EnumDeclSyntax.self) {
+                return (name, Self.inWords(enumeration, named: name))
+            }
             return nil
         }
     }

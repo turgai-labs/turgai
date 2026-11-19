@@ -74,7 +74,8 @@ struct TurgaiAppService: Service, Sendable {
     private let connectionPolicy: ProjectionOffset
     private let setup: TurgaiSetupStore
     /// Where the main web app is served, once the cluster runs.
-    private let port: Int
+    /// The web server Turgai's routes are handed to once it has started.
+    private let web: TurgaiWebServer
     private let api: APIConfiguration
     /// What the node's log shows.
     private let logLevel: Logger.Level
@@ -94,7 +95,7 @@ struct TurgaiAppService: Service, Sendable {
         memoryNotices: ProjectionOffset,
         connectionPolicy: ProjectionOffset,
         setup: TurgaiSetupStore,
-        port: Int,
+        web: TurgaiWebServer,
         api: APIConfiguration,
         logLevel: Logger.Level
     ) {
@@ -112,7 +113,7 @@ struct TurgaiAppService: Service, Sendable {
         self.memoryNotices = memoryNotices
         self.connectionPolicy = connectionPolicy
         self.setup = setup
-        self.port = port
+        self.web = web
         self.api = api
         self.logLevel = logLevel
     }
@@ -367,13 +368,15 @@ struct TurgaiAppService: Service, Sendable {
             router.addMiddleware { FileMiddleware(TurgaiWebAssets.publicRoot, searchForIndexHtml: false) }
             webApp.registerRoutes(on: router)
 
+            // The web server answers with Turgai's routes from here on: a page waiting for it to start
+            // gets it on its next request.
+            web.serve(router)
             logger.info("Turgai is ready")
             logger.info("Workspace: \(workspaceRoot)")
             let serviceGroup = ServiceGroup(
                 configuration: ServiceGroupConfiguration(
                     services: [.init(service: clusterService)]
-                        + parts.map { .init(service: $0, successTerminationBehavior: .ignore) }
-                        + [.init(service: TurgaiWebServer.application(router: router, port: port))],
+                        + parts.map { .init(service: $0, successTerminationBehavior: .ignore) },
                     logger: logger
                 )
             )
@@ -550,24 +553,6 @@ extension TurgaiAppService {
             role: role, behavior: .init(systemPrompt: bot.instructions.trimmed(), execution: .autonomousWorkspace))
     }
 
-    /// What the object writer was asked and wrote, logged.
-    @Sendable static func log(_ event: WriterEvent) {
-        let logger = Logger(label: "turgai.objectwriter")
-        // How big what it's asked is, and which objects it's shown: the
-        // prompt itself follows, in full.
-        if case .asked(let prompt) = event {
-            let objects: [Substring] = prompt.split(separator: "\n").filter { (line: Substring) -> Bool in
-                line.hasPrefix("- ") && line.contains(": ") && !line.hasPrefix("- The ")
-            }
-            let names: [String] = objects.map { (line: Substring) -> String in
-                String(line.dropFirst(2).prefix { $0 != ":" })
-            }
-            logger.info(
-                "Object writer asked",
-                metadata: ["characters": "\(prompt.count)", "objects": "\(names.joined(separator: ", "))"])
-        }
-        logger.info("\(event.written)")
-    }
 }
 
 // MARK: Where the journal is kept
@@ -610,15 +595,6 @@ struct TurnToolSources: Sendable {
     let linking: PersonLinking
 
     func tools(for context: AgentTurnContext, on actorSystem: ClusterSystem) async throws -> TurnTools {
-        // An object's Swift is written by the agent's bot's own model, in a session of its own.
-        let bot = try await TurgaiAppService.bot(of: context.agentID, on: actorSystem)
-        let writer = ObjectWriter(
-            endpoint: try await endpointFactory.endpoint(
-                for: bot.model,
-                temperature: runtimeConfiguration.temperature,
-                ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive
-            ),
-            report: TurgaiAppService.log(_:))
         // The other bots of its space, which it can ask, as whoever its turn is for may use them.
         let agents: [Role] =
             if let space = AgentContext(context.agentID.contextID)?.space, let person = CallChain.current?.scope.person
@@ -634,7 +610,6 @@ struct TurnToolSources: Sendable {
             wasmRunnerURL: wasmRunnerURL,
             userTools: userToolRegistry,
             actorSystem: actorSystem,
-            writer: writer,
             agents: agents,
             linking: linking,
             includeConversationTools: context.agentID.role != .toolRun

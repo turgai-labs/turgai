@@ -985,50 +985,33 @@ extension TurgaiMainWebApp {
                 let space = try await Space.identified(by: id, on: system)
                 let scope = try await space.scope(of: person)
                 let objects = try await space.objects(for: person)
-                // The built-in objects installed in the space, each started and checked in there, where the
-                // space's code finds it by name.
-                let installed = Set(try await objects.installed)
-                var installedObjects: [DiscoverableObject] = []
-                if installed.contains(Weather.kind) {
-                    let object = try await Weather.of(id, on: system)
-                    installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
-                }
-                if installed.contains(Scheduler.kind) {
-                    let object = try await Scheduler.of(id, on: system)
-                    installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
-                }
-                if installed.contains(Timers.kind) {
-                    let object = try await Timers.of(id, on: system)
-                    installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
-                }
-                // Each website made in the space, by its name.
-                if installed.contains(Website.kind) {
-                    for name in try await objects.sites {
-                        let object = try await Website.named(name, in: id, on: system)
-                        installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: system))
-                    }
-                }
                 // Each asked on the person's behalf, as every call to an object is: one on no one's is refused.
                 let entries = try await CallChain.$current.withValue(.start(scope, in: nil)) {
-                    var builtIns: [ObjectEntry] = []
-                    for object in installedObjects {
-                        await system.receptionist.checkIn(object, with: .virtualObjects(in: id))
-                        // One they may not read isn't theirs to see.
-                        guard let virtual = object.id.virtualActorID, let description = try? await object.describe()
-                        else { continue }
-                        builtIns.append(
-                            ObjectEntry(
-                                id: .virtual(virtual), object: object, type: description.type,
-                                description: description.description,
-                                actions: description.actions.map {
-                                    ObjectCatalog.signature($0.key, input: $0.value.input)
-                                }
-                                .sorted(),
-                                events: description.events.keys.sorted()))
-                    }
-                    return builtIns + (try await objects.held())
+                    try await BuiltIn.entries(installedIn: id, objects, on: system) + (try await objects.held())
                 }
                 return try publicAPIResponse(entries.map(ObjectListing.init))
+            }
+        }
+
+        // One of its objects' card, by its handle as listed: what it is, its YAML and its Swift. Only
+        // for one the person may read.
+        spaces.get(":space/objects/:object/card") { request, context in
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                guard let handle = context.parameters.get("object") else { return noSuchObject() }
+                let space = try await Space.identified(by: id, on: system)
+                let scope = try await space.scope(of: person)
+                let objects = try await space.objects(for: person)
+                // Asked on the person's behalf, as the list is: one they may not read isn't found.
+                let card = try await CallChain.$current.withValue(.start(scope, in: nil)) { () async throws -> Card? in
+                    let builtIns = try await BuiltIn.entries(installedIn: id, objects, on: system)
+                    let listed = builtIns + (try await objects.held())
+                    guard let entry = listed.first(where: { $0.id.description == handle }) else { return nil }
+                    return try await ObjectSession(in: id, objects: objects, actorSystem: system, builtIns: builtIns)
+                        .card(entry.id)
+                }
+                guard case .markdown(let markdown)? = card else { return noSuchObject() }
+                return try publicAPIResponse(ObjectCard(markdown: markdown))
             }
         }
 
@@ -1347,6 +1330,10 @@ private func answer(
         case .deleteConversation(let conversation, let space):
             guard let space = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
             try await Space.identified(by: space, on: system).delete(domainID(of: conversation), by: person)
+            return .ok
+        case .stopConversation(let conversation, let space):
+            guard let space = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
+            try await Space.identified(by: space, on: system).stop(domainID(of: conversation), by: person)
             return .ok
         case .changeSchedule(let chat, let space, let name, let change):
             guard let chat = TurgaiDomain.ConversationID(stableKey: chat.rawValue) else { return .failed(notAChat) }
@@ -1673,6 +1660,10 @@ private func signedInPerson(from request: Request, auth: TurgaiAuth) async -> Tu
 /// The space a path names.
 private func spaceID(in context: BasicWebSocketRequestContext) -> TurgaiDomain.SpaceID? {
     context.parameters.get("space").flatMap { TurgaiDomain.SpaceID(TurgaiModels.SpaceID(rawValue: $0)) }
+}
+
+private func noSuchObject() -> Response {
+    publicAPIErrorResponse(status: .notFound, code: "no_such_object", message: "No object like that here.")
 }
 
 private func noSuchSpace() -> Response {
@@ -2198,6 +2189,8 @@ private actor HTMLChatSocketWriter {
 private enum HTMLChatCommand: Decodable, Sendable {
     case message(text: String)
     case answer(id: UUID, answer: TurgaiModels.AccessAnswer)
+    /// The reply being worked on stopped.
+    case stop
 
     private enum CodingKeys: String, CodingKey {
         case command, text, id, answer
@@ -2208,6 +2201,8 @@ private enum HTMLChatCommand: Decodable, Sendable {
         switch try values.decode(String.self, forKey: .command) {
         case "message":
             self = .message(text: try values.decode(String.self, forKey: .text))
+        case "stop":
+            self = .stop
         case "answer":
             self = .answer(
                 id: try values.decode(UUID.self, forKey: .id),
@@ -2258,6 +2253,13 @@ private func runHTMLChatSocket(
                             receipt: receipt
                         )
                     )
+                    _ = await receipt.wait()
+                    continue
+                case .stop:
+                    let receipt = ConversationInputReceipt()
+                    await session.input.send(
+                        ConversationInputDelivery(
+                            in: conversation.space, input: .stop(conversation.domainID, by: userID), receipt: receipt))
                     _ = await receipt.wait()
                     continue
                 }

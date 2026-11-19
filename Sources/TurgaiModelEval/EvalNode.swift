@@ -100,9 +100,6 @@ struct EvalNode: Sendable {
         // A task's agents, which the others can ask: never itself.
         let others: [Role] = agents.map(\.role).filter { (role: Role) -> Bool in role != context.agentID.role }
         let offered = try await Agent.offered(others, in: Self.space, on: actorSystem)
-        let writer = ObjectWriter(
-            endpoint: writing,
-            report: { (event: WriterEvent) in FileHandle.standardError.write(Data(event.written.utf8)) })
         // The built-in objects installed in the space, each started and checked in there, where the
         // space's code finds it by name.
         let objects = try await Space.identified(by: Self.space, on: actorSystem).objects(for: Self.askerID)
@@ -145,8 +142,7 @@ struct EvalNode: Sendable {
             in: Self.space, objects: objects, actorSystem: actorSystem, agents: offered,
             builtIns: builtIns,
             // What code makes by name in the space: a website, as it says it is.
-            madeByName: installed.contains(Website.kind) ? [Website.describe()] : [], writer: writer,
-            request: context.input.text)
+            madeByName: installed.contains(Website.kind) ? [Website.describe()] : [])
         let roots: [any HailCore.Tool] = try await ObjectTools(session: session).offered()
         // The node's own tools, for a task that sends requests: as every conversation has them.
         let tools: [any HailCore.Tool] =

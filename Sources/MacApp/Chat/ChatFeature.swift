@@ -15,6 +15,12 @@ struct ChatFeature {
         case disconnected(why: String)
     }
 
+    /// The composer's one button.
+    enum ComposerButton: Equatable {
+        case send
+        case stop
+    }
+
     /// What the bot is doing in the current turn.
     struct Turn: Equatable, Sendable {
         var phase: ConversationPhase?
@@ -125,6 +131,13 @@ struct ChatFeature {
             }
         }
 
+        /// Whether a reply is being worked on now, which can be stopped.
+        var isReplying: Bool { turn != nil }
+
+        /// What the composer's button does: stop the reply being worked on while nothing new is
+        /// typed; otherwise send, a message sent meanwhile waiting its turn.
+        var composerButton: ComposerButton { isReplying && !canSend ? .stop : .send }
+
         /// What the agent is doing before its reply is typed: none while no turn runs, or once its
         /// reply shows.
         var working: String? {
@@ -225,6 +238,8 @@ struct ChatFeature {
         case closed(why: String)
         case sendTapped
         case sendFailed(SendMessageRequest)
+        /// Stop the reply being worked on; what's been said stays.
+        case stopTapped
         case accessAnswered(AccessRequest.ID, AccessAnswer)
         case delegate(Delegate)
 
@@ -374,6 +389,12 @@ struct ChatFeature {
 
             case .sendTapped:
                 return send(&state)
+
+            case .stopTapped:
+                guard state.composerButton == .stop, let id = state.conversationID, let space = state.space?.id else {
+                    return .none
+                }
+                return .run { _ in try? await chat.perform(.stopConversation(id, of: space)) }
 
             case .accessAnswered(let id, let answer):
                 guard state.accessRequests.remove(id: id) != nil else { return .none }
