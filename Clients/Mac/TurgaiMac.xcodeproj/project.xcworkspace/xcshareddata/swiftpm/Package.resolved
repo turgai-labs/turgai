@@ -1,5 +1,5 @@
 {
-  "originHash" : "789ef65d37a120a3e1cc7eecba40f99f935cda960afdfe0fcdc31a603bec5465",
+  "originHash" : "2e3eedb1260d04c9d735596f907a709f285bba2108f1c05617612e10a0e62907",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -124,7 +124,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "f414538431a696edd4cd058bbaa2e040663858da"
+        "revision" : "96b3335e61e7373f754ffedc5f02ad677c491ec7"
       }
     },
     {
@@ -179,6 +179,15 @@
       "state" : {
         "revision" : "dc5b8cb58bfe028f88ade84d1ad0c10842644fb4",
         "version" : "3.0.0"
+      }
+    },
+    {
+      "identity" : "mosaic",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/turgai-labs/mosaic.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "3b93ec52fb1a7f79e3ea5884a6e2805fc264a01e"
       }
     },
     {

@@ -1,6 +1,8 @@
 import Distributed
 import DistributedCluster
 import EventSourcing
+import Mosaic
+import MosaicHTML
 import TurgaiDomain
 import VirtualActors
 
@@ -90,7 +92,7 @@ public distributed actor Site {
     /// showing it too.
     distributed func show(_ page: Page, by space: SpaceID) async throws {
         guard state.space == space else { throw SiteError.taken(name) }
-        _ = try Layout(page)
+        _ = try Widget(page)
         try await emit(event: .shown(page))
     }
 
@@ -109,13 +111,15 @@ public distributed actor Site {
     /// The whole document a browser opens, as it's shown now: none while no space holds its name.
     public distributed func document() throws -> String? {
         guard state.space != nil else { return nil }
-        return PageDocument(layout: try Layout(state.page), version: state.version).render()
+        return WidgetDocument(
+            try Widget(state.page), version: state.version, title: "Website", live: "live", press: Self.press
+        ).render()
     }
 
     /// A press on the button labelled `label`, on the page shown as `version`: refused once that
     /// page is replaced, since the button may be gone or mean something else.
     public distributed func press(_ label: String, onPage version: Int) throws -> Bool {
-        guard state.space != nil, version == state.version, try Layout(state.page).buttons.contains(label) else {
+        guard state.space != nil, version == state.version, try Widget(state.page).buttons.contains(label) else {
             return false
         }
         pressing.tell(ButtonPressed(label: label))
@@ -132,7 +136,9 @@ public distributed actor Site {
 
     distributed func view(_ viewer: UUID) throws {
         viewing.subscribe(viewer)
-        viewing.tell(LayoutView(layout: try Layout(state.page), version: state.version).render()) { $0 == viewer }
+        viewing.tell(WidgetView(try Widget(state.page), version: state.version, press: Self.press).render()) {
+            $0 == viewer
+        }
     }
 
     distributed func nextPage(for viewer: UUID) async -> String? {
@@ -176,8 +182,23 @@ public distributed actor Site {
     public func handleEvent(_ event: SiteEvent) {
         state.apply(event)
         // The browsers showing it are shown the page it shows now: replayed, there are none yet.
-        guard let layout = try? Layout(state.page) else { return }
-        viewing.tell(LayoutView(layout: layout, version: state.version).render())
+        guard let widget = try? Widget(state.page) else { return }
+        viewing.tell(WidgetView(widget, version: state.version, press: Self.press).render())
+    }
+
+    /// Where a press of the button labelled `label`, on the page shown as `version`, is posted:
+    /// its `press` address, beside its page.
+    static func press(_ label: String, version: Int) -> String {
+        // Every byte but an ASCII letter or digit, percent-encoded.
+        let encoded = label.utf8.map { byte -> String in
+            switch byte {
+            case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
+                UInt8(ascii: "0")...UInt8(ascii: "9"):
+                String(UnicodeScalar(byte))
+            default: "%" + (byte < 16 ? "0" : "") + String(byte, radix: 16, uppercase: true)
+            }
+        }.joined()
+        return "press?label=\(encoded)&page=\(version)"
     }
 }
 

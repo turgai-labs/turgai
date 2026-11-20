@@ -1,5 +1,5 @@
 {
-  "originHash" : "7a4aa8032ea63b402ca8f8813aeee7beb9330dad833776aafb0862db8f347c93",
+  "originHash" : "c8195d55dc13a1743d7694bf3668282531d6b4605b7c80fbbcf63bc469f0ec0a",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -124,7 +124,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "f414538431a696edd4cd058bbaa2e040663858da"
+        "revision" : "96b3335e61e7373f754ffedc5f02ad677c491ec7"
       }
     },
     {
@@ -173,12 +173,12 @@
       }
     },
     {
-      "identity" : "llama.swift",
+      "identity" : "mosaic",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mattt/llama.swift",
+      "location" : "https://github.com/turgai-labs/mosaic.git",
       "state" : {
-        "revision" : "dc5b8cb58bfe028f88ade84d1ad0c10842644fb4",
-        "version" : "3.0.0"
+        "branch" : "main",
+        "revision" : "3b93ec52fb1a7f79e3ea5884a6e2805fc264a01e"
       }
     },
     {

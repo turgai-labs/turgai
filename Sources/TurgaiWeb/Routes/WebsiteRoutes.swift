@@ -1,5 +1,6 @@
 import Hummingbird
 import HummingbirdWebSocket
+import MosaicHTML
 import NIOCore
 import TurgaiObjects
 
@@ -37,7 +38,7 @@ extension TurgaiMainWebApp {
                 body: ResponseBody { writer in
                     do {
                         for await html in pages {
-                            try await writer.write(ByteBuffer(string: Self.event("page", html)))
+                            try await writer.write(ByteBuffer(string: Self.event(WidgetDocument.liveEvent, html)))
                         }
                     } catch {
                         // The browser went away.

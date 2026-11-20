@@ -31,6 +31,7 @@ let package = Package(
         .package(url: "https://github.com/turgai-labs/cluster-running-actors.git", branch: "main"),
         // Objects are Swift actors, checked as Swift checks them and run by Doppel.
         .package(url: "https://github.com/turgai-labs/doppel.git", branch: "main"),
+        .package(url: "https://github.com/turgai-labs/mosaic.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
             // A response that says it reached its token limit, until upstream has it.
@@ -216,6 +217,7 @@ let package = Package(
                 "TurgaiPersistence",
                 "TurgaiTelegram",
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "MosaicHTML", package: "mosaic"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "Elementary", package: "elementary"),
@@ -255,6 +257,9 @@ let package = Package(
                 .product(name: "ScopedEffect", package: "hail"),
                 .product(name: "Doppel", package: "doppel"),
                 .product(name: "DoppelRuntime", package: "doppel"),
+                // What a website shows, and how a browser shows it.
+                .product(name: "Mosaic", package: "mosaic"),
+                .product(name: "MosaicHTML", package: "mosaic"),
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftParser", package: "swift-syntax"),
                 .product(name: "SwiftParserDiagnostics", package: "swift-syntax"),
@@ -263,7 +268,6 @@ let package = Package(
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxMacroExpansion", package: "swift-syntax"),
                 .product(name: "SwiftDiagnostics", package: "swift-syntax"),
-                .product(name: "Elementary", package: "elementary"),
             ]
         ),
         .executableTarget(
@@ -441,6 +445,7 @@ let package = Package(
                 "TurgaiSpaces",
                 "TurgaiObjects",
                 .product(name: "Doppel", package: "doppel"),
+                .product(name: "Mosaic", package: "mosaic"),
                 "TurgaiApplication",
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),

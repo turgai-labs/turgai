@@ -1,6 +1,7 @@
 import AnyLanguageModel
 import DiscoverableActors
 import Foundation
+import Mosaic
 
 // A page nests three levels deep, each level its own type: a recursive `@Generable` type
 // overflows the stack building its schema, as its schema asks for its own again. Once
@@ -178,164 +179,141 @@ extension Page {
     ])
 }
 
-// MARK: Layout
+// MARK: As a widget
 
-/// A page as it's shown: any depth, every text and label there, and each button's label its own.
-/// Read from a ``Page`` by ``init(_:)``, so nothing past it checks a page again.
-indirect enum Layout: Equatable, Sendable {
-    case row(id: String? = nil, [Layout], alignment: RowAlignment = .center, spacing: Double = 12)
-    case column(id: String? = nil, [Layout], alignment: ColumnAlignment = .center, spacing: Double = 12)
-    case text(id: String? = nil, String, style: TextStyle = .body, color: TextColor = .primary)
-    case button(id: String? = nil, String, kind: ButtonKind = .normal)
-    case image(
-        id: String? = nil, URL, description: String, aspectRatio: AspectRatio = .original, fit: ImageFit = .fit,
-        width: Double? = nil)
+// What a model writes is a page, three levels deep, in the words its schema has; what's shown is
+// Mosaic's widget, any depth, checked whole.
 
-    init(_ page: Page) throws {
-        self = .column(try page.items.map(Layout.init))
-        var labels: Set<String> = []
-        for label in buttons where !labels.insert(label).inserted {
-            throw PageProblem.sameLabel(label)
-        }
-        var ids: Set<String> = []
-        for id in self.ids where !ids.insert(id).inserted {
-            throw PageProblem.sameID(id)
-        }
+extension Widget {
+    /// `page` as it's shown: a column of its items, checked whole, so nothing past it checks a
+    /// page again.
+    init(_ page: Page) throws(WidgetProblem) {
+        self = try Widget.column(page.items.map(Widget.init)).checked()
     }
 
-    private init(_ item: Item) throws {
+    private init(_ item: Item) throws(WidgetProblem) {
         switch item {
-        case .text(let id, let words, let style, let color): self = try .said(words, style, color, id)
-        case .button(let id, let label, let kind): self = try .labelled(label, kind, id)
+        case .text(let id, let words, let style, let color):
+            self = .text(id: id, words: words, style: .init(style), color: .init(color))
+        case .button(let id, let label, let kind): self = .button(id: id, label: label, kind: .init(kind))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
-            self = try .pictured(id, url, description, aspectRatio, fit, width)
+            self = try .picture(id, url, description, aspectRatio, fit, width)
         case .row(let id, let items, let alignment, let spacing):
-            self = .row(
-                id: try Self.identified(id), try items.map(Layout.init), alignment: alignment,
-                spacing: try Self.spaced(spacing))
+            self = .row(id: id, try items.map(Widget.init), alignment: .init(alignment), spacing: spacing)
         case .column(let id, let items, let alignment, let spacing):
-            self = .column(
-                id: try Self.identified(id), try items.map(Layout.init), alignment: alignment,
-                spacing: try Self.spaced(spacing))
+            self = .column(id: id, try items.map(Widget.init), alignment: .init(alignment), spacing: spacing)
         }
     }
 
-    private init(_ item: Inner) throws {
+    private init(_ item: Inner) throws(WidgetProblem) {
         switch item {
-        case .text(let id, let words, let style, let color): self = try .said(words, style, color, id)
-        case .button(let id, let label, let kind): self = try .labelled(label, kind, id)
+        case .text(let id, let words, let style, let color):
+            self = .text(id: id, words: words, style: .init(style), color: .init(color))
+        case .button(let id, let label, let kind): self = .button(id: id, label: label, kind: .init(kind))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
-            self = try .pictured(id, url, description, aspectRatio, fit, width)
+            self = try .picture(id, url, description, aspectRatio, fit, width)
         case .row(let id, let items, let alignment, let spacing):
-            self = .row(
-                id: try Self.identified(id), try items.map(Layout.init), alignment: alignment,
-                spacing: try Self.spaced(spacing))
+            self = .row(id: id, try items.map(Widget.init), alignment: .init(alignment), spacing: spacing)
         case .column(let id, let items, let alignment, let spacing):
-            self = .column(
-                id: try Self.identified(id), try items.map(Layout.init), alignment: alignment,
-                spacing: try Self.spaced(spacing))
+            self = .column(id: id, try items.map(Widget.init), alignment: .init(alignment), spacing: spacing)
         }
     }
 
-    private init(_ item: Leaf) throws {
+    private init(_ item: Leaf) throws(WidgetProblem) {
         switch item {
-        case .text(let id, let words, let style, let color): self = try .said(words, style, color, id)
-        case .button(let id, let label, let kind): self = try .labelled(label, kind, id)
+        case .text(let id, let words, let style, let color):
+            self = .text(id: id, words: words, style: .init(style), color: .init(color))
+        case .button(let id, let label, let kind): self = .button(id: id, label: label, kind: .init(kind))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
-            self = try .pictured(id, url, description, aspectRatio, fit, width)
+            self = try .picture(id, url, description, aspectRatio, fit, width)
         }
     }
 
-    /// Words, which have something to say.
-    private static func said(_ words: String, _ style: TextStyle, _ color: TextColor, _ id: String?) throws(PageProblem)
-        -> Layout
-    {
-        let words = words.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !words.isEmpty else { throw .noText }
-        return .text(id: try identified(id), words, style: style, color: color)
-    }
-
-    /// A picture, from the web, which says what it shows.
-    private static func pictured(
+    /// A picture, at the address written: one that isn't an address at all isn't a web one either.
+    private static func picture(
         _ id: String?, _ url: String, _ description: String, _ aspectRatio: AspectRatio, _ fit: ImageFit,
         _ width: Double?
-    ) throws(PageProblem) -> Layout {
+    ) throws(WidgetProblem) -> Widget {
         let address = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsed = URL(string: address), ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""),
-            parsed.host != nil
-        else {
-            throw .notAWebAddress(address)
-        }
-        let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !description.isEmpty else { throw .noDescription }
-        if let width { guard width > 0, width.isFinite else { throw .noWidth(width) } }
+        guard let parsed = URL(string: address) else { throw .notAWebAddress(address) }
         return .image(
-            id: try identified(id), parsed, description: description, aspectRatio: aspectRatio, fit: fit, width: width)
+            id: id, url: parsed, description: description, aspectRatio: .init(aspectRatio), fit: .init(fit),
+            width: width)
     }
+}
 
-    /// How far apart things are, in points: never less than touching.
-    private static func spaced(_ spacing: Double) throws(PageProblem) -> Double {
-        guard spacing >= 0, spacing.isFinite else { throw .negativeSpacing(spacing) }
-        return spacing
-    }
-
-    /// An id, which says something: one that's only spaces is no id.
-    private static func identified(_ id: String?) throws(PageProblem) -> String? {
-        guard let id else { return nil }
-        let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { throw .noID }
-        return trimmed
-    }
-
-    /// A button, which has a label.
-    private static func labelled(_ label: String, _ kind: ButtonKind, _ id: String?) throws(PageProblem) -> Layout {
-        let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !label.isEmpty else { throw .noLabel }
-        return .button(id: try identified(id), label, kind: kind)
-    }
-
-    /// Every button's label, in page order.
-    var buttons: [String] {
-        switch self {
-        case .row(_, let items, _, _), .column(_, let items, _, _): items.flatMap(\.buttons)
-        case .text, .image: []
-        case .button(_, let label, _): [label]
-        }
-    }
-
-    /// Every id given, in page order.
-    var ids: [String] {
-        switch self {
-        case .row(let id, let items, _, _), .column(let id, let items, _, _):
-            [id].compactMap { $0 } + items.flatMap(\.ids)
-        case .text(let id, _, _, _), .button(let id, _, _), .image(let id, _, _, _, _, _): [id].compactMap { $0 }
+extension Mosaic.RowAlignment {
+    init(_ alignment: RowAlignment) {
+        switch alignment {
+        case .top: self = .top
+        case .center: self = .center
+        case .bottom: self = .bottom
         }
     }
 }
 
-/// Why a page can't be shown.
-public enum PageProblem: Error, Codable, Equatable, Sendable, CustomStringConvertible {
-    case noText
-    case noLabel
-    case sameLabel(String)
-    case noID
-    case negativeSpacing(Double)
-    case notAWebAddress(String)
-    case noDescription
-    case noWidth(Double)
-    case sameID(String)
+extension Mosaic.ColumnAlignment {
+    init(_ alignment: ColumnAlignment) {
+        switch alignment {
+        case .leading: self = .leading
+        case .center: self = .center
+        case .trailing: self = .trailing
+        }
+    }
+}
 
-    public var description: String {
-        switch self {
-        case .noText: "A text has no words: give it `words`."
-        case .noLabel: "A button has no label: give it `label`."
-        case .sameLabel(let label): "Two buttons say `\(label)`: each button needs a label of its own."
-        case .noID: "An id is empty: give it one, or leave `id` out."
-        case .negativeSpacing(let spacing): "A spacing is \(spacing): it's points apart, from 0."
-        case .notAWebAddress(let url): "`\(url)` isn't a web address: a picture's url starts with https:// or http://."
-        case .noDescription: "A picture has no description: say what it shows, in `description`."
-        case .noWidth(let width): "A picture's width is \(width): it's points wide, more than 0, or leave `width` out."
-        case .sameID(let id): "Two things have the id `\(id)`: each id is one thing's."
+extension Mosaic.AspectRatio {
+    init(_ ratio: AspectRatio) {
+        switch ratio {
+        case .original: self = .original
+        case .square: self = .square
+        case .landscape: self = .landscape
+        case .wide: self = .wide
+        case .portrait: self = .portrait
+        }
+    }
+}
+
+extension Mosaic.ImageFit {
+    init(_ fit: ImageFit) {
+        switch fit {
+        case .fit: self = .fit
+        case .fill: self = .fill
+        }
+    }
+}
+
+extension Mosaic.TextStyle {
+    init(_ style: TextStyle) {
+        switch style {
+        case .title: self = .title
+        case .heading: self = .heading
+        case .body: self = .body
+        case .caption: self = .caption
+        case .emphasis: self = .emphasis
+        }
+    }
+}
+
+extension Mosaic.TextColor {
+    init(_ color: TextColor) {
+        switch color {
+        case .primary: self = .primary
+        case .secondary: self = .secondary
+        case .accent: self = .accent
+        case .positive: self = .positive
+        case .warning: self = .warning
+        case .negative: self = .negative
+        }
+    }
+}
+
+extension Mosaic.ButtonKind {
+    init(_ kind: ButtonKind) {
+        switch kind {
+        case .normal: self = .normal
+        case .prominent: self = .prominent
+        case .destructive: self = .destructive
         }
     }
 }
