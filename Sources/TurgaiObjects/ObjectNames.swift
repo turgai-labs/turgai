@@ -6,27 +6,44 @@ import VirtualActors
 /// Objects by name, the way models and behaviors refer to them: `shop` or `Shop` for the shop,
 /// `refund-manager-ann` or `Refund manager Ann` for Ann.
 public enum ObjectNames {
-    /// A handle for a title: kebab case, such as `reminder-list` for ReminderList or
-    /// `refund-manager-ann` for "Refund manager Ann".
+    /// A handle for a title: kebab case, such as `reminder-list` for ReminderList,
+    /// `weather-api` for WeatherAPI, or `refund-manager-ann` for "Refund manager Ann".
     public static func handle(for title: String) -> String {
-        var handle = ""
-        for character in title {
-            if character.isLetter || character.isNumber {
-                if character.isUppercase, !handle.isEmpty, handle.last != "-" { handle.append("-") }
-                handle.append(Character(character.lowercased()))
-            } else if !handle.isEmpty, handle.last != "-" {
-                handle.append("-")
-            }
-        }
-        while handle.last == "-" { handle.removeLast() }
+        let handle = words(of: title).map { $0.lowercased() }.joined(separator: "-")
         return handle.isEmpty ? "object" : handle
     }
 
     /// The Swift type an object named `name` is to other objects' code: `RefundManagerAnn` for
-    /// "Refund manager Ann". Its own code declares its actor with it too.
+    /// "Refund manager Ann", `WeatherAPI` for WeatherAPI. Its own code declares its actor with it too.
     public static func typeName(of name: String) -> String {
-        let type = handle(for: name).split(separator: "-").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
+        let type = words(of: name).map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined()
         return type.first?.isLetter == true ? type : "Object" + type
+    }
+
+    /// The words of a title, as written: apart where it's spaced or punctuated, and where its
+    /// camel case starts a word, an acronym being one, as `API` is in WeatherAPIClient.
+    private static func words(of title: String) -> [String] {
+        var words: [String] = []
+        var word = ""
+        let characters = Array(title)
+        for (index, character) in characters.enumerated() {
+            guard character.isLetter || character.isNumber else {
+                if !word.isEmpty { words.append(word) }
+                word = ""
+                continue
+            }
+            if character.isUppercase, let last = word.last {
+                let next = index + 1 < characters.count ? characters[index + 1] : nil
+                let startsWord = !last.isUppercase || next?.isLowercase == true
+                if startsWord {
+                    words.append(word)
+                    word = ""
+                }
+            }
+            word.append(character)
+        }
+        if !word.isEmpty { words.append(word) }
+        return words
     }
 
     /// The object named `name` in `space`, besides those made there by name, if there's one: one
