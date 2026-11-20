@@ -31,6 +31,7 @@ public struct ObjectWriter: Sendable {
     public static let runtime = [
         "Its stored properties start from their default values.",
         "Stored properties are what it keeps; methods are what it can be asked to do.",
+        "Methods and properties without `private` are what it offers to others. Mark helper methods and state only it uses `private`.",
         CodableValues.rule,
         "Only the object goes in the file: code outside it never runs.",
     ]
