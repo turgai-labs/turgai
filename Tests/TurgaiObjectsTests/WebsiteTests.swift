@@ -1,5 +1,6 @@
 import DistributedCluster
 import Foundation
+import Mosaic
 import Testing
 import TurgaiCalls
 import TurgaiDomain
@@ -57,12 +58,13 @@ struct WebsiteTests {
             let site = try await Site.named(menu, on: node)
             let document = try #require(try await site.document())
             #expect(document.contains("Croissant"))
-            // The page shown, as its buttons name it to a browser.
-            let page = try #require(document.firstMatch(of: /page=(\d+)/)?.output.1)
-            let shown = try #require(Int(page))
-            #expect(try await site.press("Order", onPage: shown))
-            #expect(try await !site.press("Order", onPage: shown - 1))
-            #expect(try await !site.press("Pay", onPage: shown))
+            // The page shown, and the button's path, as its press names them to a browser.
+            let press = try #require(document.firstMatch(of: /press\?path=([^&]+)&amp;page=(\d+)/)?.output)
+            let shown = try #require(Int(press.2))
+            let order = try #require(String(press.1).removingPercentEncoding.flatMap(PiecePath.init))
+            #expect(try await site.press(order, onPage: shown))
+            #expect(try await !site.press(order, onPage: shown - 1))
+            #expect(try await !site.press(try #require(PiecePath("page/pay")), onPage: shown))
             // A name nobody holds shows nothing.
             #expect(try await Site.named(SiteName(rawValue: "nobodys")!, on: node).document() == nil)
         }

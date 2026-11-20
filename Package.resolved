@@ -1,5 +1,5 @@
 {
-  "originHash" : "c8195d55dc13a1743d7694bf3668282531d6b4605b7c80fbbcf63bc469f0ec0a",
+  "originHash" : "04b30b7d785368fbdaf7a4e80a3418df4b37b8addcb685b64ce8af14c4c47f1f",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -173,12 +173,21 @@
       }
     },
     {
+      "identity" : "llama.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mattt/llama.swift",
+      "state" : {
+        "revision" : "dc5b8cb58bfe028f88ade84d1ad0c10842644fb4",
+        "version" : "3.0.0"
+      }
+    },
+    {
       "identity" : "mosaic",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/turgai-labs/mosaic.git",
       "state" : {
         "branch" : "main",
-        "revision" : "3b93ec52fb1a7f79e3ea5884a6e2805fc264a01e"
+        "revision" : "cc378b845e716c133c1bea85d93848651b241c42"
       }
     },
     {

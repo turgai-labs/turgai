@@ -217,6 +217,7 @@ let package = Package(
                 "TurgaiPersistence",
                 "TurgaiTelegram",
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
+                .product(name: "Mosaic", package: "mosaic"),
                 .product(name: "MosaicHTML", package: "mosaic"),
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),

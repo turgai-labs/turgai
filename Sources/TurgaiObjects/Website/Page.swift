@@ -182,63 +182,119 @@ extension Page {
 // MARK: As a widget
 
 // What a model writes is a page, three levels deep, in the words its schema has; what's shown is
-// Mosaic's widget, any depth, checked whole.
+// Mosaic's widget, any depth, every piece with an id. A piece the page gives no id is named by its
+// kind and place, which no written id starts like.
 
 extension Widget {
-    /// `page` as it's shown: a column of its items, checked whole, so nothing past it checks a
-    /// page again.
-    init(_ page: Page) throws(WidgetProblem) {
-        self = try Widget.column(page.items.map(Widget.init)).checked()
+    /// `page` as it's shown: a column of its items, each button's label its own, since a press is
+    /// told to the page's object by its label.
+    init(_ page: Page) throws(PageProblem) {
+        do {
+            self = .column(try Column("page", try Self.pieces(page.items, Self.init)))
+        } catch {
+            throw .widget(error)
+        }
+        var labels: Set<String> = []
+        for label in buttons where !labels.insert(label).inserted { throw .sameLabel(label) }
     }
 
-    private init(_ item: Item) throws(WidgetProblem) {
+    private init(_ item: Item, at index: Int) throws(WidgetProblem) {
         switch item {
         case .text(let id, let words, let style, let color):
-            self = .text(id: id, words: words, style: .init(style), color: .init(color))
-        case .button(let id, let label, let kind): self = .button(id: id, label: label, kind: .init(kind))
+            self = .text(try Text(Self.named(id, "text", index), words, style: .init(style), color: .init(color)))
+        case .button(let id, let label, let kind):
+            self = .button(try Button(Self.named(id, "button", index), label, kind: .init(kind)))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
-            self = try .picture(id, url, description, aspectRatio, fit, width)
+            self = .image(
+                try Image(
+                    Self.named(id, "image", index), address: url, description: description,
+                    aspectRatio: .init(aspectRatio), fit: .init(fit), width: width))
         case .row(let id, let items, let alignment, let spacing):
-            self = .row(id: id, try items.map(Widget.init), alignment: .init(alignment), spacing: spacing)
+            self = .row(
+                try Row(
+                    Self.named(id, "row", index), try Self.pieces(items, Self.init), alignment: .init(alignment),
+                    spacing: spacing))
         case .column(let id, let items, let alignment, let spacing):
-            self = .column(id: id, try items.map(Widget.init), alignment: .init(alignment), spacing: spacing)
+            self = .column(
+                try Column(
+                    Self.named(id, "column", index), try Self.pieces(items, Self.init), alignment: .init(alignment),
+                    spacing: spacing))
         }
     }
 
-    private init(_ item: Inner) throws(WidgetProblem) {
+    private init(_ item: Inner, at index: Int) throws(WidgetProblem) {
         switch item {
         case .text(let id, let words, let style, let color):
-            self = .text(id: id, words: words, style: .init(style), color: .init(color))
-        case .button(let id, let label, let kind): self = .button(id: id, label: label, kind: .init(kind))
+            self = .text(try Text(Self.named(id, "text", index), words, style: .init(style), color: .init(color)))
+        case .button(let id, let label, let kind):
+            self = .button(try Button(Self.named(id, "button", index), label, kind: .init(kind)))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
-            self = try .picture(id, url, description, aspectRatio, fit, width)
+            self = .image(
+                try Image(
+                    Self.named(id, "image", index), address: url, description: description,
+                    aspectRatio: .init(aspectRatio), fit: .init(fit), width: width))
         case .row(let id, let items, let alignment, let spacing):
-            self = .row(id: id, try items.map(Widget.init), alignment: .init(alignment), spacing: spacing)
+            self = .row(
+                try Row(
+                    Self.named(id, "row", index), try Self.pieces(items, Self.init), alignment: .init(alignment),
+                    spacing: spacing))
         case .column(let id, let items, let alignment, let spacing):
-            self = .column(id: id, try items.map(Widget.init), alignment: .init(alignment), spacing: spacing)
+            self = .column(
+                try Column(
+                    Self.named(id, "column", index), try Self.pieces(items, Self.init), alignment: .init(alignment),
+                    spacing: spacing))
         }
     }
 
-    private init(_ item: Leaf) throws(WidgetProblem) {
+    private init(_ item: Leaf, at index: Int) throws(WidgetProblem) {
         switch item {
         case .text(let id, let words, let style, let color):
-            self = .text(id: id, words: words, style: .init(style), color: .init(color))
-        case .button(let id, let label, let kind): self = .button(id: id, label: label, kind: .init(kind))
+            self = .text(try Text(Self.named(id, "text", index), words, style: .init(style), color: .init(color)))
+        case .button(let id, let label, let kind):
+            self = .button(try Button(Self.named(id, "button", index), label, kind: .init(kind)))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
-            self = try .picture(id, url, description, aspectRatio, fit, width)
+            self = .image(
+                try Image(
+                    Self.named(id, "image", index), address: url, description: description,
+                    aspectRatio: .init(aspectRatio), fit: .init(fit), width: width))
         }
     }
 
-    /// A picture, at the address written: one that isn't an address at all isn't a web one either.
-    private static func picture(
-        _ id: String?, _ url: String, _ description: String, _ aspectRatio: AspectRatio, _ fit: ImageFit,
-        _ width: Double?
-    ) throws(WidgetProblem) -> Widget {
-        let address = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parsed = URL(string: address) else { throw .notAWebAddress(address) }
-        return .image(
-            id: id, url: parsed, description: description, aspectRatio: .init(aspectRatio), fit: .init(fit),
-            width: width)
+    /// Items, each made a piece knowing its place among them.
+    private static func pieces<Item>(
+        _ items: [Item], _ piece: (Item, Int) throws(WidgetProblem) -> Widget
+    ) throws(WidgetProblem) -> [Widget] {
+        var pieces: [Widget] = []
+        for (index, item) in items.enumerated() { pieces.append(try piece(item, index)) }
+        return pieces
+    }
+
+    /// The id written, or else its kind and place: `#text-2` for the second item, a text.
+    private static func named(_ id: String?, _ kind: String, _ index: Int) -> String {
+        id ?? "#\(kind)-\(index + 1)"
+    }
+
+    /// Every button's label, in order.
+    var buttons: [String] {
+        switch self {
+        case .button(let button): [button.label.rawValue]
+        default: children.flatMap(\.buttons)
+        }
+    }
+}
+
+/// Why a page can't be shown.
+public enum PageProblem: Error, Codable, Equatable, Sendable, CustomStringConvertible {
+    /// It isn't a whole widget.
+    case widget(WidgetProblem)
+    /// Two of its buttons say the same.
+    case sameLabel(String)
+
+    public var description: String {
+        switch self {
+        case .widget(let problem): problem.description
+        case .sameLabel(let label): "Two buttons say `\(label)`: each button needs a label of its own."
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 import Hummingbird
 import HummingbirdWebSocket
+import Mosaic
 import MosaicHTML
 import NIOCore
 import TurgaiObjects
@@ -52,10 +53,10 @@ extension TurgaiMainWebApp {
         }
         router.post("/websites/:name/press") { request, context in
             guard let site = try await site(context) else { return Response(status: .notFound) }
-            guard let label = request.uri.queryParameters.get("label"),
+            guard let written = request.uri.queryParameters.get("path"), let path = PiecePath(written),
                 let version = request.uri.queryParameters.get("page", as: Int.self)
             else { return Response(status: .badRequest) }
-            return Response(status: try await site.press(label, onPage: version) ? .noContent : .conflict)
+            return Response(status: try await site.press(path, onPage: version) ? .noContent : .conflict)
         }
     }
 

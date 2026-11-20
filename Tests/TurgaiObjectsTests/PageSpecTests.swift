@@ -59,11 +59,32 @@ extension PageStyleSpecTests {
     @Test(
         "a picture is from the web, and says what it shows",
         arguments: [
-            ("file:///Users/me/secret.png", "a cover", WidgetProblem.notAWebAddress("file:///Users/me/secret.png")),
-            ("cover.jpg", "a cover", .notAWebAddress("cover.jpg")),
-            ("https://example.com/cover.jpg", " ", .noDescription),
+            (
+                "file:///Users/me/secret.png", "a cover",
+                PageProblem.widget(.notAWebAddress("file:///Users/me/secret.png"))
+            ),
+            ("cover.jpg", "a cover", .widget(.notAWebAddress("cover.jpg"))),
+            ("https://example.com/cover.jpg", " ", .widget(.noDescription)),
         ])
-    func picturesAreFromTheWeb(url: String, description: String, problem: WidgetProblem) {
+    func picturesAreFromTheWeb(url: String, description: String, problem: PageProblem) {
         #expect(throws: problem) { try Widget(Page(items: [.image(url: url, description: description)])) }
+    }
+}
+
+extension PageStyleSpecTests {
+    @Test("a page's items are named by their id, or by their kind and place, and its buttons by their labels")
+    func itemsAreNamed() throws {
+        let widget = try Widget(
+            Page(items: [
+                .text(id: "title", words: "Menu"),
+                .row(items: [.button(label: "Order"), .text(words: "or")]),
+            ]))
+        #expect(widget.widget(at: try #require(PiecePath("page/title"))) != nil)
+        #expect(
+            widget.widget(at: try #require(PiecePath("page/%23row-2/%23button-1")))
+                == .button(try Button("#button-1", "Order")))
+        #expect(throws: PageProblem.sameLabel("Order")) {
+            try Widget(Page(items: [.button(label: "Order"), .row(items: [.button(label: "Order ")])]))
+        }
     }
 }

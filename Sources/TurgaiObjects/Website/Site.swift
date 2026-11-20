@@ -116,13 +116,15 @@ public distributed actor Site {
         ).render()
     }
 
-    /// A press on the button labelled `label`, on the page shown as `version`: refused once that
-    /// page is replaced, since the button may be gone or mean something else.
-    public distributed func press(_ label: String, onPage version: Int) throws -> Bool {
-        guard state.space != nil, version == state.version, try Widget(state.page).buttons.contains(label) else {
+    /// A press on the button at `path`, on the page shown as `version`: told by its label, and
+    /// refused once that page is replaced, since the button may be gone or mean something else.
+    public distributed func press(_ path: PiecePath, onPage version: Int) throws -> Bool {
+        guard state.space != nil, version == state.version,
+            case .button(let button)? = try Widget(state.page).widget(at: path)
+        else {
             return false
         }
-        pressing.tell(ButtonPressed(label: label))
+        pressing.tell(ButtonPressed(label: button.label.rawValue))
         return true
     }
 
@@ -186,11 +188,11 @@ public distributed actor Site {
         viewing.tell(WidgetView(widget, version: state.version, press: Self.press).render())
     }
 
-    /// Where a press of the button labelled `label`, on the page shown as `version`, is posted:
-    /// its `press` address, beside its page.
-    static func press(_ label: String, version: Int) -> String {
+    /// Where a press of the button at `path`, on the page shown as `version`, is posted: its
+    /// `press` address, beside its page.
+    static func press(_ path: PiecePath, version: Int) -> String {
         // Every byte but an ASCII letter or digit, percent-encoded.
-        let encoded = label.utf8.map { byte -> String in
+        let encoded = path.description.utf8.map { byte -> String in
             switch byte {
             case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
                 UInt8(ascii: "0")...UInt8(ascii: "9"):
@@ -198,7 +200,7 @@ public distributed actor Site {
             default: "%" + (byte < 16 ? "0" : "") + String(byte, radix: 16, uppercase: true)
             }
         }.joined()
-        return "press?label=\(encoded)&page=\(version)"
+        return "press?path=\(encoded)&page=\(version)"
     }
 }
 
