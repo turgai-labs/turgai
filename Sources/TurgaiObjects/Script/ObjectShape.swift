@@ -335,13 +335,12 @@ public struct ObjectShape: Sendable, Equatable {
     /// The shape of `script`'s actor: with the types other objects' values are, which it uses.
     public init(_ script: Script) throws(CodeProblem) {
         try self.init(code: script.code, type: script.type)
-        // Its values' types as the checker resolved them, for code that checks.
-        guard
-            let declarations = SwiftCheck.declarations(
-                of: script.type, in: ObjectModule.objectFile, of: ScriptInstance.files(script)
-            ).declarations,
-            case .actor(let held, let methods, _, _)? = declarations[script.type]
-        else { return }
+        resolve(script.type, by: script.declarations())
+    }
+
+    /// Its values' types as the checker resolved them in `declarations`, for code that checks.
+    mutating func resolve(_ type: String, by declarations: Declarations?) {
+        guard let declarations, case .actor(let held, let methods, _, _)? = declarations[type] else { return }
         fields = fields.map { field in
             var field = field
             field.resolved = held.first { $0.name == field.name }?.type ?? .unresolved

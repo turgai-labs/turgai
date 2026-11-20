@@ -28,7 +28,8 @@ public struct Script: Codable, Sendable, Equatable {
         // what follows it isn't read as a declaration.
         for statement in file.statements {
             let tokens = Array(statement.tokens(viewMode: .sourceAccurate).prefix(2))
-            if tokens.count == 2, tokens[0].tokenKind == .atSign, SwiftCheck.declarationModifiers.contains(tokens[1].text)
+            if tokens.count == 2, tokens[0].tokenKind == .atSign,
+                SwiftCheck.declarationModifiers.contains(tokens[1].text)
             {
                 throw CodeProblem(
                     line: line(statement), span: "@\(tokens[1].text)",
@@ -182,10 +183,35 @@ extension Script {
     public func spec(description: String?, holding values: [String: JSONValue] = [:]) throws(CodeProblem)
         -> ObjectDescription
     {
-        let shape = try ObjectShape(self)
-        let declarations = SwiftCheck.declarations(
-            of: type, in: ObjectModule.objectFile, of: ScriptInstance.files(self)
-        ).declarations
+        try CheckedScript(self).spec(description: description, holding: values)
+    }
+
+    /// The declarations the checker resolves in its module, or `nil` when they don't resolve.
+    func declarations() -> Declarations? {
+        SwiftCheck.declarations(of: type, in: ObjectModule.objectFile, of: ScriptInstance.files(self)).declarations
+    }
+}
+
+/// A script as the checker reads it: its shape, and the declarations its module resolves. Reading
+/// is what describing an object costs, so whoever lists or runs a script keeps it read, and reads
+/// it again only when the code is another.
+public struct CheckedScript: Sendable {
+    public let script: Script
+    public let shape: ObjectShape
+    let declarations: Declarations?
+
+    public init(_ script: Script) throws(CodeProblem) {
+        var shape = try ObjectShape(code: script.code, type: script.type)
+        let declarations = script.declarations()
+        shape.resolve(script.type, by: declarations)
+        self.script = script
+        self.shape = shape
+        self.declarations = declarations
+    }
+
+    /// Its object's spec, as ``Script/spec(description:holding:)`` says.
+    public func spec(description: String?, holding values: [String: JSONValue] = [:]) -> ObjectDescription {
+        let type = script.type
         var properties: [String: JSONValue] = [:]
         for field in shape.fields {
             // Its Swift type, when the checker resolved it, or else what it holds now.
@@ -200,7 +226,7 @@ extension Script {
             }
             schema["readOnly"] = true
             // A `private` one is its own: shown to whoever uses it, never to other objects' code.
-            if !field.published { schema[Self.privateKey] = true }
+            if !field.published { schema[Script.privateKey] = true }
             properties[field.name] = .object(schema)
         }
         var actions: [String: ObjectAction] = [:]

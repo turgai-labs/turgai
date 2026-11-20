@@ -48,8 +48,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     private var timed: [String: Timer] = [:]
     /// Keeping its schedules as its fields say, one change after another.
     private var rescheduling: Task<Void, Never>?
-    /// Its code's shape, read once for each code it runs.
-    private var shaped: (code: Script, shape: ObjectShape)?
+    /// Its code as the checker read it, once for each code it runs.
+    private var checked: CheckedScript?
 
     /// An object followed: the one the field held, and the task delivering its events.
     private struct Follower: Sendable {
@@ -410,8 +410,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     public distributed func describe() async throws -> ObjectDescription {
         let object = try state.live
-        let code = object.code
-        return try code.spec(description: object.description, holding: object.fields)
+        return try checked(object.code).spec(description: object.description, holding: object.fields)
     }
 
     static func schema(of value: JSONValue) -> [String: JSONValue] {
@@ -685,10 +684,15 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     /// Its code's shape: read once for each code, which reading resolves with the checker.
     private func shape(of code: Script) throws(CodeProblem) -> ObjectShape {
-        if let shaped, shaped.code == code { return shaped.shape }
-        let shape = try ObjectShape(code)
-        shaped = (code, shape)
-        return shape
+        try checked(code).shape
+    }
+
+    /// `code` as the checker reads it: read again only when it's other code than last time.
+    private func checked(_ code: Script) throws(CodeProblem) -> CheckedScript {
+        if let checked, checked.script == code { return checked }
+        let read = try CheckedScript(code)
+        checked = read
+        return read
     }
 
     // MARK: Schedules

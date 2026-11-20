@@ -126,7 +126,7 @@ public actor ObjectSession {
     /// Every object there is, by name only, so a long list stays short: the ones made for the
     /// agent's owner, then the others. What one holds and takes is its own tool, a call away.
     func listMade() async throws -> String {
-        let yours = try await runtimeObjects().sorted()
+        let yours = try await runtimeObjects().keys.sorted()
         let others = try await entries().map { listed($0) }.filter { !yours.contains($0) }.sorted()
         for handle in yours + others { link(.object(handle)) }
         var lines: [String] = []
@@ -140,30 +140,31 @@ public actor ObjectSession {
 
     /// Your objects, to choose from.
     func yourObjects() async throws -> [ObjectID] {
-        try await runtimeObjects().sorted()
+        try await runtimeObjects().keys.sorted()
     }
 
-    /// The objects made by name that this turn's person may read, by handle.
-    private func runtimeObjects() async throws -> [ObjectID] {
+    /// The objects made by name that this turn's person may read, by handle, each as it describes
+    /// itself.
+    private func runtimeObjects() async throws -> [ObjectID: ObjectDescription] {
         var out: [DynamicObject] = []
         for entry in try await spaceObjects.held() {
             guard let identity = try await spaceObjects.identity(of: entry.object.id) else { continue }
             out.append(try await spaceObjects.held(identity))
         }
-        return try await names(of: out)
+        return try await described(out)
     }
 
-    /// The ids of `objects`, once each, sorted.
-    private func names(of objects: [DynamicObject]) async throws -> [ObjectID] {
-        var names: Set<ObjectID> = []
+    /// `objects` by id, once each, as each describes itself.
+    private func described(_ objects: [DynamicObject]) async throws -> [ObjectID: ObjectDescription] {
+        var described: [ObjectID: ObjectDescription] = [:]
         for object in objects {
             let discoverable = try DiscoverableObject.resolve(id: object.id, using: actorSystem)
             guard let description = try? await discoverable.describe() else { continue }
             let id = id(of: discoverable, type: description.type)
             made[id] = object
-            names.insert(id)
+            described[id] = description
         }
-        return names.sorted()
+        return described
     }
 
     /// An object's properties and actions, with actor references shown as handles.
@@ -221,14 +222,16 @@ public actor ObjectSession {
     /// chooses from. Its requirements are those the type declaring it declares; who conforms is
     /// what each takes, made here or built in.
     func conforming(to name: ObjectProtocolName) async -> [ObjectID] {
-        var handles = (try? await runtimeObjects()) ?? []
+        let yours = (try? await runtimeObjects()) ?? [:]
+        var handles = yours.keys.sorted()
         for entry in (try? await entries()) ?? [] {
             let handle = listed(entry)
             if !handles.contains(handle) { handles.append(handle) }
         }
         var contracts: [(handle: ObjectID, contract: ObjectContract)] = []
         for handle in handles {
-            if let description = try? await described(handle), let contract = contract(of: description) {
+            let description = if let given = yours[handle] { given } else { try? await described(handle) }
+            if let description, let contract = contract(of: description) {
                 contracts.append((handle, contract))
             }
         }
@@ -528,7 +531,9 @@ extension ObjectSession {
     }
 
     func others(except type: String) async -> Others {
-        var handles = Set((try? await runtimeObjects()) ?? [])
+        // Those made here are described once, as they're listed.
+        let yours = (try? await runtimeObjects()) ?? [:]
+        var handles = Set(yours.keys)
         for entry in (try? await entries()) ?? [] { handles.insert(listed(entry)) }
         var objects: [Uses.Object] = []
         var existing: [ObjectIdentity: String] = [:]
@@ -538,7 +543,8 @@ extension ObjectSession {
         var summaries: [String: String] = [:]
         var descriptions: [String: ObjectDescription] = [:]
         for handle in handles.sorted() {
-            guard let description = try? await described(handle), description.type != type else { continue }
+            let found = if let given = yours[handle] { given } else { try? await described(handle) }
+            guard let description = found, description.type != type else { continue }
             let typeName = description.type
             // What it publishes is read, never written: what isn't `private`, as Swift reads another
             // actor's property.
@@ -1044,7 +1050,7 @@ extension ObjectSession {
                 lines.append((["Agents:"] + agentEntries.map(line)).joined(separator: "\n"))
             }
         }
-        let madeHandles = try await runtimeObjects()
+        let madeHandles = try await runtimeObjects().keys.sorted()
         lines.append(
             madeHandles.isEmpty
                 ? "No objects have been created for you yet. create_object makes a new one."

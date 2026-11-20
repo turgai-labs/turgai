@@ -38,6 +38,8 @@ public distributed actor DynamicObjects {
     private var resolved: [ObjectIdentity: DynamicObject] = [:]
     /// Whoever follows that its objects changed: each one's backlog, and its pull while it waits.
     private var pulls = Pulls<ObjectsChanged>()
+    /// Each type's code as the checker read it, read again only when the type's code is another.
+    private var checked: [BehaviorID: CheckedScript] = [:]
 
     public init(actorSystem: ClusterSystem, dependency space: SpaceID) async throws {
         self.actorSystem = actorSystem
@@ -147,7 +149,7 @@ public distributed actor DynamicObjects {
         var specs: [String: ObjectDescription] = [:]
         for (_, type) in state.typeNames where !running.contains(type) {
             guard let source = state.types[type] else { continue }
-            specs[source.type] = try source.spec(description: nil)
+            specs[source.type] = try checked(type, source).spec(description: nil)
         }
         return specs
     }
@@ -228,6 +230,15 @@ public distributed actor DynamicObjects {
         guard chain.scope.space == home, chain.scope.permissions.configureSpace else { throw NotAllowed(.write) }
     }
 
+    /// `code`, type `id`'s, as the checker reads it: read again only when it's other code than
+    /// last time.
+    private func checked(_ id: BehaviorID, _ code: Script) throws(CodeProblem) -> CheckedScript {
+        if let read = checked[id], read.script == code { return read }
+        let read = try CheckedScript(code)
+        checked[id] = read
+        return read
+    }
+
     // MARK: Listing
 
     /// The objects made here by name that the call may read, as they're listed and found: each as
@@ -237,7 +248,7 @@ public distributed actor DynamicObjects {
         var held: [ObjectEntry] = []
         for entry in state.entries where entry.access.allows(reader, .read) {
             guard let code = state.types[entry.type] else { continue }
-            let spec = try code.spec(description: entry.description)
+            let spec = try checked(entry.type, code).spec(description: entry.description)
             let object = try await object(entry.identity)
             held.append(
                 ObjectEntry(
