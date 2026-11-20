@@ -1784,9 +1784,14 @@ public struct ObjectActionTool: HailCore.Tool {
         self.summary = summary
         self.naming = naming
         self.input = input
-        let schema = Self.handles(
-            in: receiver.schema(input) ?? ["type": "object", "properties": [:]], choices: choices)
-        self.parameters = try JSONDecoder().decode(GenerationSchema.self, from: JSONEncoder().encode(schema))
+        self.parameters = try Self.parameters(
+            receiver.schema(input) ?? ["type": "object", "properties": [:]], choices: choices)
+    }
+
+    /// The tool's parameters, from the action's input `schema`, as the model writes them.
+    static func parameters(_ schema: DiscoveryJSON, choices: [String: [ObjectID]] = [:]) throws -> GenerationSchema {
+        try JSONDecoder().decode(
+            GenerationSchema.self, from: JSONEncoder().encode(handles(in: schema, choices: choices)))
     }
 
     public var name: String {
@@ -1809,7 +1814,8 @@ public struct ObjectActionTool: HailCore.Tool {
 
     public func effect(for arguments: GeneratedContent) throws -> InvokeObjectEffect {
         let given = try JSONDecoder().decode(DiscoveryJSON.self, from: Data(arguments.jsonString.utf8))
-        let (id, own) = try receiver.choosing(in: given, for: name)
+        let (id, written) = try receiver.choosing(in: given, for: name)
+        let own = try Self.dictionaries(in: written, as: input, for: name)
         let text = String(decoding: try JSONEncoder().encode(own), as: UTF8.self)
         return InvokeObjectEffect(session: session, handle: id, action: action, arguments: input == nil ? nil : text)
     }
@@ -1824,8 +1830,10 @@ public struct ObjectActionTool: HailCore.Tool {
         return page
     }
 
-    /// The schema as the model writes it: a reference to an object is its handle, a string, and an
-    /// optional value is the value, since leaving it out of `required` already makes it optional.
+    /// The schema as the model writes it: a reference to an object is its handle, a string; an
+    /// optional value is the value, since leaving it out of `required` already makes it optional;
+    /// and a dictionary is its pairs, each a `key` and its `value`, since a tool's schema names
+    /// every property an object has.
     /// - Parameter choices: For each protocol an argument takes an object conforming to, as code
     ///   writes it, the ids of the objects that do: only they can be given.
     static func handles(in schema: DiscoveryJSON, choices: [String: [ObjectID]] = [:]) -> DiscoveryJSON {
@@ -1841,6 +1849,18 @@ public struct ObjectActionTool: HailCore.Tool {
             ]
             if let ids = choices[written], !ids.isEmpty { handle["enum"] = .array(ids.map { .string($0.description) }) }
             return .object(handle)
+        case .object(let members) where Self.isDictionary(members):
+            let pair: DiscoveryJSON = [
+                "type": "object",
+                "properties": [
+                    Self.key: Self.keyIsInteger(members) ? ["type": "integer"] : ["type": "string"],
+                    Self.value: handles(in: members["additionalProperties"] ?? [:], choices: choices),
+                ],
+                "required": [.string(Self.key), .string(Self.value)],
+            ]
+            var pairs: [String: DiscoveryJSON] = ["type": "array", "items": pair]
+            if let description = members["description"] { pairs["description"] = description }
+            return .object(pairs)
         case .object(let members):
             if case .array(let options)? = members["anyOf"] {
                 let present = options.filter { $0["type"] != "null" }
@@ -1849,6 +1869,72 @@ public struct ObjectActionTool: HailCore.Tool {
             return .object(members.mapValues { handles(in: $0, choices: choices) })
         case .array(let items): return .array(items.map { handles(in: $0, choices: choices) })
         default: return schema
+        }
+    }
+}
+
+extension ObjectActionTool {
+    /// The names a dictionary's pair is written with.
+    static let key = "key"
+    static let value = "value"
+
+    /// Whether `members` is a dictionary's schema: an object of any properties, each of one schema.
+    static func isDictionary(_ members: [String: DiscoveryJSON]) -> Bool {
+        guard members["type"] == "object", members["properties"] == nil,
+            case .object? = members["additionalProperties"]
+        else { return false }
+        return true
+    }
+
+    /// Whether the dictionary `members` is keyed by integers, as `Codable` writes `[Int: Value]`.
+    static func keyIsInteger(_ members: [String: DiscoveryJSON]) -> Bool {
+        members["propertyNames"] != nil
+    }
+
+    /// `value`, as the model wrote it against ``handles(in:choices:)``, as the action takes it, by
+    /// its `schema`: each dictionary, written as its pairs, a dictionary again.
+    static func dictionaries(in value: DiscoveryJSON, as schema: DiscoveryJSON?, for tool: String) throws
+        -> DiscoveryJSON
+    {
+        guard case .object(let members)? = schema else { return value }
+        if case .array(let options)? = members["anyOf"] {
+            let present = options.filter { $0["type"] != "null" }
+            return present.count == 1 ? try dictionaries(in: value, as: present[0], for: tool) : value
+        }
+        if isDictionary(members) {
+            guard case .array(let pairs) = value else { return value }
+            var dictionary: [String: DiscoveryJSON] = [:]
+            for pair in pairs {
+                guard case .object(let written) = pair, let key = written[Self.key].flatMap(Self.text(ofKey:)),
+                    let given = written[Self.value]
+                else {
+                    throw ObjectToolError.missingArguments(tool, missing: [Self.key, Self.value], unexpected: [])
+                }
+                dictionary[key] = try dictionaries(in: given, as: members["additionalProperties"], for: tool)
+            }
+            return .object(dictionary)
+        }
+        switch value {
+        case .object(let fields):
+            guard case .object(let properties)? = members["properties"] else { return value }
+            var taken: [String: DiscoveryJSON] = [:]
+            for (name, field) in fields { taken[name] = try dictionaries(in: field, as: properties[name], for: tool) }
+            return .object(taken)
+        case .array(let items):
+            return .array(try items.map { try dictionaries(in: $0, as: members["items"], for: tool) })
+        default:
+            return value
+        }
+    }
+
+    /// A pair's key as the dictionary's key: a string as it is, an integer in its digits.
+    private static func text(ofKey key: DiscoveryJSON) -> String? {
+        switch key {
+        case .string(let text): text
+        case .integer(let number): String(number)
+        case .unsignedInteger(let number): String(number)
+        case .number(let number) where number.rounded() == number: String(Int64(number))
+        default: nil
         }
     }
 }
