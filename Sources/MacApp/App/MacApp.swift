@@ -43,6 +43,15 @@ public struct TurgaiScenes: Scene {
         }
         .defaultSize(width: 380, height: 600)
 
+        // Each object's card in a window of its own, as long as its code is.
+        WindowGroup("Card", id: WindowID.card, for: ObjectCardAddress.self) { $address in
+            if let address {
+                ObjectCardWindow(address: address)
+                    .frame(minWidth: 480, minHeight: 400)
+            }
+        }
+        .defaultSize(width: 760, height: 820)
+
         Window("Profile", id: WindowID.profile) {
             ProfileView(store: app.scope(\.profile, action: \.profile))
                 .frame(minWidth: 360, minHeight: 420)
@@ -57,6 +66,7 @@ enum WindowID {
     static let chat = "chat"
     static let objects = "objects"
     static let profile = "profile"
+    static let card = "card"
 }
 
 private struct MenuContent: View {

@@ -10,8 +10,8 @@ public enum Card: Codable, Sendable, Equatable {
 
 extension ObjectSession {
     /// The card a person reads for `handle`. While it works, it's what the object is, as YAML:
-    /// its data now, and, for an object made here, its code's view, then its Swift. While it's
-    /// failing, it's why, with its Swift, which is where the failure is.
+    /// its data now and what it takes, publishes and announces; then, for an object made here, its
+    /// Swift. While it's failing, it's why, with its Swift, which is where the failure is.
     public func card(_ handle: ObjectID) async throws -> Card {
         let description = try await described(handle)
         var parts = ["# \(description.type)"]
@@ -24,17 +24,12 @@ extension ObjectSession {
         }
         let current = try await values(handle)
         if current != "{}" { parts.append("```yaml\n\(current)\n```") }
-        if let made {
-            // An object made here: its code's view, which says what it takes and how.
-            let source = try await made.source
-            if let yaml = try? ObjectSource(source).yaml {
-                parts.append("```yaml\n\(yaml)\n```")
-            }
-            parts.append("```swift\n\(source.code)\n```")
-        } else if let yaml = try Self.spec(of: Uses.Object(description: description, publishes: true)) {
-            // A built-in object: its spec, what it takes, publishes and announces.
+        // Its spec: what it takes, publishes and announces, as Swift declares each.
+        if let yaml = try Self.spec(of: Uses.Object(description: description, publishes: true)) {
             parts.append("```yaml\n\(yaml)\n```")
         }
+        // An object made here: its Swift, where how it does each is.
+        if let made { parts.append("```swift\n\(try await made.source.code)\n```") }
         return .markdown(parts.joined(separator: "\n\n"))
     }
 }

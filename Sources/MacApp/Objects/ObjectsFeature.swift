@@ -104,30 +104,13 @@ struct ObjectsFeature {
         var listing = Listing.waiting
         /// Why sharing an object was refused, while it's shown.
         var refusal: String?
-        /// The card shown for one of its objects, while it's open.
-        var card: Card?
 
         var isRefused: Bool { refusal != nil }
-        var isShowingCard: Bool { card != nil }
-    }
 
-    /// One object's card: what it is, its YAML and its Swift, once it's had.
-    struct Card: Equatable {
-        enum Content: Equatable {
-            case loading
-            case shown([CardBlock])
-            case missing
+        /// Where `row`'s card is: the window that shows it, for the space shown.
+        func card(of row: ObjectRow) -> ObjectCardAddress? {
+            space.map { ObjectCardAddress(space: $0, handle: row.title) }
         }
-
-        let title: String
-        var content = Content.loading
-    }
-
-    /// A part of a card, in the order it says them: a heading, some text, or a block of code.
-    enum CardBlock: Equatable {
-        case heading(String)
-        case text(String)
-        case code(language: String, String)
     }
 
     enum Action {
@@ -141,12 +124,6 @@ struct ObjectsFeature {
         case shareRefused
         /// The refusal's alert: `false` once it's closed.
         case refusalPresented(Bool)
-        /// Show an object's card: what it is, its YAML and its Swift.
-        case cardTapped(ObjectRow)
-        case cardLoaded(ObjectCard)
-        case cardMissing
-        /// The card's sheet: `false` once it's closed.
-        case cardPresented(Bool)
     }
 
     @Dependency(\.objects) var objects
@@ -184,29 +161,6 @@ struct ObjectsFeature {
                 state.refusal = "Only someone who may change it can share it."
                 return .none
 
-            case .cardTapped(let row):
-                guard let space = state.space else { return .none }
-                state.card = Card(title: row.title)
-                return .run { send in
-                    do {
-                        await send(.cardLoaded(try await objects.card(space, row.title)))
-                    } catch {
-                        await send(.cardMissing)
-                    }
-                }
-
-            case .cardLoaded(let card):
-                state.card?.content = .shown(Self.blocks(of: card.markdown))
-                return .none
-
-            case .cardMissing:
-                state.card?.content = .missing
-                return .none
-
-            case .cardPresented(let presented):
-                if !presented { state.card = nil }
-                return .none
-
             case .refusalPresented(let presented):
                 if !presented { state.refusal = nil }
                 return .none
@@ -237,41 +191,3 @@ extension ObjectsFeature {
 
 /// Sharing an object wasn't done: the server refused it, or couldn't be reached.
 private struct ObjectSharingRefused: Error {}
-
-extension ObjectsFeature {
-    /// A card's Markdown as its parts: `#` headings, fenced blocks of code with their language, and
-    /// the text between them, a paragraph at a time.
-    static func blocks(of markdown: String) -> [CardBlock] {
-        var blocks: [CardBlock] = []
-        var code: (language: String, lines: [String])?
-        var text: [String] = []
-        func endText() {
-            let paragraph = text.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !paragraph.isEmpty { blocks.append(.text(paragraph)) }
-            text = []
-        }
-        for line in markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
-            if let open = code {
-                if line.hasPrefix("```") {
-                    blocks.append(.code(language: open.language, open.lines.joined(separator: "\n")))
-                    code = nil
-                } else {
-                    code?.lines.append(line)
-                }
-            } else if line.hasPrefix("```") {
-                endText()
-                code = (String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces), [])
-            } else if line.hasPrefix("# ") {
-                endText()
-                blocks.append(.heading(String(line.dropFirst(2))))
-            } else if line.trimmingCharacters(in: .whitespaces).isEmpty {
-                endText()
-            } else {
-                text.append(line)
-            }
-        }
-        endText()
-        if let open = code { blocks.append(.code(language: open.language, open.lines.joined(separator: "\n"))) }
-        return blocks
-    }
-}
