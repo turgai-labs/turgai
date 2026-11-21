@@ -1231,11 +1231,12 @@ private func follow(
     case .tasks(let space):
         // What the tasks are now goes first; each change follows it, in order.
         let id = space.api
-        let scope = try await Space.identified(by: space, on: system).scope(of: person)
+        let reached = try await Space.identified(by: space, on: system)
+        let scope = try await reached.scope(of: person)
         // Whoever may change a task sees it: whoever made it, and whoever may see the space's tasks.
         let sees: @Sendable (KeptTask) -> Bool = { $0.maker == scope.person || scope.permissions.tasks != nil }
         // Following first, so no change between this and what's read now is missed.
-        let changes = try await SpaceTasks.identified(by: space, on: system).subscription()
+        let changes = try await reached.tasks(for: person).subscription()
         // What's kept now: its objects' schedules and timers, and its chats'.
         let workflows = system.workflows
         let decoder = JSONDecoder()

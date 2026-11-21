@@ -48,6 +48,13 @@ public distributed actor Space: ConversationOwner {
         return try await DynamicObjects.of(state.id, on: actorSystem)
     }
 
+    /// Its tasks as they change, as `person`, who's in it, follows them: which of them they see,
+    /// what they may do in it says.
+    public distributed func tasks(for person: UserID) async throws -> SpaceTasks {
+        _ = try made().scope(of: person)
+        return try await SpaceTasks.identified(by: state.id, on: actorSystem)
+    }
+
     public static func actorID(for id: SpaceID) -> VirtualActorID {
         VirtualActorID(rawValue: "space:\(id.rawValue.uuidString)")
     }
