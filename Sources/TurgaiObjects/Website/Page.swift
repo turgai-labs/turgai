@@ -190,7 +190,7 @@ extension Widget {
     /// told to the page's object by its label.
     init(_ page: Page) throws(PageProblem) {
         do {
-            self = .column(try Column("page", try Self.pieces(page.items, Self.init)))
+            self = .stack(try Stack("page", .vertical(), try Self.pieces(page.items, Self.init)))
         } catch {
             throw .widget(error)
         }
@@ -210,15 +210,15 @@ extension Widget {
                     Self.named(id, "image", index), address: url, description: description,
                     aspectRatio: .init(aspectRatio), fit: .init(fit), width: width))
         case .row(let id, let items, let alignment, let spacing):
-            self = .row(
-                try Row(
-                    Self.named(id, "row", index), try Self.pieces(items, Self.init), alignment: .init(alignment),
-                    spacing: spacing))
+            self = .stack(
+                try Stack(
+                    Self.named(id, "row", index), .horizontal(alignment: .init(alignment)),
+                    try Self.pieces(items, Self.init), spacing: spacing))
         case .column(let id, let items, let alignment, let spacing):
-            self = .column(
-                try Column(
-                    Self.named(id, "column", index), try Self.pieces(items, Self.init), alignment: .init(alignment),
-                    spacing: spacing))
+            self = .stack(
+                try Stack(
+                    Self.named(id, "column", index), .vertical(alignment: .init(alignment)),
+                    try Self.pieces(items, Self.init), spacing: spacing))
         }
     }
 
@@ -234,15 +234,15 @@ extension Widget {
                     Self.named(id, "image", index), address: url, description: description,
                     aspectRatio: .init(aspectRatio), fit: .init(fit), width: width))
         case .row(let id, let items, let alignment, let spacing):
-            self = .row(
-                try Row(
-                    Self.named(id, "row", index), try Self.pieces(items, Self.init), alignment: .init(alignment),
-                    spacing: spacing))
+            self = .stack(
+                try Stack(
+                    Self.named(id, "row", index), .horizontal(alignment: .init(alignment)),
+                    try Self.pieces(items, Self.init), spacing: spacing))
         case .column(let id, let items, let alignment, let spacing):
-            self = .column(
-                try Column(
-                    Self.named(id, "column", index), try Self.pieces(items, Self.init), alignment: .init(alignment),
-                    spacing: spacing))
+            self = .stack(
+                try Stack(
+                    Self.named(id, "column", index), .vertical(alignment: .init(alignment)),
+                    try Self.pieces(items, Self.init), spacing: spacing))
         }
     }
 
@@ -298,7 +298,7 @@ public enum PageProblem: Error, Codable, Equatable, Sendable, CustomStringConver
     }
 }
 
-extension Mosaic.RowAlignment {
+extension Mosaic.VerticalAlignment {
     init(_ alignment: RowAlignment) {
         switch alignment {
         case .top: self = .top
@@ -308,7 +308,7 @@ extension Mosaic.RowAlignment {
     }
 }
 
-extension Mosaic.ColumnAlignment {
+extension Mosaic.HorizontalAlignment {
     init(_ alignment: ColumnAlignment) {
         switch alignment {
         case .leading: self = .leading
