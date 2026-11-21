@@ -19,7 +19,7 @@ actor Counter {
 ```
 
 Code is checked before it runs, like Swift compiling it, against the declarations of everything it
-may use: the space's other objects and types, its installed built-ins, and the node's tools. A
+may use: the space's other objects and types, its built-ins, and the node's tools. A
 problem names its line.
 
 ### Other objects
@@ -80,7 +80,7 @@ Schedules are durable: they keep running across restarts.
 
 ### Websites
 
-When the space has websites installed, `Website(id: "bakery-menu")` is its website at
+`Website(id: "bakery-menu")` is its website at
 `/websites/bakery-menu/`, made the first time it's named. Its ``Page`` is rows, columns, texts,
 images and buttons; ``Website/show(_:)`` replaces the page in every open browser, and each press
 is announced as ``ButtonPressed``. A name is one space's at a time.

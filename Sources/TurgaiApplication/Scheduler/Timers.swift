@@ -44,8 +44,6 @@ public distributed actor Timers {
     public typealias ActorSystem = ClusterSystem
     public typealias Dependency = SpaceID
 
-    public static let kind = BuiltInKind(rawValue: "Timers")
-
     /// The space whose it is.
     private let space: SpaceID
 

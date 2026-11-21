@@ -53,8 +53,7 @@ public enum ConversationTools {
             // The other agents, which it can ask: never itself.
             let askable = try await Agent.offered(
                 agents.filter { $0 != context.agentID.role }, in: space, on: actorSystem)
-            let builtIns = try await BuiltIn.entries(installedIn: space, objects, on: actorSystem)
-            let installed = Set(try await objects.installed)
+            let builtIns = try await BuiltIn.entries(in: space, objects, on: actorSystem)
             let session = ObjectSession(
                 in: space,
                 objects: objects,
@@ -62,7 +61,7 @@ public enum ConversationTools {
                 agents: askable,
                 builtIns: builtIns,
                 // What code makes by name in the space: a website, as it says it is.
-                madeByName: installed.contains(Website.kind) ? [Website.describe()] : []
+                madeByName: [Website.describe()]
             )
             // What objects can be: found, listed, made, changed and removed, at the root; and the
             // objects themselves, each a tool to read it.

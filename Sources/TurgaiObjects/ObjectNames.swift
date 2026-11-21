@@ -47,7 +47,7 @@ public enum ObjectNames {
     }
 
     /// The object named `name` in `space`, besides those made there by name, if there's one: one
-    /// offered there, an agent or an installed built-in object, by the name its id gives it. Two of
+    /// offered there, an agent or a built-in object, by the name its id gives it. Two of
     /// one name are refused: neither is the one meant. A virtual actor is one object however many
     /// nodes offered it; this node's reference is the one used.
     public static func object(named name: String, in space: SpaceID, using system: ClusterSystem) async throws

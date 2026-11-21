@@ -615,7 +615,7 @@ extension TurgaiMainWebApp {
                 do {
                     // It starts with every built-in object there is.
                     try await space.make(
-                        named: name, by: person, bot: made.bot, installing: BuiltInKind.installedInNewSpaces)
+                        named: name, by: person, bot: made.bot)
                 } catch {
                     if let newKey = made.newKey { try? await dependencies.agentCredentials.remove(newKey.reference) }
                     throw error
@@ -987,7 +987,7 @@ extension TurgaiMainWebApp {
                 let objects = try await space.objects(for: person)
                 // Each asked on the person's behalf, as every call to an object is: one on no one's is refused.
                 let entries = try await CallChain.$current.withValue(.start(scope, in: nil)) {
-                    try await BuiltIn.entries(installedIn: id, objects, on: system) + (try await objects.held())
+                    try await BuiltIn.entries(in: id, objects, on: system) + (try await objects.held())
                 }
                 return try publicAPIResponse(entries.map(ObjectListing.init))
             }
@@ -1004,7 +1004,7 @@ extension TurgaiMainWebApp {
                 let objects = try await space.objects(for: person)
                 // Asked on the person's behalf, as the list is: one they may not read isn't found.
                 let card = try await CallChain.$current.withValue(.start(scope, in: nil)) { () async throws -> Card? in
-                    let builtIns = try await BuiltIn.entries(installedIn: id, objects, on: system)
+                    let builtIns = try await BuiltIn.entries(in: id, objects, on: system)
                     let listed = builtIns + (try await objects.held())
                     guard let entry = listed.first(where: { $0.id.description == handle }) else { return nil }
                     return try await ObjectSession(in: id, objects: objects, actorSystem: system, builtIns: builtIns)

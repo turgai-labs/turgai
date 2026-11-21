@@ -14,7 +14,9 @@ import TurgaiTelegram
 #endif
 
 extension TurgaiMainWebApp {
-    func registerConnectionRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
+    func registerConnectionRoutes(
+        on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
+    ) {
         registerConnections(on: router.group("spaces/:space/connections"), dependencies: dependencies)
     }
 

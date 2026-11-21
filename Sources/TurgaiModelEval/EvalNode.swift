@@ -100,32 +100,16 @@ struct EvalNode: Sendable {
         // A task's agents, which the others can ask: never itself.
         let others: [Role] = agents.map(\.role).filter { (role: Role) -> Bool in role != context.agentID.role }
         let offered = try await Agent.offered(others, in: Self.space, on: actorSystem)
-        // The built-in objects installed in the space, each started and checked in there, where the
-        // space's code finds it by name.
+        // The built-in objects an eval offers, the chats' schedules and timers, each started and
+        // checked in there, where the space's code finds it by name.
         let objects = try await Space.identified(by: Self.space, on: actorSystem).objects(for: Self.askerID)
-        let installed = Set(try await objects.installed)
-        var installedObjects: [DiscoverableObject] = []
-        if installed.contains(Weather.kind) {
-            let object = try await Weather.of(Self.space, on: actorSystem)
-            installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
-        }
-        if installed.contains(Scheduler.kind) {
-            let object = try await Scheduler.of(Self.space, on: actorSystem)
-            installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
-        }
-        if installed.contains(Timers.kind) {
-            let object = try await Timers.of(Self.space, on: actorSystem)
-            installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
-        }
-        // Each website made in the space, by its name.
-        if installed.contains(Website.kind) {
-            for name in try await objects.sites {
-                let object = try await Website.named(name, in: Self.space, on: actorSystem)
-                installedObjects.append(try DiscoverableObject.resolve(id: object.id, using: actorSystem))
-            }
-        }
+        let offeredObjects: [DiscoverableObject] = [
+            try DiscoverableObject.resolve(
+                id: try await Scheduler.of(Self.space, on: actorSystem).id, using: actorSystem),
+            try DiscoverableObject.resolve(id: try await Timers.of(Self.space, on: actorSystem).id, using: actorSystem),
+        ]
         var builtIns: [ObjectEntry] = []
-        for object in installedObjects {
+        for object in offeredObjects {
             await actorSystem.receptionist.checkIn(object, with: .virtualObjects(in: Self.space))
             guard let virtual = object.id.virtualActorID, let description = try? await object.describe() else {
                 continue
@@ -140,9 +124,7 @@ struct EvalNode: Sendable {
         }
         let session = ObjectSession(
             in: Self.space, objects: objects, actorSystem: actorSystem, agents: offered,
-            builtIns: builtIns,
-            // What code makes by name in the space: a website, as it says it is.
-            madeByName: installed.contains(Website.kind) ? [Website.describe()] : [])
+            builtIns: builtIns)
         let roots: [any HailCore.Tool] = try await ObjectTools(session: session).offered()
         // The node's own tools, for a task that sends requests: as every conversation has them.
         let tools: [any HailCore.Tool] =
@@ -171,10 +153,7 @@ struct EvalNode: Sendable {
     func asker() async throws -> CallScope {
         let space = try await Space.identified(by: Self.space, on: system)
         if try await space.status() == nil {
-            // It starts with its chats' reminders and schedules, as a new space does.
-            try await space.make(
-                named: SpaceName("Eval")!, admins: NonEmptySet(Self.askerID), bot: bot,
-                installing: [Scheduler.kind, Timers.kind])
+            try await space.make(named: SpaceName("Eval")!, admins: NonEmptySet(Self.askerID), bot: bot)
         }
         return try await space.opening(scopeOf: Self.askerID, for: .person)
     }

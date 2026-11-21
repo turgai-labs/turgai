@@ -47,7 +47,6 @@ struct WebsiteTests {
             "websites", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann]
         ) { node in
             let families = try await DynamicObjects.of(family, on: node)
-            try await families.install(defaults: [Website.kind])
             try await self.as(ann) {
                 let id = try await families.create(
                     name: "Menu", spec: .new(try Script(code: publisher, type: "Menu", uses: websiteUses)))
@@ -71,7 +70,7 @@ struct WebsiteTests {
     }
 
     /// While one space holds a name, another can't make a website with it; once it takes the
-    /// website out, the name is free. A space without websites installed makes none.
+    /// website out, the name is free.
     @Test(.timeLimit(.minutes(1)))
     func aNameIsOneSpacesAtATime() async throws {
         try await withClusterSystem(
@@ -79,13 +78,8 @@ struct WebsiteTests {
         ) { node in
             let families = try await DynamicObjects.of(family, on: node)
             let works = try await DynamicObjects.of(work, on: node)
-            try await families.install(defaults: [Website.kind])
             _ = try await self.as(ann) { try await families.site(named: menu) }
 
-            await #expect(throws: DynamicObjectsError.notInstalled(Website.kind)) {
-                try await self.as(bob) { _ = try await works.site(named: menu) }
-            }
-            try await works.install(defaults: [Website.kind])
             await #expect(throws: SiteError.taken(menu)) {
                 try await self.as(bob) { _ = try await works.site(named: menu) }
             }

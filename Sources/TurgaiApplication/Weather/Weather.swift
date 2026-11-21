@@ -13,8 +13,6 @@ public distributed actor Weather {
     public typealias ActorSystem = ClusterSystem
     public typealias Dependency = SpaceID
 
-    public static let kind = BuiltInKind(rawValue: "Weather")
-
     /// The space whose it is.
     private let space: SpaceID
 

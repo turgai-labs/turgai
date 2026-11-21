@@ -13,8 +13,6 @@ import VirtualActors
 public distributed actor Website {
     public typealias ActorSystem = ClusterSystem
 
-    public static let kind = BuiltInKind(rawValue: "Website")
-
     /// Which website it is: its space's, by its name.
     public struct Config: Codable, Sendable, Hashable {
         public let space: SpaceID

@@ -350,8 +350,7 @@ struct TurgaiAppService: Service, Sendable {
                     let space = try await Space.identified(by: first.id, on: system)
                     if try await space.status() == nil {
                         try await space.make(
-                            named: first.name, by: first.maker, bot: first.bot,
-                            installing: BuiltInKind.installedInNewSpaces)
+                            named: first.name, by: first.maker, bot: first.bot)
                     }
                     try await setup.firstSpaceMade()
                 },

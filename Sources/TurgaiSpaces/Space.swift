@@ -81,19 +81,14 @@ public distributed actor Space: ConversationOwner {
     /// It made by its platform, called `name`, with `admins` deciding for it, `groups` besides its
     /// members group, and `bot` its first bot.
     public distributed func make(
-        named name: SpaceName, admins: NonEmptySet<UserID>, groups: [GroupID: Permissions] = [:], bot: Bot,
-        installing builtIns: [BuiltInKind] = []
+        named name: SpaceName, admins: NonEmptySet<UserID>, groups: [GroupID: Permissions] = [:], bot: Bot
     ) async throws {
         try await run(.makeForPlatform(named: name, admins: admins, groups: groups, bot: bot))
-        try await DynamicObjects.of(state.id, on: actorSystem).install(defaults: builtIns)
     }
 
     /// It made, called `name`, with `person` its first admin and `bot` its first bot.
-    public distributed func make(
-        named name: SpaceName, by person: UserID, bot: Bot, installing builtIns: [BuiltInKind] = []
-    ) async throws {
+    public distributed func make(named name: SpaceName, by person: UserID, bot: Bot) async throws {
         try await run(.make(named: name, by: person, bot: bot))
-        try await DynamicObjects.of(state.id, on: actorSystem).install(defaults: builtIns)
     }
 
     /// `bot` one of its bots, as `person`, who may configure them, adds it.

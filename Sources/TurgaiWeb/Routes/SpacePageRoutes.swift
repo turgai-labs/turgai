@@ -66,7 +66,7 @@ extension TurgaiMainWebApp {
                 let id = SpaceID()
                 // It starts with every built-in object there is.
                 try await Space.identified(by: id, on: system).make(
-                    named: name, by: .account(user.id), bot: bot, installing: BuiltInKind.installedInNewSpaces)
+                    named: name, by: .account(user.id), bot: bot)
                 pendingCredential = nil
                 return TurgaiWebSupport.redirect(to: "/spaces/\(id.rawValue.uuidString)")
             } catch {

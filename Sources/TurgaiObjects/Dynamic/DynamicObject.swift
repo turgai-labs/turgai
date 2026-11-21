@@ -174,7 +174,7 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     ) async throws
         -> ActorReference
     {
-        if type.rawValue == Website.kind.rawValue {
+        if type.rawValue == Website.describe().type {
             guard let name = SiteName(rawValue: identity.rawValue) else {
                 throw CodeProblem(
                     "`\(identity)` isn't a website's name: lowercase letters, digits and `-`, not at either end.")

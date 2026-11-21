@@ -174,7 +174,8 @@ extension RuntimeMacros {
                 if inActor, variable.bindings.allSatisfy({ $0.accessorBlock == nil }) { return nil }
                 return CodeProblem(
                     line: line(attribute), span: written,
-                    "@\(subscribed) is a stored property's, in `actor \(actor.name.text)`: it follows what the property holds")
+                    "@\(subscribed) is a stored property's, in `actor \(actor.name.text)`: it follows what the property holds"
+                )
             }
             let isType =
                 declaration.is(StructDeclSyntax.self) || declaration.is(EnumDeclSyntax.self)
@@ -184,7 +185,8 @@ extension RuntimeMacros {
             if inActor, declaration.is(StructDeclSyntax.self) || declaration.is(EnumDeclSyntax.self) { return nil }
             return CodeProblem(
                 line: line(attribute), span: written,
-                "@\(event) is a struct's or an enum's, declared in `actor \(actor.name.text)`: `announce(_:)` sends a value of it")
+                "@\(event) is a struct's or an enum's, declared in `actor \(actor.name.text)`: `announce(_:)` sends a value of it"
+            )
         }
     }
 }

@@ -165,48 +165,14 @@ public distributed actor DynamicObjects {
 
     // MARK: Built-in objects
 
-    /// The built-in objects its space installed.
-    public distributed var installed: [BuiltInKind] { state.installed.sorted() }
-
-    /// The built-in object `kind` installed in its space, as whoever may configure the space asks:
-    /// one installed already stays as it is. Which kinds there are, whoever offers them knows.
-    public distributed func install(_ kind: BuiltInKind) async throws {
-        try configuring()
-        guard !state.installed.contains(kind) else { return }
-        try await emit(event: .installed(kind))
-    }
-
-    /// The built-in object `kind` taken out of its space, as whoever may configure the space asks:
-    /// websites taken out give up their names.
-    public distributed func uninstall(_ kind: BuiltInKind) async throws {
-        try configuring()
-        guard state.installed.contains(kind) else { return }
-        if kind == Website.kind {
-            for name in state.sites.sorted() {
-                try await Website.named(name, in: home, on: actorSystem).release()
-                try await emit(event: .siteRemoved(name))
-            }
-        }
-        try await emit(event: .uninstalled(kind))
-    }
-
-    /// `kinds`, what a new space starts with, installed as it's made: by whoever makes it, before
-    /// anyone's in it to ask.
-    package distributed func install(defaults kinds: [BuiltInKind]) async throws {
-        for kind in kinds where !state.installed.contains(kind) {
-            try await emit(event: .installed(kind))
-        }
-    }
-
     // MARK: Websites
 
     /// The websites made here, by name.
     public distributed var sites: [SiteName] { state.sites.sorted() }
 
     /// Its space's website named `name`, made the first time, which holds the name for the space:
-    /// only while its space has websites installed, and refused while another space holds the name.
+    /// refused while another space holds the name.
     package distributed func site(named name: SiteName) async throws -> Website {
-        guard state.installed.contains(Website.kind) else { throw DynamicObjectsError.notInstalled(Website.kind) }
         let website = try await Website.named(name, in: home, on: actorSystem)
         if !state.sites.contains(name) {
             try await website.claim()
@@ -377,7 +343,7 @@ public distributed actor DynamicObjects {
 
     // MARK: Following its changes
 
-    /// That its objects changed, from now on, as they're made, removed, shared, or installed: for
+    /// That its objects changed, from now on, as they're made, removed or shared: for
     /// whoever shows them to list them again.
     public nonisolated func subscription() async throws -> Subscription<ObjectsChanged> {
         let subscriber = UUID()
@@ -448,10 +414,6 @@ public enum DynamicObjectsEvent: Codable, Sendable {
     /// Who may read and write an object changed, as the object says.
     case accessChanged(ObjectIdentity, Access)
     case removed(ObjectIdentity)
-    /// A built-in object installed in its space.
-    case installed(BuiltInKind)
-    /// A built-in object taken out of its space.
-    case uninstalled(BuiltInKind)
     /// A website made, its name its space's.
     case siteMade(SiteName)
     /// A website taken out, its name given up.
@@ -479,8 +441,6 @@ public struct DynamicObjectsState: Codable, Sendable {
     /// The objects made by name, oldest first: what's listed and found here. An
     /// object that code made with `Type()` isn't one of them: it's reached through what holds it.
     public var entries: [Entry] = []
-    /// The built-in objects its space installed.
-    public var installed: Set<BuiltInKind> = []
     /// The websites made here, by name.
     public var sites: Set<SiteName> = []
 
@@ -518,10 +478,6 @@ public struct DynamicObjectsState: Codable, Sendable {
             if let index = entries.firstIndex(where: { $0.identity == identity }) { entries[index].access = access }
         case .removed(let identity):
             entries.removeAll { $0.identity == identity }
-        case .installed(let kind):
-            installed.insert(kind)
-        case .uninstalled(let kind):
-            installed.remove(kind)
         case .siteMade(let name):
             sites.insert(name)
         case .siteRemoved(let name):
@@ -536,8 +492,6 @@ public enum DynamicObjectsError: Error, Codable, Equatable, Sendable, CustomStri
     /// An object with this id is there already, of this type.
     case exists(String, type: String)
     case unknownType(String)
-    /// Its space hasn't installed this kind of built-in object.
-    case notInstalled(BuiltInKind)
 
     public var description: String {
         switch self {
@@ -549,8 +503,6 @@ public enum DynamicObjectsError: Error, Codable, Equatable, Sendable, CustomStri
             "An object or type named \(name) already exists. Change it with edit_object, or choose another name."
         case .unknownType(let name):
             "There's no object or type \(name) here."
-        case .notInstalled(let kind):
-            "This space hasn't installed \(kind)."
         }
     }
 }
