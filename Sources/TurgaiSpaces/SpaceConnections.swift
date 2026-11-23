@@ -26,22 +26,19 @@ extension Space {
         return space.connections.values.sorted { $0.label.rawValue < $1.label.rawValue }
     }
 
-    /// Its connections, each by its id: every one, whoever asks, for what follows them.
-    /// Read once no change is being made: never a change journaled but not yet applied.
-    public distributed func connectionIDs() async -> [ConnectionID] {
-        await changing { state.space.map { Array($0.connections.keys) } ?? [] }
+    /// Tells its connection `id`'s run how it should run now: as it's set up, or to stop when
+    /// it's off, removed, or the space isn't active.
+    func tellRun(of id: ConnectionID) async throws {
+        var wanted: Connection?
+        if case .active(let space) = state, let connection = space.connections[id], connection.enabled {
+            wanted = connection
+        }
+        try await ConnectionRun.of(id, in: state.id, on: actorSystem).set(wanted)
     }
 
-    /// Its connection `id` as it should run now: none when it's off, removed, or the space isn't
-    /// active. Read once no change is being made: never a change journaled but not yet applied,
-    /// which whoever follows its events may already have seen.
-    public distributed func runnable(_ id: ConnectionID) async -> Connection? {
-        await changing {
-            guard case .active(let space) = state, let connection = space.connections[id], connection.enabled else {
-                return nil
-            }
-            return connection
-        }
+    /// Tells each of its connections' runs how it should run now: all stop while it's archived.
+    func tellRuns() async throws {
+        for id in state.space.map({ Array($0.connections.keys) }) ?? [] { try await tellRun(of: id) }
     }
 
     /// Its connection `id`, as it's set up now: none once it's removed.
@@ -53,17 +50,20 @@ extension Space {
     /// from now on, while it's enabled.
     public distributed func addConnection(_ connection: Connection, by person: UserID) async throws {
         try await run(.addConnection(connection, by: person))
+        try await tellRun(of: connection.id)
     }
 
     /// Its connection as `connection` says from now on, as `person`, who may configure them,
     /// changes it: run again as it is now.
     public distributed func changeConnection(_ connection: Connection, by person: UserID) async throws {
         try await run(.changeConnection(connection, by: person))
+        try await tellRun(of: connection.id)
     }
 
     /// Its connection `id` removed, as `person`, who may configure them, asks: it stops.
     public distributed func removeConnection(_ id: ConnectionID, by person: UserID) async throws {
         try await run(.removeConnection(id, by: person))
+        try await tellRun(of: id)
     }
 
 }

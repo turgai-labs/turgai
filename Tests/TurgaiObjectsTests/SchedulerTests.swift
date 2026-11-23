@@ -8,6 +8,7 @@ import TurgaiDomain
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+@testable import TurgaiSpaces
 
 /// A chat's schedules, by the names they're given in it: listed there, and changed by whoever made
 /// each, or the chat's admins.
@@ -24,14 +25,14 @@ struct SchedulerTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
-    func aChatsSchedulesAreListedThereAndChangedByWhoeverMadeThem() async throws {
+    func aChatsSchedulesAreListedThereAndChangedByWhoeverIsInIt() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem(
             "scheduler", store: store, hostsVirtualActors: true, people: [Self.ann, Self.bob],
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
             let scheduler = try await Scheduler.of(Self.space, on: node)
-            let (listener, heard) = try await listening(to: Self.space, on: node)
+            let (listener, heard) = try await listening(to: Self.space, as: Self.ann, on: node)
             defer { listener.cancel() }
             let made = try await self.as(Self.ann) {
                 try await scheduler.every(
@@ -48,15 +49,14 @@ struct SchedulerTests {
             let resumed = try await self.as(Self.ann) { try await scheduler.resume(name: "morning-news") }
             #expect(!resumed.paused)
 
-            // Someone else's isn't theirs to change; one that isn't there is said with those that are.
-            await #expect(throws: DueInChatError.notTheirs("morning-news")) {
-                try await self.as(Self.bob) { try await scheduler.cancel(name: "morning-news") }
-            }
+            // One that isn't there is said with those that are.
             await #expect(throws: DueInChatError.none(kind: "schedule", "evening", named: ["morning-news"])) {
                 try await self.as(Self.ann) { try await scheduler.cancel(name: "evening") }
             }
 
-            _ = try await self.as(Self.ann) { try await scheduler.cancel(name: "morning-news") }
+            // It's the chat's: Bob, who's in the chat too, sees it and ends it, though Ann made it.
+            #expect(try await self.as(Self.bob) { try await scheduler.list().chat.map(\.name) } == ["morning-news"])
+            _ = try await self.as(Self.bob) { try await scheduler.cancel(name: "morning-news") }
             #expect(try await self.as(Self.ann) { try await scheduler.list().chat }.isEmpty)
 
             // Whoever follows the space's tasks is told each change as it's made.
@@ -65,8 +65,7 @@ struct SchedulerTests {
                 .kept(
                     KeptTask(
                         id: .schedule(id), of: .chat(Self.chat, name: "morning-news", does: "asks Tell me the news"),
-                        due: .schedule(.daily(hour: 8, minute: 0, timeZone: "Europe/Berlin")), paused: paused,
-                        maker: UserID.ann))
+                        due: .schedule(.daily(hour: 8, minute: 0, timeZone: "Europe/Berlin")), paused: paused))
             }
             #expect(
                 await heard.notices(4) == [

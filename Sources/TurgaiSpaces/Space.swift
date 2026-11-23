@@ -1,3 +1,4 @@
+import AttributedCalls
 import Distributed
 import DistributedCluster
 import EventSourcing
@@ -39,13 +40,10 @@ public distributed actor Space: ConversationOwner {
         self.actorSystem = actorSystem
         self.state = SpaceDecider.initial(id)
         try await actorSystem.journal.register(actor: self, with: Self.persistenceID(for: id))
-    }
-
-    /// Its objects, as `person`, who's in it, works with them: its own registry, handed out to
-    /// someone in it. The calls they make on it are on their behalf, as their chain says.
-    public distributed func objects(for person: UserID) async throws -> DynamicObjects {
-        _ = try made().scope(of: person)
-        return try await DynamicObjects.of(state.id, on: actorSystem)
+        // Its connections' runs are told how to run now, whatever they were last told: one that
+        // missed a change, or comes back after a restart, runs as the space has it. It's the
+        // space's own doing, whoever's call started it.
+        try? await Call.asWork(of: .space(id)) { try await tellRuns() }
     }
 
     /// Its tasks as they change, as `person`, who's in it, follows them: which of them they see,
@@ -56,7 +54,7 @@ public distributed actor Space: ConversationOwner {
     }
 
     public static func actorID(for id: SpaceID) -> VirtualActorID {
-        VirtualActorID(rawValue: "space:\(id.rawValue.uuidString)")
+        .space(id)
     }
 
     public static func persistenceID(for id: SpaceID) -> String {
@@ -184,11 +182,13 @@ public distributed actor Space: ConversationOwner {
     /// It archived, as `person`, who may configure it, asks.
     public distributed func archive(by person: UserID) async throws {
         try await run(.archive(by: person))
+        try await tellRuns()
     }
 
     /// It in use again, as `person`, who may configure it, asks.
     public distributed func unarchive(by person: UserID) async throws {
         try await run(.unarchive(by: person))
+        try await tellRuns()
     }
 
     /// Exactly `request`, made through `chain`, decided now, as whoever decides for the space has
@@ -196,44 +196,50 @@ public distributed actor Space: ConversationOwner {
     /// exactly that asker, which it spends; refused otherwise, asking whoever decides, and the
     /// request it opens, when it opens one. Decided once no other change is being made.
     public distributed func decide(_ request: ExactRequest, for chain: CallChain) async throws -> RequestDecision {
-        try await changing {
+        let decision: RequestDecision = try await changing {
             let space = try made()
-            switch try space.deciding(request, for: chain.scope.person, asker: chain.asker) {
+            switch try space.deciding(request, for: chain.scope.asker) {
             case .allowed:
                 return .granted
             case .allowedOnce(let id):
                 try await emit(event: .spent(id))
                 return .granted
             case .notAllowed:
-                let asking = SpaceCommand.ask(
-                    request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID()))
+                let asking = SpaceCommand.ask(request, by: chain.scope.asker, id: AccessRequestID(UUID()))
                 let events = try SpaceDecider.decide(asking, state)
                 for event in events { try await emit(event: event) }
-                let asked = events.lazy.compactMap { if case .asked(let asked, _) = $0 { asked } else { nil } }.first
+                let asked = events.lazy.compactMap { if case .asked(let asked) = $0 { asked } else { nil } }.first
                 return .refused(asked)
             }
         }
+        // What one of its own actors asks, working by itself, no turn shows: the chat it works in
+        // does, where whoever decides answers it. With no chat, it waits among what the space asks,
+        // which every chat's links show as they open.
+        if case .refused(let asked?) = decision, chain.scope.person == nil, let place = chain.place {
+            try? await conversation(place).asks(asked)
+        }
+        return decision
     }
 
-    /// Whether a call through `chain` may go as far as `level` with something `access` says who may
-    /// use, as the space has its person now: the groups they're in and what they may do. Not if
-    /// they're not in it. Decided once no other change is being made.
-    public distributed func decide(_ access: Access, _ level: AccessLevel, for chain: CallChain) async -> Bool {
-        await changing {
-            guard let space = try? made(), let scope = try? space.scope(of: chain.scope.person) else { return false }
-            return access.allows(chain.settled(as: scope), level)
-        }
+    /// Whether work with `chain`, calling through `caller`, may go as far as `level` with something
+    /// `access` says who may use, as the space has whoever asked now: the groups they're in and
+    /// what they may do. Not if they're not in it. It changes nothing, so it's read as the space
+    /// is, without waiting on a change being made.
+    public distributed func decide(
+        _ access: Access, _ level: AccessLevel, for chain: CallChain, calledBy caller: CallActor?
+    ) -> Bool {
+        guard let space = try? made(), let scope = try? space.scope(of: chain.scope.asker) else { return false }
+        return access.allows(scope, calledBy: caller, level)
     }
 
     /// Whoever this call is on behalf of needing exactly `request`, which their scope didn't allow:
     /// it waits for whoever decides for it. The request it opens, when it opens one.
     public distributed func needed(_ request: ExactRequest) async throws -> AccessRequest? {
         guard let chain = CallChain.current else { throw CallOnBehalfOfNoOne(actor: .actor(id)) }
-        let events = try await run(
-            .ask(request, by: chain.scope.person, as: chain.asker, id: AccessRequestID(UUID())))
+        let events = try await run(.ask(request, by: chain.scope.asker, id: AccessRequestID(UUID())))
         // Asked already, as deciding it refused it: the request that's open is the one waited for.
-        return events.lazy.compactMap { if case .asked(let asked, _) = $0 { asked } else { nil } }.first
-            ?? state.space?.request(for: request, by: chain.scope.person, as: chain.asker).flatMap {
+        return events.lazy.compactMap { if case .asked(let asked) = $0 { asked } else { nil } }.first
+            ?? state.space?.request(for: request, by: chain.scope.asker).flatMap {
                 $0.standing == .waiting ? $0 : nil
             }
     }
@@ -249,11 +255,14 @@ public distributed actor Space: ConversationOwner {
         try await self.conversation(conversation).answered(open, answer, by: person, from: self)
     }
 
-    /// The scope of a chain `person` starts here for `asker`, settled as it starts: what's allowed
-    /// `asker` once is in it, and spent.
-    public distributed func opening(scopeOf person: UserID, for asker: Asker) async throws -> CallScope {
-        try await changing {
-            let (scope, spent) = try made().opening(scopeOf: person, for: asker)
+    /// The scope of work that starts here for `asker`, one of its people or one of its own actors,
+    /// as it starts: what's allowed them once is in it, and spent. With nothing to spend, it
+    /// changes nothing, and is read as the space is, without waiting on a change being made.
+    public distributed func opening(scopeOf asker: Party) async throws -> CallScope {
+        let (scope, spent) = try made().opening(scopeOf: asker)
+        guard !spent.isEmpty else { return scope }
+        return try await changing {
+            let (scope, spent) = try made().opening(scopeOf: asker)
             for event in spent { try await emit(event: event) }
             return scope
         }

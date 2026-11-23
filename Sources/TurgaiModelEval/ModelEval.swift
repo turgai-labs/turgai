@@ -36,7 +36,7 @@ struct ModelEval: AsyncParsableCommand {
     @Flag(help: "Only probe what the object writer writes for an object that follows another's events.")
     var writerProbe = false
 
-    @Flag(help: "Only probe what FM makes of a page, generated as the website's Page.")
+    @Flag(help: "Only probe what FM makes of a page, generated as the page's Layout.")
     var pageProbe = false
 
     func run() async throws {

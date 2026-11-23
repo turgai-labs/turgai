@@ -1,3 +1,4 @@
+import AttributedCalls
 import DiscoverableActors
 import DistributedCluster
 import EventSourcing
@@ -6,13 +7,13 @@ import Hail
 import Testing
 import TurgaiCalls
 import TurgaiDomain
-import TurgaiSpaces
 import VirtualActors
 
 import struct AnyLanguageModel.GeneratedContent
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+@testable import TurgaiSpaces
 
 @Suite(.serialized, .asAPerson)
 struct DynamicObjectTests {
@@ -135,6 +136,10 @@ struct DynamicObjectTests {
                             code: logger, type: "CupLogger",
                             uses: Uses(interface: counterSpec, objects: [:], lasting: ["CoffeeCounter"]))))
                 let log = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(loggerID)
+                // Following is the logger's own work, so the counter is shared with the logger itself:
+                // whoever made both doesn't make one the other's.
+                try await coffee.share(
+                    with: Audience(try Party(DynamicObject.actorID(for: loggerID, in: AsAPerson.person.space))), .read)
 
                 #expect(try await coffee.describe().events.keys.sorted() == ["CupAdded"])
                 // The logger follows once it has subscribed; until then an event isn't missed, but
@@ -170,8 +175,12 @@ struct DynamicObjectTests {
                 let script = try Script(
                     code: listener, type: "Listener", uses: Uses(interface: spec, objects: [:], lasting: ["Bell"]))
                 #expect(await ScriptInstance.problems(in: script).isEmpty)
-                let listening = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(
-                    try await objects.create(name: "Listener", spec: .new(script)))
+                let listenerID = try await objects.create(name: "Listener", spec: .new(script))
+                let listening = try await DynamicObjects.of(AsAPerson.person.space, on: node).held(listenerID)
+                // Shared with the listener itself, whose own work following is.
+                try await ringing.share(
+                    with: Audience(try Party(DynamicObject.actorID(for: listenerID, in: AsAPerson.person.space))), .read
+                )
                 try await eventually { try await listening.read(property: "heard") == "" }
                 try await Task.sleep(for: .seconds(2))
                 _ = try await ringing.respond("ring", arguments: ["loud": true])
@@ -382,8 +391,7 @@ struct DynamicObjectTests {
                     events: boardDescribed.events.keys.sorted())
                 let session = ObjectSession(
                     in: AsAPerson.person.space,
-                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
-                        for: AsAPerson.person.person), actorSystem: node,
+                    objects: try await DynamicObjects.of(AsAPerson.person.space, on: node), actorSystem: node,
                     builtIns: [playerEntry, boardEntry])
                 try await eventually { (try await session.list().arrayValue?.count ?? 0) >= 2 }
 
@@ -646,8 +654,7 @@ struct DynamicObjectTests {
                 let annID = try await objects.create(name: "Ann", spec: .new(try Script(code: ann, type: "Ann")))
                 let session = ObjectSession(
                     in: AsAPerson.person.space,
-                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
-                        for: AsAPerson.person.person), actorSystem: node)
+                    objects: try await DynamicObjects.of(AsAPerson.person.space, on: node), actorSystem: node)
                 let others = await session.others(except: "Bob")
                 let bob = """
                     actor Bob {
@@ -680,8 +687,7 @@ struct DynamicObjectTests {
                 // the follower's.
                 let shown = ObjectSession(
                     in: AsAPerson.person.space,
-                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
-                        for: AsAPerson.person.person), actorSystem: node)
+                    objects: try await DynamicObjects.of(AsAPerson.person.space, on: node), actorSystem: node)
                 for (object, code) in zip(try await shown.yourObjects(), [ann, bob]) {
                     guard case .markdown(let card) = try await shown.card(object) else { continue }
                     #expect(card.hasSuffix("```swift\n\(code)\n```"), "\(object): \(card)")
@@ -771,41 +777,45 @@ struct DynamicObjectTests {
     @Test(.timeLimit(.minutes(2)))
     func anObjectKeepsWhoMadeIt() async throws {
         let store = MemoryEventStore()
-        let ann = CallScope.admin(UserID.ann, in: SpaceID())
         let counter = "actor Counter {\n    var count = 0\n}"
         let drinks = "actor Drinks {\n    private let tea = Counter(id: \"tea\")\n}"
         let uses = Uses(
             interface: ModuleInterface(name: Uses.module, source: "actor Counter {\n    init(id: String)\n}"),
             objects: [:], lasting: ["Counter"])
         try await withShopNodes(store: store) { shop, customers in
-            let drinksID = try await withDynamicNode(joining: shop, store: store) { _ in
+            let (ann, drinksID) = try await withDynamicNode(joining: shop, store: store) { node in
+                // Ann, as the space she made says she is.
+                let space = try await madeSpace("Shop", by: .ann, on: node)
+                let ann = try await Space.identified(by: space, on: node).scope(of: .ann)
                 // Made from a node that hosts no objects: the call carries Ann to the one that does.
-                try await CallChain.$current.withValue(.start(ann, in: nil)) {
+                let id = try await CallChain.$current.withValue(.start(ann, in: nil)) {
                     let objects = try await DynamicObjects.of(ann.space, on: customers)
                     _ = try await objects.create(
                         name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
                     return try await objects.create(
                         name: "Drinks", spec: .new(try Script(code: drinks, type: "Drinks", uses: uses)))
                 }
+                return (ann, id)
             }
             try await withDynamicNode(joining: shop, store: store) { node in
                 // Hers alone: read as her.
                 try await CallChain.$current.withValue(.start(ann, in: nil)) {
                     let objects = try await DynamicObjects.of(ann.space, on: node)
-                    #expect(try await objects.held(drinksID).maker == ann)
-                    #expect(try await objects.held(drinksID).access == Access(madeBy: ann))
+                    #expect(try await objects.held(drinksID).access == Access(madeBy: ann.asker))
                     let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
                     let made = try await DynamicObject.identified(by: tea, in: ann.space, on: node)
                     // Not hers to call: it's what Drinks holds.
-                    await #expect(throws: NotAllowed(.read)) { _ = try await made.maker }
+                    await #expect(throws: NotAllowed(.read)) { _ = try await made.access }
                 }
-                // Read as Drinks: made on Ann's behalf, and Drinks' alone.
-                let drinks = DynamicObject.callActor(for: drinksID, in: ann.space)
-                try await CallChain.$current.withValue(try CallChain.start(ann, in: nil).entering(drinks)) {
-                    let tea = try #require(try await Self.heldIdentity("tea", of: drinksID, on: node))
+                // Read as Drinks' own work: it's Drinks' alone, which made it.
+                let drinks = DynamicObject.actorID(for: drinksID, in: ann.space)
+                let tea = try #require(
+                    try await CallChain.$current.withValue(.start(ann, in: nil)) {
+                        try await Self.heldIdentity("tea", of: drinksID, on: node)
+                    })
+                try await Call.asWork(of: drinks) {
                     let made = try await DynamicObject.identified(by: tea, in: ann.space, on: node)
-                    #expect(try await made.maker == ann)
-                    #expect(try await made.access == Access(heldBy: drinks))
+                    #expect(try await made.access == Access(heldBy: .virtual(drinks)))
                 }
             }
         }
@@ -813,7 +823,7 @@ struct DynamicObjectTests {
 
     /// What an object holds comes back after a restart as it was: the object it made is the same
     /// one, restored, not made again.
-    @Test(.timeLimit(.minutes(2)))
+    @Test(.timeLimit(.minutes(1)))
     func aRestartRestoresTheObjectsItHolds() async throws {
         let store = MemoryEventStore()
         let counter =
@@ -979,8 +989,7 @@ struct DynamicObjectTests {
                 let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
                 let session = ObjectSession(
                     in: AsAPerson.person.space,
-                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
-                        for: AsAPerson.person.person), actorSystem: node)
+                    objects: try await DynamicObjects.of(AsAPerson.person.space, on: node), actorSystem: node)
                 let desk = """
                     actor Desk {
                         protocol RefundManager {
@@ -1056,8 +1065,7 @@ struct DynamicObjectTests {
                 _ = try await objects.create(name: "Ann", spec: .new(try Script(code: ann, type: "Ann")))
                 let session = ObjectSession(
                     in: AsAPerson.person.space,
-                    objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
-                        for: AsAPerson.person.person), actorSystem: node)
+                    objects: try await DynamicObjects.of(AsAPerson.person.space, on: node), actorSystem: node)
                 let others = await session.others(except: "Bob")
                 let bob = """
                     actor Bob {

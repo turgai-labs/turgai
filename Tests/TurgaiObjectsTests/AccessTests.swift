@@ -13,7 +13,7 @@ struct AccessTests {
 
     @Test
     func aNewObjectIsItsMakersAlone() {
-        let access = Access(madeBy: dad)
+        let access = Access(madeBy: dad.asker)
 
         #expect(access.allows(dad, .write))
         #expect(!access.allows(mom, .read))
@@ -25,7 +25,7 @@ struct AccessTests {
 
     @Test
     func sharedWithTheMembersTheyReadAndItsDecidersWrite() {
-        let access = Access(madeBy: dad)
+        let access = Access(madeBy: dad.asker)
             .sharing(with: .group(family, .members), .read)
             .sharing(with: .deciders(of: family), .write)
 
@@ -37,19 +37,24 @@ struct AccessTests {
             !access.allows(CallScope.member(UserID.kid, in: SpaceID()), .read))
     }
 
+    /// A call for `scope` that no actor made, as an object it reaches sees it.
+    private func reached(_ scope: CallScope) -> Reached {
+        Reached(chain: .start(scope, in: nil), caller: nil)
+    }
+
     @Test
     func onlyWhoMayWriteItShares() throws {
         var object = DynamicObjectState.unmade
         object = object.applying(
             try object.adopting(
                 BehaviorID(rawValue: "List"), try Script(code: "actor List {}", type: "List"), starts: [:],
-                by: .start(dad, in: nil)))
+                by: reached(dad)))
 
         #expect(throws: NotAllowed(.write)) {
-            try object.live.sharing(with: .group(family, .members), .read, by: .start(kid, in: nil))
+            try object.live.sharing(with: .group(family, .members), .read, by: reached(kid))
         }
         object = object.applying(
-            try object.live.sharing(with: .group(family, .members), .read, by: .start(dad, in: nil)))
+            try object.live.sharing(with: .group(family, .members), .read, by: reached(dad)))
         #expect(try object.live.access.allows(kid, .read))
     }
 
@@ -63,8 +68,8 @@ struct AccessTests {
         let made = object.applying(
             try object.adopting(
                 BehaviorID(rawValue: "List"), try Script(code: "actor List {}", type: "List"), starts: [:],
-                by: .start(kid, in: nil)))
-        #expect(try made.live.maker == kid)
+                by: reached(kid)))
+        #expect(try made.live.access == Access(madeBy: kid.asker))
         #expect(!made.access(for: .start(dad, in: nil)).allows(dad, .read))
     }
 }

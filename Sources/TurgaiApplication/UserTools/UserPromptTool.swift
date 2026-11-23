@@ -3,6 +3,7 @@ import DistributedCluster
 import Hail
 import HailCore
 import TurgaiConversations
+import TurgaiHail
 import VirtualActors
 
 #if canImport(FoundationEssentials)
@@ -68,8 +69,8 @@ public struct UserPromptTool: HailCore.Tool {
                 name, calledBy: sourceAgentID.role, in: try AgentContext.space(of: sourceAgentID), run: UUID()
             ).contextID
         )
-        let agent: Agent = try await actorSystem.agent(childID)
-        let response: String = try await Agent.answering(as: childID) { try await agent.respond(instruction) }
+        let agent = try await Agent.identified(by: childID, on: actorSystem)
+        let response: String = try await agent.respond(instruction)
         return .text(response)
     }
 }

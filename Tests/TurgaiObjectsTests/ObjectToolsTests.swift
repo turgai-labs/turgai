@@ -5,11 +5,11 @@ import Foundation
 import Hail
 import Testing
 import TurgaiDomain
-import TurgaiSpaces
 import VirtualActors
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+@testable import TurgaiSpaces
 
 /// Objects live on the first node, which also hosts the objects made here, as a runtime's does;
 /// the model's session runs on the second, so every call goes through a remote reference.
@@ -87,8 +87,8 @@ struct ObjectToolsTests {
 
             let session = ObjectSession(
                 in: AsAPerson.person.space,
-                objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
-                    for: AsAPerson.person.person), actorSystem: sessionNode, builtIns: [boardEntry])
+                objects: try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode), actorSystem: sessionNode,
+                builtIns: [boardEntry])
             _ = try await waitForRoots(1, in: session)
 
             func found(_ query: String) async throws -> [String] {
@@ -118,8 +118,8 @@ struct ObjectToolsTests {
             // directly.
             let listing = ObjectSession(
                 in: AsAPerson.person.space,
-                objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
-                    for: AsAPerson.person.person), actorSystem: sessionNode, builtIns: [boardEntry])
+                objects: try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode), actorSystem: sessionNode,
+                builtIns: [boardEntry])
             var lines: [String] = []
             var links: [String] = []
             for _ in 0..<50 {
@@ -141,8 +141,8 @@ struct ObjectToolsTests {
             // A new session, as a later turn gets: the listed handle works straight away.
             let session = ObjectSession(
                 in: AsAPerson.person.space,
-                objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
-                    for: AsAPerson.person.person), actorSystem: sessionNode, builtIns: [boardEntry])
+                objects: try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode), actorSystem: sessionNode,
+                builtIns: [boardEntry])
             #expect(try await session.describe(try await session.id(written: "board"))["type"] == "Board")
             _ = board
         }
@@ -154,8 +154,8 @@ struct ObjectToolsTests {
             try await withObjectNodes { _, sessionNode in
                 let session = ObjectSession(
                     in: AsAPerson.person.space,
-                    objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
-                        for: AsAPerson.person.person), actorSystem: sessionNode)
+                    objects: try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode),
+                    actorSystem: sessionNode)
                 _ = try await session.describe(try await session.id(written: "h9"))
             }
         }

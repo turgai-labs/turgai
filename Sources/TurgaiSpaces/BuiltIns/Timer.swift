@@ -1,3 +1,4 @@
+import AttributedCalls
 import DistributedCluster
 import DurableWorkflows
 import Hail
@@ -10,30 +11,27 @@ import TurgaiObjects
     import Foundation
 #endif
 
-/// A chat's timer: due once, at its date, by the name it was given in the chat, doing `then` there
-/// for whoever made it.
+/// A chat's timer: due once, at its date, by the name it was given in the chat, doing `then` there.
+/// It's the chat's: whoever is in the chat may change it.
 public struct ChatTimer: Codable, Sendable, Equatable {
     public let name: String
     public let date: Date
     public let then: WhenDue
-    /// Who made it: whose message an `ask` is, and who may cancel it, besides the chat's admins.
-    public let ownerID: TurgaiDomain.UserID
+    /// Who asked for it: whom the bot answers when it's due and asks the bot something.
+    public let askedBy: Party
     /// The space whose chat it's in, which it does what it does through.
     public let space: SpaceID
     public let conversationID: ConversationID
-    public let participantID: ParticipantID
 
     public init(
-        name: String, date: Date, then: WhenDue, ownerID: TurgaiDomain.UserID, in space: SpaceID,
-        conversationID: ConversationID
+        name: String, date: Date, then: WhenDue, askedBy: Party, in space: SpaceID, conversationID: ConversationID
     ) {
         self.name = name
         self.date = date
         self.then = then
-        self.ownerID = ownerID
+        self.askedBy = askedBy
         self.space = space
         self.conversationID = conversationID
-        self.participantID = ParticipantID(channel: conversationID.channel, rawValue: ownerID.key)
     }
 
     /// The durable timer named `name` in `conversation` of `space` for `date`: one for each date
@@ -71,11 +69,14 @@ public struct TimerActivities {
 
     @Activity
     public func deliver(input: ChatTimer, context: ActivityContext) async throws -> DurableVoid {
-        try await WhenDue.doing(
-            input.then, in: input.conversationID, of: input.space, for: input.ownerID, as: input.participantID,
-            run: context.workflowID, on: context.system)
-        // Due once: done, it isn't a timer any more.
-        await context.system.tellTasks(in: input.space, .ended(.timer(context.workflowID)))
+        // What's due is the space's timers' own work, as a reminder is its actor's.
+        try await Call.asWork(of: .owned(by: input.space, "builtin", "timers")) {
+            try await WhenDue.doing(
+                input.then, for: input.askedBy, in: input.conversationID, of: input.space, run: context.workflowID,
+                on: context.system)
+            // Due once: done, it isn't a timer any more.
+            await context.system.tellTasks(in: input.space, .ended(.timer(context.workflowID)))
+        }
         return DurableVoid()
     }
 }

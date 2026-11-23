@@ -1,5 +1,7 @@
+import AttributedCalls
 import TurgaiCalls
 import TurgaiDomain
+import VirtualActors
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -46,9 +48,9 @@ public enum SpaceEvent: Hashable, Codable, Sendable {
     case connectionChanged(Connection)
     /// A connection is no way into it any more.
     case connectionRemoved(ConnectionID)
-    /// Someone asked it to run exactly what they may not run yet: themselves, or an object's own
-    /// work, done for them.
-    case asked(AccessRequest, by: Asker)
+    /// Someone asked it to run exactly what they may not run yet: one of its people, or one of
+    /// its own actors.
+    case asked(AccessRequest)
     /// Someone who decides for it answered.
     case answered(AccessRequestID, AccessAnswer, by: UserID)
     /// What was allowed once ran.
@@ -101,8 +103,8 @@ public enum SpaceCommand: Hashable, Sendable {
     case leave(UserID)
     case archive(by: UserID)
     case unarchive(by: UserID)
-    /// `asker` asks, for `person`, to run exactly `request`, which their scope doesn't allow.
-    case ask(ExactRequest, by: UserID, as: Asker, id: AccessRequestID)
+    /// `asker` asks to run exactly `request`, which their scope doesn't allow.
+    case ask(ExactRequest, by: Party, id: AccessRequestID)
     /// `person` answers the request `id`: only someone who may decide for what it asks counts.
     case answer(AccessRequestID, AccessAnswer, by: UserID)
 }
@@ -253,8 +255,6 @@ extension SpaceState {
         public fileprivate(set) var access: [ExactRequest: Access]
         /// What's asked of it: waiting for an answer, or allowed once and not yet run.
         public fileprivate(set) var requests: [AccessRequestID: AccessRequest]
-        /// Who asked each: the one what it allows once goes to.
-        public fileprivate(set) var askers: [AccessRequestID: Asker]
 
         fileprivate init(
             id: SpaceID, name: SpaceName, admins: NonEmptySet<UserID>, groups: [GroupID: Permissions], main: Bot
@@ -269,7 +269,6 @@ extension SpaceState {
             self.invites = [:]
             self.access = [:]
             self.requests = [:]
-            self.askers = [:]
         }
 
         /// What `person` may do here: everything for an admin, what their groups may for anyone else,
@@ -310,33 +309,42 @@ extension SpaceState {
             return CallScope(person, in: id, may: permissions, groups: groups, allowed: Set(shared))
         }
 
-        /// The scope of a chain `person` starts here for `asker`, as it opens: theirs, with what was
-        /// allowed `asker` once besides, which opening it spends. What another asked for, even for
-        /// them, it doesn't take.
-        public func opening(scopeOf person: UserID, for asker: Asker) throws(SpaceRefusal) -> (CallScope, [SpaceEvent])
-        {
-            let scope = try scope(of: person)
-            let once = requests.values.filter {
-                $0.by == person && askers[$0.id] == asker && $0.standing == .allowedOnce
+        /// Whom work `asker` asks for here is for: one of its people, as above; or one of its own
+        /// actors, which is in no group and may only what's shared with it. Refused for anyone
+        /// else: someone who isn't in it, and an actor that isn't its own.
+        public func scope(of asker: Party) throws(SpaceRefusal) -> CallScope {
+            switch asker {
+            case .person(let person):
+                return try scope(of: person)
+            case .actor(let actor):
+                guard actor.space == id else { throw .notInIt }
+                let asIt = CallScope(asker, in: id, may: .none, groups: [], allowed: [])
+                let shared = access.filter { $0.value.allows(asIt, .read) }.keys
+                return CallScope(asker, in: id, may: .none, groups: [], allowed: Set(shared))
             }
-            .sorted { $0.id.rawValue.uuidString < $1.id.rawValue.uuidString }
+        }
+
+        /// The scope of work that starts here for `asker`: theirs, with what was allowed them once
+        /// besides, which starting it spends. What another asked for, it doesn't take.
+        public func opening(scopeOf asker: Party) throws(SpaceRefusal) -> (CallScope, [SpaceEvent]) {
+            let scope = try scope(of: asker)
+            let once = requests.values.filter { $0.by == asker && $0.standing == .allowedOnce }
+                .sorted { $0.id.rawValue.uuidString < $1.id.rawValue.uuidString }
             return (
                 CallScope(
-                    person, in: id, may: scope.permissions, groups: scope.groups,
+                    asker, in: id, may: scope.permissions, groups: scope.groups,
                     allowed: scope.allowed.union(once.map(\.request))),
                 once.map { .spent($0.id) }
             )
         }
 
-        /// How exactly `request`, which `person` makes as `asker`, is decided now: allowed by what
-        /// they may do and what's shared with them, allowed once for exactly that asker (the
-        /// allowance to spend), or not at all. Refused when they're not in it.
-        public func deciding(_ request: ExactRequest, for person: UserID, asker: Asker) throws(SpaceRefusal)
-            -> RequestAllowance
-        {
-            if try scope(of: person).allows(request) { return .allowed }
+        /// How exactly `request`, which `asker` makes, is decided now: allowed by what they may do
+        /// and what's shared with them, allowed them once (the allowance to spend), or not at all.
+        /// Refused when they're not in it.
+        public func deciding(_ request: ExactRequest, for asker: Party) throws(SpaceRefusal) -> RequestAllowance {
+            if try scope(of: asker).allows(request) { return .allowed }
             let once = requests.values.first {
-                $0.by == person && askers[$0.id] == asker && $0.standing == .allowedOnce && $0.request == request
+                $0.by == asker && $0.standing == .allowedOnce && $0.request == request
             }
             return once.map { .allowedOnce($0.id) } ?? .notAllowed
         }
@@ -351,9 +359,9 @@ extension SpaceState {
             access[request] ?? Access(decidedBy: id)
         }
 
-        /// The request `asker` asked for exactly `request` with, for `person`, while it's open.
-        public func request(for request: ExactRequest, by person: UserID, as asker: Asker) -> AccessRequest? {
-            requests.values.first { $0.request == request && $0.by == person && askers[$0.id] == asker }
+        /// The request `asker` asked for exactly `request` with, while it's open.
+        public func request(for request: ExactRequest, by asker: Party) -> AccessRequest? {
+            requests.values.first { $0.request == request && $0.by == asker }
         }
 
         /// Whether `person` may do what `allows` says with what they may.
@@ -540,11 +548,10 @@ public enum SpaceDecider {
         case .unarchive(let person):
             try space.check(person) { $0.configureSpace }
             return archived ? [.unarchived(by: person)] : []
-        case .ask(let request, let person, let asker, let id):
-            guard space.request(for: request, by: person, as: asker) == nil,
-                try !space.scope(of: person).allows(request)
+        case .ask(let request, let asker, let id):
+            guard space.request(for: request, by: asker) == nil, try !space.scope(of: asker).allows(request)
             else { return [] }
-            return [.asked(AccessRequest(id: id, request: request, by: person, standing: .waiting), by: asker)]
+            return [.asked(AccessRequest(id: id, request: request, by: asker, standing: .waiting))]
         case .answer(let id, let answer, let person):
             // An answer by someone who isn't in it, or who may not decide for what it asks, doesn't count.
             guard let open = space.requests[id], open.standing == .waiting, let scope = try? space.scope(of: person),
@@ -616,30 +623,32 @@ public enum SpaceDecider {
             next.groups[group] = nil
             // No one is in it alone: deciding refuses that.
             next.members = space.members.compactMapValues { $0.removing(group) }
-        case .asked(let request, let asker):
+        case .asked(let request):
             next.requests[request.id] = request
-            next.askers[request.id] = asker
         case .answered(let id, let answer, _):
             guard let open = space.requests[id] else { return next }
-            if answer != .once { next.askers[id] = nil }
             switch answer {
             case .once:
                 next.requests[id] = open.standing(.allowedOnce)
             case .always:
                 next.requests[id] = nil
-                next.access[open.request] = space.access(to: open.request).sharing(with: .person(open.by), .read)
+                next.access[open.request] = space.access(to: open.request).sharing(with: Audience(open.by), .read)
             case .everyone:
-                // Everyone in the groups whoever asked is in.
+                // Everyone in the groups whoever asked is in; an actor is in none, so it alone.
                 next.requests[id] = nil
-                next.access[open.request] = space.groupsReaching(open.by).reduce(space.access(to: open.request)) {
-                    $0.sharing(with: .group(space.id, $1), .read)
+                switch open.by {
+                case .person(let person):
+                    next.access[open.request] = space.groupsReaching(person).reduce(space.access(to: open.request)) {
+                        $0.sharing(with: .group(space.id, $1), .read)
+                    }
+                case .actor:
+                    next.access[open.request] = space.access(to: open.request).sharing(with: Audience(open.by), .read)
                 }
             case .no:
                 next.requests[id] = nil
             }
         case .spent(let id):
             next.requests[id] = nil
-            next.askers[id] = nil
         case .invited(let invite):
             next.invites[invite.id] = invite
         case .inviteUsed(let id, _), .inviteTakenBack(let id):

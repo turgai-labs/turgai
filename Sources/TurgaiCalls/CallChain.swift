@@ -18,74 +18,34 @@ public enum CallActor: Hashable, Codable, Sendable, CustomStringConvertible {
     }
 }
 
-/// Who asked for what an admin then allows once: a person, themselves, or one actor's own work,
-/// done for whoever it's for. What's allowed once goes to exactly the one that asked.
-public enum Asker: Hashable, Codable, Sendable {
-    case person
-    case actor(CallActor)
-}
-
-/// Who a call is on behalf of, and the actors it went through to get here, the first first: each
-/// while its code handles the call. It's what tells an actor a call came from its own handling,
-/// and what makes calls that go round in a circle fail, with the circle as the reason, instead of
-/// running until memory runs out.
+/// What a piece of work may do, and where it happens: what its space said whoever asked may do
+/// when the work started, and the conversation it's in, when it's in one. Everything the work calls
+/// has it, and nothing keeps it after. Who made each call, who asked, and how far the calls went,
+/// the actor system says itself.
 public struct CallChain: Codable, Sendable, Equatable {
-    /// Whoever started it, as they came in. It stays the same down the chain.
+    /// Whoever asked, and what they may do, as their space said when the work started.
     public let scope: CallScope
     /// The conversation it happens in, when it happens in one: a turn's, or, for what an actor
-    /// does itself, the one it was made in. It stays the same down the chain too.
+    /// does itself, the one it was made in.
     public let place: ConversationID?
-    /// Who it's for, asking: its person, or an actor's own work, done for them. What an admin
-    /// allows once goes to exactly the one that asked.
-    public let asker: Asker
-    public let actors: [CallActor]
 
-    /// How deep calls may go.
-    static let limit = 64
-
-    /// A call no actor's code made, on behalf of `scope`, in `place`: the start of a chain its
-    /// person makes.
+    /// The start of a piece of work for `scope`, in `place`.
     public static func start(_ scope: CallScope, in place: ConversationID?) -> CallChain {
-        CallChain(scope: scope, place: place, asker: .person, actors: [])
+        CallChain(scope: scope, place: place)
     }
 
-    /// The start of a chain of `actor`'s own work, its tasks and what it follows, on behalf of
-    /// `scope`, whoever it's for, in `place`.
-    public static func own(_ actor: CallActor, for scope: CallScope, in place: ConversationID?) -> CallChain {
-        CallChain(scope: scope, place: place, asker: .actor(actor), actors: [])
-    }
-
-    /// The same chain on behalf of `scope`, as whoever decides for its person settled it now: the
-    /// same person, place, asker and actors it went through.
+    /// The same work with `scope`, as whoever decides for whoever asked has it now: in the same
+    /// place.
     public func settled(as scope: CallScope) -> CallChain {
-        CallChain(scope: scope, place: place, asker: asker, actors: actors)
+        CallChain(scope: scope, place: place)
     }
 
-    /// The chain inside `actor`'s handling of a call that came through this one, refused once
-    /// it's too deep. It's left as the handling ends, with the chain it was entered from.
-    public func entering(_ actor: CallActor) throws(CallsTooDeep) -> CallChain {
-        let next = CallChain(scope: scope, place: place, asker: asker, actors: actors + [actor])
-        guard next.actors.count <= Self.limit else { throw CallsTooDeep(chain: next) }
-        return next
-    }
-
-    /// Whether the call came through `actor`'s handling.
-    public func contains(_ actor: CallActor) -> Bool {
-        actors.contains(actor)
-    }
-
-    /// The chain the current task is in, carried with its calls to other nodes.
+    /// What the work the current task is in may do, carried with its calls to other nodes.
     @TaskLocal public static var current: CallChain?
-
-    /// The chain the current task is in, entered by `actor` as it handles a call. A call in no
-    /// chain is on behalf of no one, and is refused.
-    public static func entering(_ actor: CallActor) throws -> CallChain {
-        guard let current else { throw CallOnBehalfOfNoOne(actor: actor) }
-        return try current.entering(actor)
-    }
 }
 
-/// A call that no chain carried, so on behalf of no one: every call starts with someone.
+/// A call that carried nothing about whom it's for, so on behalf of no one: every call starts with
+/// someone.
 public struct CallOnBehalfOfNoOne: Error, Codable, Sendable, Equatable, CustomStringConvertible {
     public let actor: CallActor
 
@@ -96,20 +56,9 @@ public struct CallOnBehalfOfNoOne: Error, Codable, Sendable, Equatable, CustomSt
     public var description: String { "a call to \(actor) is on behalf of no one" }
 }
 
-/// Calls that went deeper than a chain may go.
-public struct CallsTooDeep: Error, Sendable, Equatable, CustomStringConvertible {
-    public let chain: CallChain
-
-    public var description: String {
-        "calls went \(chain.actors.count) deep: "
-            + (chain.actors.prefix(6).map(\.description) + (chain.actors.count > 6 ? ["…"] : []))
-            .joined(separator: " → ")
-    }
-}
-
 extension ClusterSystemSettings {
-    /// Carries the call chain with remote calls, so a call on another node continues it. Every
-    /// node that runs Turgai's agents or objects declares it.
+    /// Carries what a piece of work may do with its calls to other nodes. Every node that runs
+    /// Turgai's agents or objects declares it.
     public mutating func propagateCallChain() {
         propagateTaskLocal(CallChain.$current, as: "turgai.call-chain")
     }

@@ -8,6 +8,7 @@ import TurgaiDomain
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+@testable import TurgaiSpaces
 
 /// A chat's timers, by the names they're given in it: each due once, listed there, and cancelled by
 /// whoever set it, or the chat's admins.
@@ -24,14 +25,14 @@ struct TimersTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
-    func aChatsTimersAreListedThereAndCancelledByWhoeverSetThem() async throws {
+    func aChatsTimersAreListedThereAndCancelledByWhoeverIsInIt() async throws {
         let store = MemoryEventStore()
         try await withClusterSystem(
             "timers-object", store: store, hostsVirtualActors: true, people: [Self.ann, Self.bob],
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
             let timers = try await Timers.of(Self.space, on: node)
-            let (listener, heard) = try await listening(to: Self.space, on: node)
+            let (listener, heard) = try await listening(to: Self.space, as: Self.ann, on: node)
             defer { listener.cancel() }
             let set = try await self.as(Self.ann) {
                 try await timers.after(name: "Tea", minutes: 30, then: .say(text: "Tea's ready"))
@@ -49,15 +50,13 @@ struct TimersTests {
                 try await self.as(Self.ann) { try await timers.at(name: "then", date: past, then: .say(text: "Then")) }
             }
 
-            // Someone else's isn't theirs to cancel; one that isn't there is said with those that are.
-            await #expect(throws: DueInChatError.notTheirs("tea")) {
-                try await self.as(Self.bob) { try await timers.cancel(name: "tea") }
-            }
+            // One that isn't there is said with those that are.
             await #expect(throws: DueInChatError.none(kind: "timer", "coffee", named: ["tea"])) {
                 try await self.as(Self.ann) { try await timers.cancel(name: "coffee") }
             }
 
-            _ = try await self.as(Self.ann) { try await timers.cancel(name: "tea") }
+            // It's the chat's: Bob, who's in the chat too, cancels it, though Ann set it.
+            _ = try await self.as(Self.bob) { try await timers.cancel(name: "tea") }
             #expect(try await self.as(Self.ann) { try await timers.list().chat }.isEmpty)
 
             // Whoever follows the space's tasks is told it's set, then that it isn't due any more.
@@ -67,7 +66,7 @@ struct TimersTests {
                     .kept(
                         KeptTask(
                             id: .timer(id), of: .chat(Self.chat, name: "tea", does: "says Tea's ready"),
-                            due: .timer(.at(set.date)), paused: false, maker: UserID.ann)),
+                            due: .timer(.at(set.date)), paused: false)),
                     .ended(.timer(id)),
                 ])
         }

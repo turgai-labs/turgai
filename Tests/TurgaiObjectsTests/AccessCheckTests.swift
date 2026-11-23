@@ -4,6 +4,7 @@ import Foundation
 import Testing
 import TurgaiCalls
 import TurgaiDomain
+import TurgaiSpaces
 
 @testable import TurgaiObjects
 
@@ -33,7 +34,7 @@ struct AccessCheckTests {
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
             }
-            let object = try await objects.held(id)
+            let object = try await self.as(ann) { try await objects.held(id) }
 
             // Hers: she uses it and sees it; Bob does neither.
             #expect(try await self.as(ann) { try await object.respond("add", arguments: [:]).reply } == .integer(1))
@@ -66,7 +67,7 @@ struct AccessCheckTests {
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
             }
-            let object = try await objects.held(id)
+            let object = try await self.as(ann) { try await objects.held(id) }
             #expect(try await self.as(ann) { try await object.respond("add", arguments: [:]).reply } == .integer(1))
             try await self.as(ann) { try await objects.remove(id) }
 
@@ -117,7 +118,7 @@ struct AccessCheckTests {
                 try await objects.create(
                     name: "Briefing", spec: .new(try Script(code: briefing, type: "Briefing", uses: uses)))
             }
-            let desk = try await objects.held(briefingID)
+            let desk = try await self.as(ann) { try await objects.held(briefingID) }
             func morning() async throws -> JSONValue {
                 try await self.as(ann) { try await desk.respond("morning", arguments: [:]).reply }
             }
@@ -159,8 +160,9 @@ struct AccessCheckTests {
             let id = try await self.as(ann) {
                 try await objects.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
             }
-            let object = try await objects.held(id)
+            let object = try await self.as(ann) { try await objects.held(id) }
 
+            // No one asked, and nothing says what they may do.
             await #expect(throws: CallOnBehalfOfNoOne.self) {
                 _ = try await object.respond("add", arguments: [:])
             }

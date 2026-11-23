@@ -5,18 +5,19 @@ import TurgaiAgents
 import TurgaiApplication
 import TurgaiObjects
 import TurgaiPersistence
+import TurgaiSpaces
 
 /// What the object writer writes, first time, for an object that has to follow another object's
-/// events: given the website as Swift declares it, with its button presses as a stream, and asked
+/// events: given the page as Swift declares it, with its button presses as a stream, and asked
 /// for a counter of them. Nothing is checked or saved: each answer is FM's own first instinct.
 enum WriterProbe {
-    static let website = """
-        - Website(id: "website")
-          A website on this machine.
+    static let page = """
+        - Page(id: "page")
+          A page on this machine.
           Methods:
-            show(_ page: Page)
+            show(_ layout: Layout)
           Events:
-            ButtonPressed(label: String), received by onButtonPressed(_ buttonPressed: Website.ButtonPressed)
+            ButtonPressed(label: String), received by onButtonPressed(_ buttonPressed: Page.ButtonPressed)
         """
     /// What events and subscribing are, then the calls for them, and where the receiving goes.
     static let events = """
@@ -31,7 +32,7 @@ enum WriterProbe {
           @attached(peer) macro Subscribed(to object: Object)
             The method it's attached to is called with each event of that object named like the method.
         """
-    static let request = "Count each press of the website's button."
+    static let request = "Count each press of the page's button."
 
     static func run(model: AgentModel, runs: Int, temperature: Double) async throws {
         let endpoints = AgentModelEndpointFactory(
@@ -45,14 +46,14 @@ enum WriterProbe {
             report: { event in
                 if case .answered = event { print(event.written) }
             })
-        // The website, as the module the code imports declares it.
+        // The page, as the module the code imports declares it.
         let uses = Uses(
             interface: ModuleInterface(
                 name: Uses.module,
                 source:
-                    "actor Website {\n    func show(_ page: Page)\n    @Event struct ButtonPressed: Codable {\n        var label: String\n    }\n}\n\nstruct Page {\n    var items: [String]\n}"
+                    "actor Page {\n    func show(_ layout: Layout)\n    @Event struct ButtonPressed: Codable {\n        var label: String\n    }\n}\n\nstruct Layout {\n    var items: [String]\n}"
             ),
-            objects: [ObjectIdentity(rawValue: "website"): "Website"], lasting: ["Website"])
+            objects: [ObjectIdentity(rawValue: "page"): "Page"], lasting: ["Page"])
         var tally: [String: Int] = [:]
         var saved = 0
         for run in 1...runs {
@@ -61,8 +62,8 @@ enum WriterProbe {
             let outcome: ObjectWriter.Outcome
             do {
                 outcome = try await writer.write(
-                    type: "PressCounter", task: "Counts each press of the website's button.", current: nil,
-                    others: [website], request: request
+                    type: "PressCounter", task: "Counts each press of the page's button.", current: nil,
+                    others: [page], request: request
                 ) { (code: String) -> String? in
                     do {
                         let script = try Script(code: code, type: "PressCounter", uses: uses)
@@ -83,8 +84,8 @@ enum WriterProbe {
                 outcome = .failed("the request failed: \(error)")
             }
             let traits = Self.traits(of: final)
-            // Saved and following the website: the subscription is what was asked for.
-            if case .saved = outcome, traits.contains("follows website"),
+            // Saved and following the page: the subscription is what was asked for.
+            if case .saved = outcome, traits.contains("follows page"),
                 traits.contains("implements onButtonPressed(_:)")
             {
                 saved += 1
@@ -92,7 +93,7 @@ enum WriterProbe {
             for trait in traits { tally[trait, default: 0] += 1 }
             print("=== RUN \(run): \(outcome) \(traits.joined(separator: ", "))\n\(final)\n")
         }
-        print("=== TALLY over \(runs) runs: \(saved) saved following the website")
+        print("=== TALLY over \(runs) runs: \(saved) saved following the page")
         for (trait, count) in tally.sorted(by: { $0.key < $1.key }) { print("\(count)  \(trait)") }
     }
 
@@ -115,11 +116,11 @@ enum WriterProbe {
         }
         if code.contains("subscribe(to:") { traits.append("subscribe(to:)") }
         if code.range(
-            of: #"@Subscribed\s+(private\s+)?var \w+ = Website\(id: "website"\)"#, options: .regularExpression) != nil
+            of: #"@Subscribed\s+(private\s+)?var \w+ = Page\(id: "page"\)"#, options: .regularExpression) != nil
         {
-            traits.append("follows website")
+            traits.append("follows page")
         }
-        if code.contains("func onButtonPressed(_ buttonPressed: Website.ButtonPressed)") {
+        if code.contains("func onButtonPressed(_ buttonPressed: Page.ButtonPressed)") {
             traits.append("implements onButtonPressed(_:)")
         }
         if code.contains("onButtonPressed") || code.contains("handler") || code.contains("callback")
@@ -131,12 +132,12 @@ enum WriterProbe {
     }
 }
 
-/// What FM makes of a page, generated as the `@Generable` `Page` it is, for a few asks.
+/// What FM makes of a layout, generated as the `@Generable` `Layout` it is, for a few asks.
 enum PageProbe {
     static let asks = [
-        "A page titled Coffee, with two buttons side by side: Add and Reset.",
-        "A page with a heading, a short line of text under it, and a Buy button.",
-        "A page with two columns: Tea on the left with an Order button, Coffee on the right with an Order button.",
+        "A layout titled Coffee, with two buttons side by side: Add and Reset.",
+        "A layout with a heading, a short line of text under it, and a Buy button.",
+        "A layout with two columns: Tea on the left with an Order button, Coffee on the right with an Order button.",
     ]
 
     static func run(model: AgentModel, runs: Int, temperature: Double) async throws {
@@ -150,11 +151,11 @@ enum PageProbe {
                 let entries: [Transcript.Entry] = [.prompt(.init(segments: [.text(.init(content: ask))]))]
                 let stream = endpoint.stream(
                     request: ModelRequest(input: entries, entries: entries), tools: [], authority: FullAuthority(),
-                    generating: Page.self, purpose: .generation)
+                    generating: Layout.self, purpose: .generation)
                 var result = "no page"
                 for await event in stream {
                     switch event {
-                    case .generated(let page): result = String(describing: page)
+                    case .generated(let layout): result = String(describing: layout)
                     case .failed(let error): result = "failed: \(error)"
                     default: continue
                     }

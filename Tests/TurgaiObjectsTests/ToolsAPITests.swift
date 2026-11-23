@@ -42,7 +42,7 @@ struct ToolsAPITests {
                 ) { input, _ in
                     // It runs in the chain of the call its code is handling.
                     let words = try JSONDecoder().decode(Words.self, from: try JSONEncoder().encode(input))
-                    let heard = CallChain.current?.scope.person.key ?? "no one"
+                    let heard = CallChain.current?.scope.person?.key ?? "no one"
                     let echoed = Echoed(bytes: Data(words.text.utf8), heard: heard)
                     return try JSONDecoder().decode(JSONValue.self, from: try JSONEncoder().encode(echoed))
                 }
@@ -120,7 +120,8 @@ struct ToolsAPITests {
             let id = try await CallChain.$current.withValue(.start(ann, in: nil)) {
                 try await objects.create(name: "Reader", spec: .new(try Script(code: code, type: "Reader", uses: uses)))
             }
-            try await body(node, try await objects.held(id))
+            let reader = try await CallChain.$current.withValue(.start(ann, in: nil)) { try await objects.held(id) }
+            try await body(node, reader)
         }
     }
 
@@ -143,10 +144,10 @@ struct ToolsAPITests {
         }
     }
 
-    /// An object's own task is opened by the object, as its maker: what it needed, it asks its
-    /// maker's group for.
+    /// An object's own task is the object's: what it needed, it asks its space for, as itself, not
+    /// as whoever made it.
     @Test(.timeLimit(.minutes(1)))
-    func anObjectsOwnTaskAsksItsMakersGroup() async throws {
+    func anObjectsOwnTaskAsksItsSpaceAsItself() async throws {
         try await reader(refusing) { node, reader in
             let ann = self.ann
             _ = try await CallChain.$current.withValue(.start(ann, in: nil)) {
@@ -159,7 +160,8 @@ struct ToolsAPITests {
                 if waiting.isEmpty { try await Task.sleep(for: .milliseconds(50)) }
             }
             #expect(waiting.map(\.request) == [Self.forecast])
-            #expect(waiting.map(\.by) == [ann.person])
+            let itself = try Party(DynamicObject.actorID(for: ObjectIdentity(rawValue: "reader"), in: family))
+            #expect(waiting.map(\.by) == [itself])
         }
     }
 
@@ -217,7 +219,9 @@ struct ToolsAPITests {
                 try await objects.create(
                     name: "Watcher", spec: .new(try Script(code: code, type: "Watcher", uses: uses)))
             }
-            let watcher = try await objects.held(id)
+            let watcher = try await CallChain.$current.withValue(.start(ann, in: Self.chatC)) {
+                try await objects.held(id)
+            }
             // Called from chat D: the call happens in D.
             let reply = try await CallChain.$current.withValue(.start(ann, in: Self.chatD)) {
                 try await watcher.respond("here", arguments: [:]).reply

@@ -1,6 +1,7 @@
 import Distributed
 import DistributedCluster
 import EventSourcing
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiMemory
 import VirtualActors
@@ -101,7 +102,7 @@ public distributed actor User {
     }
 
     public static func actorID(for userID: UserID) -> VirtualActorID {
-        VirtualActorID(rawValue: "user:\(userID.key)")
+        .user(userID)
     }
 
     public static func persistenceID(for userID: UserID) -> String {

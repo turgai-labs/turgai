@@ -53,7 +53,7 @@ public distributed actor DynamicObjects {
     }
 
     static func actorID(for space: SpaceID) -> VirtualActorID {
-        VirtualActorID(rawValue: "objects:\(space.rawValue.uuidString)")
+        .owned(by: space, "objects", "made")
     }
 
     private static let persistencePrefix = "turgai-objects-"
@@ -68,12 +68,9 @@ public distributed actor DynamicObjects {
         return UUID(uuidString: String(persistenceID.dropFirst(persistencePrefix.count))).map(SpaceID.init(rawValue:))
     }
 
-    /// The chain the current call came through: every call is on someone's behalf.
-    private func caller() throws -> CallChain {
-        guard let chain = CallChain.current else {
-            throw CallOnBehalfOfNoOne(actor: .virtual(Self.actorID(for: home)))
-        }
-        return chain
+    /// The call it's handling: every call is on someone's behalf.
+    private func caller() throws -> Reached {
+        try Reached.current(at: .virtual(Self.actorID(for: home)))
     }
 
     // MARK: Objects
@@ -135,10 +132,9 @@ public distributed actor DynamicObjects {
         try await made.describe(name: name, description: description)
         if !start.isEmpty { try await made.set(values: start) }
         let access = try await made.access
-        let maker = try await made.maker
         let place = try await made.madeIn
         try await emit(
-            event: .added(identity, type: id, description: description, access: access, maker: maker, in: place))
+            event: .added(identity, type: id, description: description, access: access, in: place))
         return identity
     }
 
@@ -165,29 +161,28 @@ public distributed actor DynamicObjects {
 
     // MARK: Built-in objects
 
-    // MARK: Websites
+    // MARK: Pages
 
-    /// The websites made here, by name.
-    public distributed var sites: [SiteName] { state.sites.sorted() }
+    /// The pages made here, by name.
+    public distributed var pages: [PageName] { state.pages.sorted() }
 
-    /// Its space's website named `name`, made the first time, which holds the name for the space:
-    /// refused while another space holds the name.
-    package distributed func site(named name: SiteName) async throws -> Website {
-        let website = try await Website.named(name, in: home, on: actorSystem)
-        if !state.sites.contains(name) {
-            try await website.claim()
-            try await emit(event: .siteMade(name))
+    /// Its space's page named `name`, made the first time it's named.
+    package distributed func page(named name: PageName) async throws -> Page {
+        let page = try await Page.named(name, in: home, on: actorSystem)
+        if !state.pages.contains(name) {
+            try await page.make()
+            try await emit(event: .pageMade(name))
         }
-        return website
+        return page
     }
 
-    /// The website named `name` taken out of its space, as whoever may configure the space asks:
-    /// its name free for any space from then on.
-    public distributed func removeSite(_ name: SiteName) async throws {
+    /// The page named `name` taken out of its space, as whoever may configure the space asks:
+    /// it's opened by no one from then on.
+    public distributed func removePage(_ name: PageName) async throws {
         try configuring()
-        guard state.sites.contains(name) else { return }
-        try await Website.named(name, in: home, on: actorSystem).release()
-        try await emit(event: .siteRemoved(name))
+        guard state.pages.contains(name) else { return }
+        try await Page.named(name, in: home, on: actorSystem).remove()
+        try await emit(event: .pageRemoved(name))
     }
 
     /// Refused unless whoever the call is on behalf of may configure its space.
@@ -410,14 +405,14 @@ public enum DynamicObjectsEvent: Codable, Sendable {
     /// An object made by name, of a type, by `maker`: listed and found by the name it holds, to
     /// whoever may read it.
     case added(
-        ObjectIdentity, type: BehaviorID, description: String?, access: Access, maker: CallScope, in: ConversationID?)
+        ObjectIdentity, type: BehaviorID, description: String?, access: Access, in: ConversationID?)
     /// Who may read and write an object changed, as the object says.
     case accessChanged(ObjectIdentity, Access)
     case removed(ObjectIdentity)
-    /// A website made, its name its space's.
-    case siteMade(SiteName)
-    /// A website taken out, its name given up.
-    case siteRemoved(SiteName)
+    /// A page made, its name its space's.
+    case pageMade(PageName)
+    /// A page taken out, its name given up.
+    case pageRemoved(PageName)
 }
 
 public struct DynamicObjectsState: Codable, Sendable {
@@ -428,8 +423,6 @@ public struct DynamicObjectsState: Codable, Sendable {
         public let description: String?
         /// Who may read and write it, as it last said: who it's listed to.
         public var access: Access
-        /// Whoever made it, on whose behalf it's started.
-        public let maker: CallScope
         /// The conversation it was made in, where it's started.
         public let place: ConversationID?
     }
@@ -441,8 +434,8 @@ public struct DynamicObjectsState: Codable, Sendable {
     /// The objects made by name, oldest first: what's listed and found here. An
     /// object that code made with `Type()` isn't one of them: it's reached through what holds it.
     public var entries: [Entry] = []
-    /// The websites made here, by name.
-    public var sites: Set<SiteName> = []
+    /// The pages made here, by name.
+    public var pages: Set<PageName> = []
 
     public init() {}
 
@@ -469,19 +462,19 @@ public struct DynamicObjectsState: Codable, Sendable {
             types[id] = code
         case .typeNamed(let name, let id):
             typeNames[name] = id
-        case .added(let identity, let type, let description, let access, let maker, let place):
+        case .added(let identity, let type, let description, let access, let place):
             entries.append(
                 Entry(
-                    identity: identity, type: type, description: description, access: access, maker: maker,
+                    identity: identity, type: type, description: description, access: access,
                     place: place))
         case .accessChanged(let identity, let access):
             if let index = entries.firstIndex(where: { $0.identity == identity }) { entries[index].access = access }
         case .removed(let identity):
             entries.removeAll { $0.identity == identity }
-        case .siteMade(let name):
-            sites.insert(name)
-        case .siteRemoved(let name):
-            sites.remove(name)
+        case .pageMade(let name):
+            pages.insert(name)
+        case .pageRemoved(let name):
+            pages.remove(name)
         }
     }
 }

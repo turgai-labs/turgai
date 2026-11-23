@@ -61,7 +61,8 @@ public distributed actor TelegramCursor {
         async throws -> TelegramCursor
     {
         try await actorSystem.virtualActors.getActor(
-            identifiedBy: VirtualActorID(rawValue: "telegram-cursor:\(space.rawValue.uuidString)/\(connection)"),
+            identifiedBy: VirtualActorID(
+                "cursor", "telegram", in: .owned(by: space, "connection", connection.description)),
             dependency: Address(space: space, connection: connection))
     }
 

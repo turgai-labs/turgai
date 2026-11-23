@@ -3,9 +3,9 @@ import EventSourcing
 import Testing
 import TurgaiConversations
 import TurgaiDomain
-import TurgaiSpaces
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

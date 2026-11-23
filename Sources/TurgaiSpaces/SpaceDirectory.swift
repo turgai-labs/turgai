@@ -61,6 +61,8 @@ public struct SpaceDirectoryStorage: Sendable {
     public var spaces: @Sendable (UserID) async throws -> [SpaceID]
     /// The people in the space.
     public var people: @Sendable (SpaceID) async throws -> [UserID]
+    /// Every space anyone is in.
+    public var all: @Sendable () async throws -> [SpaceID]
     /// Where it's read the spaces' events up to.
     public var offset: @Sendable () async throws -> Offset
     /// Keeps a change, kept at an offset, then that it's read up to it.
@@ -69,11 +71,13 @@ public struct SpaceDirectoryStorage: Sendable {
     public init(
         spaces: @escaping @Sendable (UserID) async throws -> [SpaceID],
         people: @escaping @Sendable (SpaceID) async throws -> [UserID],
+        all: @escaping @Sendable () async throws -> [SpaceID],
         offset: @escaping @Sendable () async throws -> Offset,
         keep: @escaping @Sendable (SpaceDirectoryChange?, Offset) async throws -> Void
     ) {
         self.spaces = spaces
         self.people = people
+        self.all = all
         self.offset = offset
         self.keep = keep
     }
@@ -84,6 +88,7 @@ public struct SpaceDirectoryStorage: Sendable {
         return Self(
             spaces: { try await tables.spaces(of: $0) },
             people: { try await tables.people(in: $0) },
+            all: { try await tables.all() },
             offset: { try await tables.offset(of: SpaceDirectoryTables.projection) },
             keep: { try await tables.keep($0, at: $1) }
         )
@@ -95,6 +100,7 @@ public struct SpaceDirectoryStorage: Sendable {
         return Self(
             spaces: { await directory.spaces(of: $0) },
             people: { await directory.people(in: $0) },
+            all: { await directory.all() },
             offset: { await directory.offset },
             keep: { await directory.keep($0, at: $1) }
         )
@@ -138,6 +144,15 @@ private struct SpaceDirectoryTables: Sendable {
         try await connection.query(
             "SELECT space FROM space_members WHERE person = ? ORDER BY joined_at", [.text(person.key)]
         ).map { row in
+            guard let space = row.column("space")?.string.flatMap(UUID.init(uuidString:)) else {
+                throw SpaceDirectoryError.invalidEntry
+            }
+            return SpaceID(rawValue: space)
+        }
+    }
+
+    func all() async throws -> [SpaceID] {
+        try await connection.query("SELECT DISTINCT space FROM space_members").map { row in
             guard let space = row.column("space")?.string.flatMap(UUID.init(uuidString:)) else {
                 throw SpaceDirectoryError.invalidEntry
             }
@@ -209,6 +224,10 @@ private actor MemorySpaceDirectory {
         members.filter { $0.value[space] != nil }.map(\.key)
     }
 
+    func all() -> [SpaceID] {
+        Array(Set(members.values.flatMap(\.keys)))
+    }
+
     func keep(_ change: SpaceDirectoryChange?, at offset: Offset) {
         switch change {
         case .joined(let space, let people)?:
@@ -236,6 +255,8 @@ public distributed actor SpaceDirectory: ClusterSingleton {
     private let refreshInterval: Duration
     /// The projection, while it's the cluster's directory.
     private var following: Task<Void, Never>?
+    /// Its spaces being started, as it starts.
+    private var waking: Task<Void, Never>?
     /// Who follows each person's spaces as they change: a subscriber each, and whose they follow.
     private var pulls = Pulls<SpaceNotice>()
     private var followers: [UUID: UserID] = [:]
@@ -303,6 +324,14 @@ public distributed actor SpaceDirectory: ClusterSingleton {
     /// Follows the spaces' events while it's the cluster's directory: from where it read up to,
     /// and again from there whenever following them fails.
     public func activateSingleton() async {
+        // Each space it knows is started: what a space runs by itself, such as its connections, a
+        // space brings back as it starts. Nothing else remembers them.
+        waking = Task {
+            for space in (try? await storage.all()) ?? [] {
+                guard !Task.isCancelled else { return }
+                _ = try? await Space.identified(by: space, on: actorSystem).status()
+            }
+        }
         following = Task {
             await Projection<SpaceEvent>(tag: .space).runRestarting(
                 on: journal, refreshInterval: refreshInterval,
@@ -321,6 +350,8 @@ public distributed actor SpaceDirectory: ClusterSingleton {
     }
 
     public func passivateSingleton() async {
+        waking?.cancel()
+        waking = nil
         following?.cancel()
         following = nil
     }

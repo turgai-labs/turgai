@@ -44,21 +44,22 @@ public struct SchedulesInChat: Codable, Sendable, Equatable {
 /// Why a chat's schedule or timer can't be made or changed as asked.
 public enum DueInChatError: Error, Codable, Sendable, Equatable, CustomStringConvertible {
     case inNoChat
+    /// No person asked, for one that asks the chat's bot something: what's asked is a message.
+    case noPersonAsked
     case unnamed
     /// The chat has no `kind` named so: with the names of those it has.
     case none(kind: String, String, named: [String])
-    case notTheirs(String)
     case past(Date)
     case noMinutes(Int)
 
     public var description: String {
         switch self {
         case .inNoChat: "this happens in no chat"
+        case .noPersonAsked: "what asks the chat's bot is a person's, and no person asked"
         case .unnamed: "it has a name"
         case .none(let kind, let name, let names):
             "this chat has no \(kind) `\(name)`"
                 + (names.isEmpty ? "" : "; its \(kind)s: " + names.map { "`\($0)`" }.joined(separator: ", "))
-        case .notTheirs(let name): "`\(name)` is changed by whoever made it, or the chat's admins"
         case .past(let date): "\(date.formatted(date: .abbreviated, time: .shortened)) has passed"
         case .noMinutes(let minutes): "`minutes: \(minutes)` is at least 1"
         }
@@ -70,10 +71,10 @@ public enum DueInChatError: Error, Codable, Sendable, Equatable, CustomStringCon
         return (chain, chat)
     }
 
-    /// Whether `chain`'s person may change what `owner` made: whoever made it, or an admin of the
-    /// chat's space.
-    static func mayChange(madeBy owner: UserID, _ chain: CallChain) -> Bool {
-        owner == chain.scope.person || chain.scope.permissions.tasks == .manage
+    /// Refuses `then` when it asks the chat's bot something and no person asked: what's asked is
+    /// a message, which only a person writes for now.
+    static func askable(_ then: WhenDue, _ chain: CallChain) throws {
+        if case .ask = then, chain.scope.person == nil { throw DueInChatError.noPersonAsked }
     }
 }
 
@@ -91,7 +92,7 @@ public distributed actor Scheduler {
     /// `space`'s scheduler, wherever and whenever it runs.
     public static func of(_ space: SpaceID, on actorSystem: ClusterSystem) async throws -> Scheduler {
         try await actorSystem.virtualActors.getActor(
-            identifiedBy: VirtualActorID(rawValue: "builtin/\(space.rawValue.uuidString)/scheduler"), dependency: space)
+            identifiedBy: .owned(by: space, "builtin", "scheduler"), dependency: space)
     }
 
     public init(actorSystem: ActorSystem, dependency space: SpaceID) async throws {
@@ -113,14 +114,15 @@ public distributed actor Scheduler {
         let name = ObjectNames.handle(for: name)
         guard !name.trimmed().isEmpty else { throw DueInChatError.unnamed }
         let rule = try schedule.rule()
+        try DueInChatError.askable(then, chain)
         let id = ChatSchedule.id(in: chat, of: chain.scope.space, named: name)
         let workflows = actorSystem.workflows
         if let made = try await made(id) {
-            guard DueInChatError.mayChange(madeBy: made.ownerID, chain) else { throw DueInChatError.notTheirs(name) }
             try await workflows.cancelSchedule(id: id, workflow: ScheduleWorkflow.self)
         }
         let entry = ChatSchedule(
-            name: name, schedule: schedule, then: then, ownerID: chain.scope.person, in: chain.scope.space,
+            name: name, schedule: schedule, then: then, askedBy: chain.scope.asker,
+            in: chain.scope.space,
             conversationID: chat)
         try await workflows.schedule(
             id: id, recurrence: rule, workflow: ScheduleWorkflow.self, input: entry,
@@ -197,7 +199,6 @@ public distributed actor Scheduler {
         guard let made = try await made(id) else {
             throw DueInChatError.none(kind: "schedule", written, named: try await list().chat.map(\.name))
         }
-        guard DueInChatError.mayChange(madeBy: made.ownerID, chain) else { throw DueInChatError.notTheirs(name) }
         let workflows = actorSystem.workflows
         try await change(id, workflows)
         let after = try await workflows.describeSchedule(id: id, workflow: ScheduleWorkflow.self)
@@ -223,6 +224,6 @@ public distributed actor Scheduler {
 extension Scheduler: AccessControlled {
     /// Everyone in its space may use it, and no one from another.
     public distributed func access(for chain: CallChain) -> Access {
-        chain.scope.space == space ? .readByEveryone : .nobody
+        .readByEveryone
     }
 }

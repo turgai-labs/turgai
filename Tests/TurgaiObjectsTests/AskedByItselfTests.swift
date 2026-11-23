@@ -8,9 +8,9 @@ import Testing
 import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
-import TurgaiSpaces
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 /// An agent asked by a call that came from its own answer, through objects and nodes, is told it's
 /// itself: the call chain says so, wherever the call went.
@@ -49,8 +49,8 @@ struct AskedByItselfTests {
                 let offered = try await Agent.offered([Role("planner")], in: askedIn, on: sessionNode)
                 let writing = ObjectSession(
                     in: AsAPerson.person.space,
-                    objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
-                        for: AsAPerson.person.person), actorSystem: sessionNode, agents: offered)
+                    objects: try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode),
+                    actorSystem: sessionNode, agents: offered)
                 let script = try Script(
                     code: Self.relay, type: "Relay", uses: await writing.others(except: "Relay").uses)
                 _ = try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode).create(
@@ -60,12 +60,12 @@ struct AskedByItselfTests {
                 turn.uses(
                     ObjectSession(
                         in: AsAPerson.person.space,
-                        objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
-                            for: AsAPerson.person.person), actorSystem: sessionNode, agents: offered))
+                        objects: try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode),
+                        actorSystem: sessionNode, agents: offered))
                 let asking = ObjectSession(
                     in: AsAPerson.person.space,
-                    objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
-                        for: AsAPerson.person.person), actorSystem: sessionNode, agents: offered)
+                    objects: try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode),
+                    actorSystem: sessionNode, agents: offered)
                 let answer = try await asking.invoke(
                     try await asking.id(written: "planner"), action: "respond", arguments: #"{"request": "plan"}"#)
 

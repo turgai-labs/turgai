@@ -71,7 +71,6 @@ struct TurgaiAppService: Service, Sendable {
     private let conversationDirectory: ConversationDirectoryStorage
     /// How far the memory notices have read people's memory events.
     private let memoryNotices: ProjectionOffset
-    private let connectionPolicy: ProjectionOffset
     private let setup: TurgaiSetupStore
     /// Where the main web app is served, once the cluster runs.
     /// The web server Turgai's routes are handed to once it has started.
@@ -93,7 +92,6 @@ struct TurgaiAppService: Service, Sendable {
         spaceDirectory: SpaceDirectoryStorage,
         conversationDirectory: ConversationDirectoryStorage,
         memoryNotices: ProjectionOffset,
-        connectionPolicy: ProjectionOffset,
         setup: TurgaiSetupStore,
         web: TurgaiWebServer,
         api: APIConfiguration,
@@ -111,7 +109,6 @@ struct TurgaiAppService: Service, Sendable {
         self.spaceDirectory = spaceDirectory
         self.conversationDirectory = conversationDirectory
         self.memoryNotices = memoryNotices
-        self.connectionPolicy = connectionPolicy
         self.setup = setup
         self.web = web
         self.api = api
@@ -168,7 +165,6 @@ struct TurgaiAppService: Service, Sendable {
                 turgaiDirectory
                 .appendingPathComponent("tools", isDirectory: true)
             let wasmRunnerURL = WasmRunnerLocator.executableURL(environment: environment)
-            let telegramFiles = TelegramFiles()
             // The tools every node has: a turn's, and those object code calls, each effect decided
             // by the space of whoever it's on behalf of, as things are then.
             let nodeTools = NodeTools(
@@ -178,7 +174,7 @@ struct TurgaiAppService: Service, Sendable {
             let turnTools = TurnToolSources(
                 endpointFactory: endpointFactory,
                 runtimeConfiguration: runtimeConfiguration,
-                telegramFiles: telegramFiles, nodeTools: nodeTools, workspaceRoot: workspaceRoot,
+                nodeTools: nodeTools, workspaceRoot: workspaceRoot,
                 wasmRunnerURL: wasmRunnerURL, userToolRegistry: userToolRegistry, linking: linking)
             let runtimePlugin = try runtimeConfiguration.makeAgentRuntimePlugin(
                 workspaceRoot: workspaceRoot,
@@ -212,8 +208,6 @@ struct TurgaiAppService: Service, Sendable {
             let workflowsPlugin = DurableWorkflowsPlugin()
             let channelRuntimePlugin = TurgaiChannelRuntimePlugin(
                 secrets: channelSecrets,
-                telegramFiles: telegramFiles,
-                endpoints: endpointFactory,
                 linking: linking
             )
             // How each platform's connections run, when a space runs one.
@@ -235,33 +229,14 @@ struct TurgaiAppService: Service, Sendable {
                 settings.propagateCallChain()
                 // Whether a call may use an object, the caller's space decides, as things are then.
                 settings.checkObjectAccess(
-                    deciding: ObjectCallDecisions { access, level, chain, system in
-                        let space = try await Space.identified(by: chain.scope.space, on: system)
-                        return try await space.decide(access, level, for: chain)
-                    })
+                    deciding: ObjectCallDecisions(decide: Space.decides, opening: Space.opens))
                 settings.plugins.install(plugin: journalPlugin)
                 settings.plugins.install(plugin: runtimePlugin)
                 settings.plugins.install(plugin: workflowsPlugin)
                 // What runs by itself, kept going by its node, and how each kind comes back after a
-                // restart: a connection's run reads its connection again; an object is let in as
-                // whoever it was kept for, as its space decides then.
-                settings.plugins.install(
-                    plugin: RunningActors(recovering: [
-                        .of(
-                            ConnectionRun.self, dependency: ConnectionRun.Config.self,
-                            keptFor: ConnectionRun.Config.self
-                        ) {
-                            run, _, _ in
-                            try await run.recovered()
-                        },
-                        .of(DynamicObject.self, dependency: DynamicObject.Config.self, keptFor: CallScope.self) {
-                            object, config, maker in
-                            let actor = DynamicObject.callActor(for: config.identity, in: config.space)
-                            try await CallChain.$current.withValue(.own(actor, for: maker, in: nil)) {
-                                try await object.recovered()
-                            }
-                        },
-                    ]))
+                // restart: a connection's run is told by its space how to run now; an object comes
+                // back as its own work, which may what its space says then.
+                settings.plugins.install(plugin: RunningActors(recovering: [DynamicObject.recovery]))
                 settings.plugins.install(plugin: channelRuntimePlugin)
                 settings.plugins.install(plugin: ToolsAPIPlugin(nodeTools.api))
             }
@@ -278,10 +253,6 @@ struct TurgaiAppService: Service, Sendable {
                 ConversationDirectory(actorSystem: $0, storage: conversationDirectory, journal: eventStore)
             }
             let memoryNotices = memoryNotices
-            let connectionPolicy = connectionPolicy
-            _ = try await system.singleton.host(ConnectionPolicy.self, name: ConnectionPolicy.singletonName) {
-                ConnectionPolicy(actorSystem: $0, offset: connectionPolicy, journal: eventStore)
-            }
             _ = try await system.singleton.host(MemoryNotices.self, name: MemoryNotices.singletonName) {
                 MemoryNotices(actorSystem: $0, storage: memoryNotices, journal: eventStore)
             }
@@ -586,7 +557,6 @@ extension TurgaiAppService {
 struct TurnToolSources: Sendable {
     let endpointFactory: AgentModelEndpointFactory
     let runtimeConfiguration: HailRuntimeConfiguration
-    let telegramFiles: TelegramFiles
     let nodeTools: NodeTools
     let workspaceRoot: String
     let wasmRunnerURL: URL?
@@ -603,7 +573,6 @@ struct TurnToolSources: Sendable {
             } else { [] }
         var tools = try await ConversationTools.make(
             context: context,
-            telegramFiles: telegramFiles,
             nodeTools: nodeTools,
             workspaceRoot: workspaceRoot,
             wasmRunnerURL: wasmRunnerURL,

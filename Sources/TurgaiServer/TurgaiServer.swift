@@ -83,7 +83,6 @@ public struct TurgaiServer: Sendable {
             spaceDirectory: try await .live(in: persistence),
             conversationDirectory: try await .live(in: persistence),
             memoryNotices: try await .live(named: "memory-notices", in: persistence),
-            connectionPolicy: try await .live(named: "connection-policy", in: persistence),
             setup: setup,
             web: web,
             api: api,

@@ -50,7 +50,7 @@ public distributed actor Timers {
     /// `space`'s timers, wherever and whenever it runs.
     public static func of(_ space: SpaceID, on actorSystem: ClusterSystem) async throws -> Timers {
         try await actorSystem.virtualActors.getActor(
-            identifiedBy: VirtualActorID(rawValue: "builtin/\(space.rawValue.uuidString)/timers"), dependency: space)
+            identifiedBy: .owned(by: space, "builtin", "timers"), dependency: space)
     }
 
     public init(actorSystem: ActorSystem, dependency space: SpaceID) async throws {
@@ -112,7 +112,6 @@ public distributed actor Timers {
         guard let (id, timer) = running.first(where: { $0.timer.name == name }) else {
             throw DueInChatError.none(kind: "timer", written, named: running.map(\.timer.name).sorted())
         }
-        guard DueInChatError.mayChange(madeBy: timer.ownerID, chain) else { throw DueInChatError.notTheirs(name) }
         try await actorSystem.workflows.cancel(type: TimerWorkflow.self, options: WorkflowOptions(id: id))
         await actorSystem.tellTasks(in: chain.scope.space, .ended(.timer(id)))
         return TimerInChat(name: timer.name, date: timer.date, then: timer.then)
@@ -123,17 +122,15 @@ public distributed actor Timers {
         let (chain, chat) = try DueInChatError.chat()
         let name = ObjectNames.handle(for: written)
         guard !name.trimmed().isEmpty else { throw DueInChatError.unnamed }
+        try DueInChatError.askable(then, chain)
         let workflows = actorSystem.workflows
         if let (id, before) = try await running(in: chat, of: chain.scope.space).first(where: { $0.timer.name == name })
         {
-            guard DueInChatError.mayChange(madeBy: before.ownerID, chain) else {
-                throw DueInChatError.notTheirs(name)
-            }
             try await workflows.cancel(type: TimerWorkflow.self, options: WorkflowOptions(id: id))
             await actorSystem.tellTasks(in: chain.scope.space, .ended(.timer(id)))
         }
         let timer = ChatTimer(
-            name: name, date: date, then: then, ownerID: chain.scope.person, in: chain.scope.space,
+            name: name, date: date, then: then, askedBy: chain.scope.asker, in: chain.scope.space,
             conversationID: chat)
         let id = ChatTimer.id(in: chat, of: chain.scope.space, named: name, at: date)
         try await workflows.start(
@@ -163,6 +160,6 @@ public distributed actor Timers {
 extension Timers: AccessControlled {
     /// Everyone in its space may use it, and no one from another.
     public distributed func access(for chain: CallChain) -> Access {
-        chain.scope.space == space ? .readByEveryone : .nobody
+        .readByEveryone
     }
 }

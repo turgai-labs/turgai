@@ -13,6 +13,7 @@ import TurgaiHail
 import TurgaiObjects
 import TurgaiPeople
 import TurgaiPersistence
+import TurgaiSpaces
 import TurgaiTelegram
 
 #if canImport(FoundationEssentials)

@@ -5,6 +5,7 @@ import TurgaiAgents
 import TurgaiDomain
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 struct AgentModelEndpointFactoryTests {
     /// Ollama's `think` is on or off: effort none turns it off for any model, and other levels

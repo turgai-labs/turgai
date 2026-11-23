@@ -235,12 +235,12 @@ public struct SpaceInvite: Hashable, Codable, Sendable {
     }
 }
 
-/// Who a call is on behalf of, and what they may do: the person who started its chain, in the
-/// space they came in through, with what they may do there, the groups they're in, and the exact
-/// requests it shares with them, as the space settles them when the chain starts. Everything in
-/// the chain has them.
+/// Who a piece of work is for, and what they may do: whoever asked, one of a space's people or one
+/// of its own actors, in that space, with what they may do there, the groups they're in, and the
+/// exact requests it shares with them, as the space says when the work starts. Everything the work
+/// calls has them, and nothing keeps them after it.
 public struct CallScope: Hashable, Codable, Sendable {
-    public let person: UserID
+    public let asker: Party
     public let space: SpaceID
     public let permissions: Permissions
     /// The groups they're in, whom what's shared with a group reaches: an admin is in every one.
@@ -249,11 +249,21 @@ public struct CallScope: Hashable, Codable, Sendable {
     /// with them, and those allowed once for this scope.
     public let allowed: Set<ExactRequest>
 
+    /// The person who asked, when a person did.
+    public var person: UserID? { asker.person }
+
     public init(
         _ person: UserID, in space: SpaceID, may permissions: Permissions, groups: Set<GroupID>,
         allowed: Set<ExactRequest>
     ) {
-        self.person = person
+        self.init(.person(person), in: space, may: permissions, groups: groups, allowed: allowed)
+    }
+
+    public init(
+        _ asker: Party, in space: SpaceID, may permissions: Permissions, groups: Set<GroupID>,
+        allowed: Set<ExactRequest>
+    ) {
+        self.asker = asker
         self.space = space
         self.permissions = permissions
         self.groups = groups

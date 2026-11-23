@@ -4,10 +4,11 @@ import DistributedCluster
 import Foundation
 import Hail
 import Testing
-import TurgaiSpaces
+import TurgaiDomain
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+@testable import TurgaiSpaces
 
 /// Making an object offers the root's tools again, with it among the objects they choose from, in
 /// the result of making it: the turn that made it can change it, share it and remove it.
@@ -22,8 +23,7 @@ struct OfferedAfterMakingTests {
                 name: "Tea", spec: .new(try Script(code: "actor Tea {\n    var cups = 0\n}", type: "Tea")))
             let session = ObjectSession(
                 in: AsAPerson.person.space,
-                objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
-                    for: AsAPerson.person.person), actorSystem: node)
+                objects: try await DynamicObjects.of(AsAPerson.person.space, on: node), actorSystem: node)
             let offered = try await ObjectTools(session: session).offered()
             #expect(try Self.choices(of: "edit_object", in: offered) == ["tea"])
 
@@ -50,8 +50,7 @@ struct OfferedAfterMakingTests {
                 name: "Tea", spec: .new(try Script(code: "actor Tea {\n    var cups = 0\n}", type: "Tea")))
             let session = ObjectSession(
                 in: AsAPerson.person.space,
-                objects: try await Space.identified(by: AsAPerson.person.space, on: node).objects(
-                    for: AsAPerson.person.person), actorSystem: node)
+                objects: try await DynamicObjects.of(AsAPerson.person.space, on: node), actorSystem: node)
             _ = try await withEffect(
                 MakeObjectEffect(session: session, objectName: "Coffee", task: "Counts cups of coffee."),
                 authority: TurgaiAuthority()

@@ -22,8 +22,16 @@ public enum Audience: Hashable, Codable, Sendable {
     case deciders(of: SpaceID)
     /// One person, in whichever space they come in through.
     case person(UserID)
-    /// An actor, when it's the one calling directly.
+    /// An actor: when it's the one calling directly, or the one that asked.
     case actor(CallActor)
+
+    /// The one `asker` is: a person, or an actor.
+    public init(_ asker: Party) {
+        switch asker {
+        case .person(let person): self = .person(person)
+        case .actor: self = .actor(.virtual(asker.actorID))
+        }
+    }
 
     /// Whether a call on behalf of `scope` is for this audience.
     func includes(_ scope: CallScope) -> Bool {
@@ -32,7 +40,7 @@ public enum Audience: Hashable, Codable, Sendable {
         case .group(let space, let group): space == scope.space && scope.groups.contains(group)
         case .deciders(let space): space == scope.space && scope.permissions.requests != nil
         case .person(let person): person == scope.person
-        case .actor: false
+        case .actor(let actor): scope.person == nil && actor == .virtual(scope.asker.actorID)
         }
     }
 }
@@ -48,9 +56,9 @@ public struct Access: Hashable, Codable, Sendable {
         levels = [.deciders(of: space): .write]
     }
 
-    /// A new object's access: its maker's alone.
-    public init(madeBy maker: CallScope) {
-        levels = [.person(maker.person): .write]
+    /// A new object's access: its maker's alone, a person or an actor.
+    public init(madeBy maker: Party) {
+        levels = [Audience(maker): .write]
     }
 
     /// Something another actor's code made: only that actor, which holds it, may use or change it.
@@ -62,9 +70,6 @@ public struct Access: Hashable, Codable, Sendable {
     /// Read by everyone and written by no one: what a built-in object and an agent allow, until
     /// whoever runs the node, and whoever made the agent, are known.
     public static let readByEveryone = Access(levels: [.everyone: .read])
-
-    /// Read and written by no one: what an object allows a call from another space.
-    public static let nobody = Access(levels: [:])
 
     private init(levels: [Audience: AccessLevel]) {
         self.levels = levels
@@ -80,11 +85,11 @@ public struct Access: Hashable, Codable, Sendable {
         [levels[.actor(caller)], levels[.everyone]].compactMap { $0 }.max()
     }
 
-    /// Whether a call coming through `chain` may go as far as `level`: whoever started it may, or
-    /// the actor calling directly may.
-    public func allows(_ chain: CallChain, _ level: AccessLevel) -> Bool {
-        if allows(chain.scope, level) { return true }
-        guard let caller = chain.actors.last, let callerLevel = self.level(for: caller) else { return false }
+    /// Whether work for `scope`, calling through the actor `caller`, may go as far as `level`:
+    /// whoever asked may, or the actor calling directly may.
+    public func allows(_ scope: CallScope, calledBy caller: CallActor?, _ level: AccessLevel) -> Bool {
+        if allows(scope, level) { return true }
+        guard let caller, let callerLevel = self.level(for: caller) else { return false }
         return callerLevel >= level
     }
 

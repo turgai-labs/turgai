@@ -1,9 +1,11 @@
+import AttributedCalls
 import Testing
+import TurgaiCalls
 import TurgaiConversations
 import TurgaiDomain
-import TurgaiSpaces
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -42,6 +44,25 @@ struct ConversationStartTests {
                     with: ghost, by: .ann)
             }
             await #expect(throws: SpaceRefusal.notInIt) { try await family.history(of: id, for: .bob) }
+        }
+    }
+
+    /// A conversation is found by its id from anywhere, and a call that reaches it from outside its
+    /// space is put to the space: one that is no one's is refused before it reaches it.
+    @Test func aCallThatIsNotItsSpacesDoesNotReachIt() async throws {
+        try await withClusterSystem("outside", store: MemoryEventStore(), hostsVirtualActors: true, people: []) {
+            system in
+            let spaceID = try await madeSpace("Family", by: .ann, bot: helper, on: system)
+            let family = try await Space.identified(by: spaceID, on: system)
+            let id = ConversationID(channel: ChannelID("turgai"), externalAddress: .init(UUID().uuidString))
+            try await family.start(id, with: nil, by: .ann)
+
+            let conversation = try await Conversation.identified(by: id, in: spaceID, on: system)
+            await #expect(throws: CallOnBehalfOfNoOne.self) {
+                _ = try await conversation.currentRecord()
+            }
+            // Through its space, it's read as before.
+            #expect(try await family.reading(id, by: .ann).participants == [.bot(helper.id), .person(.ann)])
         }
     }
 

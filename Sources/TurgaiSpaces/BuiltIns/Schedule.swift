@@ -1,3 +1,4 @@
+import AttributedCalls
 import Crypto
 import DiscoverableActors
 import DistributedCluster
@@ -24,29 +25,27 @@ public enum WhenDue: Codable, Sendable, Equatable {
 }
 
 /// A chat's schedule: due as its `schedule` says, by the name it was given in the chat, doing
-/// `then` there each time, for whoever made it.
+/// `then` there each time. It's the chat's: whoever is in the chat may change it.
 public struct ChatSchedule: Codable, Sendable, Equatable {
     public let name: String
     public let schedule: TurgaiObjects.Schedule
     public let then: WhenDue
-    /// Who made it: whose message an `ask` is, and who may change it, besides the chat's admins.
-    public let ownerID: TurgaiDomain.UserID
+    /// Who asked for it: whom the bot answers each time it's due and asks the bot something.
+    public let askedBy: Party
     /// The space whose chat it's in, which it does what it does through.
     public let space: SpaceID
     public let conversationID: ConversationID
-    public let participantID: ParticipantID
 
     public init(
-        name: String, schedule: TurgaiObjects.Schedule, then: WhenDue, ownerID: TurgaiDomain.UserID,
-        in space: SpaceID, conversationID: ConversationID
+        name: String, schedule: TurgaiObjects.Schedule, then: WhenDue, askedBy: Party, in space: SpaceID,
+        conversationID: ConversationID
     ) {
         self.name = name
         self.schedule = schedule
         self.then = then
-        self.ownerID = ownerID
+        self.askedBy = askedBy
         self.space = space
         self.conversationID = conversationID
-        self.participantID = ParticipantID(channel: conversationID.channel, rawValue: ownerID.key)
     }
 
     /// The durable schedule named `name` in `conversation` of `space`: one for each name in each
@@ -108,9 +107,12 @@ public struct ScheduleActivities {
         input: ChatSchedule,
         context: ActivityContext
     ) async throws -> DurableVoid {
-        try await WhenDue.doing(
-            input.then, in: input.conversationID, of: input.space, for: input.ownerID, as: input.participantID,
-            run: context.workflowID, on: context.system)
+        // What's due is the space's scheduler's own work, as a reminder is its actor's.
+        try await Call.asWork(of: .owned(by: input.space, "builtin", "scheduler")) {
+            try await WhenDue.doing(
+                input.then, for: input.askedBy, in: input.conversationID, of: input.space, run: context.workflowID,
+                on: context.system)
+        }
         return DurableVoid()
     }
 }
@@ -125,20 +127,23 @@ extension WhenDue {
     }
 
     /// Does `then` in `conversation`, through its space `space`, as the run `workflow` of
-    /// something due there: says its text, or asks the chat's bot, as a message from `owner`.
+    /// something due there: says its text, or asks the chat's bot, for `asker`, who asked for it.
     static func doing(
-        _ then: WhenDue, in conversation: ConversationID, of space: SpaceID, for owner: TurgaiDomain.UserID,
-        as participant: ParticipantID, run workflow: WorkflowID, on system: ClusterSystem
+        _ then: WhenDue, for asker: Party, in conversation: ConversationID, of space: SpaceID,
+        run workflow: WorkflowID, on system: ClusterSystem
     ) async throws {
         let space = try await Space.identified(by: space, on: system)
         switch then {
         case .say(let text):
             try await space.notify(conversation, text)
         case .ask(let instruction):
+            // What's asked of the bot is a message, which only a person writes for now.
+            guard let person = asker.person else { throw DueInChatError.noPersonAsked }
             let message = InboundMessage(
                 id: MessageID(rawValue: turgaiDeterministicUUID("message:\(workflow.rawValue)")),
-                conversationID: conversation, participantID: participant, userID: owner, author: nil,
-                text: instruction, receivedAt: Date())
+                conversationID: conversation,
+                participantID: ParticipantID(channel: conversation.channel, rawValue: person.key), userID: person,
+                author: nil, text: instruction, receivedAt: Date())
             try await space.say(
                 message, turnID: TurgaiDomain.TurnID(rawValue: turgaiDeterministicUUID("turn:\(workflow.rawValue)")))
         }
@@ -150,13 +155,13 @@ extension KeptTask {
     public init(_ schedule: ChatSchedule, id: ScheduleID, paused: Bool) {
         self.init(
             id: .schedule(id), of: .chat(schedule.conversationID, name: schedule.name, does: schedule.then.described),
-            due: .schedule(schedule.schedule), paused: paused, maker: schedule.ownerID)
+            due: .schedule(schedule.schedule), paused: paused)
     }
 
     /// `timer`, a chat's, kept as `id`.
     public init(_ timer: ChatTimer, id: WorkflowID) {
         self.init(
             id: .timer(id), of: .chat(timer.conversationID, name: timer.name, does: timer.then.described),
-            due: .timer(.at(timer.date)), paused: false, maker: timer.ownerID)
+            due: .timer(.at(timer.date)), paused: false)
     }
 }

@@ -3,21 +3,21 @@ import DiscoverableActors
 import Foundation
 import Mosaic
 
-// A page nests three levels deep, each level its own type: a recursive `@Generable` type
+// A layout nests three levels deep, each level its own type: a recursive `@Generable` type
 // overflows the stack building its schema, as its schema asks for its own again. Once
 // AnyLanguageModel refers to a type it's already building, the levels become one `Item`.
 
-/// A web page: what it shows, top to bottom.
-@Generable(description: "A web page: what it shows, top to bottom.")
+/// A page's layout: what it shows, top to bottom.
+@Generable(description: "A page's layout: what it shows, top to bottom.")
 @Describable
-public struct Page: Codable, Sendable, Equatable {
+public struct Layout: Codable, Sendable, Equatable {
     /// What it shows, top to bottom.
     @Guide(description: "What it shows, top to bottom.")
     public var items: [Item]
 }
 
-/// Something a page shows.
-@Generable(description: "Something a page shows.")
+/// Something a layout shows.
+@Generable(description: "Something a layout shows.")
 @Describable
 public enum Item: Codable, Sendable, Equatable {
     /// Words to read, in a style and colour.
@@ -66,7 +66,7 @@ public enum Leaf: Codable, Sendable, Equatable {
         width: Double? = nil)
 }
 
-// Each thing's `id`, when it's given, is what it is on the page: the same thing on the page
+// Each thing's `id`, when it's given, is what it is on the layout: the same thing on the layout
 // before and after, wherever it is, as SwiftUI's `id` is. Without one, a button is its label,
 // and anything else its place.
 
@@ -120,8 +120,8 @@ public enum ImageFit: String, Codable, Sendable, Equatable {
     case fill
 }
 
-/// How words look: what they are on the page.
-@Generable(description: "How words look: what they are on the page.")
+/// How words look: what they are on the layout.
+@Generable(description: "How words look: what they are on the layout.")
 @Describable
 public enum TextStyle: String, Codable, Sendable, Equatable {
     /// The page's title, largest.
@@ -166,11 +166,11 @@ public enum ButtonKind: String, Codable, Sendable, Equatable {
     case destructive
 }
 
-extension Page {
-    /// The page a website starts with: every kind of item, nested as deep as items go, so the
-    /// page it shows is always one to change.
-    static let start = Page(items: [
-        .text(words: "A new website"),
+extension Layout {
+    /// The layout a page starts with: every kind of item, nested as deep as items go, so the
+    /// layout it shows is always one to change.
+    static let start = Layout(items: [
+        .text(words: "A new page"),
         .row(items: [
             .column(items: [.text(words: "First column"), .button(label: "First")]),
             .column(items: [.text(words: "Second column"), .button(label: "Second")]),
@@ -181,16 +181,16 @@ extension Page {
 
 // MARK: As a widget
 
-// What a model writes is a page, three levels deep, in the words its schema has; what's shown is
-// Mosaic's widget, any depth, every piece with an id. A piece the page gives no id is named by its
+// What a model writes is a layout, three levels deep, in the words its schema has; what's shown is
+// Mosaic's widget, any depth, every piece with an id. A piece the layout gives no id is named by its
 // kind and place, which no written id starts like.
 
 extension Widget {
-    /// `page` as it's shown: a column of its items, each button's label its own, since a press is
-    /// told to the page's object by its label.
-    init(_ page: Page) throws(PageProblem) {
+    /// `layout` as it's shown: a column of its items, each button's label its own, since a press is
+    /// told to the page by its label.
+    public init(_ layout: Layout) throws(LayoutProblem) {
         do {
-            self = .stack(try Stack("page", .vertical(), try Self.pieces(page.items, Self.init)))
+            self = .stack(try Stack("page", .vertical(), try Self.pieces(layout.items, Self.init)))
         } catch {
             throw .widget(error)
         }
@@ -283,8 +283,8 @@ extension Widget {
     }
 }
 
-/// Why a page can't be shown.
-public enum PageProblem: Error, Codable, Equatable, Sendable, CustomStringConvertible {
+/// Why a layout can't be shown.
+public enum LayoutProblem: Error, Codable, Equatable, Sendable, CustomStringConvertible {
     /// It isn't a whole widget.
     case widget(WidgetProblem)
     /// Two of its buttons say the same.

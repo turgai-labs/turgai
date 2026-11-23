@@ -4,6 +4,7 @@ import TurgaiDomain
 
 @testable import TurgaiApplication
 @testable import TurgaiHail
+@testable import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

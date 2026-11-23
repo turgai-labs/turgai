@@ -11,7 +11,7 @@ import TurgaiDomain
 public enum DynamicObjectEvent: Codable, Sendable {
     /// The code of its type it runs from now on, first or new, with the starting values of the
     /// data new to it, given on behalf of `by`. One that another object's code made is held by it.
-    case adopted(BehaviorID, Script, starts: [String: JSONValue], by: CallScope, in: ConversationID?, heldBy: ObjectID?)
+    case adopted(BehaviorID, Script, starts: [String: JSONValue], by: Party, in: ConversationID?, heldBy: ObjectID?)
     /// `audience` given `level` of access, or none at all.
     case shared(with: Audience, AccessLevel?)
     /// What it's called and what it was made for, as it was asked for: an object made by name has
@@ -94,7 +94,7 @@ public enum DynamicObjectState: Codable, Sendable {
         switch (self, event) {
         case (.unmade, .adopted(let type, let code, let starts, let maker, let place, let holder)),
             (.removed, .adopted(let type, let code, let starts, let maker, let place, let holder)):
-            .live(LiveObject(type: type, code: code, fields: starts, maker: maker, madeIn: place, heldBy: holder))
+            .live(LiveObject(type: type, code: code, fields: starts, madeBy: maker, in: place, heldBy: holder))
         case (.unmade, _): self
         case (.live(let object), .removed): .removed(object)
         case (.live(let object), _): .live(object.applying(event))
@@ -117,7 +117,7 @@ public enum DynamicObjectState: Codable, Sendable {
     /// or removed, is the caller's to make.
     func access(for chain: CallChain) -> Access {
         switch self {
-        case .unmade, .removed: Access(madeBy: chain.scope)
+        case .unmade, .removed: Access(madeBy: chain.scope.asker)
         case .live(let object): object.access
         }
     }
@@ -128,19 +128,19 @@ public enum DynamicObjectState: Codable, Sendable {
     /// by a call through `chain`: an object not made yet becomes the caller's, and the object's
     /// whose code made it, if one did, which alone may use it; a living one takes it from a call
     /// that may write it.
-    func adopting(_ type: BehaviorID, _ code: Script, starts: [String: JSONValue], by chain: CallChain) throws
+    func adopting(_ type: BehaviorID, _ code: Script, starts: [String: JSONValue], by chain: Reached) throws
         -> DynamicObjectEvent
     {
         switch self {
         // Not made yet, or removed: a new life, its maker's.
         case .unmade, .removed:
-            let holder = chain.actors.last.map(ObjectID.init).flatMap {
+            let holder = chain.caller.map(ObjectID.init).flatMap {
                 DynamicObject.identity(of: $0) == nil ? nil : $0
             }
-            return .adopted(type, code, starts: starts, by: chain.scope, in: chain.place, heldBy: holder)
+            return .adopted(type, code, starts: starts, by: chain.scope.asker, in: chain.place, heldBy: holder)
         case .live(let object):
             try object.changeable(by: chain)
-            return .adopted(type, code, starts: starts, by: chain.scope, in: chain.place, heldBy: nil)
+            return .adopted(type, code, starts: starts, by: chain.scope.asker, in: chain.place, heldBy: nil)
         }
     }
 
@@ -156,7 +156,7 @@ public enum DynamicObjectState: Codable, Sendable {
 
     /// Its removal by a call through `chain`, which only a living object takes, from a call that may
     /// write it.
-    func removing(by chain: CallChain) throws -> DynamicObjectEvent {
+    func removing(by chain: Reached) throws -> DynamicObjectEvent {
         try live.changeable(by: chain)
         return .removed
     }
@@ -168,9 +168,6 @@ public struct LiveObject: Codable, Sendable {
     /// The type it runs, and its code as it runs it.
     public private(set) var type: BehaviorID
     public private(set) var code: Script
-    /// Whoever it was made by: on whose behalf it was first given code. What it starts itself, its
-    /// tasks and the events it follows, is on their behalf.
-    public let maker: CallScope
     /// The conversation it was made in, when it was made in one: where what it says goes.
     public let madeIn: ConversationID?
     /// Who may read it and who may write it: its maker's alone, from when it's made, until shared.
@@ -191,13 +188,12 @@ public struct LiveObject: Codable, Sendable {
     /// An object just made on behalf of `maker`, running `code` of the type `type`, holding
     /// `fields`: its maker's, or, made by another object's code, its holder's alone.
     init(
-        type: BehaviorID, code: Script, fields: [String: JSONValue], maker: CallScope, madeIn: ConversationID?,
+        type: BehaviorID, code: Script, fields: [String: JSONValue], madeBy maker: Party, in madeIn: ConversationID?,
         heldBy holder: ObjectID?
     ) {
         self.type = type
         self.code = code
         self.fields = fields
-        self.maker = maker
         self.madeIn = madeIn
         self.access = holder.map { Access(heldBy: $0.callActor) } ?? Access(madeBy: maker)
     }
@@ -243,13 +239,13 @@ public struct LiveObject: Codable, Sendable {
     // MARK: Decisions
 
     /// Refuses a change by a call through `chain` that may not write it.
-    func changeable(by chain: CallChain) throws {
+    func changeable(by chain: Reached) throws {
         guard access.allows(chain, .write) else { throw NotAllowed(.write) }
     }
 
     /// Its name and what it was made for, which an object is given once, by a call through `chain`
     /// that may write it.
-    func describing(name: String, description: String?, by chain: CallChain) throws -> DynamicObjectEvent {
+    func describing(name: String, description: String?, by chain: Reached) throws -> DynamicObjectEvent {
         try changeable(by: chain)
         guard self.name == nil else { throw DynamicObjectError.alreadyCreated }
         return .described(name: name, description: description)
@@ -257,7 +253,7 @@ public struct LiveObject: Codable, Sendable {
 
     /// `audience` given `level` of access, or none, by a call through `chain`: only one that may
     /// write it shares it.
-    func sharing(with audience: Audience, _ level: AccessLevel?, by chain: CallChain) throws -> DynamicObjectEvent {
+    func sharing(with audience: Audience, _ level: AccessLevel?, by chain: Reached) throws -> DynamicObjectEvent {
         try changeable(by: chain)
         return .shared(with: audience, level)
     }
@@ -282,7 +278,7 @@ public struct LiveObject: Codable, Sendable {
 
     /// Setting `values` of its data directly, by a call through `chain` that may write it: each must
     /// be data its code holds.
-    func setting(_ values: [String: JSONValue], by chain: CallChain) throws -> DynamicObjectEvent {
+    func setting(_ values: [String: JSONValue], by chain: Reached) throws -> DynamicObjectEvent {
         try changeable(by: chain)
         let held = try ObjectShape(code).fields.map(\.name)
         if let unknown = values.keys.sorted().first(where: { !held.contains($0) }) {

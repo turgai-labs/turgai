@@ -66,7 +66,7 @@ struct RecordedTurn: Sendable {
             return turn
         }
         do {
-            try await Agent.answering(as: try await agent.agentID) { try await stream.send(text, to: agent) }
+            try await stream.send(text, to: agent)
         } catch {
             // The model may fail after several useful tool calls. Keep those calls in the trace.
             stream.finish()

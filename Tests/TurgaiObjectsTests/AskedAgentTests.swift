@@ -6,9 +6,9 @@ import Testing
 import TurgaiDomain
 import TurgaiHail
 import TurgaiObjects
-import TurgaiSpaces
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 /// The space the agents are asked in.
 private let askedIn = AsAPerson.person.space
@@ -26,8 +26,8 @@ struct AskedAgentTests {
             let offered = try await Agent.offered([Role("planner"), Role("chef")], in: askedIn, on: sessionNode)
             let session = ObjectSession(
                 in: AsAPerson.person.space,
-                objects: try await Space.identified(by: AsAPerson.person.space, on: sessionNode).objects(
-                    for: AsAPerson.person.person), actorSystem: sessionNode, agents: offered)
+                objects: try await DynamicObjects.of(AsAPerson.person.space, on: sessionNode), actorSystem: sessionNode,
+                agents: offered)
 
             var page = ""
             for _ in 0..<50 {

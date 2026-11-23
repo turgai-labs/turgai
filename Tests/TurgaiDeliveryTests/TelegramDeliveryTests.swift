@@ -4,6 +4,7 @@ import TurgaiDomain
 import TurgaiTelegram
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 @Test
 func terminalSuppressesRateLimitedPreviewRetry() {

@@ -76,7 +76,8 @@ struct EvalNode: Sendable {
             settings.plugins.install(plugin: virtualActors)
             settings.plugins.install(plugin: DiscoveryPlugin())
             settings.propagateCallChain()
-            settings.checkObjectAccess()
+            settings.checkObjectAccess(
+                deciding: ObjectCallDecisions(decide: ObjectCallDecisions.default.decide, opening: Space.opens))
             settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
             settings.plugins.install(plugin: plugin)
             settings.plugins.install(plugin: ToolsAPIPlugin(Self.nodeTools.api))
@@ -102,7 +103,6 @@ struct EvalNode: Sendable {
         let offered = try await Agent.offered(others, in: Self.space, on: actorSystem)
         // The built-in objects an eval offers, the chats' schedules and timers, each started and
         // checked in there, where the space's code finds it by name.
-        let objects = try await Space.identified(by: Self.space, on: actorSystem).objects(for: Self.askerID)
         let offeredObjects: [DiscoverableObject] = [
             try DiscoverableObject.resolve(
                 id: try await Scheduler.of(Self.space, on: actorSystem).id, using: actorSystem),
@@ -122,9 +122,8 @@ struct EvalNode: Sendable {
                         .sorted(),
                     events: description.events.keys.sorted()))
         }
-        let session = ObjectSession(
-            in: Self.space, objects: objects, actorSystem: actorSystem, agents: offered,
-            builtIns: builtIns)
+        let session = try await ObjectSession(
+            in: Self.space, actorSystem: actorSystem, agents: offered, builtIns: builtIns)
         let roots: [any HailCore.Tool] = try await ObjectTools(session: session).offered()
         // The node's own tools, for a task that sends requests: as every conversation has them.
         let tools: [any HailCore.Tool] =
@@ -155,12 +154,13 @@ struct EvalNode: Sendable {
         if try await space.status() == nil {
             try await space.make(named: SpaceName("Eval")!, admins: NonEmptySet(Self.askerID), bot: bot)
         }
-        return try await space.opening(scopeOf: Self.askerID, for: .person)
+        return try await space.opening(scopeOf: .person(Self.askerID))
     }
 
     /// An agent no one has talked to.
     func freshAgent() async throws -> Agent {
-        try await system.agent(AgentID(role: Role("eval"), contextID: AgentContextID(UUID().uuidString)))
+        try await Agent.identified(
+            by: AgentID(role: Role("eval"), contextID: AgentContextID(UUID().uuidString)), on: system)
     }
 
     func stop() {

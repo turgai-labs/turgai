@@ -45,7 +45,7 @@ struct ConversationReducerTests {
         ).0
         let forecast = ExactRequest.http(method: "GET", url: "https://example.com/forecast", body: Data())
         let request = AccessRequest(
-            id: AccessRequestID(UUID()), request: forecast, by: asked.userID, standing: .waiting)
+            id: AccessRequestID(UUID()), request: forecast, by: .person(asked.userID), standing: .waiting)
 
         state = step(state, .awaiting(request.id)).0
         #expect(state.awaiting[request.id]?.message == asked)

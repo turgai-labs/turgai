@@ -2,7 +2,6 @@ import DistributedCluster
 import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
-import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -11,28 +10,67 @@ import TurgaiSpaces
     import Foundation
 #endif
 
-/// A command `person` gave in the conversation `conversation` of `space`, about what's due and
-/// what's theirs there: its answer is shown in the conversation.
-public struct ChatCommands {
+/// A command someone gives in one of a space's chats, about what's due there and the objects they
+/// may use: the space takes it, as it takes a message, and shows its answer in the chat.
+public enum InChatCommand: Codable, Sendable, Equatable {
+    /// The chat's timers.
+    case reminders
+    /// The chat's schedules.
+    case tasks
+    /// A change to the chat's schedule of that name.
+    case changeTask(TaskChange, name: String)
+    /// The chat's timer of that name cancelled.
+    case cancelReminder(name: String)
+    /// The objects they may use.
+    case objects
+    /// One of those objects' card, by its handle as listed.
+    case object(String)
+
+    /// A change to one of a chat's schedules.
+    public enum TaskChange: Codable, Sendable, Equatable {
+        case pause, resume, cancel
+    }
+}
+
+extension Space {
+    /// `command`, given by `person` in its conversation `conversation`: done as they may do it,
+    /// with its answer shown there. Refused unless they're one of the conversation's people.
+    public distributed func command(_ command: InChatCommand, in conversation: ConversationID, for person: UserID)
+        async throws
+    {
+        let commands = ChatCommands(space: self, conversation: conversation, person: person, system: actorSystem)
+        switch command {
+        case .reminders: try await commands.reminders()
+        case .tasks: try await commands.tasks()
+        case .changeTask(let change, let name): try await commands.change(change, named: name)
+        case .cancelReminder(let name): try await commands.cancelReminder(named: name)
+        case .objects: try await commands.objects()
+        case .object(let handle): try await commands.object(handle)
+        }
+    }
+}
+
+/// How a space does a chat's command: asked of its scheduler, its timers and its objects for the
+/// person, and shown in the chat.
+struct ChatCommands {
     let space: Space
     let conversation: ConversationID
     let person: TurgaiDomain.UserID
     let system: ClusterSystem
 
-    /// A change to one of the chat's schedules, as its commands ask for it.
-    public enum TaskChange: Sendable {
-        case pause, resume, cancel
-    }
+    typealias TaskChange = InChatCommand.TaskChange
 
     /// The chat's timers and its objects', as the timers object lists them for `person`.
     func reminders() async throws {
-        let (text, actions) = DuePresentation.reminders(try await asking { system, space in try await Timers.of(space, on: system).list() })
+        let (text, actions) = DuePresentation.reminders(
+            try await asking { system, space in try await Timers.of(space, on: system).list() })
         try await show(text, actions: actions)
     }
 
     /// The chat's schedules and its objects', as the scheduler lists them for `person`.
     func tasks() async throws {
-        let (text, actions) = DuePresentation.tasks(try await asking { system, space in try await Scheduler.of(space, on: system).list() })
+        let (text, actions) = DuePresentation.tasks(
+            try await asking { system, space in try await Scheduler.of(space, on: system).list() })
         try await show(text, actions: actions)
     }
 
@@ -64,7 +102,9 @@ public struct ChatCommands {
     /// why, when it isn't theirs to cancel.
     func cancelReminder(named name: String) async throws {
         do {
-            let cancelled = try await asking { system, space in try await Timers.of(space, on: system).cancel(name: name) }
+            let cancelled = try await asking { system, space in
+                try await Timers.of(space, on: system).cancel(name: name)
+            }
             try await show(DuePresentation.reminderAction("cancelled", id: cancelled.name))
         } catch {
             try await show("\(error)")
@@ -73,9 +113,8 @@ public struct ChatCommands {
 
     /// The objects `person` may read here, made by name, each a button that shows its card.
     func objects() async throws {
-        let handed = try await space.objects(for: person)
         let objects = try await asking { system, space in
-            try await ObjectSession(in: space, objects: handed, actorSystem: system).yourObjects()
+            try await ObjectSession(in: space, actorSystem: system, builtIns: []).yourObjects()
         }
         try await show(
             objects.isEmpty ? "No objects." : "Objects:",
@@ -86,9 +125,8 @@ public struct ChatCommands {
     /// it isn't one of theirs.
     func object(_ written: String) async throws {
         do {
-            let handed = try await space.objects(for: person)
             let card = try await asking { system, space in
-                let session = ObjectSession(in: space, objects: handed, actorSystem: system)
+                let session = try await ObjectSession(in: space, actorSystem: system, builtIns: [])
                 let objects = try await session.yourObjects()
                 guard let object = objects.first(where: { $0.description == written }) else {
                     throw NotYourObject(written: written, yours: objects.map(\.description))
@@ -197,4 +235,3 @@ enum DuePresentation {
         "Reminder \(id) \(verb)."
     }
 }
-

@@ -4,6 +4,7 @@ import Hail
 import HailCore
 import TurgaiConversations
 import TurgaiDomain
+import TurgaiHail
 import VirtualActors
 
 #if canImport(FoundationEssentials)
@@ -28,7 +29,7 @@ enum UserAgentRunner {
                 toolName, calledBy: sourceAgentID.role, in: try AgentContext.space(of: sourceAgentID), run: UUID()
             ).contextID
         )
-        let agent: Agent = try await actorSystem.agent(childID)
-        return try await Agent.answering(as: childID) { try await agent.respond(instruction) }
+        let agent = try await Agent.identified(by: childID, on: actorSystem)
+        return try await agent.respond(instruction)
     }
 }

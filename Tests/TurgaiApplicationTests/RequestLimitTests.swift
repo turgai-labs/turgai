@@ -5,6 +5,7 @@ import TurgaiAgents
 import TurgaiDomain
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 @Suite("Request limits")
 struct RequestLimitTests {

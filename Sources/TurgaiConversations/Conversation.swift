@@ -211,8 +211,8 @@ public protocol ConversationOwner: DistributedActor, Codable where ActorSystem =
     /// The owner `id`, wherever and whenever it runs.
     static func identified(by id: SpaceID, on actorSystem: ClusterSystem) async throws -> Self
 
-    /// The scope of a chain `person` starts for `asker`, settled as it starts.
-    distributed func opening(scopeOf person: TurgaiDomain.UserID, for asker: Asker) async throws -> CallScope
+    /// The scope of work that starts for `asker`, as it starts.
+    distributed func opening(scopeOf asker: Party) async throws -> CallScope
 
     /// Whoever the current chain is on behalf of needing exactly `request`, which their scope didn't
     /// allow: the request it opens, when it opens one.
@@ -315,7 +315,7 @@ public distributed actor Conversation {
         init<Owner: ConversationOwner>(
             _: Owner.Type, id: SpaceID, conversation: ConversationID, on actorSystem: ClusterSystem
         ) {
-            opening = { try await Owner.identified(by: id, on: actorSystem).opening(scopeOf: $0, for: .person) }
+            opening = { try await Owner.identified(by: id, on: actorSystem).opening(scopeOf: .person($0)) }
             needed = { try await Owner.identified(by: id, on: actorSystem).needed($0) }
             heard = { try await Owner.identified(by: id, on: actorSystem).heard($0, of: $1, in: conversation) }
         }
@@ -331,7 +331,7 @@ public distributed actor Conversation {
 
     /// Its id in the cluster: its space's, then its own there.
     static func actorID(for conversationID: ConversationID, in space: SpaceID) -> VirtualActorID {
-        VirtualActorID(rawValue: "conversation:\(space.rawValue.uuidString)/\(conversationID.stableKey)")
+        .owned(by: space, "conversation", conversationID.stableKey)
     }
 
     static func persistenceID(for conversationID: ConversationID, in space: SpaceID) -> String {
@@ -514,6 +514,12 @@ public distributed actor Conversation {
         try await owner.heard(exchange, person)
     }
 
+    /// Its owner asks `request`, for work that's no turn of its own, such as an object's that
+    /// works in it: its links show what's asked, and whoever decides answers through one.
+    public distributed func asks(_ request: AccessRequest) async {
+        await publishLive(.asked(conversationID: conversationID, request))
+    }
+
     /// The answer to `answered`, one of its owner's requests, as `owner` counted it: its links show
     /// it, so each stops asking, and the turn that waited continues.
     public distributed func answered<Owner: ConversationOwner>(
@@ -684,7 +690,8 @@ public distributed actor Conversation {
     /// snapshot is read from Hail's event-sourced agent in one operation, so
     /// token usage and lifecycle data describe one coherent state.
     public distributed func showContext(as scope: CallScope) async throws {
-        _ = try state.reading(by: scope.person)
+        guard let person = scope.person else { throw ConversationRefusal.notInIt }
+        _ = try state.reading(by: person)
         guard let bot = state.bots.first else { throw ConversationRefusal.notStarted }
         let participant = try await participant(for: bot.role)
         let snapshot = try await CallChain.$current.withValue(.start(scope, in: conversationID)) {

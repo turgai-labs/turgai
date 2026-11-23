@@ -1,4 +1,5 @@
 import DistributedCluster
+import TurgaiCalls
 import TurgaiDomain
 
 @testable import TurgaiObjects
@@ -19,13 +20,17 @@ actor TasksHeard {
     }
 }
 
-/// `space`'s tasks on `node`, followed from now on, with what's heard of them: until the returned
-/// task is cancelled.
-func listening(to space: SpaceID, on node: ClusterSystem) async throws -> (Task<Void, Never>, TasksHeard) {
+/// `space`'s tasks on `node`, followed from now on as `scope`, one of its people's, with what's
+/// heard of them: until the returned task is cancelled.
+func listening(to space: SpaceID, as scope: CallScope, on node: ClusterSystem) async throws
+    -> (Task<Void, Never>, TasksHeard)
+{
     let heard = TasksHeard()
-    let changes = try await SpaceTasks.identified(by: space, on: node).subscription()
-    let following = Task {
-        for await notice in changes { await heard.add(notice) }
+    return try await CallChain.$current.withValue(.start(scope, in: nil)) {
+        let changes = try await SpaceTasks.identified(by: space, on: node).subscription()
+        let following = Task {
+            for await notice in changes { await heard.add(notice) }
+        }
+        return (following, heard)
     }
-    return (following, heard)
 }

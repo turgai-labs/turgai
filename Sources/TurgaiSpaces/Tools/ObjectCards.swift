@@ -12,6 +12,14 @@ extension ObjectSession {
     /// The card a person reads for `handle`. While it works, it's what the object is, as YAML:
     /// its data now and what it takes, publishes and announces; then, for an object made here, its
     /// Swift. While it's failing, it's why, with its Swift, which is where the failure is.
+    /// The card of the object listed by `handle`, among those whoever asks may read: none when it
+    /// isn't one of them.
+    public func card(named handle: String) async throws -> Card? {
+        let listed = builtIns + (try await spaceObjects.held())
+        guard let entry = listed.first(where: { $0.id.description == handle }) else { return nil }
+        return try await card(entry.id)
+    }
+
     public func card(_ handle: ObjectID) async throws -> Card {
         let description = try await described(handle)
         var parts = ["# \(description.type)"]

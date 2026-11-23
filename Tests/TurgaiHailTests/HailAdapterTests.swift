@@ -6,6 +6,7 @@ import TurgaiTelegram
 
 @testable import TurgaiApplication
 @testable import TurgaiHail
+@testable import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -270,13 +271,11 @@ struct HailAdapterTests {
 
     @Test
     func anAttachmentIsGotThroughTheBotTheChatIsWith() async throws {
-        let chat = ChannelID(provider: "telegram", instanceID: "bot")
-        let files = TelegramFiles()
-        await files.register(chat) { fileID in
-            #expect(fileID == "telegram-file-id")
-            return TelegramFileData(body: Data([1, 2, 3]), contentType: "image/jpeg")
-        }
-        let tool = Telegram.Fetch_attachmentTool(owner: Telegram(chat: chat, files: files))
+        let tool = Telegram.Fetch_attachmentTool(
+            owner: Telegram(fetch: { attachment in
+                #expect(attachment.rawValue == "telegram-file-id")
+                return ToolData(body: Data([1, 2, 3]), contentType: "image/jpeg")
+            }))
 
         let output = try await tool.runOutput(
             input: TelegramAttachment(attachmentID: "telegram-file-id"), authority: FullAuthority())

@@ -849,8 +849,12 @@ extension TurgaiMainWebApp {
             try await answering(request) { person in
                 guard let id = spaceID(in: context) else { return noSuchSpace() }
                 var listed: [SpaceConnection] = []
-                for connection in try await Space.identified(by: id, on: system).connections(for: person) {
-                    let status = try await ConnectionRun.of(connection.id, in: id, on: system).status
+                let space = try await Space.identified(by: id, on: system)
+                let scope = try await space.scope(of: person)
+                for connection in try await space.connections(for: person) {
+                    let status = try await CallChain.$current.withValue(.start(scope, in: nil)) {
+                        try await ConnectionRun.of(connection.id, in: id, on: system).status
+                    }
                     listed.append(
                         SpaceConnection(
                             connection, status: status,
@@ -982,13 +986,8 @@ extension TurgaiMainWebApp {
         spaces.get(":space/objects") { request, context in
             try await answering(request) { person in
                 guard let id = spaceID(in: context) else { return noSuchSpace() }
-                let space = try await Space.identified(by: id, on: system)
-                let scope = try await space.scope(of: person)
-                let objects = try await space.objects(for: person)
-                // Each asked on the person's behalf, as every call to an object is: one on no one's is refused.
-                let entries = try await CallChain.$current.withValue(.start(scope, in: nil)) {
-                    try await BuiltIn.entries(in: id, objects, on: system) + (try await objects.held())
-                }
+                // The space lists what's its own, as the person may see it.
+                let entries = try await Space.identified(by: id, on: system).objects(for: person)
                 return try publicAPIResponse(entries.map(ObjectListing.init))
             }
         }
@@ -1001,14 +1000,9 @@ extension TurgaiMainWebApp {
                 guard let handle = context.parameters.get("object") else { return noSuchObject() }
                 let space = try await Space.identified(by: id, on: system)
                 let scope = try await space.scope(of: person)
-                let objects = try await space.objects(for: person)
                 // Asked on the person's behalf, as the list is: one they may not read isn't found.
                 let card = try await CallChain.$current.withValue(.start(scope, in: nil)) { () async throws -> Card? in
-                    let builtIns = try await BuiltIn.entries(in: id, objects, on: system)
-                    let listed = builtIns + (try await objects.held())
-                    guard let entry = listed.first(where: { $0.id.description == handle }) else { return nil }
-                    return try await ObjectSession(in: id, objects: objects, actorSystem: system, builtIns: builtIns)
-                        .card(entry.id)
+                    try await ObjectSession(in: id, actorSystem: system).card(named: handle)
                 }
                 guard case .markdown(let markdown)? = card else { return noSuchObject() }
                 return try publicAPIResponse(ObjectCard(markdown: markdown))
@@ -1031,7 +1025,8 @@ extension TurgaiMainWebApp {
                     }
                 let space = try await Space.identified(by: id, on: system)
                 let scope = try await space.scope(of: person)
-                let made = try await space.objects(for: person).held(ObjectIdentity(rawValue: object))
+                // The object, by its id: its space is asked as it's called.
+                let made = try await DynamicObject.identified(by: ObjectIdentity(rawValue: object), in: id, on: system)
                 do {
                     try await CallChain.$current.withValue(.start(scope, in: nil)) {
                         try await made.share(with: .everyone, level)
@@ -1208,8 +1203,11 @@ private func follow(
     case .objects(let space):
         // Its space hands its objects to someone in it, who follows that they changed; what they
         // are as it's joined, the app lists itself.
-        let objects = try await Space.identified(by: space, on: system).objects(for: person)
-        let changes = try await objects.subscription()
+        let reached = try await Space.identified(by: space, on: system)
+        let chain = CallChain.start(try await reached.scope(of: person), in: nil)
+        let changes = try await CallChain.$current.withValue(chain) {
+            try await ObjectSession(in: space, actorSystem: system, builtIns: []).changes()
+        }
         let forwarding = Task {
             for await _ in changes { try? await writer.write(.init(payload: .objectsChanged)) }
         }
@@ -1233,10 +1231,26 @@ private func follow(
         let id = space.api
         let reached = try await Space.identified(by: space, on: system)
         let scope = try await reached.scope(of: person)
-        // Whoever may change a task sees it: whoever made it, and whoever may see the space's tasks.
-        let sees: @Sendable (KeptTask) -> Bool = { $0.maker == scope.person || scope.permissions.tasks != nil }
-        // Following first, so no change between this and what's read now is missed.
-        let changes = try await reached.tasks(for: person).subscription()
+        let chain = CallChain.start(scope, in: nil)
+        // A chat's task is seen by whoever is in the chat; an object's by whoever may see the
+        // object, as it's shared now; and all by whoever may see the space's tasks.
+        let sees: @Sendable (KeptTask) async -> Bool = { task in
+            if scope.permissions.tasks != nil { return true }
+            switch task.of {
+            case .chat(let chat, _, _): return (try? await reached.reading(chat, by: person)) != nil
+            case .object(let object, _):
+                // Whoever may read the object: asked of the object itself, by its id.
+                let read = try? await CallChain.$current.withValue(chain) {
+                    try await DynamicObject.identified(by: object, in: space, on: system).access
+                }
+                return read != nil
+            }
+        }
+        // Following first, so no change between this and what's read now is missed. Followed for
+        // the person, as the space said they may when they joined the topic.
+        let changes = try await CallChain.$current.withValue(chain) {
+            try await reached.tasks(for: person).subscription()
+        }
         // What's kept now: its objects' schedules and timers, and its chats'.
         let workflows = system.workflows
         let decoder = JSONDecoder()
@@ -1247,7 +1261,7 @@ private func follow(
             tasks.append(
                 KeptTask(
                     id: .schedule(schedule.id), of: .object(firing.object, field: firing.property), due: firing.due,
-                    paused: schedule.paused, maker: firing.maker))
+                    paused: schedule.paused))
         }
         for timer in try await workflows.listWorkflows(workflow: ObjectTimerWorkflow.self) {
             guard case .running = timer.status, let data = timer.inputData,
@@ -1256,7 +1270,7 @@ private func follow(
             tasks.append(
                 KeptTask(
                     id: .timer(timer.id), of: .object(firing.object, field: firing.property), due: firing.due,
-                    paused: false, maker: firing.maker))
+                    paused: false))
         }
         for schedule in try await workflows.listSchedules(workflow: ScheduleWorkflow.self) {
             guard let made = try? decoder.decode(ChatSchedule.self, from: schedule.inputData), made.space == space
@@ -1269,22 +1283,25 @@ private func follow(
             else { continue }
             tasks.append(KeptTask(made, id: timer.id))
         }
-        try? await writer.write(.init(payload: .tasks(space: id, tasks: tasks.filter(sees).map(TaskListing.init))))
-        let forwarding = Task {
-            for await notice in changes {
-                switch notice {
-                case .kept(let task) where !sees(task):
-                    continue
-                case .kept(let task):
-                    try? await writer.write(.init(payload: .taskKept(space: id, task: TaskListing(task))))
-                case .ended(let task):
-                    try? await writer.write(.init(payload: .taskEnded(space: id, id: task.listed)))
+        var seen: [KeptTask] = []
+        for task in tasks where await sees(task) { seen.append(task) }
+        try? await writer.write(.init(payload: .tasks(space: id, tasks: seen.map(TaskListing.init))))
+        let forwarding = CallChain.$current.withValue(chain) {
+            Task {
+                for await notice in changes {
+                    switch notice {
+                    case .kept(let task):
+                        guard await sees(task) else { continue }
+                        try? await writer.write(.init(payload: .taskKept(space: id, task: TaskListing(task))))
+                    case .ended(let task):
+                        try? await writer.write(.init(payload: .taskEnded(space: id, id: task.listed)))
+                    }
                 }
             }
         }
         // Left, its subscription ends, and nothing more is told.
         return {
-            await changes.cancel()
+            await CallChain.$current.withValue(chain) { await changes.cancel() }
             forwarding.cancel()
         }
     }
@@ -1346,7 +1363,7 @@ private func answer(
             let scope = try await reached.scope(of: person)
             try await CallChain.$current.withValue(.start(scope, in: chat)) {
                 let scheduler = try await Scheduler.of(space, on: system)
-                switch ChatCommands.TaskChange(change) {
+                switch InChatCommand.TaskChange(change) {
                 case .pause: _ = try await scheduler.pause(name: name)
                 case .resume: _ = try await scheduler.resume(name: name)
                 case .cancel: _ = try await scheduler.cancel(name: name)
@@ -1389,7 +1406,7 @@ private let notASpace = TurgaiModels.ChatError(code: "not_a_space", message: "Th
 /// What a push names no chat by.
 private let notAChat = TurgaiModels.ChatError(code: "not_a_chat", message: "There's no such chat.")
 
-extension ChatCommands.TaskChange {
+extension InChatCommand.TaskChange {
     /// `change`, as the app asks for it.
     fileprivate init(_ change: ScheduleChange) {
         self =

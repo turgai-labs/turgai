@@ -2,6 +2,7 @@ import DistributedCluster
 import Hail
 import TurgaiCalls
 import TurgaiDomain
+import TurgaiHail
 import TurgaiObjects
 import TurgaiPeople
 import TurgaiSpaces
@@ -19,7 +20,6 @@ import TurgaiSpaces
 public enum ConversationTools {
     public static func make(
         context: AgentTurnContext,
-        telegramFiles: TelegramFiles,
         nodeTools: NodeTools,
         workspaceRoot: String,
         wasmRunnerURL: URL? = nil,
@@ -37,9 +37,13 @@ public enum ConversationTools {
                 LocationTool(),
                 NowTool(),
             ]
-        // A Telegram chat's attachments, got through the bot the chat is with, while it runs.
-        if case .conversation(let conversation, _)? = working, await telegramFiles.serves(conversation.channel) {
-            tools += Telegram(chat: conversation.channel, files: telegramFiles).tools
+        // A chat's attachments, got through the connection the chat is on, while that serves it.
+        if case .conversation(let conversation, let space)? = working, let actorSystem,
+            let connection = UUID(uuidString: conversation.channel.instanceID).map(ConnectionID.init(rawValue:)),
+            let run = try? await ConnectionRun.of(connection, in: space, on: actorSystem),
+            (try? await run.servesAttachments) == true
+        {
+            tools += Telegram(fetch: { try await run.attachment($0) }).tools
         }
         var pages: any ToolPages = NoToolPages()
         // The person the agent works for: in a conversation, whoever its turn answers. One asked
@@ -49,19 +53,15 @@ public enum ConversationTools {
         // Objects are its space's, and the built-in ones, as its space hands them to whoever the turn is
         // for: an agent in no space, or a turn on no one's behalf, reaches none.
         if let actorSystem, let space = working?.space, let person = CallChain.current?.scope.person {
-            let objects = try await Space.identified(by: space, on: actorSystem).objects(for: person)
             // The other agents, which it can ask: never itself.
             let askable = try await Agent.offered(
                 agents.filter { $0 != context.agentID.role }, in: space, on: actorSystem)
-            let builtIns = try await BuiltIn.entries(in: space, objects, on: actorSystem)
-            let session = ObjectSession(
+            let session = try await ObjectSession(
                 in: space,
-                objects: objects,
                 actorSystem: actorSystem,
                 agents: askable,
-                builtIns: builtIns,
-                // What code makes by name in the space: a website, as it says it is.
-                madeByName: [Website.describe()]
+                // What code makes by name in the space: a page, as it says it is.
+                madeByName: [Page.describe()]
             )
             // What objects can be: found, listed, made, changed and removed, at the root; and the
             // objects themselves, each a tool to read it.

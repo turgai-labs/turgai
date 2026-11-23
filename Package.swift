@@ -124,6 +124,7 @@ let package = Package(
             name: "TurgaiCalls",
             dependencies: [
                 "TurgaiDomain",
+                .product(name: "AttributedCalls", package: "cluster-attributed-calls"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
             ]
@@ -131,6 +132,7 @@ let package = Package(
         .target(
             name: "TurgaiPeople",
             dependencies: [
+                "TurgaiCalls",
                 "TurgaiDomain",
                 "TurgaiMemory",
                 "TurgaiPersistence",
@@ -145,6 +147,10 @@ let package = Package(
         .target(
             name: "TurgaiSpaces",
             dependencies: [
+                .product(name: "AttributedCalls", package: "cluster-attributed-calls"),
+                .product(name: "RunningActors", package: "cluster-running-actors"),
+                "TurgaiAgents",
+                "TurgaiTelegram",
                 "TurgaiObjects",
                 "TurgaiConversations",
                 "TurgaiCalls",
@@ -301,6 +307,7 @@ let package = Package(
         .target(
             name: "TurgaiHail",
             dependencies: [
+                "TurgaiCalls",
                 "TurgaiDomain",
                 .product(name: "Hail", package: "hail"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
@@ -433,7 +440,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TurgaiHailTests",
-            dependencies: ["TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiTelegram"]
+            dependencies: ["TurgaiDomain", "TurgaiHail", "TurgaiApplication", "TurgaiSpaces", "TurgaiTelegram"]
         ),
         .testTarget(
             name: "TurgaiApplicationTests",
@@ -446,6 +453,7 @@ let package = Package(
             name: "TurgaiObjectsTests",
             dependencies: [
                 "TurgaiCalls",
+                .product(name: "AttributedCalls", package: "cluster-attributed-calls"),
                 "TurgaiSpaces",
                 "TurgaiObjects",
                 .product(name: "Doppel", package: "doppel"),

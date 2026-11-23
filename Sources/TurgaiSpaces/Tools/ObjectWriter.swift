@@ -1,5 +1,6 @@
 import AnyLanguageModel
 import Hail
+import TurgaiAgents
 import TurgaiObjects
 
 /// Writes an object's Swift in a session of its own, whose answer is the code: what the object

@@ -7,6 +7,7 @@ import Testing
 import TurgaiHail
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 /// An agent does one thing at a time, and says so: asked again from within its own turn, which
 /// would wait for itself, it's busy answering at once, and the turn answers all the same. Asked

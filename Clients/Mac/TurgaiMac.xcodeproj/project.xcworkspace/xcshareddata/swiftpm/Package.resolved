@@ -1,5 +1,5 @@
 {
-  "originHash" : "2e3eedb1260d04c9d735596f907a709f285bba2108f1c05617612e10a0e62907",
+  "originHash" : "7b8d298fe93148b1d7dadc27cebb97768d1ff84f530e66e6d20a275b78f1419f",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "f95c908967e98c68c5ce3fd61a7974e7e869e303",
         "version" : "1.36.1"
+      }
+    },
+    {
+      "identity" : "cluster-attributed-calls",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/turgai-labs/cluster-attributed-calls.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "11ca06ed41ff6523cf4550c37d92194e14a13e1b"
       }
     },
     {

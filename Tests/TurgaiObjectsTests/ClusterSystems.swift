@@ -6,10 +6,11 @@ import Hail
 import RunningActors
 import TurgaiCalls
 import TurgaiDomain
-import TurgaiSpaces
+import TurgaiObjects
 import VirtualActors
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 /// A cluster node for a test, set up as Turgai runs one, journaled to `store`, and joined to
 /// `other` when one is given. A node that hosts virtual actors has a `VirtualNode`; `installing`
@@ -48,7 +49,7 @@ func withClusterSystem<Result>(
                     try await reached.make(
                         named: SpaceName("Test")!, admins: NonEmptySet(.tester), bot: ollamaBot("Helper"))
                 }
-                for person in Set(inIt.map(\.person)).subtracting([.tester]) {
+                for person in Set(inIt.compactMap(\.person)).subtracting([.tester]) {
                     try await reached.admit(person, into: NonEmptySet(.members))
                 }
             }
@@ -87,7 +88,10 @@ private func configure(_ settings: inout ClusterSystemSettings, store: MemoryEve
     settings.plugins.install(plugin: virtualActors)
     settings.plugins.install(plugin: DiscoveryPlugin())
     settings.propagateCallChain()
-    settings.checkObjectAccess()
+    // As the server decides: each call into an object is put to the space of whoever asked, which
+    // reads what they may do itself. What a test says they may doesn't count.
+    settings.checkObjectAccess(
+        deciding: ObjectCallDecisions(decide: Space.decides, opening: Space.opens))
     settings.plugins.install(plugin: ClusterJournalPlugin { _ in store })
 }
 

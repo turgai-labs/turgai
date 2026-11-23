@@ -2,6 +2,7 @@ import Foundation
 import Testing
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 struct WebSearchBackendTests {
     private let duckDuckGoHTML = """

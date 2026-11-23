@@ -5,7 +5,7 @@ import TurgaiObjects
 
 /// A built-in object every space has: how its objects in a space are reached.
 public struct BuiltIn: Sendable {
-    /// Its objects in a space, started there: one for most, one per site for websites.
+    /// Its objects in a space, started there: one for most, one per page for pages.
     let objects: @Sendable (SpaceID, DynamicObjects, ClusterSystem) async throws -> [DiscoverableObject]
 
     /// Every built-in there is, in the order they're offered. Weather is left out for now, so an
@@ -18,12 +18,12 @@ public struct BuiltIn: Sendable {
             [try DiscoverableObject.resolve(id: try await Timers.of(space, on: system).id, using: system)]
         },
         BuiltIn { space, objects, system in
-            var sites: [DiscoverableObject] = []
-            for name in try await objects.sites {
-                let site = try await Website.named(name, in: space, on: system)
-                sites.append(try DiscoverableObject.resolve(id: site.id, using: system))
+            var pages: [DiscoverableObject] = []
+            for name in try await objects.pages {
+                let page = try await Page.named(name, in: space, on: system)
+                pages.append(try DiscoverableObject.resolve(id: page.id, using: system))
             }
-            return sites
+            return pages
         },
     ]
 

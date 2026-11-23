@@ -6,6 +6,7 @@ import TurgaiPeople
 
 @testable import TurgaiApplication
 @testable import TurgaiConversations
+@testable import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

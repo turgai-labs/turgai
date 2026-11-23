@@ -20,6 +20,9 @@ public enum ExactRequest: Hashable, Codable, Sendable, CustomStringConvertible {
     case command(String, arguments: [String], in: String)
     /// A program run with its arguments, in a directory.
     case program(String, arguments: [String], in: String)
+    /// One of the space's objects used, by its id: what another of its objects asks, for its own
+    /// work.
+    case use(SpaceActor)
 
     /// As the people deciding read it: `GET https://example.com`.
     public var description: String {
@@ -31,6 +34,7 @@ public enum ExactRequest: Hashable, Codable, Sendable, CustomStringConvertible {
         case .writeFile(let path, let content): "write \(path)\n\(content)"
         case .command(let command, let arguments, let directory), .program(let command, let arguments, let directory):
             ([command] + arguments).joined(separator: " ") + " (in \(directory))"
+        case .use(let object): "use \(object.name)"
         }
     }
 }
@@ -60,13 +64,59 @@ public struct AccessRequestID: Hashable, Codable, Sendable, CustomStringConverti
     public var description: String { rawValue.uuidString }
 }
 
+/// One of a space's own actors, as its id places it: its space, then each kind and name down to
+/// it, such as the object `coffee-counter`, or the bot of one of its conversations.
+public struct SpaceActor: Hashable, Codable, Sendable, CustomStringConvertible {
+    /// A kind, and a name of that kind.
+    public struct Step: Hashable, Codable, Sendable {
+        public let kind: String
+        public let name: String
+
+        public init(_ kind: String, _ name: String) {
+            self.kind = kind
+            self.name = name
+        }
+    }
+
+    public let space: SpaceID
+    /// Its own kind and name, or the actor of its space it's under.
+    public let first: Step
+    /// The kinds and names after the first, down to its own.
+    public let rest: [Step]
+
+    public init(in space: SpaceID, _ first: Step, _ rest: [Step] = []) {
+        self.space = space
+        self.first = first
+        self.rest = rest
+    }
+
+    /// Each kind and name, down to its own.
+    public var steps: [Step] { [first] + rest }
+
+    /// What it's called: its own name.
+    public var name: String { (rest.last ?? first).name }
+
+    public var description: String { name }
+}
+
+/// Who asks something of a space: one of its people, or one of its own actors, doing its own work.
+public enum Party: Hashable, Codable, Sendable {
+    case person(UserID)
+    case actor(SpaceActor)
+
+    /// The person, when it's one.
+    public var person: UserID? {
+        if case .person(let person) = self { person } else { nil }
+    }
+}
+
 /// Someone asking their space's admins to run exactly what they may not run yet, until they answer:
 /// waiting, or allowed once and not yet run.
 public struct AccessRequest: Hashable, Codable, Sendable, Identifiable {
     public let id: AccessRequestID
     public let request: ExactRequest
-    /// Whose it is.
-    public let by: UserID
+    /// Whose it is: who asked.
+    public let by: Party
     public let standing: Standing
 
     /// Where it stands.
@@ -77,7 +127,7 @@ public struct AccessRequest: Hashable, Codable, Sendable, Identifiable {
         case allowedOnce
     }
 
-    public init(id: AccessRequestID, request: ExactRequest, by: UserID, standing: Standing) {
+    public init(id: AccessRequestID, request: ExactRequest, by: Party, standing: Standing) {
         self.id = id
         self.request = request
         self.by = by

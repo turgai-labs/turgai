@@ -262,7 +262,7 @@ public struct HailAgentAdapter: Sendable {
     }
 
     private func agent(for conversationID: ConversationID) async throws -> Agent {
-        try await actorSystem.agent(Self.agentID(for: conversationID, in: space, role: agentRole))
+        try await Agent.identified(by: Self.agentID(for: conversationID, in: space, role: agentRole), on: actorSystem)
     }
 
     public func deactivate(for conversationID: ConversationID) async throws {

@@ -13,6 +13,7 @@ import TurgaiHail
 import TurgaiObjects
 import TurgaiPeople
 import TurgaiPersistence
+import TurgaiSpaces
 import TurgaiTelegram
 
 #if canImport(FoundationEssentials)
@@ -62,6 +63,6 @@ extension TurgaiMainWebApp {
         registerConnectionRoutes(on: router, dependencies: dependencies)
         registerPublicChatRoutes(on: router, dependencies: dependencies)
         registerAccountRoutes(on: router, dependencies: dependencies)
-        registerWebsiteRoutes(on: router, dependencies: dependencies)
+        registerPageRoutes(on: router, dependencies: dependencies)
     }
 }

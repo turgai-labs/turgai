@@ -1,9 +1,11 @@
+import AttributedCalls
 import DiscoverableActors
 import DistributedCluster
 import Foundation
 import Hail
 import TurgaiCalls
 import TurgaiDomain
+import TurgaiHail
 import TurgaiObjects
 import VirtualActors
 
@@ -62,12 +64,13 @@ extension Agent: @retroactive DiscoverableActor {
             try _DiscoverySupport.validate(arguments, allowedKeys: ["request"])
             let request = try _DiscoverySupport.argument(
                 String.self, "request", in: arguments, actorSystem: actorSystem)
-            // A call that came from its own answer: it can't answer it until it has answered.
-            if CallChain.current?.contains(Self.objectID(of: agentID).callActor) == true {
+            // A call that came from its own answer: it can't answer it until it has answered. The
+            // call says the actors it came through; the last is this one, reached now.
+            if Call.path.dropLast().contains(agentID.actorID) {
                 throw AgentAskError.askedByItself(agentID.role)
             }
             do {
-                let answer: String = try await Self.answering(as: agentID) { try await respond(request) }
+                let answer: String = try await respond(request)
                 return try _DiscoverySupport.json(answer)
             } catch AgentRuntimeError.busy(let busy) {
                 throw AgentAskError.busy(agentID.role, busy)
@@ -122,7 +125,7 @@ extension Agent {
 
     /// The id the agent with `id` is known by, as an object and in call chains: its virtual actor's.
     public static func objectID(of id: AgentID) -> ObjectID {
-        .virtual(VirtualActorID(rawValue: id.rawValue))
+        .virtual(id.actorID)
     }
 
     /// The agents of `roles`, bots of `space`, asked as objects there, as their objects are listed:
@@ -135,7 +138,7 @@ extension Agent {
         let description = describe()
         for role in roles {
             let agentID = asked(role, in: space)
-            let agent = try await system.agent(agentID)
+            let agent = try await Agent.identified(by: agentID, on: system)
             let object = try DiscoverableObject.resolve(id: agent.id, using: system)
             await system.receptionist.checkIn(object, with: .virtualObjects(in: space))
             entries.append(

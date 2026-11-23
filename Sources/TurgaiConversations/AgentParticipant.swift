@@ -85,10 +85,8 @@ public distributed actor AgentParticipant {
                 actorSystem.log.debug(
                     "Turn started", metadata: ["conversation": "\(conversationKey)", "turn": "\(turn)"])
                 let response = try await CallChain.$current.withValue(.start(turnScope, in: request.conversationID)) {
-                    try await Agent.answering(as: agentID) {
-                        try await peer.run(to: request) { event in
-                            await participant.whenLocal { await $0.follow(event, of: request.turnID) }
-                        }
+                    try await peer.run(to: request) { event in
+                        await participant.whenLocal { await $0.follow(event, of: request.turnID) }
                     }
                 }
                 actorSystem.log.debug(

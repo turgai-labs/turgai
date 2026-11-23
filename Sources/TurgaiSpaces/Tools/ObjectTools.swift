@@ -60,7 +60,35 @@ public actor ObjectSession {
         case action(ObjectID, String)
     }
 
+    /// The objects of `space`, as someone works with them from `actorSystem`: its registry found
+    /// here, by the space's id, and the built-in objects every space has, unless `builtIns` says
+    /// which are offered.
     public init(
+        in space: SpaceID,
+        actorSystem: ClusterSystem,
+        agents: [ObjectEntry] = [],
+        builtIns: [ObjectEntry]? = nil,
+        madeByName: [ObjectDescription] = []
+    ) async throws {
+        let objects = try await DynamicObjects.of(space, on: actorSystem)
+        let offered: [ObjectEntry]
+        if let builtIns {
+            offered = builtIns
+        } else {
+            offered = try await BuiltIn.entries(in: space, objects, on: actorSystem)
+        }
+        self.init(
+            in: space, objects: objects, actorSystem: actorSystem, agents: agents, builtIns: offered,
+            madeByName: madeByName)
+    }
+
+    /// That the space's objects changed, from now on, as they're made, removed or shared: for
+    /// whoever shows them to list them again.
+    public nonisolated func changes() async throws -> Subscription<ObjectsChanged> {
+        try await spaceObjects.subscription()
+    }
+
+    init(
         in space: SpaceID,
         objects: DynamicObjects,
         actorSystem: ClusterSystem,
@@ -569,7 +597,7 @@ extension ObjectSession {
             lasting.insert(unmade)
             summaries[unmade] = Self.given(description.description)
         }
-        // Built-in types code makes by name, as each says it is: a website, before there's one.
+        // Built-in types code makes by name, as each says it is: a page, before there's one.
         for description in madeByName
         where description.type != type && !objects.contains(where: { $0.type == description.type }) {
             objects.append(Uses.Object(description: description, publishes: true))
@@ -657,7 +685,7 @@ extension ObjectSession {
         }
     }
 
-    /// A method as Swift declares it: `show(page: Page)`, `approve(_ amount: Int) -> Bool`.
+    /// A method as Swift declares it: `show(page: Layout)`, `approve(_ amount: Int) -> Bool`.
     static func written(_ name: String, _ method: DeclaredActor.Method) -> String {
         let parameters = method.parameters.map { parameter in
             let called =
@@ -874,21 +902,21 @@ extension ObjectSession {
             session: self, handle: handle, type: (try? await described(handle).type) ?? handle.description)
     }
 
-    /// The websites made in its space that this turn's person may take out, by id: all of them,
+    /// The pages made in its space that this turn's person may take out, by id: all of them,
     /// when they may configure the space, or none.
-    func removableSites() async throws -> [ObjectID: SiteName] {
+    func removablePages() async throws -> [ObjectID: PageName] {
         guard CallChain.current?.scope.permissions.configureSpace == true else { return [:] }
-        var sites: [ObjectID: SiteName] = [:]
-        for name in try await spaceObjects.sites {
-            sites[.virtual(Website.actorID(for: name, in: space))] = name
+        var pages: [ObjectID: PageName] = [:]
+        for name in try await spaceObjects.pages {
+            pages[.virtual(Page.actorID(for: name, in: space))] = name
         }
-        return sites
+        return pages
     }
 
-    /// Removes an object made with create, for good, or takes out a website, giving up its name.
+    /// Removes an object made with create, for good, or takes out a page, giving up its name.
     func remove(_ handle: ObjectID) async throws -> DiscoveryJSON {
-        if let site = try await removableSites()[handle] {
-            try await making { try await $0.removeSite(site) }
+        if let page = try await removablePages()[handle] {
+            try await making { try await $0.removePage(page) }
             objects[handle] = nil
             return "removed"
         }
@@ -1611,8 +1639,8 @@ public struct ObjectTools: Sendable {
             ListObjectsTool(session: session), SearchObjectsTool(session: session),
             try CreateObjectTool(session: session),
         ]
-        // Websites are taken out as objects are removed, by whoever may configure the space.
-        let removable = objects + (try await session.removableSites()).keys.sorted()
+        // Pages are taken out as objects are removed, by whoever may configure the space.
+        let removable = objects + (try await session.removablePages()).keys.sorted()
         var tools = always
         if !objects.isEmpty {
             tools += [

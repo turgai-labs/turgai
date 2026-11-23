@@ -283,7 +283,8 @@ public enum TelegramConnections {
     /// Runs `connection`, one of `space`'s, with `access`, until it's cancelled: why it stopped
     /// when it stops by itself.
     public static func run(
-        _ connection: Connection, access: TelegramAccess, of space: SpaceID, on system: ClusterSystem
+        _ connection: Connection, access: TelegramAccess, of space: SpaceID, on system: ClusterSystem,
+        serving: @escaping @Sendable (ConnectionRun.Fetch?) async -> Void
     )
         async -> ConnectionStopped
     {
@@ -311,7 +312,7 @@ public enum TelegramConnections {
                 channel: connection.channel,
                 actorSystem: system,
                 linking: dependencies.linking,
-                files: dependencies.telegramFiles,
+                serving: serving,
                 logger: logger,
                 persistedConversationIDs: persisted
             )
@@ -337,7 +338,8 @@ private actor ChannelBot {
     private let linking: PersonLinking
     /// The channel this bot's chats are in: its connection's.
     private let conversationChannel: ChannelID
-    private let files: TelegramFiles
+    /// Tells its connection's run how its chats' files are got, while it runs.
+    private let serving: @Sendable (ConnectionRun.Fetch?) async -> Void
     private let logger: Logger
     private let deliveryConfiguration: TelegramDeliveryConfiguration
     private let persistedConversationIDs: [ConversationID]
@@ -351,7 +353,7 @@ private actor ChannelBot {
         channel conversationChannel: ChannelID,
         actorSystem: ClusterSystem,
         linking: PersonLinking,
-        files: TelegramFiles,
+        serving: @escaping @Sendable (ConnectionRun.Fetch?) async -> Void,
         logger: Logger,
         delivery: TelegramDeliveryConfiguration = TelegramDeliveryConfiguration(),
         persistedConversationIDs: [ConversationID] = [],
@@ -372,7 +374,7 @@ private actor ChannelBot {
         self.actorSystem = actorSystem
         self.linking = linking
         self.conversationChannel = conversationChannel
-        self.files = files
+        self.serving = serving
         self.logger = logger
         self.deliveryConfiguration = delivery
         self.persistedConversationIDs = persistedConversationIDs
@@ -380,7 +382,11 @@ private actor ChannelBot {
 
     public func run() async throws {
         // Its chats' attachments are got through it while it runs.
-        await files.register(conversationChannel, client.downloadFile)
+        let client = client
+        await serving { attachment in
+            let file = try await client.downloadFile(attachment.rawValue)
+            return ToolData(body: file.body, contentType: file.contentType)
+        }
 
         let telegramConnections = try await bot.connections()
 
@@ -410,10 +416,10 @@ private actor ChannelBot {
                 }
             )
         } catch {
-            await files.unregister(conversationChannel)
+            await serving(nil)
             throw error
         }
-        await files.unregister(conversationChannel)
+        await serving(nil)
     }
 
     private func consume(

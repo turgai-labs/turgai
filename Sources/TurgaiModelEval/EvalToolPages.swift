@@ -1,5 +1,6 @@
 import Hail
 import TurgaiApplication
+import TurgaiSpaces
 
 /// Changes only the introduction of the objects page; its links and every other page remain identical.
 struct EvalPages: ToolPages {

@@ -1,6 +1,8 @@
+import DistributedCluster
 import Hail
+import TurgaiCalls
 import TurgaiDomain
-import TurgaiHail
+import VirtualActors
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -32,7 +34,8 @@ public enum AgentContext: Equatable, Sendable {
             guard !role.isEmpty, !role.contains("/") else { return nil }
             self = .asked(as: Role(String(role)), in: SpaceID(rawValue: space))
         } else if id.rawValue.hasPrefix(Self.toolRunPrefix) {
-            let parts = id.rawValue.dropFirst(Self.toolRunPrefix.count).split(separator: "/", omittingEmptySubsequences: false)
+            let parts = id.rawValue.dropFirst(Self.toolRunPrefix.count).split(
+                separator: "/", omittingEmptySubsequences: false)
             guard parts.count == 4, let space = UUID(uuidString: String(parts[0])), !parts[1].isEmpty,
                 let run = UUID(uuidString: String(parts[2])), !parts[3].isEmpty
             else { return nil }
@@ -82,4 +85,30 @@ extension Role {
     /// What Hail calls the agent a user's tool thinks with, for one run: with no hyphen, since Hail
     /// reads an agent's role up to its id's first hyphen.
     public static let toolRun = Role("toolrun")
+}
+
+extension AgentID {
+    /// The id of this agent's actor: the one place that says it. It's one of its space's own, so
+    /// its id says where the agent works, and ends with its role, as an object's id ends with its
+    /// name: in a conversation of its space, asked as an object there, or thinking for one run of a
+    /// tool. An agent that works in no space is no one's.
+    public var actorID: VirtualActorID {
+        switch AgentContext(contextID) {
+        case .conversation(let conversation, let space):
+            VirtualActorID("agent", role.rawValue, in: .owned(by: space, "conversation", conversation.stableKey))
+        case .asked(_, let space):
+            .owned(by: space, "agent", role.rawValue)
+        case .toolRun(_, _, let space, let run):
+            VirtualActorID("agent", role.rawValue, in: .owned(by: space, "run", run.uuidString))
+        case nil:
+            VirtualActorID(rawValue: rawValue)
+        }
+    }
+}
+
+extension Agent {
+    /// The agent `agentID`, wherever and whenever it runs: its space's own, when it works in one.
+    public static func identified(by agentID: AgentID, on actorSystem: ClusterSystem) async throws -> Agent {
+        try await actorSystem.virtualActors.getActor(identifiedBy: agentID.actorID, dependency: agentID)
+    }
 }

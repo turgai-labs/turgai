@@ -3,6 +3,7 @@ import Testing
 import TurgaiCalls
 import TurgaiDomain
 import TurgaiSpaces
+import VirtualActors
 
 @testable import TurgaiObjects
 
@@ -72,8 +73,30 @@ struct SpaceTests {
     }
 
     /// `bob` asking for the forecast, as `asker`, the request `id`.
-    private func asking(_ id: AccessRequestID, as asker: Asker = .person) -> SpaceCommand {
-        .ask(forecast, by: bob, as: asker, id: id)
+    private func asking(_ id: AccessRequestID, as asker: Party? = nil) -> SpaceCommand {
+        .ask(forecast, by: asker ?? .person(bob), id: id)
+    }
+
+    /// What work that starts for someone may do, by who asked. A person may what their groups
+    /// may; one of the space's own actors is in no group and may only what's shared with it;
+    /// anyone else is refused.
+    @Test func workIsForOneOfItsPeopleOrOneOfItsOwnActors() throws {
+        let space = try made(try annDecidesForBob())
+        let counter = try Party(VirtualActorID.owned(by: family, "object", "counter"))
+        let elsewhere = try Party(VirtualActorID.owned(by: SpaceID(), "object", "counter"))
+
+        #expect(try space.scope(of: Party.person(ann)).permissions == .all)
+        #expect(try space.scope(of: Party.person(bob)).groups == [.members])
+        let its = try space.scope(of: counter)
+        #expect(its.asker == counter && its.person == nil)
+        #expect(its.permissions == .none && its.groups.isEmpty && !its.allows(forecast))
+        // What's its own, and what's shared with it; nothing a person's, though they made it.
+        #expect(Access(madeBy: counter).allows(its, .write))
+        #expect(!Access(madeBy: .person(bob)).allows(its, .read))
+        #expect(Access(madeBy: .person(bob)).sharing(with: Audience(counter), .read).allows(its, .read))
+
+        #expect(throws: SpaceRefusal.notInIt) { try space.scope(of: Party.person(.guest(UUID()))) }
+        #expect(throws: SpaceRefusal.notInIt) { try space.scope(of: elsewhere) }
     }
 
     @Test func nothingButMakingHappensBeforeItsMade() throws {
@@ -119,14 +142,14 @@ struct SpaceTests {
         let id = AccessRequestID(UUID())
         #expect(
             try decide(asking(id), state)
-                == [.asked(AccessRequest(id: id, request: forecast, by: bob, standing: .waiting), by: .person)])
+                == [.asked(AccessRequest(id: id, request: forecast, by: .person(bob), standing: .waiting))])
     }
 
     @Test func aRequestStillWaitingIsTheSameOne() throws {
         let id = AccessRequestID(UUID())
         let waiting = try run([asking(id)], from: try annDecidesForBob())
         #expect(try decide(asking(AccessRequestID(UUID())), waiting).isEmpty)
-        #expect(try made(waiting).request(for: forecast, by: bob, as: .person)?.id == id)
+        #expect(try made(waiting).request(for: forecast, by: .person(bob))?.id == id)
     }
 
     @Test func onlyAnAnswerByWhoeverDecidesCounts() throws {
@@ -152,7 +175,7 @@ struct SpaceTests {
         let id = AccessRequestID(UUID())
         let shared = try run([asking(id), .answer(id, .always, by: ann)], from: try annDecidesForBob())
         #expect(try made(shared).scope(of: bob).allows(forecast))
-        #expect(try made(shared).opening(scopeOf: bob, for: .person).0.allows(forecast))
+        #expect(try made(shared).opening(scopeOf: .person(bob)).0.allows(forecast))
         // Only with Bob, and nothing waits.
         #expect(try !made(shared).scope(of: cat).allows(forecast))
         #expect(try made(shared).requests.isEmpty)
@@ -193,16 +216,16 @@ struct SpaceTests {
         #expect(try made(state).permissions(of: guest) == Permissions(bots: .use))
     }
 
-    /// What's allowed once goes to exactly the one that asked: an object's own work asking for Bob
-    /// doesn't give it to Bob's turn, nor Bob's turn to the object.
+    /// What's allowed once goes to exactly the one that asked: what an object's own work asked
+    /// for isn't Bob's turn's, nor the other way round.
     @Test func onceGoesToExactlyTheOneThatAsked() throws {
         let id = AccessRequestID(UUID())
-        let clock = Asker.actor(DynamicObject.callActor(for: ObjectIdentity(rawValue: "clock"), in: family))
+        let clock = try Party(DynamicObject.actorID(for: ObjectIdentity(rawValue: "clock"), in: family))
         let once = try run([asking(id, as: clock), .answer(id, .once, by: ann)], from: try annDecidesForBob())
-        let (turn, spentByTurn) = try made(once).opening(scopeOf: bob, for: .person)
+        let (turn, spentByTurn) = try made(once).opening(scopeOf: .person(bob))
         #expect(!turn.allows(forecast))
         #expect(spentByTurn.isEmpty)
-        let (own, spent) = try made(once).opening(scopeOf: bob, for: clock)
+        let (own, spent) = try made(once).opening(scopeOf: clock)
         #expect(own.allows(forecast))
         #expect(spent == [.spent(id)])
     }
@@ -212,11 +235,11 @@ struct SpaceTests {
         let once = try run([asking(id), .answer(id, .once, by: ann)], from: try annDecidesForBob())
         // Not what's shared with Bob: only the scope that opens next has it, which spends it.
         #expect(try !made(once).scope(of: bob).allows(forecast))
-        let (scope, spent) = try made(once).opening(scopeOf: bob, for: .person)
+        let (scope, spent) = try made(once).opening(scopeOf: .person(bob))
         #expect(scope.allows(forecast))
         #expect(spent == [.spent(id)])
         let after = SpaceDecider.evolve(once, spent)
-        #expect(try !made(after).opening(scopeOf: bob, for: .person).0.allows(forecast))
+        #expect(try !made(after).opening(scopeOf: .person(bob)).0.allows(forecast))
     }
 
     @Test func refusedItCanBeAskedAgain() throws {
@@ -226,7 +249,7 @@ struct SpaceTests {
         let again = AccessRequestID(UUID())
         #expect(
             try decide(asking(again), refused)
-                == [.asked(AccessRequest(id: again, request: forecast, by: bob, standing: .waiting), by: .person)])
+                == [.asked(AccessRequest(id: again, request: forecast, by: .person(bob), standing: .waiting))])
     }
 
     /// A space someone made: called what they named it, with them its first admin. A guest makes

@@ -5,6 +5,7 @@ import Testing
 import TurgaiObjects
 
 @testable import TurgaiApplication
+@testable import TurgaiSpaces
 
 /// An action's tool, as the model meets it: every argument its code takes can be written, and
 /// reaches the object as its code takes it.

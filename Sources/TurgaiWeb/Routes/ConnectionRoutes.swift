@@ -3,6 +3,7 @@ import Hummingbird
 import HummingbirdElementary
 import HummingbirdWebSocket
 import TurgaiApplication
+import TurgaiCalls
 import TurgaiDomain
 import TurgaiSpaces
 import TurgaiTelegram
@@ -60,8 +61,11 @@ extension TurgaiMainWebApp {
                 return TurgaiWebSupport.redirect(to: "/")
             }
             var items: [ConnectionListItem] = []
+            let scope = try await space.scope(of: .account(user.id))
             for connection in try await space.connections(for: .account(user.id)) {
-                let status = try await ConnectionRun.of(connection.id, in: listing.id, on: system).status
+                let status = try await CallChain.$current.withValue(.start(scope, in: nil)) {
+                    try await ConnectionRun.of(connection.id, in: listing.id, on: system).status
+                }
                 items.append(
                     ConnectionListItem(
                         id: connection.id, label: connection.label.rawValue, enabled: connection.enabled,

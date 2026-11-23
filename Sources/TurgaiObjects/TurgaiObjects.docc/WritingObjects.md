@@ -78,11 +78,12 @@ actor Digest {
 
 Schedules are durable: they keep running across restarts.
 
-### Websites
+### Pages
 
-`Website(id: "bakery-menu")` is its website at
-`/websites/bakery-menu/`, made the first time it's named. Its ``Page`` is rows, columns, texts,
-images and buttons; ``Website/show(_:)`` replaces the page in every open browser, and each press
+`Page(id: "bakery-menu")` is its page, under its space, at
+`/spaces/<space>/pages/bakery-menu/`, made the first time it's named. Its ``Layout`` is rows,
+columns, texts, images and buttons; ``Page/show(_:)`` replaces the layout wherever the page is
+open, in a browser or an app, and each press
 is announced as ``ButtonPressed``. A name is one space's at a time.
 
 ### Tools

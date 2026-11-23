@@ -5,13 +5,13 @@ import Testing
 
 @testable import TurgaiObjects
 
-/// A page's styles as the writer is given them: Swift's own declarations, each optional value
-/// `nil` when it's left out, so a page written before them still is one.
-@Suite("A page's styles, in the spec")
+/// A layout's styles as the writer is given them: Swift's own declarations, each optional value
+/// `nil` when it's left out, so a layout written before them still is one.
+@Suite("A layout's styles, in the spec")
 struct PageStyleSpecTests {
     @Test("the spec declares the styles, and code with them and without them is Swift")
     func stylesAreDeclaredAndOptional() {
-        let spec = Uses.declarations(of: [Page.jsonSchema])
+        let spec = Uses.declarations(of: [Layout.jsonSchema])
         #expect(
             spec.contains(
                 "case text(id: String? = nil, words: String, style: TextStyle = .body, color: TextColor = .primary)"),
@@ -29,8 +29,8 @@ struct PageStyleSpecTests {
             "\(spec)")
         let code = """
             actor Shown {
-                func page() -> Page {
-                    Page(items: [
+                func layout() -> Layout {
+                    Layout(items: [
                         .text(id: "song", words: "Song", style: .title),
                         .row(items: [.button(label: "Play", kind: .prominent), .button(label: "Next")]),
                         .text(words: "from Music", color: .secondary),
@@ -47,9 +47,9 @@ struct PageStyleSpecTests {
 }
 
 extension PageStyleSpecTests {
-    @Test("a page's schema, as a model is given it, has the styles")
+    @Test("a layout's schema, as a model is given it, has the styles")
     func schemaHasTheStyles() throws {
-        let schema = String(decoding: try JSONEncoder().encode(Page.generationSchema), as: UTF8.self)
+        let schema = String(decoding: try JSONEncoder().encode(Layout.generationSchema), as: UTF8.self)
         #expect(schema.contains("TextStyle"), "\(schema)")
         #expect(schema.contains("prominent"))
     }
@@ -61,21 +61,21 @@ extension PageStyleSpecTests {
         arguments: [
             (
                 "file:///Users/me/secret.png", "a cover",
-                PageProblem.widget(.notAWebAddress("file:///Users/me/secret.png"))
+                LayoutProblem.widget(.notAWebAddress("file:///Users/me/secret.png"))
             ),
             ("cover.jpg", "a cover", .widget(.notAWebAddress("cover.jpg"))),
             ("https://example.com/cover.jpg", " ", .widget(.noDescription)),
         ])
-    func picturesAreFromTheWeb(url: String, description: String, problem: PageProblem) {
-        #expect(throws: problem) { try Widget(Page(items: [.image(url: url, description: description)])) }
+    func picturesAreFromTheWeb(url: String, description: String, problem: LayoutProblem) {
+        #expect(throws: problem) { try Widget(Layout(items: [.image(url: url, description: description)])) }
     }
 }
 
 extension PageStyleSpecTests {
-    @Test("a page's items are named by their id, or by their kind and place, and its buttons by their labels")
+    @Test("a layout's items are named by their id, or by their kind and place, and its buttons by their labels")
     func itemsAreNamed() throws {
         let widget = try Widget(
-            Page(items: [
+            Layout(items: [
                 .text(id: "title", words: "Menu"),
                 .row(items: [.button(label: "Order"), .text(words: "or")]),
             ]))
@@ -83,8 +83,8 @@ extension PageStyleSpecTests {
         #expect(
             widget.widget(at: try #require(PiecePath("page/%23row-2/%23button-1")))
                 == .button(try Button("#button-1", "Order")))
-        #expect(throws: PageProblem.sameLabel("Order")) {
-            try Widget(Page(items: [.button(label: "Order"), .row(items: [.button(label: "Order ")])]))
+        #expect(throws: LayoutProblem.sameLabel("Order")) {
+            try Widget(Layout(items: [.button(label: "Order"), .row(items: [.button(label: "Order ")])]))
         }
     }
 }

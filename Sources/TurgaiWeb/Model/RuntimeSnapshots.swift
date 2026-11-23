@@ -3,6 +3,7 @@ import Hail
 import TurgaiApplication
 import TurgaiCalls
 import TurgaiDomain
+import TurgaiHail
 import TurgaiSpaces
 
 extension TurgaiRouteDependencies {
@@ -23,7 +24,7 @@ extension TurgaiRouteDependencies {
                     // A bot's agents only, each as its bot: not a user's tool thinking.
                     guard let bot = BotID(role: entry.role.rawValue) else { continue }
                     group.addTask {
-                        guard let agent: Agent = try? await system.agent(entry.agentID),
+                        guard let agent: Agent = try? await Agent.identified(by: entry.agentID, on: system),
                             let snapshot = try? await agent.contextSnapshot
                         else { return nil }
                         return TurgaiAgentRuntimeSnapshot(

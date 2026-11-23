@@ -3,6 +3,8 @@ import DurableWorkflows
 import EventSourcing
 import Foundation
 import Testing
+import TurgaiDomain
+import TurgaiSpaces
 
 @testable import TurgaiObjects
 
@@ -62,6 +64,37 @@ struct ObjectScheduleTests {
         #expect(try ObjectShape(try Script(code: kept, type: "Ticker", uses: Self.uses)).schedules.isEmpty)
     }
 
+    /// What's due reaches its object as the object's own work each time, starting from it: however
+    /// often it was due before, more often than calls may go deep.
+    @Test(.timeLimit(.minutes(2)))
+    func aScheduleIsHandledHoweverOftenItWasDue() async throws {
+        let store = MemoryEventStore()
+        try await withClusterSystem(
+            "schedules-often", store: store, hostsVirtualActors: true,
+            installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
+        ) { node in
+            let worker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
+                actorSystem: node, activities: ObjectScheduleActivities())
+            defer { _ = worker }
+            let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
+            let identity = try await objects.create(
+                name: "Ticker", spec: .new(try Script(code: Self.ticker, type: "Ticker", uses: Self.uses)))
+            let ticker = try await objects.held(identity)
+            let id = ObjectFiring.scheduleID(of: identity, in: AsAPerson.person.space, "tick")
+            try await eventually("kept") {
+                try await node.workflows.listSchedules(workflow: ObjectScheduleWorkflow.self).contains { $0.id == id }
+            }
+            let times = 70
+            for time in 1...times {
+                _ = try await node.workflows.triggerSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
+                try await eventually("handled \(time)") {
+                    try await ticker.read(property: "count") == .integer(Int64(time))
+                }
+            }
+            #expect(try await ticker.health == .working)
+        }
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func aScheduleThatsDueCallsItsHandlerAndEndsWhenItsPropertyHoldsNone() async throws {
         let store = MemoryEventStore()
@@ -72,7 +105,7 @@ struct ObjectScheduleTests {
             let worker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
                 actorSystem: node, activities: ObjectScheduleActivities())
             defer { _ = worker }
-            let (listener, heard) = try await listening(to: AsAPerson.person.space, on: node)
+            let (listener, heard) = try await listening(to: AsAPerson.person.space, as: AsAPerson.person, on: node)
             defer { listener.cancel() }
             let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
             let identity = try await objects.create(
@@ -98,7 +131,7 @@ struct ObjectScheduleTests {
                     .kept(
                         KeptTask(
                             id: .schedule(id), of: .object(identity, field: "tick"), due: .schedule(.every(minutes: 5)),
-                            paused: false, maker: AsAPerson.person.person)),
+                            paused: false)),
                     .ended(.schedule(id)),
                 ])
         }

@@ -4,12 +4,12 @@ import Foundation
 import Testing
 import TurgaiCalls
 import TurgaiDomain
-import TurgaiSpaces
 
 import struct AnyLanguageModel.GeneratedContent
 
 @testable import TurgaiApplication
 @testable import TurgaiObjects
+@testable import TurgaiSpaces
 
 /// An object is shared through share_object, with the chat the turn came in through, by whoever may
 /// change it: anyone else is refused, as any change is.
@@ -50,9 +50,9 @@ struct SharingTests {
             let id = try await self.as(ann) {
                 try await objects.create(name: "Tally", spec: .new(try Script(code: counter, type: "Counter")))
             }
-            let object = try await objects.held(id)
+            let object = try await self.as(ann) { try await objects.held(id) }
             let annSession = ObjectSession(
-                in: family, objects: try await Space.identified(by: family, on: node).objects(for: ann.person),
+                in: family, objects: try await DynamicObjects.of(family, on: node),
                 actorSystem: node)
             let tally = try await self.as(ann) { try await annSession.id(written: "tally") }
 
@@ -62,7 +62,7 @@ struct SharingTests {
 
             // Bob reads it, and still can't change who may.
             let bobSession = ObjectSession(
-                in: family, objects: try await Space.identified(by: family, on: node).objects(for: bob.person),
+                in: family, objects: try await DynamicObjects.of(family, on: node),
                 actorSystem: node)
             let bobsTally = try await self.as(bob) { try await bobSession.id(written: "tally") }
             await #expect(throws: ObjectToolError.failed(NotAllowed(.write).description)) {
@@ -103,7 +103,7 @@ struct SharingTests {
                 return try await objects.create(
                     name: "Drinks", spec: .new(try Script(code: drinks, type: "Drinks", uses: uses)))
             }
-            let desk = try await objects.held(drinksID)
+            let desk = try await self.as(ann) { try await objects.held(drinksID) }
             try await self.as(ann) { try await desk.share(with: .group(family, .members), .read) }
 
             // Bob uses Drinks, and through it the tea it holds.

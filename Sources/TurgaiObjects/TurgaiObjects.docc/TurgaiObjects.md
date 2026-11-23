@@ -10,7 +10,7 @@ journal. It answers calls, announces events, follows other objects, runs on sche
 back after a restart with what it was doing.
 
 Each space has its own objects, held by its ``DynamicObjects``: no call from another space reaches
-them. Every space has the built-in objects, such as ``Website``, of its own.
+them. Every space has the built-in objects, such as ``Page``, of its own.
 
 See <doc:WritingObjects> for what object code can do.
 
@@ -32,12 +32,12 @@ See <doc:WritingObjects> for what object code can do.
 - ``Schedule``
 - ``Timer``
 
-### Websites
+### Pages
 
-- ``Website``
-- ``Site``
-- ``SiteName``
 - ``Page``
+- ``Page``
+- ``PageName``
+- ``Layout``
 - ``ButtonPressed``
 
 ### Calls

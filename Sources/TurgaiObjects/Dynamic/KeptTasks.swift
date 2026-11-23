@@ -29,15 +29,12 @@ public struct KeptTask: Codable, Sendable, Equatable, Identifiable {
     public let of: Of
     public let due: ObjectDue
     public let paused: Bool
-    /// Who made it: who may change it, besides the space's admins.
-    public let maker: UserID
 
-    public init(id: ID, of: Of, due: ObjectDue, paused: Bool, maker: UserID) {
+    public init(id: ID, of: Of, due: ObjectDue, paused: Bool) {
         self.id = id
         self.of = of
         self.due = due
         self.paused = paused
-        self.maker = maker
     }
 }
 
@@ -66,7 +63,7 @@ public distributed actor SpaceTasks {
     /// `space`'s tasks, as they change.
     public static func identified(by space: SpaceID, on actorSystem: ClusterSystem) async throws -> SpaceTasks {
         try await actorSystem.virtualActors.getActor(
-            identifiedBy: VirtualActorID(rawValue: "tasks:\(space.rawValue.uuidString)"), dependency: space)
+            identifiedBy: .owned(by: space, "tasks", "kept"), dependency: space)
     }
 
     /// Its changes from now on, subscribed already: what's read of the tasks after this misses

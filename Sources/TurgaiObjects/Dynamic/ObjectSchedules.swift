@@ -1,3 +1,4 @@
+import AttributedCalls
 import DiscoverableActors
 import DistributedCluster
 import DurableWorkflows
@@ -120,15 +121,11 @@ public enum Weekday: String, Codable, Sendable, CaseIterable {
     }
 }
 
-/// An object's property being due: which object, and the property that holds it, with who made the
-/// object, in which space: whose space says what its doing may do.
+/// An object's property being due: which object, in which space, and the property that holds it.
 public struct ObjectFiring: Codable, Sendable, Equatable {
     public let object: ObjectIdentity
     public let property: String
-    public let maker: UserID
     public let space: SpaceID
-    /// Whom its object's own doing was on behalf of when it set this: what lets the firing in.
-    public let scope: CallScope
     /// What makes it due, and the chat the object was made in, which lists it.
     public let due: ObjectDue
     public let place: ConversationID?
@@ -189,15 +186,15 @@ public struct ObjectScheduleActivities {
     /// which spends nothing; the object handles it as its own doing, as it does its tasks.
     @Activity
     public func fire(input: ObjectFiring, context: ActivityContext) async throws -> DurableVoid {
-        // Let in on the scope it was set with; the object handles it on the scope it holds now.
-        let actor = DynamicObject.callActor(for: input.object, in: input.space)
-        try await CallChain.$current.withValue(.own(actor, for: input.scope, in: nil)) {
+        // What's due is its object's own work, as a reminder is its actor's: it reaches the object
+        // as its own, and its space says then what it may do.
+        try await Call.asWork(of: DynamicObject.actorID(for: input.object, in: input.space)) {
             try await DynamicObject.identified(by: input.object, in: input.space, on: context.system).fired(
                 input.property)
-        }
-        // A timer is due once: done, it isn't one any more.
-        if case .timer = input.due {
-            await context.system.tellTasks(in: input.space, .ended(.timer(context.workflowID)))
+            // A timer is due once: done, it isn't one any more.
+            if case .timer = input.due {
+                await context.system.tellTasks(in: input.space, .ended(.timer(context.workflowID)))
+            }
         }
         return DurableVoid()
     }

@@ -464,20 +464,23 @@ public actor LiveSession {
             let space = try await space(spaceID, for: conversationID)
             try await followIfTheChatSays(userID, in: conversationID, of: space)
             try await attach(to: conversationID, in: spaceID, for: userID)
-            let commands = ChatCommands(space: space, conversation: conversationID, person: userID, system: actorSystem)
             switch command {
             case .memory: try await space.showMemory(in: conversationID, for: userID)
             case .forget: try await space.forgetMemory(in: conversationID, for: userID)
             case .context: try await space.showContext(in: conversationID, for: userID)
             case .diagnose: try await space.showDiagnostics(in: conversationID, for: userID)
-            case .reminders: try await commands.reminders()
-            case .tasks: try await commands.tasks()
-            case .pauseTask(let name): try await commands.change(.pause, named: name)
-            case .unpauseTask(let name): try await commands.change(.resume, named: name)
-            case .cancelTask(let name): try await commands.change(.cancel, named: name)
-            case .cancelReminder(let name): try await commands.cancelReminder(named: name)
-            case .objects: try await commands.objects()
-            case .object(let id): try await commands.object(id)
+            case .reminders: try await space.command(.reminders, in: conversationID, for: userID)
+            case .tasks: try await space.command(.tasks, in: conversationID, for: userID)
+            case .pauseTask(let name):
+                try await space.command(.changeTask(.pause, name: name), in: conversationID, for: userID)
+            case .unpauseTask(let name):
+                try await space.command(.changeTask(.resume, name: name), in: conversationID, for: userID)
+            case .cancelTask(let name):
+                try await space.command(.changeTask(.cancel, name: name), in: conversationID, for: userID)
+            case .cancelReminder(let name):
+                try await space.command(.cancelReminder(name: name), in: conversationID, for: userID)
+            case .objects: try await space.command(.objects, in: conversationID, for: userID)
+            case .object(let id): try await space.command(.object(id), in: conversationID, for: userID)
             case .forgetFact(let id): try await space.forgetFact(id, in: conversationID, for: userID)
             case .remembering(let remembering):
                 try await space.setRemembering(remembering, in: conversationID, for: userID)
