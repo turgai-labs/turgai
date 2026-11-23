@@ -61,7 +61,7 @@
       "location" : "https://github.com/akbashev/cluster-virtual-actors.git",
       "state" : {
         "branch" : "stable-references",
-        "revision" : "0d8c6549043215d61b9d42e661832534f6923c66"
+        "revision" : "5650d4a9ad97d6bcd298bedc0de0d556a45d8b41"
       }
     },
     {
@@ -412,7 +412,7 @@
       "location" : "https://github.com/turgai-labs/swift-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "5c3532fb12d185aae99c4927bd188a5c4c5bb6ea"
+        "revision" : "6d70f6db0107b0e135b993648b41223c779fc070"
       }
     },
     {
