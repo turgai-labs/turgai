@@ -25,7 +25,6 @@ public enum ConversationTools {
         wasmRunnerURL: URL? = nil,
         userTools: UserToolRegistry? = nil,
         actorSystem: ClusterSystem? = nil,
-        agents: [Role] = [],
         linking: PersonLinking? = nil,
         includeConversationTools: Bool = true
     ) async throws -> TurnTools {
@@ -53,13 +52,11 @@ public enum ConversationTools {
         // Objects are its space's, and the built-in ones, as its space hands them to whoever the turn is
         // for: an agent in no space, or a turn on no one's behalf, reaches none.
         if let actorSystem, let space = working?.space, let person = CallChain.current?.scope.person {
-            // The other agents, which it can ask: never itself.
-            let askable = try await Agent.offered(
-                agents.filter { $0 != context.agentID.role }, in: space, on: actorSystem)
+            // Its space lists what's in it, its other bots among them: never itself.
             let session = try await ObjectSession(
                 in: space,
                 actorSystem: actorSystem,
-                agents: askable,
+                asking: context.agentID.role,
                 // What code makes by name in the space: a page, as it says it is.
                 madeByName: [Page.describe()]
             )

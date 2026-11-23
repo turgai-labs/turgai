@@ -1002,7 +1002,12 @@ extension TurgaiMainWebApp {
                 let scope = try await space.scope(of: person)
                 // Asked on the person's behalf, as the list is: one they may not read isn't found.
                 let card = try await CallChain.$current.withValue(.start(scope, in: nil)) { () async throws -> Card? in
-                    try await ObjectSession(in: id, actorSystem: system).card(named: handle)
+                    // A made object's card is its own: read from it, by its id.
+                    let made = try await DynamicObject.identified(
+                        by: ObjectIdentity(rawValue: handle), in: id, on: system)
+                    if let own = try? await made.card { return own }
+                    // A built-in object's, or a bot's: what it says it is and holds.
+                    return try await ObjectSession(in: id, actorSystem: system).card(named: handle)
                 }
                 guard case .markdown(let markdown)? = card else { return noSuchObject() }
                 return try publicAPIResponse(ObjectCard(markdown: markdown))
@@ -1206,7 +1211,7 @@ private func follow(
         let reached = try await Space.identified(by: space, on: system)
         let chain = CallChain.start(try await reached.scope(of: person), in: nil)
         let changes = try await CallChain.$current.withValue(chain) {
-            try await ObjectSession(in: space, actorSystem: system, builtIns: []).changes()
+            try await ObjectSession(in: space, actorSystem: system, agents: [], builtIns: []).changes()
         }
         let forwarding = Task {
             for await _ in changes { try? await writer.write(.init(payload: .objectsChanged)) }

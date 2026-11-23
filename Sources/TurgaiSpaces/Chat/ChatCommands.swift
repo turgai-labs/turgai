@@ -114,7 +114,7 @@ struct ChatCommands {
     /// The objects `person` may read here, made by name, each a button that shows its card.
     func objects() async throws {
         let objects = try await asking { system, space in
-            try await ObjectSession(in: space, actorSystem: system, builtIns: []).yourObjects()
+            try await ObjectSession(in: space, actorSystem: system, agents: [], builtIns: []).yourObjects()
         }
         try await show(
             objects.isEmpty ? "No objects." : "Objects:",
@@ -126,7 +126,7 @@ struct ChatCommands {
     func object(_ written: String) async throws {
         do {
             let card = try await asking { system, space in
-                let session = try await ObjectSession(in: space, actorSystem: system, builtIns: [])
+                let session = try await ObjectSession(in: space, actorSystem: system, agents: [], builtIns: [])
                 let objects = try await session.yourObjects()
                 guard let object = objects.first(where: { $0.description == written }) else {
                     throw NotYourObject(written: written, yours: objects.map(\.description))

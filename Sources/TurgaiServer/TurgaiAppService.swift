@@ -564,13 +564,6 @@ struct TurnToolSources: Sendable {
     let linking: PersonLinking
 
     func tools(for context: AgentTurnContext, on actorSystem: ClusterSystem) async throws -> TurnTools {
-        // The other bots of its space, which it can ask, as whoever its turn is for may use them.
-        let agents: [Role] =
-            if let space = AgentContext(context.agentID.contextID)?.space, let person = CallChain.current?.scope.person
-            {
-                (try? await Space.identified(by: space, on: actorSystem).bots(for: person).map { Role($0.id.role) })
-                    ?? []
-            } else { [] }
         var tools = try await ConversationTools.make(
             context: context,
             nodeTools: nodeTools,
@@ -578,7 +571,6 @@ struct TurnToolSources: Sendable {
             wasmRunnerURL: wasmRunnerURL,
             userTools: userToolRegistry,
             actorSystem: actorSystem,
-            agents: agents,
             linking: linking,
             includeConversationTools: context.agentID.role != .toolRun
         )

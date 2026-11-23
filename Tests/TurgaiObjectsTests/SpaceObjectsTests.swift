@@ -51,21 +51,28 @@ struct SpaceObjectsTests {
         }
     }
 
-    /// A space lists its own objects for one of its people: those it has from the start, and those
-    /// made in it. No one who isn't in the space is told it.
+    /// A space lists its own objects for one of its people: those it has from the start, its bots,
+    /// and those made in it. No one who isn't in the space is told it.
     @Test(.timeLimit(.minutes(1)))
     func aSpaceListsItsOwnObjects() async throws {
         try await withClusterSystem(
             "spaces", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann]
         ) { node in
             let families = try await DynamicObjects.of(family, on: node)
-            _ = try await self.as(ann) {
+            let counterID = try await self.as(ann) {
                 try await families.create(name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
             }
+            // Its card is its own: read from it, as any of what it publishes is.
+            let card = try await self.as(ann) { try await families.held(counterID).card }
+            guard case .markdown(let written) = card else { return }
+            #expect(written.hasPrefix("# Counter"), "\(written)")
+            #expect(written.contains("count: 0") && written.contains("actor Counter"), "\(written)")
             let space = try await Space.identified(by: family, on: node)
             let listed = try await space.objects(for: .ann)
             #expect(
                 Set(listed.map(\.type)).isSuperset(of: ["Scheduler", "Timers", "Counter"]), "\(listed.map(\.type))")
+            // Its bots are objects too, listed with the others, each by what it's called.
+            #expect(listed.contains { $0.description == "Helper" }, "\(listed.map(\.description))")
             // Every one of them is the space's own, as its id says.
             let ids = listed.map { entry -> String in
                 if case .virtual(let id) = entry.id { id.rawValue } else { "\(entry.id)" }

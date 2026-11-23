@@ -405,6 +405,59 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         get throws { try state.live.recent }
     }
 
+    /// What it shows of itself, for a person to read: what it is, what it holds now, what it
+    /// takes, publishes and announces, and its Swift; while it's failing, why, with its Swift. An
+    /// object its code made, which it holds, is shown with what that holds; any other, by its name.
+    public distributed var card: Card {
+        get async throws {
+            let object = try state.live
+            let description = try checked(object.code).spec(description: object.description, holding: object.fields)
+            if case .failing(let failure) = object.health {
+                return try Card(description, values: [:], failure: failure, code: object.code.code)
+            }
+            var values: [String: JSONValue] = [:]
+            for name in description.properties.keys {
+                if let value = object.fields[name] { values[name] = try await shown(value) }
+            }
+            return try Card(description, values: values, code: object.code.code)
+        }
+    }
+
+    /// `value` as its card shows it: each object in it by its name, or, one its code made, with what
+    /// that holds.
+    private func shown(_ value: JSONValue) async throws -> JSONValue {
+        if let reference = ObjectReference(value) {
+            switch reference {
+            case .named(let name, _):
+                return .string(name)
+            case .actor(let actor, _):
+                let object = try actor.resolve(using: actorSystem)
+                guard let virtual = object.id.virtualActorID else { return value }
+                // One made by code is its holder's: shown as what it is and holds.
+                if Self.identity(of: object.id) != nil,
+                    try await DynamicObjects.of(home, on: actorSystem).identity(of: object.id) == nil
+                {
+                    return .string(try await Card.inside(object))
+                }
+                return .string(ObjectID.virtual(virtual).description)
+            case .itself, .unmade:
+                return value
+            }
+        }
+        switch value {
+        case .array(let elements):
+            var shown: [JSONValue] = []
+            for element in elements { shown.append(try await self.shown(element)) }
+            return .array(shown)
+        case .object(let members):
+            var shown: [String: JSONValue] = [:]
+            for (key, member) in members { shown[key] = try await self.shown(member) }
+            return .object(shown)
+        default:
+            return value
+        }
+    }
+
     public distributed func describe() async throws -> ObjectDescription {
         let object = try state.live
         return try checked(object.code).spec(description: object.description, holding: object.fields)

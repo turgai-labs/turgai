@@ -211,7 +211,9 @@ struct EvalTask: Sendable {
     private static func state(of addresses: [String], created: [String], on node: EvalNode) async
         -> (text: String, missing: String?)
     {
-        guard let session = try? await ObjectSession(in: EvalNode.space, actorSystem: node.system, builtIns: [])
+        guard
+            let session = try? await ObjectSession(
+                in: EvalNode.space, actorSystem: node.system, agents: [], builtIns: [])
         else { return ("The eval's space isn't there.", nil) }
         let made: String = created.isEmpty ? "none" : created.joined(separator: ", ")
         var text = ""

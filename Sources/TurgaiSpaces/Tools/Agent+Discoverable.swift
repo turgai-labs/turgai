@@ -134,9 +134,23 @@ extension Agent {
     public static func offered(_ roles: [Role], in space: SpaceID, on system: ClusterSystem) async throws
         -> [ObjectEntry]
     {
+        try await offered(roles.map { ($0, nil) }, in: space, on: system)
+    }
+
+    /// `bots` of `space`, as objects there: each listed with what it's called, so one is told from
+    /// another.
+    public static func offered(_ bots: [Bot], in space: SpaceID, on system: ClusterSystem) async throws
+        -> [ObjectEntry]
+    {
+        try await offered(bots.map { (Role($0.id.role), $0.name.rawValue) }, in: space, on: system)
+    }
+
+    private static func offered(_ agents: [(role: Role, name: String?)], in space: SpaceID, on system: ClusterSystem)
+        async throws -> [ObjectEntry]
+    {
         var entries: [ObjectEntry] = []
         let description = describe()
-        for role in roles {
+        for (role, name) in agents {
             let agentID = asked(role, in: space)
             let agent = try await Agent.identified(by: agentID, on: system)
             let object = try DiscoverableObject.resolve(id: agent.id, using: system)
@@ -144,7 +158,7 @@ extension Agent {
             entries.append(
                 ObjectEntry(
                     id: objectID(of: agentID), object: object, type: objectType,
-                    description: description.description,
+                    description: name ?? description.description,
                     actions: description.actions.map { ObjectCatalog.signature($0.key, input: $0.value.input) }
                         .sorted()))
         }

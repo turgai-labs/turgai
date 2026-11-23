@@ -61,12 +61,14 @@ public actor ObjectSession {
     }
 
     /// The objects of `space`, as someone works with them from `actorSystem`: its registry found
-    /// here, by the space's id, and the built-in objects every space has, unless `builtIns` says
-    /// which are offered.
+    /// here, by the space's id; the built-in objects every space has, unless `builtIns` says which
+    /// are offered; and its bots, as the space lists them for whoever this is for, unless `agents`
+    /// says which. `asking` is the bot whose turn it is, which can't ask itself.
     public init(
         in space: SpaceID,
         actorSystem: ClusterSystem,
-        agents: [ObjectEntry] = [],
+        asking: Role? = nil,
+        agents: [ObjectEntry]? = nil,
         builtIns: [ObjectEntry]? = nil,
         madeByName: [ObjectDescription] = []
     ) async throws {
@@ -77,8 +79,16 @@ public actor ObjectSession {
         } else {
             offered = try await BuiltIn.entries(in: space, objects, on: actorSystem)
         }
+        let bots: [ObjectEntry]
+        if let agents {
+            bots = agents
+        } else if let person = CallChain.current?.scope.person {
+            bots = try await Space.identified(by: space, on: actorSystem).botObjects(for: person, besides: asking)
+        } else {
+            bots = []
+        }
         self.init(
-            in: space, objects: objects, actorSystem: actorSystem, agents: agents, builtIns: offered,
+            in: space, objects: objects, actorSystem: actorSystem, agents: bots, builtIns: offered,
             madeByName: madeByName)
     }
 
@@ -635,7 +645,7 @@ extension ObjectSession {
             if let summary = summaries[actor.name] { declaration.append("  \(summary).") }
             // Each with what its parameters are, as its object says, in words.
             let takes = actor.methods.sorted { $0.key < $1.key }.map { name, method in
-                ([Self.written(name, method)] + Self.parameterWords(descriptions[actor.name]?.actions[name]?.input))
+                ([method.written(as: name)] + Self.parameterWords(descriptions[actor.name]?.actions[name]?.input))
                     .joined(separator: "\n")
             }
             if !takes.isEmpty { declaration.append("  Methods:\n" + takes.map { "    \($0)" }.joined(separator: "\n")) }
@@ -648,7 +658,7 @@ extension ObjectSession {
             // What an object conforming to each protocol it declares takes.
             let protocols = actor.protocols.sorted { $0.key < $1.key }.map { name, requirements in
                 "\(name): "
-                    + requirements.sorted { $0.key < $1.key }.map { Self.written($0.key, $0.value) }.joined(
+                    + requirements.sorted { $0.key < $1.key }.map { $0.value.written(as: $0.key) }.joined(
                         separator: "; ")
             }
             if !protocols.isEmpty {
@@ -683,17 +693,6 @@ extension ObjectSession {
             }
             return "      \(parameter.name): \(text)"
         }
-    }
-
-    /// A method as Swift declares it: `show(page: Layout)`, `approve(_ amount: Int) -> Bool`.
-    static func written(_ name: String, _ method: DeclaredActor.Method) -> String {
-        let parameters = method.parameters.map { parameter in
-            let called =
-                parameter.label == parameter.name ? parameter.name : "\(parameter.label ?? "_") \(parameter.name)"
-            return "\(called): \(parameter.type)"
-        }
-        return "\(name)(\(parameters.joined(separator: ", ")))" + (method.effects.map { " \($0)" } ?? "")
-            + (method.returns.map { " -> \($0)" } ?? "")
     }
 
     /// An object made here, now running `source`, and every object sharing its code.
@@ -798,10 +797,25 @@ extension ObjectSession {
                 guard case .string(let written) = minted, let id = try? await self.id(written: written),
                     let object = try? await self.object(id)
                 else { return minted }
-                return .string("`\(id)`, " + (try await Self.inside(object)))
+                return .string("`\(id)`, " + (try await Card.inside(object)))
             }
         }
         return values
+    }
+
+    /// The card of the object listed by `handle`, among those whoever asks may read: none when it
+    /// isn't one of them.
+    public func card(named handle: String) async throws -> Card? {
+        let listed = builtIns + agents + (try await spaceObjects.held())
+        guard let entry = listed.first(where: { $0.id.description == handle }) else { return nil }
+        return try await card(entry.id)
+    }
+
+    /// The card a person reads for `handle`: a made object's own, read from it; a built-in one's,
+    /// or a bot's, what it says it is and holds.
+    public func card(_ handle: ObjectID) async throws -> Card {
+        if let made = try await madeObject(handle) { return try await made.card }
+        return try Card(try await described(handle), values: try await currentValues(handle))
     }
 
     /// An object's values now, by name.
@@ -1138,7 +1152,7 @@ extension ObjectSession {
         let object = try reference.resolve(using: actorSystem)
         // One made by code is its holder's: shown as what it is and holds, never as one to call.
         if DynamicObject.identity(of: object.id) != nil, try await !isHeld(object) {
-            return .string(try await Self.inside(object))
+            return .string(try await Card.inside(object))
         }
         let minted = id(of: object, type: try await object.describe().type)
         link(.object(minted))
@@ -1148,16 +1162,6 @@ extension ObjectSession {
     /// Whether the directory holds `object`, made by name.
     private func isHeld(_ object: DiscoverableObject) async throws -> Bool {
         try await spaceObjects.identity(of: object.id) != nil
-    }
-
-    /// An object another holds, as its holder shows it: its type, and what it holds.
-    private static func inside(_ object: DiscoverableObject) async throws -> String {
-        let description = try await object.describe()
-        var held: [String] = []
-        for name in description.properties.keys.sorted() {
-            held.append("\(name): \(try await object.read(property: name).inline)")
-        }
-        return "a `\(description.type)`" + (held.isEmpty ? "" : " holding " + held.joined(separator: ", "))
     }
 
     /// A handle in the model's arguments becomes a reference.
@@ -1330,24 +1334,9 @@ extension ObjectSession {
 
     /// A result as the model reads it: YAML, the way it writes its arguments, keys sorted.
     static func text(_ value: DiscoveryJSON) throws -> String {
-        try Yams.dump(object: plain(value), sortKeys: true).trimmed(while: \.isNewline)
+        try value.yaml
     }
 
-    private static func plain(_ value: DiscoveryJSON) -> Any {
-        switch value {
-        // Nothing, which Yams writes as `null`.
-        case .null: Optional<Any>.none as Any
-        case .bool(let bool): bool
-        // A whole number reads as one: YAML would write 3000.0 as 3e+3.
-        case .number(let number) where number.rounded() == number && abs(number) < 1e15: Int(number)
-        case .number(let number): number
-        case .integer(let integer): Int(integer)
-        case .unsignedInteger(let integer): Int(clamping: integer)
-        case .string(let string): string
-        case .array(let elements): elements.map(plain)
-        case .object(let members): members.mapValues(plain)
-        }
-    }
 }
 
 public enum ObjectToolError: Error, Equatable, Sendable, CustomStringConvertible {
