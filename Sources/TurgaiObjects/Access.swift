@@ -1,6 +1,7 @@
 import DiscoverableActors
 import Distributed
 import DistributedCluster
+import AttributedCalls
 import TurgaiCalls
 import TurgaiDomain
 
@@ -42,16 +43,24 @@ extension AccessControlled {
 }
 
 extension ClusterSystemSettings {
-    /// Checks every call to an object before it runs, on whichever node it lives: a call from
-    /// another node, or one through a reference here. A call is on someone's behalf, who may read
-    /// the object, as `decisions` decide; one that changes it, the object refuses as it decides the
-    /// change, unless they may write it. An object that doesn't say who may read it is refused.
+    /// Checks every call to an actor of this node before it runs, on whichever node it lives: a
+    /// call from another node, or one through a reference here.
+    ///
+    /// Each call says who made it and who it's for, and an actor another owns takes calls only from
+    /// its owner's side. A
+    /// call to an object is on someone's behalf, who may read the object, as `decisions` decide; one
+    /// that changes it, the object refuses as it decides the change, unless they may write it. An
+    /// object that doesn't say who may read it is refused.
     public mutating func checkObjectAccess(deciding decisions: ObjectCallDecisions = .default) {
-        remoteCall.incomingCallFilter = { actor, _ in
-            if let object = actor as? any AccessControlled {
-                try await object.checkReading(decisions)
-            } else if actor is any DiscoverableActor {
-                throw NotAllowed(.read)
+        attributeCalls()
+        remoteCall.incomingCallInterceptor = { actor, _, call in
+            try await Call.receiving(by: actor) {
+                if let object = actor as? any AccessControlled {
+                    try await object.checkReading(decisions)
+                } else if actor is any DiscoverableActor {
+                    throw NotAllowed(.read)
+                }
+                try await call()
             }
         }
     }

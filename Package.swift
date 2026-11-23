@@ -54,6 +54,8 @@ let package = Package(
         // Not merged upstream yet: stable virtual actor references, and our
         // swift-distributed-actors fixes joined on one branch.
         .package(url: "https://github.com/akbashev/cluster-virtual-actors.git", branch: "stable-references"),
+        // Every call says who made it and who it's for.
+        .package(url: "https://github.com/turgai-labs/cluster-attributed-calls.git", branch: "main"),
         .package(
             url: "https://github.com/turgai-labs/swift-distributed-actors.git", branch: "turgai-integration"
         ),
@@ -244,6 +246,7 @@ let package = Package(
             name: "TurgaiObjects",
             dependencies: [
                 .product(name: "RunningActors", package: "cluster-running-actors"),
+                .product(name: "AttributedCalls", package: "cluster-attributed-calls"),
                 "TurgaiCalls",
                 "TurgaiDomain",
                 .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),

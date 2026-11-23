@@ -1,5 +1,5 @@
 {
-  "originHash" : "04b30b7d785368fbdaf7a4e80a3418df4b37b8addcb685b64ce8af14c4c47f1f",
+  "originHash" : "ae573d681766b1ca1df54a13dd4b607e265ecee93e116c046c5d6e284e6b1616",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -17,6 +17,15 @@
       "state" : {
         "revision" : "f95c908967e98c68c5ce3fd61a7974e7e869e303",
         "version" : "1.36.1"
+      }
+    },
+    {
+      "identity" : "cluster-attributed-calls",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/turgai-labs/cluster-attributed-calls.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "4c139b9ba12bf10b01530c3eab12f79c59eb41ff"
       }
     },
     {
@@ -52,7 +61,7 @@
       "location" : "https://github.com/akbashev/cluster-virtual-actors.git",
       "state" : {
         "branch" : "stable-references",
-        "revision" : "a022fbbbef912d7fc3c5b49ef3bf52e28531e534"
+        "revision" : "5650d4a9ad97d6bcd298bedc0de0d556a45d8b41"
       }
     },
     {
@@ -403,7 +412,7 @@
       "location" : "https://github.com/turgai-labs/swift-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "5c3532fb12d185aae99c4927bd188a5c4c5bb6ea"
+        "revision" : "6d70f6db0107b0e135b993648b41223c779fc070"
       }
     },
     {
