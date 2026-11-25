@@ -353,6 +353,10 @@ public enum ChatCommand: Codable, Equatable, Sendable {
         case .memory: .memory
         case .tasks: .tasks(space: try values.decode(SpaceID.self, forKey: .space))
         case .objects: .objects(space: try values.decode(SpaceID.self, forKey: .space))
+        case .page:
+            .page(
+                space: try values.decode(SpaceID.self, forKey: .space),
+                page: MadeObjectID(rawValue: try values.decode(String.self, forKey: .name)))
         }
     }
 
@@ -381,6 +385,9 @@ public enum ChatCommand: Codable, Equatable, Sendable {
                 try values.encode(topic.name, forKey: .topic)
                 switch topic {
                 case .tasks(let space), .objects(let space): try values.encode(space, forKey: .space)
+                case .page(let space, let page):
+                    try values.encode(space, forKey: .space)
+                    try values.encode(page.rawValue, forKey: .name)
                 case .memory: break
                 }
             case .setRemembering(let remembering): try values.encode(remembering, forKey: .remembering)
@@ -431,6 +438,7 @@ public enum ChatEventKind: String, Codable, Sendable {
     case reply
     case memoryChanged = "memory.changed"
     case objectsChanged = "objects.changed"
+    case pageChanged = "page.changed"
     case tasks
     case taskKept = "task.kept"
     case taskEnded = "task.ended"
@@ -538,6 +546,8 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         /// The objects the person may read changed: to a connection that joined
         /// ``ChatTopic/objects(space:)``.
         case objectsChanged
+        /// One of the space's pages changed: to a connection that joined ``ChatTopic/page(space:page:)``.
+        case pageChanged(space: SpaceID, page: MadeObjectID)
         /// The tasks of the space with this id the person may change, as they are as a connection
         /// joins ``ChatTopic/tasks(space:)``: each change follows.
         case tasks(space: SpaceID, tasks: [TaskListing])
@@ -573,6 +583,7 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             case .reply: .reply
             case .memoryChanged: .memoryChanged
             case .objectsChanged: .objectsChanged
+            case .pageChanged: .pageChanged
             case .tasks: .tasks
             case .taskKept: .taskKept
             case .taskEnded: .taskEnded
@@ -705,6 +716,10 @@ public struct ChatEvent: Codable, Equatable, Sendable {
             payload = .memoryChanged
         case .objectsChanged:
             payload = .objectsChanged
+        case .pageChanged:
+            payload = .pageChanged(
+                space: try values.decode(SpaceID.self, forKey: .space),
+                page: MadeObjectID(rawValue: try values.decode(String.self, forKey: .id)))
         case .tasks:
             payload = .tasks(
                 space: try values.decode(SpaceID.self, forKey: .space),
@@ -816,6 +831,9 @@ public struct ChatEvent: Codable, Equatable, Sendable {
         case .taskEnded(let space, let id):
             try values.encode(space, forKey: .space)
             try values.encode(id, forKey: .id)
+        case .pageChanged(let space, let page):
+            try values.encode(space, forKey: .space)
+            try values.encode(page.rawValue, forKey: .id)
         }
     }
 }

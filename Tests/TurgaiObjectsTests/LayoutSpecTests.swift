@@ -81,8 +81,13 @@ extension PageStyleSpecTests {
             ]))
         #expect(widget.widget(at: try #require(PiecePath("page/title"))) != nil)
         #expect(
-            widget.widget(at: try #require(PiecePath("page/%23row-2/%23button-1")))
-                == .button(try Button("#button-1", "Order")))
+            widget.widget(at: try #require(PiecePath("page/%23stack-2/Order")))
+                == .button(try Button("Order", "Order")))
+        #expect(widget.widget(at: try #require(PiecePath("page/%23stack-2/%23text-2"))) != nil)
+        // Side by side too, it's the labels that are said to clash.
+        #expect(throws: LayoutProblem.sameLabel("Order")) {
+            try Widget(Layout(items: [.button(label: "Order"), .button(label: "Order")]))
+        }
         #expect(throws: LayoutProblem.sameLabel("Order")) {
             try Widget(Layout(items: [.button(label: "Order"), .row(items: [.button(label: "Order ")])]))
         }

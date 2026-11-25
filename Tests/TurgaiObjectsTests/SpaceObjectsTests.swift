@@ -51,8 +51,8 @@ struct SpaceObjectsTests {
         }
     }
 
-    /// A space lists its own objects for one of its people: those it has from the start, its bots,
-    /// and those made in it. No one who isn't in the space is told it.
+    /// A space lists its own objects for one of its people: those it has from the start, and those
+    /// made in it. No one who isn't in the space is told it.
     @Test(.timeLimit(.minutes(1)))
     func aSpaceListsItsOwnObjects() async throws {
         try await withClusterSystem(
@@ -71,8 +71,9 @@ struct SpaceObjectsTests {
             let listed = try await space.objects(for: .ann)
             #expect(
                 Set(listed.map(\.type)).isSuperset(of: ["Scheduler", "Timers", "Counter"]), "\(listed.map(\.type))")
-            // Its bots are objects too, listed with the others, each by what it's called.
-            #expect(listed.contains { $0.description == "Helper" }, "\(listed.map(\.description))")
+            // Its bots aren't among them: they're listed apart, for a turn to ask, each by what it's called.
+            #expect(!listed.contains { $0.description == "Helper" }, "\(listed.map(\.description))")
+            #expect(try await space.botObjects(for: .ann, besides: nil).map(\.description) == ["Helper"])
             // Every one of them is the space's own, as its id says.
             let ids = listed.map { entry -> String in
                 if case .virtual(let id) = entry.id { id.rawValue } else { "\(entry.id)" }

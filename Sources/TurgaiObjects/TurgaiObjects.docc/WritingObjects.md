@@ -80,11 +80,12 @@ Schedules are durable: they keep running across restarts.
 
 ### Pages
 
-`Page(id: "bakery-menu")` is its page, under its space, at
-`/spaces/<space>/pages/bakery-menu/`, made the first time it's named. Its ``Layout`` is rows,
-columns, texts, images and buttons; ``Page/show(_:)`` replaces the layout wherever the page is
-open, in a browser or an app, and each press
-is announced as ``ButtonPressed``. A name is one space's at a time.
+An object conforming to `Page`, `actor Menu: Page`, is shown to people as its `layout` says: a
+``Layout`` of rows, columns, texts, images and buttons, wherever it's opened, such as at
+`/spaces/<space>/objects/<name>/` in a browser. The layout is read whenever the page is opened and
+after each change, so it's never older than what the object holds. What people do there comes to
+it as events: a press calls its `onButtonPressed(_:)` with a ``ButtonPressed``. An object that
+doesn't conform to `Page` isn't shown.
 
 ### Tools
 

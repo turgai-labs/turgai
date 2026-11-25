@@ -43,6 +43,21 @@ public struct TurgaiScenes: Scene {
         }
         .defaultSize(width: 380, height: 600)
 
+        Window("Pages", id: WindowID.pages) {
+            PagesView(store: app.scope(\.pages, action: \.pages))
+                .frame(minWidth: 360, minHeight: 320)
+        }
+        .defaultSize(width: 620, height: 480)
+
+        // Each page in a window of its own, drawn as it says.
+        WindowGroup("Page", id: WindowID.page, for: PageAddress.self) { $address in
+            if let address {
+                PageWindow(address: address)
+                    .frame(minWidth: 320, minHeight: 240)
+            }
+        }
+        .defaultSize(width: 420, height: 560)
+
         // Each object's card in a window of its own, as long as its code is.
         WindowGroup("Card", id: WindowID.card, for: ObjectCardAddress.self) { $address in
             if let address {
@@ -67,6 +82,8 @@ enum WindowID {
     static let objects = "objects"
     static let profile = "profile"
     static let card = "card"
+    static let pages = "pages"
+    static let page = "page"
 }
 
 private struct MenuContent: View {

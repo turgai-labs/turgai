@@ -192,9 +192,12 @@ private struct EvalDumpEndpoint: ModelEndpoint {
             (try? encoder.encode(request.entries)).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
         let schemas =
             (try? encoder.encode(tools.map(\.schema))).flatMap { String(data: $0, encoding: .utf8) } ?? "<unavailable>"
+        let answer =
+            (try? encoder.encode(Output.generationSchema)).flatMap { String(data: $0, encoding: .utf8) }
+            ?? "<unavailable>"
         FileHandle.standardError.write(
             Data(
-                "\n=== EVAL REQUEST: TRANSCRIPT ===\n\(entries)\n=== EVAL REQUEST: TOOLS ===\n\(schemas)\n=== END EVAL REQUEST ===\n"
+                "\n=== EVAL REQUEST: TRANSCRIPT ===\n\(entries)\n=== EVAL REQUEST: TOOLS ===\n\(schemas)\n=== EVAL REQUEST: ANSWER SCHEMA ===\n\(answer)\n=== END EVAL REQUEST ===\n"
                     .utf8))
         // What the model generates, as it streams: its activity and tool calls as they come, and
         // what it had generated when it ended or failed, in full.
@@ -207,7 +210,23 @@ private struct EvalDumpEndpoint: ModelEndpoint {
                 for await event in events {
                     switch event {
                     case .activity(let activity): write("=== EVAL ACTIVITY: \(activity)\n")
-                    case .toolCall(let call): write("=== EVAL TOOL CALL: \(call)\n")
+                    case .toolCall(let call):
+                        write("=== EVAL TOOL CALL: \(call.call.name) \(call.call.arguments.jsonString)\n")
+                        // What the call gives back, as the model reads it, and the tools there are
+                        // from then on: written, then handed on to the request waiting for it.
+                        let (reply, answers) = ToolReply.awaiting()
+                        Task {
+                            for await answer in answers {
+                                write(
+                                    "=== EVAL TOOL ANSWER: \(call.call.name) ===\n\(answer.reading)\n"
+                                        + "=== EVAL TOOLS NOW: \(answer.tools.map(\.name).joined(separator: ", "))\n"
+                                        + "=== END EVAL TOOL ANSWER ===\n")
+                                call.reply.give(answer)
+                                break
+                            }
+                        }
+                        continuation.yield(.toolCall(ModelToolCall(call: call.call, reply: reply)))
+                        continue
                     case .partialUpdated(let partial): last = String(describing: partial)
                     case .generated(let output):
                         write("=== EVAL GENERATED ===\n\(output)\n=== END EVAL GENERATED ===\n")

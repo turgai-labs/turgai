@@ -291,22 +291,38 @@ struct ObjectProtocolTests {
             !(try await refusals("actor Ann: Shop.RefundManager {\n    func refundDenied(order: Int) {}\n}")).isEmpty)
     }
 
-    /// Who conforms is decided by what each takes, one way for every object: one that never said
-    /// it conforms, such as a built-in, conforms when it takes the requirements as written.
-    @Test func whoConformsIsWhatEachTakes() throws {
-        let shop = try ObjectContract(try Script(code: Self.shop, type: "Shop").spec(description: nil))
+    /// An object conforms when its code says so and it takes the requirements: one that takes
+    /// them without saying so doesn't, made here or built in.
+    @Test func whoConformsIsWhoSaysSo() throws {
+        let shopDescription = try Script(code: Self.shop, type: "Shop").spec(description: nil)
+        let shop = try ObjectContract(shopDescription)
         let manager = try #require(shop.protocols[ObjectProtocolName(rawValue: "Shop.RefundManager")])
+        // Ann's code is written next to the shop, whose protocol it names.
+        let uses = Uses(
+            interface: Uses.interface(of: [Uses.Object(description: shopDescription, publishes: true)]),
+            objects: [ObjectIdentity(rawValue: "shop"): "Shop"], lasting: ["Shop"])
         let ann = try ObjectContract(
             try Script(
                 code:
                     "actor Ann: Shop.RefundManager {\n    func refundRequested(order: Int, total: Double) async throws {}\n}",
-                type: "Ann"
+                type: "Ann", uses: uses
             )
             .spec(description: nil))
-        #expect(ann.conforms(to: manager))
+        let name = ObjectProtocolName(rawValue: "Shop.RefundManager")
+        #expect(ann.conformances.contains(name), "\(ann.conformances)")
+        #expect(ann.conforms(to: name, requiring: manager))
         let counter = try ObjectContract(
             try Script(code: "actor Counter {\n    func add() {}\n}", type: "Counter").spec(description: nil))
-        #expect(!counter.conforms(to: manager))
+        #expect(!counter.conforms(to: name, requiring: manager))
+        // The same method, never said to be for the protocol.
+        let bob = try ObjectContract(
+            try Script(
+                code: "actor Bob {\n    func refundRequested(order: Int, total: Double) async throws {}\n}",
+                type: "Bob",
+                uses: uses
+            )
+            .spec(description: nil))
+        #expect(!bob.conforms(to: name, requiring: manager))
         let builtIn = ObjectDescription(
             type: "Desk", description: nil,
             actions: [
@@ -317,7 +333,7 @@ struct ObjectProtocolTests {
                         "required": ["order", "total"], "x-order": ["order", "total"],
                     ], output: nil)
             ])
-        #expect(try ObjectContract(builtIn).conforms(to: manager))
+        #expect(!(try ObjectContract(builtIn).conforms(to: name, requiring: manager)))
     }
 
     /// The YAML view says what an object declares, conforms to, follows and keeps private.

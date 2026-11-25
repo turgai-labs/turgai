@@ -24,12 +24,15 @@ public enum ChatTopic: Hashable, Sendable {
     /// The objects of the space with this id that the person may read: that they changed, as one
     /// is made, removed, shared or installed.
     case objects(space: SpaceID)
+    /// One of the space's pages: that it changed, so what it shows may be other now.
+    case page(space: SpaceID, page: MadeObjectID)
 
     /// What it is, as the socket names it.
     enum Name: String, Codable {
         case memory
         case tasks
         case objects
+        case page
     }
 
     var name: Name {
@@ -37,6 +40,7 @@ public enum ChatTopic: Hashable, Sendable {
         case .memory: .memory
         case .tasks: .tasks
         case .objects: .objects
+        case .page: .page
         }
     }
 }

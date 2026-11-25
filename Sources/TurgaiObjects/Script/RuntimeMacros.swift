@@ -28,7 +28,7 @@ public enum RuntimeMacros {
     /// What events are, and the attributes that make them, for whoever writes an object's code.
     public static let declared = """
         Events:
-          An object announces events. Objects that follow it receive them.
+          An object announces events. It receives events from objects it follows and, as a page, from what people do there.
           @Event marks a struct or enum in the object. Its values are the events. The object sends one with announce.
           @Subscribed marks a stored property that holds another object. The object follows it.
           Each event it receives calls its function named on plus the event's name, with the event.

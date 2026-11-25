@@ -6,6 +6,7 @@ import HTTPTypes
 import Hail
 import Hummingbird
 import HummingbirdWebSocket
+import Mosaic
 import NIOCore
 import TurgaiAgents
 import TurgaiApplication
@@ -1042,6 +1043,83 @@ extension TurgaiMainWebApp {
                 return Response(status: .noContent)
             }
         }
+
+        /// What `answer` gives for the page `context` names, asked on behalf of `person` with what
+        /// their space says they may do: none when there's no such object, they may not read it,
+        /// or it isn't a page.
+        @Sendable func page<Answer: Sendable>(
+            _ context: BasicWebSocketRequestContext, for person: TurgaiDomain.UserID,
+            _ answer: @Sendable (DynamicObject) async throws -> Answer
+        ) async throws -> Answer? {
+            guard let id = spaceID(in: context), let page = context.parameters.get("page") else { return nil }
+            let scope = try await Space.identified(by: id, on: system).scope(of: person)
+            let object = try await DynamicObject.identified(by: ObjectIdentity(rawValue: page), in: id, on: system)
+            do {
+                return try await CallChain.$current.withValue(.start(scope, in: nil)) { try await answer(object) }
+            } catch is NotAPage { return nil } catch is NotAllowed { return nil } catch is DynamicObjectError {
+                return nil
+            }
+        }
+
+        // Its pages the person may read: its objects that conform to `Page`.
+        spaces.get(":space/pages") { request, context in
+            try await answering(request) { person in
+                guard let id = spaceID(in: context) else { return noSuchSpace() }
+                let space = try await Space.identified(by: id, on: system)
+                let scope = try await space.scope(of: person)
+                let entries = try await space.objects(for: person)
+                let pages = try await CallChain.$current.withValue(.start(scope, in: nil)) { () async throws in
+                    var pages: [PageListing] = []
+                    for entry in entries {
+                        guard let made = DynamicObject.identity(of: entry.object.id),
+                            let described = try? await entry.object.describe(),
+                            described.conforms.contains(Page.name)
+                        else { continue }
+                        // Its own preview, when it gives one that can be drawn.
+                        let object = try await DynamicObject.identified(by: made, in: id, on: system)
+                        let preview = (try? await Previewed.preview(of: object)).flatMap { $0 }.flatMap {
+                            try? Widget($0)
+                        }
+                        pages.append(
+                            PageListing(
+                                id: MadeObjectID(rawValue: made.rawValue), title: entry.id.description,
+                                summary: entry.description, preview: preview))
+                    }
+                    return pages
+                }
+                return try publicAPIResponse(pages)
+            }
+        }
+
+        // What one of its pages shows now, as a widget: none for an object that isn't a page.
+        spaces.get(":space/pages/:page") { request, context in
+            try await answering(request) { person in
+                guard
+                    let shown = try await page(
+                        context, for: person,
+                        { object in
+                            let shown = try await Page.shown(by: object)
+                            return PageShown(widget: try Widget(shown.layout), version: shown.version)
+                        })
+                else { return noSuchObject() }
+                return try publicAPIResponse(shown)
+            }
+        }
+
+        // A press of one of its pages' buttons, by its path, on the layout it was shown as: not
+        // taken once that layout is replaced.
+        spaces.post(":space/pages/:page/press") { request, context in
+            try await answering(request) { person in
+                guard let path = request.uri.queryParameters.get("path").flatMap(PiecePath.init),
+                    let version = request.uri.queryParameters.get("page", as: Int.self)
+                else { return Response(status: .badRequest) }
+                guard
+                    let taken = try await page(
+                        context, for: person, { try await Page.press(path, on: version, of: $0) })
+                else { return noSuchObject() }
+                return Response(status: taken ? .noContent : .conflict)
+            }
+        }
     }
 
     /// A conversation's messages, through the API: reading them, and sending one.
@@ -1181,6 +1259,7 @@ private enum Following {
     case memory
     case tasks(TurgaiDomain.SpaceID)
     case objects(TurgaiDomain.SpaceID)
+    case page(TurgaiDomain.SpaceID, ObjectIdentity)
 
     /// `topic`, read: none when the space it names isn't one.
     init?(_ topic: TurgaiModels.ChatTopic) {
@@ -1193,6 +1272,9 @@ private enum Following {
         case .objects(let space):
             guard let id = TurgaiDomain.SpaceID(space) else { return nil }
             self = .objects(id)
+        case .page(let space, let page):
+            guard let id = TurgaiDomain.SpaceID(space) else { return nil }
+            self = .page(id, ObjectIdentity(rawValue: page.rawValue))
         }
     }
 }
@@ -1221,6 +1303,30 @@ private func follow(
             await changes.cancel()
             forwarding.cancel()
         }
+    case .page(let space, let identity):
+        // A page of its space the person may read: each time it changes, they're told, and read
+        // what it shows then themselves.
+        let reached = try await Space.identified(by: space, on: system)
+        let chain = CallChain.start(try await reached.scope(of: person), in: nil)
+        let object = try await DynamicObject.identified(by: identity, in: space, on: system)
+        _ = try await CallChain.$current.withValue(chain) { try await Page.shown(by: object) }
+        let changed = ChatEvent(
+            payload: .pageChanged(space: space.api, page: MadeObjectID(rawValue: identity.rawValue)))
+        let forwarding = Task {
+            await CallChain.$current.withValue(chain) {
+                // Subscribed again while they have it open, each time a subscription ends, as when its
+                // code changed or nothing changed for long: it may show something else, so they're
+                // told. One that can't be made, as when it's gone, ends following it.
+                while !Task.isCancelled, let changes = try? await object.subscribe(to: ObjectChanged.self) {
+                    do {
+                        for try await _ in changes { try? await writer.write(changed) }
+                    } catch {}
+                    try? await writer.write(changed)
+                }
+            }
+        }
+        // Left, its subscription ends, and nothing more is told.
+        return { forwarding.cancel() }
     case .memory:
         let changes = try await system.singleton.proxy(MemoryNotices.self, name: MemoryNotices.singletonName)
             .subscription(for: person)

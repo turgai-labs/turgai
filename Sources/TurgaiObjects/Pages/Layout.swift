@@ -22,7 +22,7 @@ public struct Layout: Codable, Sendable, Equatable {
 public enum Item: Codable, Sendable, Equatable {
     /// Words to read, in a style and colour.
     case text(id: String? = nil, words: String, style: TextStyle = .body, color: TextColor = .primary)
-    /// A button. Pressing it announces ButtonPressed with its label.
+    /// A button. Pressing it sends ButtonPressed, with its label, to the page.
     case button(id: String? = nil, label: String, kind: ButtonKind = .normal)
     /// A picture from the web, at an http or https `url`, `description` saying what it shows, `width` points wide, or as wide as there's room for.
     case image(
@@ -40,7 +40,7 @@ public enum Item: Codable, Sendable, Equatable {
 public enum Inner: Codable, Sendable, Equatable {
     /// Words to read, in a style and colour.
     case text(id: String? = nil, words: String, style: TextStyle = .body, color: TextColor = .primary)
-    /// A button. Pressing it announces ButtonPressed with its label.
+    /// A button. Pressing it sends ButtonPressed, with its label, to the page.
     case button(id: String? = nil, label: String, kind: ButtonKind = .normal)
     /// A picture from the web, at an http or https `url`, `description` saying what it shows, `width` points wide, or as wide as there's room for.
     case image(
@@ -58,7 +58,7 @@ public enum Inner: Codable, Sendable, Equatable {
 public enum Leaf: Codable, Sendable, Equatable {
     /// Words to read, in a style and colour.
     case text(id: String? = nil, words: String, style: TextStyle = .body, color: TextColor = .primary)
-    /// A button. Pressing it announces ButtonPressed with its label.
+    /// A button. Pressing it sends ButtonPressed, with its label, to the page.
     case button(id: String? = nil, label: String, kind: ButtonKind = .normal)
     /// A picture from the web, at an http or https `url`, `description` saying what it shows, `width` points wide, or as wide as there's room for.
     case image(
@@ -166,119 +166,124 @@ public enum ButtonKind: String, Codable, Sendable, Equatable {
     case destructive
 }
 
-extension Layout {
-    /// The layout a page starts with: every kind of item, nested as deep as items go, so the
-    /// layout it shows is always one to change.
-    static let start = Layout(items: [
-        .text(words: "A new page"),
-        .row(items: [
-            .column(items: [.text(words: "First column"), .button(label: "First")]),
-            .column(items: [.text(words: "Second column"), .button(label: "Second")]),
-        ]),
-        .button(label: "Third"),
-    ])
-}
-
 // MARK: As a widget
 
 // What a model writes is a layout, three levels deep, in the words its schema has; what's shown is
-// Mosaic's widget, any depth, every piece with an id. A piece the layout gives no id is named by its
-// kind and place, which no written id starts like.
+// Mosaic's widget, any depth, every piece with an id. A piece the layout gives no id Mosaic names by
+// its kind and place; a button given none is its label, which is its own on the layout.
 
 extension Widget {
     /// `layout` as it's shown: a column of its items, each button's label its own, since a press is
     /// told to the page by its label.
     public init(_ layout: Layout) throws(LayoutProblem) {
+        var labels: Set<String> = []
+        for label in layout.items.flatMap(\.labels) {
+            let label = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard labels.insert(label).inserted else { throw .sameLabel(label) }
+        }
         do {
-            self = .stack(try Stack("page", .vertical(), try Self.pieces(layout.items, Self.init)))
+            self = .stack(try Stack(id: "page", .vertical(), try Self.pieces(layout.items, Self.init)))
         } catch {
             throw .widget(error)
         }
-        var labels: Set<String> = []
-        for label in buttons where !labels.insert(label).inserted { throw .sameLabel(label) }
     }
 
-    private init(_ item: Item, at index: Int) throws(WidgetProblem) {
+    private init(_ item: Item) throws(WidgetProblem) {
         switch item {
         case .text(let id, let words, let style, let color):
-            self = .text(try Text(Self.named(id, "text", index), words, style: .init(style), color: .init(color)))
+            self = .text(try Text(id: id, words, style: .init(style), color: .init(color)))
         case .button(let id, let label, let kind):
-            self = .button(try Button(Self.named(id, "button", index), label, kind: .init(kind)))
+            self = .button(try Button(id ?? label, label, kind: .init(kind)))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
             self = .image(
                 try Image(
-                    Self.named(id, "image", index), address: url, description: description,
-                    aspectRatio: .init(aspectRatio), fit: .init(fit), width: width))
+                    id: id, address: url, description: description, aspectRatio: .init(aspectRatio), fit: .init(fit),
+                    width: width))
         case .row(let id, let items, let alignment, let spacing):
             self = .stack(
                 try Stack(
-                    Self.named(id, "row", index), .horizontal(alignment: .init(alignment)),
-                    try Self.pieces(items, Self.init), spacing: spacing))
+                    id: id, .horizontal(alignment: .init(alignment)), try Self.pieces(items, Self.init),
+                    spacing: spacing))
         case .column(let id, let items, let alignment, let spacing):
             self = .stack(
                 try Stack(
-                    Self.named(id, "column", index), .vertical(alignment: .init(alignment)),
-                    try Self.pieces(items, Self.init), spacing: spacing))
+                    id: id, .vertical(alignment: .init(alignment)), try Self.pieces(items, Self.init),
+                    spacing: spacing))
         }
     }
 
-    private init(_ item: Inner, at index: Int) throws(WidgetProblem) {
+    private init(_ item: Inner) throws(WidgetProblem) {
         switch item {
         case .text(let id, let words, let style, let color):
-            self = .text(try Text(Self.named(id, "text", index), words, style: .init(style), color: .init(color)))
+            self = .text(try Text(id: id, words, style: .init(style), color: .init(color)))
         case .button(let id, let label, let kind):
-            self = .button(try Button(Self.named(id, "button", index), label, kind: .init(kind)))
+            self = .button(try Button(id ?? label, label, kind: .init(kind)))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
             self = .image(
                 try Image(
-                    Self.named(id, "image", index), address: url, description: description,
-                    aspectRatio: .init(aspectRatio), fit: .init(fit), width: width))
+                    id: id, address: url, description: description, aspectRatio: .init(aspectRatio), fit: .init(fit),
+                    width: width))
         case .row(let id, let items, let alignment, let spacing):
             self = .stack(
                 try Stack(
-                    Self.named(id, "row", index), .horizontal(alignment: .init(alignment)),
-                    try Self.pieces(items, Self.init), spacing: spacing))
+                    id: id, .horizontal(alignment: .init(alignment)), try Self.pieces(items, Self.init),
+                    spacing: spacing))
         case .column(let id, let items, let alignment, let spacing):
             self = .stack(
                 try Stack(
-                    Self.named(id, "column", index), .vertical(alignment: .init(alignment)),
-                    try Self.pieces(items, Self.init), spacing: spacing))
+                    id: id, .vertical(alignment: .init(alignment)), try Self.pieces(items, Self.init),
+                    spacing: spacing))
         }
     }
 
-    private init(_ item: Leaf, at index: Int) throws(WidgetProblem) {
+    private init(_ item: Leaf) throws(WidgetProblem) {
         switch item {
         case .text(let id, let words, let style, let color):
-            self = .text(try Text(Self.named(id, "text", index), words, style: .init(style), color: .init(color)))
+            self = .text(try Text(id: id, words, style: .init(style), color: .init(color)))
         case .button(let id, let label, let kind):
-            self = .button(try Button(Self.named(id, "button", index), label, kind: .init(kind)))
+            self = .button(try Button(id ?? label, label, kind: .init(kind)))
         case .image(let id, let url, let description, let aspectRatio, let fit, let width):
             self = .image(
                 try Image(
-                    Self.named(id, "image", index), address: url, description: description,
-                    aspectRatio: .init(aspectRatio), fit: .init(fit), width: width))
+                    id: id, address: url, description: description, aspectRatio: .init(aspectRatio), fit: .init(fit),
+                    width: width))
         }
     }
 
-    /// Items, each made a piece knowing its place among them.
+    /// Items, each made a piece.
     private static func pieces<Item>(
-        _ items: [Item], _ piece: (Item, Int) throws(WidgetProblem) -> Widget
+        _ items: [Item], _ piece: (Item) throws(WidgetProblem) -> Widget
     ) throws(WidgetProblem) -> [Widget] {
-        var pieces: [Widget] = []
-        for (index, item) in items.enumerated() { pieces.append(try piece(item, index)) }
-        return pieces
+        try items.map(piece)
     }
+}
 
-    /// The id written, or else its kind and place: `#text-2` for the second item, a text.
-    private static func named(_ id: String?, _ kind: String, _ index: Int) -> String {
-        id ?? "#\(kind)-\(index + 1)"
-    }
-
-    /// Every button's label, in order.
-    var buttons: [String] {
+// Every button's label, in order, as written.
+extension Item {
+    fileprivate var labels: [String] {
         switch self {
-        case .button(let button): [button.label.rawValue]
-        default: children.flatMap(\.buttons)
+        case .button(_, let label, _): [label]
+        case .row(_, let items, _, _), .column(_, let items, _, _): items.flatMap(\.labels)
+        case .text, .image: []
+        }
+    }
+}
+
+extension Inner {
+    fileprivate var labels: [String] {
+        switch self {
+        case .button(_, let label, _): [label]
+        case .row(_, let items, _, _), .column(_, let items, _, _): items.flatMap(\.labels)
+        case .text, .image: []
+        }
+    }
+}
+
+extension Leaf {
+    fileprivate var labels: [String] {
+        switch self {
+        case .button(_, let label, _): [label]
+        case .text, .image: []
         }
     }
 }

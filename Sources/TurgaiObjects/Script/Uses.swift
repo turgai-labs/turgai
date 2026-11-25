@@ -71,7 +71,7 @@ extension Uses {
         -> ModuleInterface
     {
         // The runtime's own values, which any object's code can hold: when something's due.
-        var schemas: [JSONValue] = [Schedule.jsonSchema, Timer.jsonSchema]
+        var schemas: [JSONValue] = [Schedule.jsonSchema, Timer.jsonSchema, Layout.jsonSchema, ButtonPressed.jsonSchema]
         // The events, each declared in its actor, `Player.TrackChanged`, and among the values no more.
         var events: Set<String> = []
         var actors: [String] = []
@@ -144,8 +144,11 @@ extension Uses {
             actors.append(lines.joined(separator: "\n"))
         }
         let values = declarations(of: schemas, except: own, declared: events)
+        // The runtime's own protocol: an object conforming to `Page` is shown to people.
         return ModuleInterface(
-            name: module, source: (actors + (values.isEmpty ? [] : [values])).joined(separator: "\n\n"))
+            name: module,
+            source: (actors + [Page.declaration, Previewed.declaration] + (values.isEmpty ? [] : [values])).joined(
+                separator: "\n\n"))
     }
 
     /// The tools object code calls, as Swift declares them: `enum Tools`, with an enum in it for each
@@ -233,6 +236,33 @@ extension Uses {
                 return (name, Self.inWords(enumeration, named: name))
             }
             return nil
+        }
+    }
+
+    /// The protocols any object may conform to, each with the name code writes it by, in words:
+    /// what it is, then what an object conforming to it has, never as code to copy.
+    public var protocolsNamed: [(name: String, words: String)] {
+        interface.protocolDeclarations.map { declared in
+            let name = declared.name.text
+            let summary = Self.summary(declared.leadingTrivia)
+            var words = "- `\(name)`" + (summary.map { ": \(Self.lowercasedFirst($0))" } ?? "")
+            for member in declared.memberBlock.members {
+                // What it is, as said of it: "what they see", without its full stop.
+                let said = Self.summary(member.decl.leadingTrivia).map {
+                    Self.lowercasedFirst($0).trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                }
+                if let variable = member.decl.as(VariableDeclSyntax.self) {
+                    for binding in variable.bindings {
+                        let type = binding.typeAnnotation?.type.trimmedDescription ?? "Any"
+                        let property = binding.pattern.trimmedDescription
+                        words += " Its `\(property)`, a `\(type)`" + (said.map { ", is \($0)." } ?? ".")
+                    }
+                } else if let function = member.decl.as(FunctionDeclSyntax.self) {
+                    let written = function.name.text + function.signature.trimmedDescription
+                    words += " It takes `\(written)`" + (said.map { ": \($0)." } ?? ".")
+                }
+            }
+            return (name, words)
         }
     }
 

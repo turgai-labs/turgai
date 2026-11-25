@@ -2,6 +2,7 @@ import DiscoverableActors
 import DistributedCluster
 import Foundation
 import Hail
+import Mosaic
 import TurgaiApplication
 import TurgaiCalls
 import TurgaiDomain
@@ -31,6 +32,9 @@ struct EvalTask: Sendable {
         /// One turn, in which the agent sends HTTP requests itself, and its answer must say what
         /// came back.
         case sends(answered: @Sendable (String) -> Bool)
+        /// The request makes an object that's a page: opened, the button labelled `pressing` is
+        /// pressed, and what it shows before and after must pass `shows`.
+        case page(pressing: String, shows: @Sendable (_ before: String, _ after: String) -> Bool)
     }
 
     init(
@@ -139,6 +143,12 @@ struct EvalTask: Sendable {
                 #"Post the JSON {"name": "Ann", "cups": 3} to https://httpbin.org/post and tell me what JSON it says it got."#,
             check: .sends(answered: has("ann", "3"))),
         EvalTask(
+            request: "Make a counter for my coffee cups: I can add a cup, ask how many I had, and reset it.",
+            then: [
+                "Make the counter a page by conforming to the Page protocol, showing how many cups I had and an Add button."
+            ],
+            check: .page(pressing: "add", shows: countedOneMore)),
+        EvalTask(
             request:
                 "Make a day planner that, when I ask it for a plan, asks the planner agent for one and keeps the latest plan.",
             agents: [planner],
@@ -146,6 +156,16 @@ struct EvalTask: Sendable {
             stateMatches: { $0.lowercased().contains("coffee") },
             answered: has("coffee")),
     ]
+
+    /// Whether a number shown before is shown one more after: a press counted, whatever was
+    /// counted before it.
+    private static func countedOneMore(_ before: String, _ after: String) -> Bool {
+        func numbers(_ text: String) -> Set<Int> {
+            Set(text.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) })
+        }
+        let later = numbers(after)
+        return numbers(before).contains { later.contains($0 + 1) }
+    }
 
     private static func has(_ words: String...) -> @Sendable (String) -> Bool {
         { reply in words.allSatisfy { reply.lowercased().contains($0) } }
@@ -176,7 +196,7 @@ struct EvalTask: Sendable {
         switch check {
         case .followUp(_, _, let answered, let stateMatches):
             return replies.contains(where: answered) && stateMatches(stateText)
-        case .shared:
+        case .shared, .page:
             return true
         case .asks(let agent, let answered):
             // Its tool, by the agent's id, whichever way tools are named: `planner_respond`,
@@ -275,6 +295,66 @@ struct EvalTask: Sendable {
         return (turns, allowed(access) ? nil : "Shared otherwise than asked: \(access.levels)")
     }
 
+    /// The request asked of a fresh agent; then the object it made, opened as a page as a browser
+    /// opens it, its button labelled `pressing` pressed, and what it shows then checked by `shows`.
+    private func paging(
+        pressing: String, checkedBy shows: @Sendable (String, String) -> Bool, on node: EvalNode
+    ) async throws -> (turns: [RecordedTurn], failure: String?) {
+        let agent = try await node.freshAgent()
+        var turns: [RecordedTurn] = []
+        for asked in [request] + then {
+            turns.append(await RecordedTurn.send(asked, to: agent, on: node.system))
+        }
+        let created = turns.flatMap(\.calls).compactMap(Self.createdHandle(from:))
+        if let saved = try await Self.savedCode(of: created, on: node.system) {
+            turns.append(RecordedTurn(answer: "Saved code:\n" + saved))
+        }
+        guard let made = created.last else {
+            return (turns, turns.compactMap(\.failure).first ?? "No object was made.")
+        }
+        let object = try await DynamicObject.identified(
+            by: ObjectIdentity(rawValue: made), in: EvalNode.space, on: node.system)
+        let first: LayoutShown
+        do {
+            first = try await Page.shown(by: object)
+        } catch {
+            return (turns, "\(made) isn't shown as a page: \(error)")
+        }
+        let widget = try Widget(first.layout)
+        let before = Self.words(of: widget).joined(separator: " | ")
+        turns.append(RecordedTurn(answer: "Shown:\n" + before))
+        guard let path = Self.path(toButton: pressing, in: widget) else {
+            return (turns, "No button labelled \(pressing).")
+        }
+        guard try await Page.press(path, on: first.version, of: object) else {
+            return (turns, "The press wasn't taken.")
+        }
+        let after = Self.words(of: try Widget(try await Page.shown(by: object).layout)).joined(separator: " | ")
+        turns.append(RecordedTurn(answer: "Shown after pressing \(pressing):\n" + after))
+        return (turns, shows(before, after) ? nil : "Shown \(before.prefix(60)), then \(after.prefix(60))")
+    }
+
+    /// What a widget says: its texts and its buttons' labels, in order.
+    private static func words(of widget: Widget) -> [String] {
+        switch widget {
+        case .text(let text): [text.words.rawValue]
+        case .button(let button): ["[\(button.label.rawValue)]"]
+        default: widget.children.flatMap(words(of:))
+        }
+    }
+
+    /// Where the first button labelled `label`, in any case, is: the ids from the top down to it.
+    private static func path(toButton label: String, in widget: Widget, at above: [PieceID] = []) -> PiecePath? {
+        let here = above + [widget.id]
+        if case .button(let button) = widget, button.label.rawValue.lowercased().contains(label.lowercased()) {
+            return PiecePath(here)
+        }
+        for child in widget.children {
+            if let found = path(toButton: label, in: child, at: here) { return found }
+        }
+        return nil
+    }
+
     /// The request and what follows it, then the follow-up, asked of a fresh agent; then what the
     /// objects the request made hold, and the code they ended with.
     private func followingUp(with followUp: String, readingStateOf stateAddresses: [String], on node: EvalNode)
@@ -335,6 +415,10 @@ struct EvalTask: Sendable {
                     let shared = try await sharing(checkedBy: allowed, on: node)
                     turns = shared.turns
                     failure = shared.failure
+                case .page(let pressing, let shows):
+                    let paged = try await paging(pressing: pressing, checkedBy: shows, on: node)
+                    turns = paged.turns
+                    failure = paged.failure
                 case .asks, .sends:
                     let agent = try await node.freshAgent()
                     turns.append(await RecordedTurn.send(request, to: agent, on: node.system))
@@ -410,7 +494,7 @@ struct EvalTask: Sendable {
         guard call.completed, !call.failed else { return nil }
         let marker: String
         switch call.name {
-        case "create_object": marker = "Saved "
+        case "create_object": marker = "Made "
         default: return nil
         }
         guard let range = call.output.range(of: marker),

@@ -17,30 +17,30 @@ import TurgaiSpaces
     import Foundation
 #endif
 
-/// The pages of spaces, each under its space and its name: its layout at
-/// `/spaces/<space>/pages/<name>/`, its changes at `live` beside it, and its presses at `press`.
+/// The objects of spaces that are pages, each under its space and its name: its layout at
+/// `/spaces/<space>/objects/<name>/`, its changes at `live` beside it, and its presses at `press`.
+/// An object that doesn't conform to `Page` isn't here.
 ///
 /// A page is one of its space's objects, used as any is: its layout read, its presses called, its
-/// layouts followed. Whoever opens one is someone signed in, or a guest, which anyone who is
+/// changes followed. Whoever opens one is someone signed in, or a guest, which anyone who is
 /// neither becomes, in the space's guests, the first time they open one of its pages. Their space
-/// says what they may do, and the page is asked with that, as any route asks. What comes back is
-/// the layout as the page says it, drawn here as HTML for a browser.
+/// says what they may do, and the object is asked with that, as any route asks. What comes back is
+/// the layout as the object says it, drawn here as HTML for a browser.
 extension TurgaiMainWebApp {
     func registerPageRoutes(on router: Router<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies) {
         let system = dependencies.system
         let auth = dependencies.auth
 
-        /// Who a request for a page is from, and which page: the person, and the page, found by its
-        /// id as any actor is. Someone neither signed in
-        /// nor a guest yet is a new guest, with the token that says so from now on.
+        /// Who a request for a page is from, and which object: the person, and the object, by its
+        /// name in its space. Someone neither signed in nor a guest yet is a new guest, with the
+        /// token that says so from now on.
         @Sendable func asking(_ request: Request, _ context: BasicWebSocketRequestContext) async throws -> Asking? {
             guard
                 let space = context.parameters.get("space").flatMap(UUID.init(uuidString:)).map(
                     TurgaiDomain.SpaceID.init(rawValue:)),
-                let name = context.parameters.get("name").flatMap(PageName.init(rawValue:))
+                let name = context.parameters.get("name"), !name.isEmpty
             else { return nil }
-            let page = try DiscoverableObject.resolve(
-                id: try await Page.named(name, in: space, on: system).id, using: system)
+            let page = try await DynamicObject.identified(by: ObjectIdentity(rawValue: name), in: space, on: system)
             if let account = await TurgaiWebSupport.authenticatedAccount(from: request, auth: auth) {
                 return Asking(
                     space: space, page: page, person: .account(account.id), guest: nil)
@@ -70,28 +70,26 @@ extension TurgaiMainWebApp {
             } catch is SpaceRefusal { return nil }
         }
 
-        /// What `ask` answers, asked of the page for whoever `asking` is, with what their space
+        /// What `ask` answers, asked of the object for whoever `asking` is, with what their space
         /// says they may do. None when they aren't one of the space's people, or there's no such
-        /// page.
+        /// object, or it isn't a page.
         @Sendable func answer<Answer: Sendable>(
-            _ asking: Asking, _ ask: @Sendable (DiscoverableObject) async throws -> Answer
+            _ asking: Asking, _ ask: @Sendable (DynamicObject) async throws -> Answer
         ) async throws -> Answer? {
             guard let chain = try await chain(of: asking) else { return nil }
             do {
                 return try await CallChain.$current.withValue(chain) { try await ask(asking.page) }
-            } catch is NoSuchPage { return nil } catch is NotAllowed { return nil }
-        }
-
-        /// The layout the page shows now, and which it is, read through whoever asks.
-        @Sendable func shown(_ asking: Asking) async throws -> LayoutShown? {
-            try await answer(asking) { page in
-                let layout: Layout = try await page.read(property: "layout").decode()
-                let version: Int = try await page.read(property: "version").decode()
-                return LayoutShown(layout: layout, version: version)
+            } catch is NotAPage { return nil } catch is NotAllowed { return nil } catch is DynamicObjectError {
+                return nil
             }
         }
 
-        router.get("/spaces/:space/pages/:name") { request, context in
+        /// The layout the object shows now, and which it is, read through whoever asks.
+        @Sendable func shown(_ asking: Asking) async throws -> LayoutShown? {
+            try await answer(asking) { try await Page.shown(by: $0) }
+        }
+
+        router.get("/spaces/:space/objects/:name") { request, context in
             // Its layout's own addresses, `live` and `press`, are read from where it is: under its name.
             guard request.uri.path.hasSuffix("/") else {
                 return Response(status: .movedPermanently, headers: [.location: request.uri.path + "/"])
@@ -110,13 +108,10 @@ extension TurgaiMainWebApp {
             if let token = asking.guest?.newToken { response.setCookie(TurgaiWebSupport.guestCookie(token)) }
             return response
         }
-        router.get("/spaces/:space/pages/:name/live") { request, context in
+        router.get("/spaces/:space/objects/:name/live") { request, context in
             // Its changes are followed from a layout someone opened, so by someone known already.
-            let follower = UUID()
             guard let asking = try await asking(request, context), asking.guest?.newToken == nil,
-                try await answer(
-                    asking,
-                    { try await $0._subscribe(follower, to: String(describing: LayoutShown.self)) }) != nil,
+                let changes = try await answer(asking, { try await $0.subscribe(to: ObjectChanged.self) }),
                 let first = try await shown(asking), let chain = try await chain(of: asking)
             else { return Response(status: .notFound) }
             let page = asking.page
@@ -124,49 +119,42 @@ extension TurgaiMainWebApp {
                 status: .ok,
                 headers: [.contentType: "text/event-stream", .cacheControl: "no-cache"],
                 body: ResponseBody { writer in
-                    // Followed for whoever opened it, as their space said they may then.
+                    // Read for whoever opened it, as their space said they may then.
                     try await CallChain.$current.withValue(chain) {
                         do {
-                            // The layout as it is now, then each one shown after it.
+                            // The layout as it is now, then each other one it shows after a change.
                             try await writer.write(ByteBuffer(string: try Self.liveEvent(first)))
-                            following: while !Task.isCancelled {
-                                switch try await page._nextEvent(for: follower) {
-                                case .event(let event):
-                                    let shown = try event.decode(LayoutShown.self)
-                                    try await writer.write(ByteBuffer(string: try Self.liveEvent(shown)))
-                                case .idle: continue
-                                case .ended: break following
-                                }
+                            var last = first
+                            // Until its subscription ends, as when its code changes, and the
+                            // browser opens it again.
+                            for try await _ in changes {
+                                let shown = try await Page.shown(by: page)
+                                guard shown != last else { continue }
+                                last = shown
+                                try await writer.write(ByteBuffer(string: try Self.liveEvent(shown)))
                             }
                         } catch {
-                            // The browser went away.
-                            try? await page._unsubscribe(follower)
+                            // The browser went away, or it's no page any more.
+                            await changes.cancel()
                             throw error
                         }
-                        try? await page._unsubscribe(follower)
+                        await changes.cancel()
                         try await writer.finish(nil)
                     }
                 }
             )
         }
-        router.post("/spaces/:space/pages/:name/press") { request, context in
+        router.post("/spaces/:space/objects/:name/press") { request, context in
             // A press comes from a layout someone opened, so from someone known already.
             guard let asking = try await asking(request, context), asking.guest?.newToken == nil else {
                 return Response(status: .notFound)
             }
-            guard let path = request.uri.queryParameters.get("path"), PiecePath(path) != nil,
+            guard let path = request.uri.queryParameters.get("path").flatMap(PiecePath.init),
                 let version = request.uri.queryParameters.get("page", as: Int.self)
             else { return Response(status: .badRequest) }
-            guard
-                let taken = try await answer(
-                    asking,
-                    { page -> Bool in
-                        try await page.invoke(
-                            "press", arguments: ["path": .string(path), "version": .integer(Int64(version))],
-                            through: nil
-                        ).decode()
-                    })
-            else { return Response(status: .notFound) }
+            guard let taken = try await answer(asking, { try await Page.press(path, on: version, of: $0) }) else {
+                return Response(status: .notFound)
+            }
             return Response(status: taken ? .noContent : .conflict)
         }
     }
@@ -200,11 +188,11 @@ extension TurgaiMainWebApp {
     }
 }
 
-/// Who asks about a page, and which: its space, the page as any object is reached, and the
-/// person. A guest is said with their id, and the token to keep when they're new.
+/// Who asks about a page, and which: its space, the object, and the person. A guest is said with
+/// their id, and the token to keep when they're new.
 private struct Asking: Sendable {
     let space: TurgaiDomain.SpaceID
-    let page: DiscoverableObject
+    let page: DynamicObject
     let person: TurgaiDomain.UserID
     let guest: (id: TurgaiDomain.UserID, newToken: String?)?
 }

@@ -34,9 +34,10 @@ let package = Package(
         .package(url: "https://github.com/turgai-labs/mosaic.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax", from: "602.0.0"),
         .package(
-            // A response that says it reached its token limit, until upstream has it.
+            // A response that says it reached its token limit, and the schema of a type that holds
+            // itself, until upstream has them.
             url: "https://github.com/akbashev/AnyLanguageModel.git",
-            branch: "response-says-why-it-ended",
+            branch: "turgai-integration",
             traits: ["AsyncHTTPClient", .trait(name: "Llama", condition: .when(traits: ["Llama"]))]
         ),
         .package(
@@ -118,7 +119,7 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-docc-plugin.git", from: "1.4.0"),
     ],
     targets: [
-        .target(name: "TurgaiModels"),
+        .target(name: "TurgaiModels", dependencies: [.product(name: "Mosaic", package: "mosaic")]),
         .target(name: "TurgaiDomain"),
         .target(
             name: "TurgaiCalls",
@@ -298,6 +299,7 @@ let package = Package(
                 .product(name: "EventSourcing", package: "cluster-event-sourcing"),
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "Mosaic", package: "mosaic"),
             ]
         ),
         .target(
@@ -414,6 +416,8 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "Mosaic", package: "mosaic"),
+                .product(name: "MosaicSwiftUI", package: "mosaic"),
             ],
             resources: [
                 .process("Resources/Assets.xcassets")

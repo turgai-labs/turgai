@@ -246,13 +246,16 @@ public distributed actor Space: ConversationOwner {
 
     /// `person`'s answer to the request `id`, as the link they answered through, in its
     /// conversation `conversation`, says: only an answer by whoever may decide for what it asks
-    /// counts. The conversation's links show it, and the turn that waited for it continues.
+    /// counts. The conversation's links show it, and the turn that waited for it continues; an object
+    /// that asked is told.
     public distributed func answer(
         _ id: AccessRequestID, _ answer: AccessAnswer, by person: UserID, in conversation: ConversationID
     ) async throws {
         guard let open = state.space?.requests[id], !(try await run(.answer(id, answer, by: person))).isEmpty
         else { return }
         try await self.conversation(conversation).answered(open, answer, by: person, from: self)
+        // An object that asked is told it's allowed, and does what it couldn't.
+        if answer != .no { await DynamicObject.allowed(open.by, on: actorSystem) }
     }
 
     /// The scope of work that starts here for `asker`, one of its people or one of its own actors,

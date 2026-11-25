@@ -161,36 +161,6 @@ public distributed actor DynamicObjects {
 
     // MARK: Built-in objects
 
-    // MARK: Pages
-
-    /// The pages made here, by name.
-    public distributed var pages: [PageName] { state.pages.sorted() }
-
-    /// Its space's page named `name`, made the first time it's named.
-    package distributed func page(named name: PageName) async throws -> Page {
-        let page = try await Page.named(name, in: home, on: actorSystem)
-        if !state.pages.contains(name) {
-            try await page.make()
-            try await emit(event: .pageMade(name))
-        }
-        return page
-    }
-
-    /// The page named `name` taken out of its space, as whoever may configure the space asks:
-    /// it's opened by no one from then on.
-    public distributed func removePage(_ name: PageName) async throws {
-        try configuring()
-        guard state.pages.contains(name) else { return }
-        try await Page.named(name, in: home, on: actorSystem).remove()
-        try await emit(event: .pageRemoved(name))
-    }
-
-    /// Refused unless whoever the call is on behalf of may configure its space.
-    private func configuring() throws {
-        let chain = try caller()
-        guard chain.scope.space == home, chain.scope.permissions.configureSpace else { throw NotAllowed(.write) }
-    }
-
     /// `code`, type `id`'s, as the checker reads it: read again only when it's other code than
     /// last time.
     private func checked(_ id: BehaviorID, _ code: Script) throws(CodeProblem) -> CheckedScript {
@@ -310,6 +280,9 @@ public distributed actor DynamicObjects {
         for entry in state.entries where entry.access.allows(writer, .write) {
             reached = try await object(entry.identity).typeChanged(id, code: source, reached: reached)
         }
+        // Whoever follows is told again now its objects run it: what they read then, a page it
+        // made one among it, is what the new code says.
+        pulls.tell(ObjectsChanged())
     }
 
     /// Removes one of these objects for good.
@@ -409,10 +382,6 @@ public enum DynamicObjectsEvent: Codable, Sendable {
     /// Who may read and write an object changed, as the object says.
     case accessChanged(ObjectIdentity, Access)
     case removed(ObjectIdentity)
-    /// A page made, its name its space's.
-    case pageMade(PageName)
-    /// A page taken out, its name given up.
-    case pageRemoved(PageName)
 }
 
 public struct DynamicObjectsState: Codable, Sendable {
@@ -434,8 +403,6 @@ public struct DynamicObjectsState: Codable, Sendable {
     /// The objects made by name, oldest first: what's listed and found here. An
     /// object that code made with `Type()` isn't one of them: it's reached through what holds it.
     public var entries: [Entry] = []
-    /// The pages made here, by name.
-    public var pages: Set<PageName> = []
 
     public init() {}
 
@@ -471,10 +438,6 @@ public struct DynamicObjectsState: Codable, Sendable {
             if let index = entries.firstIndex(where: { $0.identity == identity }) { entries[index].access = access }
         case .removed(let identity):
             entries.removeAll { $0.identity == identity }
-        case .pageMade(let name):
-            pages.insert(name)
-        case .pageRemoved(let name):
-            pages.remove(name)
         }
     }
 }

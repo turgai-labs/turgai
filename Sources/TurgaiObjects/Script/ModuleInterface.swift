@@ -59,6 +59,12 @@ extension ModuleInterface {
 }
 
 extension ModuleInterface {
+    /// The protocols it declares for any object to conform to, in order: those of no actor. One
+    /// an actor declares is that actor's, said with it.
+    public var protocolDeclarations: [ProtocolDeclSyntax] {
+        Parser.parse(source: source).statements.compactMap { $0.item.as(ProtocolDeclSyntax.self) }
+    }
+
     /// The actors it declares, each with what it takes, publishes and announces: a function marked
     /// with one of `events` is an event the actor announces.
     public func actors(events: Set<String>) -> [DeclaredActor] {

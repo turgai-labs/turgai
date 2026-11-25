@@ -41,7 +41,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// Its subscribers, to the events the code it runs announces: replaced with each new code, so
     /// subscribers find theirs ended, and subscribe again.
     private var hub = _DiscoveryEventHub(events: [])
-    /// The objects it follows, by the `@Subscribed` field holding each.
+    /// What it follows: by the `@Subscribed` field holding each, the object it held and the task
+    /// following it.
     private var followers: [String: Follower] = [:]
     /// The schedules its `Schedule` fields are due by, as they're kept durably now, by field.
     private var scheduled: [String: Schedule] = [:]
@@ -52,10 +53,15 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// Its code as the checker read it, once for each code it runs.
     private var checked: CheckedScript?
 
-    /// An object followed: the one the field held, and the task delivering its events.
+    /// An object followed: the one the field held, and the task following it.
     private struct Follower: Sendable {
         let source: ObjectReference
         let task: Task<Void, Never>
+    }
+
+    /// What it follows ends with it.
+    deinit {
+        for follower in followers.values { follower.task.cancel() }
     }
 
     /// An object's code, as it runs on this actor. Each start is a generation: a task belongs to
@@ -69,11 +75,6 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             case .stopped(let generation), .running(_, let generation, _): generation
             }
         }
-    }
-
-    /// What it follows ends with it. (Its code's tasks hold it while they run, so none outlive it.)
-    deinit {
-        for follower in followers.values { follower.task.cancel() }
     }
 
     /// Which object it is, and the space it's in.
@@ -171,26 +172,24 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     public func handleEvent(_ event: DynamicObjectEvent) {
         state = state.applying(event)
+        // Whoever shows what it holds is told it changed: replayed, there's no one to tell yet. New
+        // code, or its removal, ends their subscription instead.
+        switch event {
+        case .handled, .set: hub.announce(ObjectChanged(), named: ObjectChanged.name)
+        case .adopted, .shared, .described, .failed, .announced, .removed: break
+        }
     }
 
     // MARK: Lifecycle
 
     /// The object with `id`, of the type whose actor is `type`, as code names it with `Type(id:)`:
     /// the one there is, a built-in one checked in under it, or one made now running its type's
-    /// code. The same id is the same object, whoever names it; one of another type is refused. A
-    /// page is its space's by its name, made the first time.
+    /// code. The same id is the same object, whoever names it; one of another type is refused.
     static func make(
         _ type: ObjectTypeName, id identity: ObjectIdentity, in space: SpaceID, on system: ClusterSystem
     ) async throws
         -> ActorReference
     {
-        if type.rawValue == Page.describe().type {
-            guard let name = PageName(rawValue: identity.rawValue) else {
-                throw CodeProblem(
-                    "`\(identity)` isn't a page's name: lowercase letters, digits and `-`, not at either end.")
-            }
-            return try ActorReference(try await DynamicObjects.of(space, on: system).page(named: name))
-        }
         let object = try await identified(by: identity, in: space, on: system)
         if let existing = try? await object.source {
             guard existing.type == type.rawValue else {
@@ -272,9 +271,12 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         _ = try await running()
     }
 
-    /// It runs while it's living, so what it follows keeps reaching it.
+    /// It stops once nothing of its own runs, it follows nothing, and nothing's subscribed to it: a
+    /// message starts it again.
     public func shouldDeactivate() async -> Bool {
-        if case .live = state { false } else { true }
+        guard followers.isEmpty, hub.isEmpty else { return false }
+        if case .running(_, _, let tasks) = process, !tasks.isEmpty { return false }
+        return true
     }
 
     /// Ends the object for good: it answers nothing from now on, and the next idle sweep stops
@@ -375,6 +377,10 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         try await emit(event: try state.live.sharing(with: audience, level, by: try caller()))
         // Who it's listed to follows who may read it.
         try await DynamicObjects.of(home, on: actorSystem).accessChanged(own)
+        // An object it's shared with is told it's allowed, and follows it if it couldn't before.
+        if level != nil, case .actor(.virtual(let id)) = audience, let party = try? Party(id) {
+            await Self.allowed(party, on: actorSystem)
+        }
     }
 
     // MARK: Who may call it
@@ -476,11 +482,11 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         }
     }
 
+    /// Its property `name` as Swift reads it: what a stored one holds, or what a computed one's
+    /// getter gives, run as its code says.
     public distributed func read(property name: String) async throws -> JSONValue {
-        guard let value = try state.live.fields[name] else {
-            throw DiscoveryError.unknownProperty(name)
-        }
-        return value
+        if let value = try state.live.fields[name] { return value }
+        return try await running().read(name)
     }
 
     public distributed func _subscribe(_ subscriber: UUID, to event: String) async throws {
@@ -495,13 +501,15 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         hub.unsubscribe(subscriber)
     }
 
-    /// A hub for the events its code announces now, after its code changed: none for an object
-    /// that isn't living.
+    /// A hub for the events its code announces now, after its code changed, and that it changed:
+    /// none for an object that isn't living.
     private func rehub() {
-        let announced: Set<String> =
+        var announced: Set<String> =
             if case .live(let object) = state, let shape = try? ObjectShape(object.code) {
                 Set(shape.events.map(\.name))
             } else { [] }
+        // That it changed, whatever its code: for whoever shows what it holds.
+        if case .live = state { announced.insert(ObjectChanged.name) }
         hub = _DiscoveryEventHub(events: announced)
     }
 
@@ -559,7 +567,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             try await emit(event: .failed(origin, problem: String(describing: error)))
             throw error
         }
-        if let event = try state.live.handling(origin, holding: after) { try await emit(event: event) }
+        let changed = try state.live.handling(origin, holding: after)
+        if let changed { try await emit(event: changed) }
         try await announce(reply.announced)
         refollow()
         return ObjectReply(
@@ -658,7 +667,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             let announced = try await asItsOwn { try await instance.runTask(id) }
             let after = try await instance.fields()
             taskEnded(id, of: generation)
-            if let event = try state.live.handling(origin, holding: after) { try await emit(event: event) }
+            let changed = try state.live.handling(origin, holding: after)
+            if let changed { try await emit(event: changed) }
             try await announce(announced)
             refollow()
         } catch is EffectDenied {
@@ -687,8 +697,9 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     // MARK: Following
 
-    /// Follows the objects its `@Subscribed` fields hold now: a field holding another object than
-    /// before follows that one instead, and one that's gone, or a removed object, follows nothing.
+    /// Follows the objects its `@Subscribed` fields hold now, each in a task of its own, kept going
+    /// by its node: a field holding another object than before follows that one instead, and one
+    /// that's gone, or a removed object, follows nothing.
     private func refollow() {
         rescheduleSoon()
         guard case .live(let object) = state, let shape = try? shape(of: object.code) else {
@@ -705,25 +716,88 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             followers[field] = nil
         }
         let handlers = Set(shape.messages.map(\.name))
+        let config = Config(space: home, identity: own)
         for (field, source) in wanted where followers[field] == nil {
-            // It follows for as long as the object lives and its node runs: the task holds it only
-            // while following, so the object can go, and the task with it.
-            let config = Config(space: home, identity: own)
             followers[field] = Follower(
                 source: source,
-                // Kept going by its node: it comes back with the object after a restart.
                 task: actorSystem.runningActors.keep(
                     DynamicObject.self, id: Self.actorID(for: own, in: home), dependency: config, for: config
                 ) { [weak self] in
-                    while !Task.isCancelled {
-                        guard let self, !self.actorSystem.isTerminated else { return }
-                        guard
-                            await self.whenLocal({ await $0.follow(field, holding: source, handlers: handlers) })
-                                == true
-                        else { return }
-                        try? await Task.sleep(for: .seconds(1))
-                    }
+                    await self?.whenLocal { await $0.follow(field, holding: source, handlers: handlers) }
                 })
+        }
+    }
+
+    /// Follows the object `field` holds until that ends. One it couldn't subscribe to, as it may not
+    /// read it yet, it follows again when something changes, or it's told it's allowed. One that
+    /// ends after it subscribed, as when the object's code changed, the object went, or nothing
+    /// came for long, it subscribes to again.
+    private func follow(_ field: String, holding source: ObjectReference, handlers: Set<String>) async {
+        // Following is its own doing, as its tasks are.
+        let subscribed = (try? await asItsOwn { try await following(field, holding: source, handlers: handlers) }) ?? false
+        guard !Task.isCancelled, followers[field]?.source == source else { return }
+        followers[field] = nil
+        if subscribed { refollow() }
+    }
+
+    /// Subscribes to the events of the object `field` holds that its code has a method for, named
+    /// like each, and delivers each until one of them ends: whether it subscribed.
+    private func following(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async throws
+        -> Bool
+    {
+        _ = try state.live
+        let source = try await Self.discoverable(reference, me: try await me(), in: home, using: actorSystem)
+        let events = try await source.describe().events.keys.filter { handlers.contains(Self.handler(for: $0)) }
+        guard !events.isEmpty else { return false }
+        var subscriptions: [(event: String, announcements: Announcements<JSONValue>)] = []
+        for event in events { subscriptions.append((event, try await source.subscribe(toEventNamed: event))) }
+        await withTaskGroup(of: Void.self) { group in
+            for (event, announcements) in subscriptions {
+                group.addTask {
+                    do {
+                        for try await values in announcements { await self.deliver(event, values: values, from: field) }
+                    } catch {
+                        self.actorSystem.log.debug(
+                            "A dynamic object's subscription ended",
+                            metadata: ["event": "\(event)", "error": "\(error)"])
+                    }
+                }
+            }
+            // One ending ends them all, to subscribe again together.
+            await group.next()
+            group.cancelAll()
+        }
+        for subscription in subscriptions { await subscription.announcements.cancel() }
+        return true
+    }
+
+    /// An event of an object it follows, handled by its method named like it, given the event's
+    /// value, as any message is: journaled, with what failed if it did.
+    private func deliver(_ event: String, values: JSONValue, from field: String) async {
+        let handler = Self.handler(for: event)
+        let arguments: JSONValue = ["_0": values]
+        let origin = Origin.event(Delivery(message: handler, arguments: arguments, at: Date()), from: field)
+        // An event it follows is its own work, as a task is; journaled as it failed, if it did.
+        _ = try? await asItsOwn { try await handling(handler, arguments: arguments, origin: origin) }
+    }
+
+    /// What it asked its space for is allowed: it follows what it couldn't before.
+    distributed func allowed() {
+        refollow()
+    }
+
+    /// Tells the made object `asker` is, when it's one, that what it asked its space for is
+    /// allowed: as its own work, as anything that comes back to it is.
+    public static func allowed(_ asker: Party, on system: ClusterSystem) async {
+        guard let (space, identity) = made(asker.actorID) else { return }
+        do {
+            let object = try await identified(by: identity, in: space, on: system)
+            // Its own work, with nothing of whoever allowed it.
+            try await CallChain.$current.withValue(nil) {
+                try await Call.asWork(of: actorID(for: identity, in: space)) { try await object.allowed() }
+            }
+        } catch {
+            system.log.debug("An object wasn't told it's allowed", metadata: ["object": "\(identity)", "error": "\(error)"])
         }
     }
 
@@ -880,68 +954,6 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             try Party(Self.actorID(for: own, in: home)), home, actorSystem)
         let chain = CallChain.start(scope, in: try state.live.madeIn)
         return try await Call.onOwnBehalf { try await CallChain.$current.withValue(chain, operation: work) }
-    }
-
-    /// Delivers the events of the object `field` holds that the code has a method for, named like
-    /// each, until they end: whether it should follow again, which a source that's gone, or not
-    /// there yet, should be.
-    private func follow(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
-        // Following is its own doing, as its tasks are.
-        (try? await asItsOwn { await following(field, holding: reference, handlers: handlers) }) ?? false
-    }
-
-    private func following(_ field: String, holding reference: ObjectReference, handlers: Set<String>) async -> Bool {
-        do {
-            _ = try state.live
-            let source = try await Self.discoverable(reference, me: try await me(), in: home, using: actorSystem)
-            let events = try await source.describe().events.keys.filter { handlers.contains(Self.handler(for: $0)) }
-            guard !events.isEmpty else { return false }
-            let pulls = events.map { event in Task { await pull(event, from: source, into: field) } }
-            await withTaskCancellationHandler {
-                for pull in pulls { await pull.value }
-            } onCancel: {
-                for pull in pulls { pull.cancel() }
-            }
-        } catch {
-            actorSystem.log.warning(
-                "A dynamic object can't follow an object",
-                metadata: ["object": "\(own)", "field": "\(field)", "error": "\(error)"])
-        }
-        return true
-    }
-
-    /// Subscribes to `event` of `source`, and delivers each one until it ends.
-    private func pull(_ event: String, from source: DiscoverableObject, into field: String) async {
-        let subscriber = UUID()
-        do {
-            try await source._subscribe(subscriber, to: event)
-            while !Task.isCancelled {
-                switch try await source._nextEvent(for: subscriber) {
-                case .event(let values): await deliver(event, values: values, from: field)
-                case .idle: continue
-                case .ended: return
-                }
-            }
-            try await source._unsubscribe(subscriber)
-        } catch {
-            actorSystem.log.warning(
-                "A dynamic object's subscription ended",
-                metadata: ["object": "\(own)", "event": "\(event)", "error": "\(error)"])
-        }
-    }
-
-    /// An event of an object it follows, handled by its method named like it, given the event's
-    /// value, as any message is: journaled, with what failed if it did.
-    private func deliver(_ event: String, values: JSONValue, from field: String) async {
-        let handler = Self.handler(for: event)
-        let arguments: JSONValue = ["_0": values]
-        let origin = Origin.event(Delivery(message: handler, arguments: arguments, at: Date()), from: field)
-        do {
-            // An event it follows is its own work, as a task is.
-            _ = try await asItsOwn { try await handling(handler, arguments: arguments, origin: origin) }
-        } catch {
-            // Journaled as it failed; the next event is delivered all the same.
-        }
     }
 
     /// The function that handles `event`: on and its name, `buttonPressed`'s and `ButtonPressed`'s

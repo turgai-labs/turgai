@@ -516,7 +516,8 @@ struct ChatFeature {
         case .notice(_, _, let error):
             state.error = error
         case .conversationJoined, .conversationSaid, .conversationTitled, .conversationLeft, .conversationDeleted,
-            .spaceJoined, .spaceListed, .spaceLeft, .memoryChanged, .objectsChanged, .tasks, .taskKept, .taskEnded,
+            .spaceJoined, .spaceListed, .spaceLeft, .memoryChanged, .objectsChanged, .pageChanged, .tasks, .taskKept,
+            .taskEnded,
             .reply:
             // Not the conversation's.
             break
@@ -663,7 +664,8 @@ extension ChatEvent {
             id
         case .notice(let id, _, _):
             id
-        case .reply, .spaceJoined, .spaceListed, .spaceLeft, .memoryChanged, .objectsChanged, .tasks, .taskKept,
+        case .reply, .spaceJoined, .spaceListed, .spaceLeft, .memoryChanged, .objectsChanged, .pageChanged, .tasks,
+            .taskKept,
             .taskEnded:
             nil
         case .conversationJoined(let conversation), .conversationSaid(let conversation),

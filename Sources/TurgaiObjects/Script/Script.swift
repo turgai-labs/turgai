@@ -265,6 +265,12 @@ public struct CheckedScript: Sendable {
         }
         return ObjectDescription(
             type: type, description: description, properties: properties, actions: actions, events: events,
-            protocols: protocols)
+            protocols: protocols, conforms: conformances)
+    }
+
+    /// The protocols its code says it conforms to, as code writes them.
+    public var conformances: [String] {
+        if case .actor(_, _, let conformances, _)? = declarations?.types[script.type] { return conformances }
+        return []
     }
 }

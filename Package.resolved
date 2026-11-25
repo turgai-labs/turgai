@@ -1,13 +1,13 @@
 {
-  "originHash" : "ae573d681766b1ca1df54a13dd4b607e265ecee93e116c046c5d6e284e6b1616",
+  "originHash" : "c564894cab0c3d2bda5bbe4372c122ade28b84b3acc3203d1254894015459265",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/akbashev/AnyLanguageModel.git",
       "state" : {
-        "branch" : "response-says-why-it-ended",
-        "revision" : "b3924be19b2c68c88de8ade7fc8a768fcedb6893"
+        "branch" : "turgai-integration",
+        "revision" : "04e750e2b4493037b684c3890190febb67adbf2b"
       }
     },
     {
@@ -88,7 +88,7 @@
       "location" : "https://github.com/akbashev/discoverable-distributed-actors.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "ea5eb6d341874bb67620f817609de3e91fb9a046"
+        "revision" : "fbca9eb335d7049eb613430eeb90a51c0308b5b5"
       }
     },
     {
@@ -97,7 +97,7 @@
       "location" : "https://github.com/turgai-labs/doppel.git",
       "state" : {
         "branch" : "main",
-        "revision" : "3c4ee661e938846c9d4ed5813bee6d517c59015e"
+        "revision" : "b989f18f4a36e0aefe8ef5894023ee7034619e84"
       }
     },
     {
@@ -133,7 +133,7 @@
       "location" : "https://github.com/akbashev/hail.git",
       "state" : {
         "branch" : "turgai-integration",
-        "revision" : "96b3335e61e7373f754ffedc5f02ad677c491ec7"
+        "revision" : "7ca3990f0a63686056c6800b949a76aa238f3425"
       }
     },
     {
@@ -196,7 +196,7 @@
       "location" : "https://github.com/turgai-labs/mosaic.git",
       "state" : {
         "branch" : "main",
-        "revision" : "b9ba0f61c4b3afdbe89f4ab422945b9b3ecd7556"
+        "revision" : "eacf8ec33f78a62333a880906e0d57708dcdb0d3"
       }
     },
     {

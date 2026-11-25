@@ -60,11 +60,12 @@ struct OfferedAfterMakingTests {
             let text = page.output.textRepresentation
             #expect(text.contains("actor Coffee {}"))
             #expect(text.contains("- `Tea`"))
-            #expect(page.links.map(\.name) == ["open_declaration", "save_code"])
+            #expect(page.links.map(\.name) == ["explain_declaration", "save_code"])
 
-            let open = try #require(page.links.first { $0.name == "open_declaration" } as? OpenDeclarationTool)
-            let tea = try await open.runOutput(
-                input: GeneratedContent(properties: ["name": "Tea"]), authority: TurgaiAuthority())
+            let explain = try #require(
+                page.links.first { $0.name == "explain_declaration" } as? ExplainDeclarationTool)
+            let tea = try await explain.runOutput(
+                input: GeneratedContent(properties: ["declaration": "Tea"]), authority: TurgaiAuthority())
             #expect(tea.result.textRepresentation.contains("Tea(id:"))
 
             let save = try #require(page.links.first { $0.name == "save_code" } as? SaveCodeTool)

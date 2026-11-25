@@ -113,8 +113,12 @@ public final class ScriptInstance {
         guard starting.isEmpty else {
             return (macros.isEmpty ? starting : macros).sorted { ($0.line ?? 0) < ($1.line ?? 0) }
         }
+        // Each as Swift says it, with what its notes say under it: what a protocol requires that's
+        // missing.
         let swift = SwiftCheck.problems(in: ObjectModule.objectFile, of: module).map { diagnostic in
-            CodeProblem(line: diagnostic.line, span: diagnostic.code, diagnostic.message)
+            CodeProblem(
+                line: diagnostic.line, span: diagnostic.code,
+                ([diagnostic.message] + diagnostic.notes).joined(separator: "; "))
         }
         // And the objects it names, which exist, and what it sends and keeps, which the runtime
         // keeps as data.
@@ -170,6 +174,16 @@ public final class ScriptInstance {
             var fields: [String: JSONValue] = [:]
             for (name, value) in try object.fields() { fields[name] = try host.json(value) }
             return fields
+        } catch {
+            throw Self.problem(error)
+        }
+    }
+
+    /// Its property `name`, stored or computed, as Swift reads it: a computed one's getter runs on
+    /// the instance.
+    public func read(_ name: String) async throws(CodeProblem) -> JSONValue {
+        do {
+            return try host.json(try await object.read(name))
         } catch {
             throw Self.problem(error)
         }

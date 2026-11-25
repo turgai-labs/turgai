@@ -11,6 +11,8 @@ public struct ObjectContract: Sendable, Equatable {
     public let methods: [Declarations.Method]
     /// The protocols it declares, by name, each with what a type conforming to it takes.
     public let protocols: [ObjectProtocolName: [Declarations.Method]]
+    /// The protocols it says it conforms to.
+    public let conformances: Set<ObjectProtocolName>
 
     /// The contract `description` says, as Swift resolves it.
     public init(_ description: ObjectDescription) throws(CodeProblem) {
@@ -31,12 +33,18 @@ public struct ObjectContract: Sendable, Equatable {
             }
         }
         self.protocols = protocols
+        conformances = Set(description.conforms.map(ObjectProtocolName.init(rawValue:)))
     }
 
-    /// Whether it takes every one of `requirements`, as Swift calls each: its name, its
-    /// parameters' labels and types, and what it gives back. What a type declares it conforms to
-    /// isn't asked: an object conforms by what it takes, whatever its code was written with.
-    public func conforms(to requirements: [Declarations.Method]) -> Bool {
+    /// Whether it conforms to `name`, whose requirements are `requirements`: it says it does, and
+    /// takes every one as Swift calls it, its name, its parameters' labels and types, and what it
+    /// gives back, as they are now, since a protocol can change after its code was checked.
+    public func conforms(to name: ObjectProtocolName, requiring requirements: [Declarations.Method]) -> Bool {
+        conformances.contains(name) && takes(requirements)
+    }
+
+    /// Whether it takes every one of `requirements`.
+    private func takes(_ requirements: [Declarations.Method]) -> Bool {
         requirements.allSatisfy { requirement in
             methods.contains { method in
                 method.name == requirement.name && method.result == requirement.result

@@ -34,9 +34,6 @@ public actor ObjectSession {
     let agents: [ObjectEntry]
     /// The built-in objects installed in its space, offered there.
     let builtIns: [ObjectEntry]
-    /// The built-in types installed in its space whose objects code makes by name, `Type(id:)`, as
-    /// each type describes itself: known before any object of it is.
-    let madeByName: [ObjectDescription]
 
     /// The objects met, by id.
     private var objects: [ObjectID: DiscoverableObject] = [:]
@@ -69,8 +66,7 @@ public actor ObjectSession {
         actorSystem: ClusterSystem,
         asking: Role? = nil,
         agents: [ObjectEntry]? = nil,
-        builtIns: [ObjectEntry]? = nil,
-        madeByName: [ObjectDescription] = []
+        builtIns: [ObjectEntry]? = nil
     ) async throws {
         let objects = try await DynamicObjects.of(space, on: actorSystem)
         let offered: [ObjectEntry]
@@ -87,9 +83,7 @@ public actor ObjectSession {
         } else {
             bots = []
         }
-        self.init(
-            in: space, objects: objects, actorSystem: actorSystem, agents: bots, builtIns: offered,
-            madeByName: madeByName)
+        self.init(in: space, objects: objects, actorSystem: actorSystem, agents: bots, builtIns: offered)
     }
 
     /// That the space's objects changed, from now on, as they're made, removed or shared: for
@@ -103,15 +97,13 @@ public actor ObjectSession {
         objects: DynamicObjects,
         actorSystem: ClusterSystem,
         agents: [ObjectEntry] = [],
-        builtIns: [ObjectEntry] = [],
-        madeByName: [ObjectDescription] = []
+        builtIns: [ObjectEntry] = []
     ) {
         self.space = space
         self.spaceObjects = objects
         self.actorSystem = actorSystem
         self.agents = agents
         self.builtIns = builtIns
-        self.madeByName = madeByName
     }
 
     /// The directory's roots, with handles, titles, and descriptions.
@@ -257,8 +249,8 @@ public actor ObjectSession {
     }
 
     /// The objects here conforming to `name`, by id, in order: what an argument of `any` of it
-    /// chooses from. Its requirements are those the type declaring it declares; who conforms is
-    /// what each takes, made here or built in.
+    /// chooses from. Its requirements are those the type declaring it declares; an object conforms
+    /// when its code says so and it takes them.
     func conforming(to name: ObjectProtocolName) async -> [ObjectID] {
         let yours = (try? await runtimeObjects()) ?? [:]
         var handles = yours.keys.sorted()
@@ -274,7 +266,7 @@ public actor ObjectSession {
             }
         }
         guard let requirements = contracts.lazy.compactMap({ $0.contract.protocols[name] }).first else { return [] }
-        return contracts.filter { $0.contract.conforms(to: requirements) }.map(\.handle).sorted()
+        return contracts.filter { $0.contract.conforms(to: name, requiring: requirements) }.map(\.handle).sorted()
     }
 
     /// For each protocol an action's arguments take an object conforming to, as code writes it,
@@ -463,7 +455,8 @@ public actor ObjectSession {
         let changed = try await object.source
         let said = Self.changes(from: before, to: try? ObjectShape(changed), now: try await currentValues(handle))
         return landing(
-            "Saved \(handle): \(said).\(Self.codeChanges(from: current.code, to: changed.code))",
+            "Saved \(handle): \(said).\nEach of its methods is a tool now, \(handle)_<method>: calling one runs it, to test it."
+                + Self.codeChanges(from: current.code, to: changed.code),
             on: .object(handle: handle))
     }
 
@@ -473,7 +466,8 @@ public actor ObjectSession {
     func codePage(of handle: ObjectID) async throws -> ToolPage {
         let object = try await dynamicObject(handle)
         let current = try await object.source
-        let declared = await others(except: current.type).declared
+        let others = await others(except: current.type)
+        let declared = others.declared
         var parts = [
             "`actor \(current.type)`" + (Self.given(try? await described(handle).description).map { ": \($0)" } ?? "")
         ]
@@ -481,15 +475,22 @@ public actor ObjectSession {
         parts.append("How the runtime runs it:\n" + ObjectWriter.runtime.map { "- \($0)" }.joined(separator: "\n"))
         parts.append(RuntimeMacros.declared)
         parts.append("Its code now:\n```swift\n\(current.code)\n```")
-        if !declared.isEmpty {
+        if !others.protocols.isEmpty {
+            parts.append("Protocols its code can conform to:\n" + others.protocols.joined(separator: "\n"))
+        }
+        // Where learning starts: what nothing else here names. The rest is reached by opening
+        // what names it.
+        let protocols = Set(others.uses.protocolsNamed.map(\.name))
+        let starting = Self.starting(declared, besides: others.protocols).filter { !protocols.contains($0.name) }
+        if !starting.isEmpty {
             parts.append(
                 "What its code can use:\n"
-                    + declared.map { "- `\($0.name)`" + ($0.summary.isEmpty ? "" : ": \($0.summary)") }
+                    + starting.map { "- `\($0.name)`" + ($0.summary.isEmpty ? "" : ": \($0.summary)") }
                     .joined(separator: "\n"))
         }
         var links: [any HailCore.Tool] = []
         if !declared.isEmpty {
-            links.append(try OpenDeclarationTool(session: self, handle: handle, names: declared.map(\.name)))
+            links.append(try ExplainDeclarationTool(session: self, handle: handle, names: declared.map(\.name)))
         }
         links.append(SaveCodeTool(session: self, handle: handle))
         return .text(parts.joined(separator: "\n\n"), links: links)
@@ -504,6 +505,27 @@ public actor ObjectSession {
         let next = declared.filter { $0.name != name && Self.names(found.words, $0.name) }
         return found.words
             + (next.isEmpty ? "" : "\n\nIt names: " + next.map { "`\($0.name)`" }.joined(separator: ", "))
+    }
+
+    /// What of `declared` nothing else names, in `declared` or in `besides`: where following what each
+    /// names starts. Whatever no start leads to, as things naming only each other do, starts too.
+    static func starting(_ declared: [Declared], besides: [String]) -> [Declared] {
+        let named: (Declared) -> Bool = { thing in
+            besides.contains { names($0, thing.name) }
+                || declared.contains { $0.name != thing.name && names($0.words, thing.name) }
+        }
+        var starts = declared.filter { !named($0) }
+        // What the starts, and the protocols, lead to.
+        var reached = Set(starts.map(\.name))
+        var next = besides + starts.map(\.words)
+        while let words = next.popLast() {
+            for thing in declared where !reached.contains(thing.name) && names(words, thing.name) {
+                reached.insert(thing.name)
+                next.append(thing.words)
+            }
+        }
+        starts += declared.filter { !reached.contains($0.name) }
+        return declared.filter { thing in starts.contains { $0.name == thing.name } }
     }
 
     /// Whether `text` names `name` as a word of its own, not inside a longer one.
@@ -557,8 +579,11 @@ extension ObjectSession {
         /// Each tool function code can call, in a few lines: as code calls it, and what it does.
         var tools: [String] = []
         /// Everything code can use, each by the name it's written by: objects, tool functions and
-        /// value types, as a code page lists them and `open_declaration` shows them.
+        /// value types, as a code page lists them and `explain_declaration` explains them.
         var declared: [Declared] = []
+        /// The protocols any object may conform to, each what it is and what it requires, in full:
+        /// a code page's section of their own.
+        var protocols: [String] = []
     }
 
     /// One thing code can use: the name code writes it by, what it is in a line, and in full.
@@ -606,14 +631,6 @@ extension ObjectSession {
             objects.append(Uses.Object(description: description, publishes: true))
             lasting.insert(unmade)
             summaries[unmade] = Self.given(description.description)
-        }
-        // Built-in types code makes by name, as each says it is: a page, before there's one.
-        for description in madeByName
-        where description.type != type && !objects.contains(where: { $0.type == description.type }) {
-            objects.append(Uses.Object(description: description, publishes: true))
-            lasting.insert(description.type)
-            summaries[description.type] = Self.given(description.description)
-            descriptions[description.type] = description
         }
         // The object being written declares its own types: they aren't declared for it again.
         // The tools this node has, which code calls as `Tools.<tool>.<function>`.
@@ -675,8 +692,11 @@ extension ObjectSession {
                 Declared(
                     name: actor.name, summary: summaries[actor.name] ?? "", words: declaration.joined(separator: "\n")))
         }
+        // The protocols any object may conform to, in full, in a section of their own; explained
+        // by name, as anything its code can use is.
+        others.protocols = others.uses.protocolsNamed.map(\.words)
         // The values they send and take, each by its name: its first line says what it is.
-        for (name, words) in others.uses.valuesNamed {
+        for (name, words) in others.uses.protocolsNamed + others.uses.valuesNamed {
             let first = words.prefix { $0 != "\n" }
             let summary = first.firstRange(of: ": ").map { String(first[$0.upperBound...]) } ?? ""
             others.declared.append(Declared(name: name, summary: summary, words: words))
@@ -916,24 +936,8 @@ extension ObjectSession {
             session: self, handle: handle, type: (try? await described(handle).type) ?? handle.description)
     }
 
-    /// The pages made in its space that this turn's person may take out, by id: all of them,
-    /// when they may configure the space, or none.
-    func removablePages() async throws -> [ObjectID: PageName] {
-        guard CallChain.current?.scope.permissions.configureSpace == true else { return [:] }
-        var pages: [ObjectID: PageName] = [:]
-        for name in try await spaceObjects.pages {
-            pages[.virtual(Page.actorID(for: name, in: space))] = name
-        }
-        return pages
-    }
-
-    /// Removes an object made with create, for good, or takes out a page, giving up its name.
+    /// Removes an object made with create, for good.
     func remove(_ handle: ObjectID) async throws -> DiscoveryJSON {
-        if let page = try await removablePages()[handle] {
-            try await making { try await $0.removePage(page) }
-            objects[handle] = nil
-            return "removed"
-        }
         let identity = try await dynamicObject(handle).identity
         try await making { try await $0.remove(identity) }
         made[handle] = nil
@@ -1628,8 +1632,6 @@ public struct ObjectTools: Sendable {
             ListObjectsTool(session: session), SearchObjectsTool(session: session),
             try CreateObjectTool(session: session),
         ]
-        // Pages are taken out as objects are removed, by whoever may configure the space.
-        let removable = objects + (try await session.removablePages()).keys.sorted()
         var tools = always
         if !objects.isEmpty {
             tools += [
@@ -1638,7 +1640,7 @@ public struct ObjectTools: Sendable {
                 try ShareObjectTool(session: session, objects: objects),
             ]
         }
-        if !removable.isEmpty { tools.append(try RemoveObjectTool(session: session, objects: removable)) }
+        if !objects.isEmpty { tools.append(try RemoveObjectTool(session: session, objects: objects)) }
         return tools
     }
 
@@ -2238,15 +2240,16 @@ public struct ObjectToolsFindInput: Sendable {
     public let query: String
 }
 
-/// Shows one thing an object's code can use in full, as its code page lists them: an object, a
-/// tool function or a value type.
-public struct OpenDeclarationTool: HailCore.Tool {
+/// Explains one thing an object's code can use in full: an object, a tool function or a value type,
+/// with what it names next.
+public struct ExplainDeclarationTool: HailCore.Tool {
     public typealias Input = GeneratedContent
-    static let property = "name"
+    static let property = "declaration"
     let session: ObjectSession
     let handle: ObjectID
-    public let name = "open_declaration"
-    public let description = "Show one thing its code can use in full, by its name on the code page."
+    public let name = "explain_declaration"
+    public let description =
+        "How code writes it, and what each of its parts means: its fields, cases or methods. Then the declarations it names."
     private let parameters: GenerationSchema
 
     init(session: ObjectSession, handle: ObjectID, names: [String]) throws {
@@ -2254,10 +2257,10 @@ public struct OpenDeclarationTool: HailCore.Tool {
         self.handle = handle
         self.parameters = try GenerationSchema(
             root: DynamicGenerationSchema(
-                name: "OpenDeclaration",
+                name: "ExplainDeclaration",
                 properties: [
                     .init(
-                        name: Self.property, description: "Its name, as the code page lists it.",
+                        name: Self.property, description: "Its name.",
                         schema: .init(type: String.self, guides: [.anyOf(names)]))
                 ]),
             dependencies: [])
@@ -2292,7 +2295,7 @@ public struct SaveCodeTool: HailCore.Tool {
     let handle: ObjectID
     public let name = "save_code"
     public let description =
-        "Check this Swift as the object's whole code and run it from now on. What's wrong comes back at its line."
+        "Save the object's whole Swift code. It's checked when it compiles and when it runs."
 
     public func effect(for input: Input) throws -> SaveObjectCodeEffect {
         SaveObjectCodeEffect(session: session, handle: handle, code: input.code)

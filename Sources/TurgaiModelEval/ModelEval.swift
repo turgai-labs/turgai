@@ -52,7 +52,10 @@ struct ModelEval: AsyncParsableCommand {
             task.isEmpty
             ? EvalTask.all
             : EvalTask.all.filter { (request: EvalTask) -> Bool in
-                task.contains { (word: String) -> Bool in request.request.localizedCaseInsensitiveContains(word) }
+                // Its request, or one that follows it.
+                task.contains { (word: String) -> Bool in
+                    ([request.request] + request.then).contains { $0.localizedCaseInsensitiveContains(word) }
+                }
             }
         let service = ModelEvalService(
             model: try AgentModel(model), tasks: tasks, runs: runs, log: URL(fileURLWithPath: log),

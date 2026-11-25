@@ -520,7 +520,10 @@ struct ShownMessageTests {
             $0.chat.events = { .finished }
             $0.chat.ask = { _ in throw CancellationError() }
             $0.objects.list = { space in space == family.id ? [mac] : [] }
+            $0.pages.list = { _ in [] }
         }
+        // The pages window follows the same space, as its own tests show.
+        store.exhaustivity = .off(showSkippedAssertions: false)
 
         await store.send(.sidebar(.loaded([family], []))) { $0.sidebar.spaces = [family] }
         await store.receive(\.objects.spaceChanged) { $0.objects.space = family.id }

@@ -155,6 +155,8 @@ struct AppFeature {
         var sidebar = SidebarFeature.State()
         var chat = ChatFeature.State()
         var objects = ObjectsFeature.State()
+        /// The space's pages, each opened in a window of its own.
+        var pages = PagesFeature.State()
         /// Who's signed in, and what's remembered about them.
         var profile = ProfileFeature.State()
         /// The window's panel of spaces and their conversations.
@@ -189,6 +191,7 @@ struct AppFeature {
         case sidebar(SidebarFeature.Action)
         case chat(ChatFeature.Action)
         case objects(ObjectsFeature.Action)
+        case pages(PagesFeature.Action)
         case profile(ProfileFeature.Action)
         case sidebarToggled
     }
@@ -209,13 +212,18 @@ struct AppFeature {
         // The objects window lists the space the sidebar shows, from the first it shows: at
         // launch, on a switch, and when the shown one is archived.
         .onChange(of: \.sidebar.shownSpace?.id) { _, shown in
-            Reduce { _, _ in shown.map { .send(.objects(.spaceChanged($0))) } ?? .none }
+            Reduce { _, _ in
+                shown.map { .merge(.send(.objects(.spaceChanged($0))), .send(.pages(.spaceChanged($0)))) } ?? .none
+            }
         }
         Scope(\.chat, action: \.chat) {
             ChatFeature()
         }
         Scope(\.objects, action: \.objects) {
             ObjectsFeature()
+        }
+        Scope(\.pages, action: \.pages) {
+            PagesFeature()
         }
         Scope(\.profile, action: \.profile) {
             ProfileFeature()
@@ -243,7 +251,7 @@ struct AppFeature {
             guard case .signedIn = state.account else { return .none }
             return signOut(&state, notice: nil)
 
-        case .binding, .sidebar, .chat, .objects, .profile:
+        case .binding, .sidebar, .chat, .objects, .pages, .profile:
             return .none
 
         case .sidebarToggled:

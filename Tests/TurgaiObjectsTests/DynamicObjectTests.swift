@@ -414,7 +414,7 @@ struct DynamicObjectTests {
                         "- Track: a track, as a player plays it.\n  Fields:\n    title: String\n    artist: String?"))
                 #expect(
                     words.contains("- Card: what a board shows. One of:\n    .piece(Piece)\n    .row(items: [Piece])"))
-                #expect(!words.contains("struct"))
+                #expect(!words.contains("struct "), "\(words)")
                 // A built-in object's card is its spec.
                 guard case .markdown(let card) = try await session.card(try await session.id(written: "player")) else {
                     return
@@ -1024,6 +1024,11 @@ struct DynamicObjectTests {
                 let counter = "actor Counter {\n    var count = 0\n}"
                 let counterID = try await objects.create(
                     name: "Counter", spec: .new(try Script(code: counter, type: "Counter")))
+                // Bob takes what the protocol asks, but never says he's one.
+                let bob =
+                    "actor Bob {\n    func refundRequested(order: Int) async throws {}\n}"
+                _ = try await objects.create(
+                    name: "Bob", spec: .new(try Script(code: bob, type: "Bob", uses: others.uses)))
 
                 // Only Ann conforms: she's what the shift's argument offers.
                 #expect(

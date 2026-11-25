@@ -85,6 +85,7 @@ private struct WindowToolbar: ToolbarContent {
     let name: String?
 
     var body: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) { PagesButton() }
         ToolbarItem(placement: .primaryAction) { ObjectsButton() }
         ToolbarItem(placement: .primaryAction) { AccountButton(initial: initial, name: name) }
             // A stamp of its own, not on the toolbar's glass.
@@ -161,6 +162,20 @@ private struct ObjectsButton: View {
             Label("Objects", systemImage: "cube")
         }
         .help("Objects")
+    }
+}
+
+/// The space's pages, in a window of their own.
+private struct PagesButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button {
+            openWindow(id: WindowID.pages)
+        } label: {
+            Label("Pages", systemImage: "rectangle.grid.2x2")
+        }
+        .help("Pages")
     }
 }
 

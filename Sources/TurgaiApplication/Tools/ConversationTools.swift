@@ -53,13 +53,7 @@ public enum ConversationTools {
         // for: an agent in no space, or a turn on no one's behalf, reaches none.
         if let actorSystem, let space = working?.space, let person = CallChain.current?.scope.person {
             // Its space lists what's in it, its other bots among them: never itself.
-            let session = try await ObjectSession(
-                in: space,
-                actorSystem: actorSystem,
-                asking: context.agentID.role,
-                // What code makes by name in the space: a page, as it says it is.
-                madeByName: [Page.describe()]
-            )
+            let session = try await ObjectSession(in: space, actorSystem: actorSystem, asking: context.agentID.role)
             // What objects can be: found, listed, made, changed and removed, at the root; and the
             // objects themselves, each a tool to read it.
             tools += try await ObjectTools(session: session).offered()

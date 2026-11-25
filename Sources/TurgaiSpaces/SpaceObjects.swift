@@ -18,21 +18,21 @@ import VirtualActors
 /// A space's objects are its own: it lists them, for one of its people, and says what work that
 /// starts in it may do.
 extension Space {
-    /// Its objects, of every kind, as `person`, one of its people, may see them: those every space
-    /// has from the start, its scheduler and its timers, its pages, its bots, when they may use
-    /// them, and those made in it. The list is its own: built here, with what they may do now.
-    /// Refused for someone who isn't in it.
+    /// Its objects, as `person`, one of its people, may see them: those every space has from the
+    /// start, its scheduler and its timers, its pages, and those made in it. Not its bots, which
+    /// are listed apart. The list is its own: built here, with what they may do now. Refused for
+    /// someone who isn't in it.
     public distributed func objects(for person: TurgaiDomain.UserID) async throws -> [ObjectEntry] {
         let scope = try made().scope(of: person)
         let made = try await DynamicObjects.of(state.id, on: actorSystem)
-        let bots = try await botObjects(for: person, besides: nil)
         return try await CallChain.$current.withValue(.start(scope, in: nil)) {
-            try await BuiltIn.entries(in: state.id, made, on: actorSystem) + bots + (try await made.held())
+            try await BuiltIn.entries(in: state.id, made, on: actorSystem) + (try await made.held())
         }
     }
 
-    /// Its bots, as objects `person` may ask: none when they may not use its bots. Not `asking`,
-    /// the bot whose turn it is, which can't ask itself while it answers.
+    /// Its bots, as objects a turn for `person` may ask, each by what it's called: none when they
+    /// may not use its bots. Not `asking`, the bot whose turn it is, which can't ask itself while
+    /// it answers.
     public distributed func botObjects(for person: TurgaiDomain.UserID, besides asking: Role?) async throws
         -> [ObjectEntry]
     {
