@@ -25,13 +25,14 @@ public enum Page {
 }
 
 extension Page {
-    /// What `object` shows as a page now: its `layout`, and which layout that is, named by what it
-    /// shows, so a press on one no longer shown is told apart with nothing kept. Refused when it
-    /// doesn't conform to `Page`.
+    /// What `object` shows as a page now: its `layout`, as it was worked out after it last changed,
+    /// and which layout that is, named by what it shows, so a press on one no longer shown is told
+    /// apart with nothing kept. Refused when it doesn't conform to `Page`, or can't be shown.
     public static func shown(by object: DynamicObject) async throws -> LayoutShown {
-        guard try await object.describe().conforms.contains(name) else { throw NotAPage() }
-        let layout: Layout = try await object.read(property: "layout").decode()
-        return LayoutShown(layout: layout, version: version(of: layout))
+        switch try await object.page() {
+        case .shown(let shown, _): return shown
+        case .failed(let reason): throw PageNotShown(reason: reason)
+        }
     }
 
     /// Press the button at `path` of the layout `object` shows, as whoever has it open does: its
@@ -87,16 +88,31 @@ public enum Previewed {
     public static let declaration = """
         /// Conforming to it gives the object's page a preview, shown before the page is opened.
         protocol Previewed: Actor {
-            /// What the preview shows.
-            var preview: Layout { get }
+            /// What the preview shows, and at which size.
+            var preview: Preview { get }
         }
         """
 
     /// What `object` shows as its page's preview: none when it doesn't conform to `Previewed`.
-    public static func preview(of object: DynamicObject) async throws -> Layout? {
-        guard try await object.describe().conforms.contains(name) else { return nil }
-        return try await object.read(property: "preview").decode()
+    public static func preview(of object: DynamicObject) async throws -> Preview? {
+        guard case .shown(_, let preview) = try await object.page() else { return nil }
+        return preview
     }
+}
+
+/// What an object shows as a page, as it's worked out once after each change of its code or of what
+/// it holds: its layout, which layout that is, and its own preview when it gives one; or why it
+/// can't be shown.
+public enum PageRender: Codable, Sendable, Equatable {
+    case shown(LayoutShown, preview: Preview?)
+    case failed(String)
+}
+
+/// A page that can't be shown now, and why.
+public struct PageNotShown: Error, Sendable, Equatable, CustomStringConvertible {
+    public let reason: String
+
+    public var description: String { reason }
 }
 
 /// An object that isn't a page: it doesn't conform to `Page`.

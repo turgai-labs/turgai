@@ -4,6 +4,7 @@ import Testing
 import TurgaiModels
 
 @testable import MacApp
+@testable import TurgaiClient
 
 private let turgaiSpace = SpaceID(rawValue: "turgai")
 private let familySpace = SpaceID(rawValue: "family")
@@ -17,9 +18,24 @@ private let adminMay = SpacePermissions(
     people: .manage, bots: .configure, requests: .runAny, tasks: .manage, connections: true,
     deleteConversations: true, configureSpace: true)
 
+/// The connection answering the joins of their spaces and conversations with `spaces` and
+/// `conversations`, each push kept in `asked`, in order.
+private func joins(
+    _ spaces: [SpaceSummary], _ conversations: [Conversation], asked: LockIsolated<[LiveAsk]> = .init([])
+) -> @Sendable (LiveAsk) async throws -> LiveReply {
+    { ask in
+        asked.withValue { $0.append(ask) }
+        switch ask {
+        case .join(.spaces): return .joined(LiveEvent(payload: .spaces(spaces: spaces)))
+        case .join(.conversations): return .joined(LiveEvent(payload: .conversations(conversations: conversations)))
+        default: return .ok
+        }
+    }
+}
+
 @MainActor
 struct SidebarFeatureTests {
-    let session = Session(token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
+    let session = Session(server: .onThisMac, token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
     let turgai = SpaceSummary(
         id: turgaiSpace, name: "Turgai", permissions: memberMay, status: .active)
     let dinner = Conversation(
@@ -35,11 +51,11 @@ struct SidebarFeatureTests {
         let store = TestStore(initialState: SidebarFeature.State()) {
             SidebarFeature()
         } withDependencies: {
-            $0.server.spaces = { _ in [self.turgai] }
-            $0.server.conversations = { _ in [self.dinner, self.trip] }
+            $0.chat.ask = joins([self.turgai], [self.dinner, self.trip])
             $0.chat.events = { .finished }
+            $0.server.people = { _, _ in [SpacePerson(id: "account-ann", name: "ann", groups: [])] }
         }
-        await store.send(.appeared(session)) { $0.session = self.session }
+        await store.send(.signedIn(session)) { $0.session = self.session }
         await store.receive(\.loaded) {
             $0.spaces = [self.turgai]
             $0.conversations = [
@@ -50,6 +66,7 @@ struct SidebarFeatureTests {
             $0.shownSpaceID = turgaiSpace
         }
         await store.receive(\.delegate, .open(dinner.id))
+        await store.receive(\.peopleCounted) { $0.peopleCounts[turgaiSpace] = 1 }
         await store.finish()
     }
 
@@ -79,15 +96,14 @@ struct SidebarFeatureTests {
         let store = TestStore(initialState: SidebarFeature.State()) {
             SidebarFeature()
         } withDependencies: {
-            $0.server.spaces = { _ in [self.turgai] }
-            $0.server.conversations = { _ in [] }
+            $0.chat.ask = joins([self.turgai], [])
             $0.chat.events = { .finished }
             $0.server.startConversation = { _, space in
                 started.withValue { $0.append(space) }
                 return self.dinner
             }
         }
-        await store.send(.appeared(session)) { $0.session = self.session }
+        await store.send(.signedIn(session)) { $0.session = self.session }
         await store.receive(\.loaded) { $0.spaces = [self.turgai] }
         await store.receive(\.started) {
             $0.conversations = [.init(id: self.dinner.id, title: "plan dinner", spaceID: turgaiSpace, people: 1)]
@@ -100,18 +116,20 @@ struct SidebarFeatureTests {
     }
 
     /// While the window's shown, what the connection says about their conversations is heard: one
-    /// joined comes first, marked; one deleted goes.
+    /// joined comes first, marked; one deleted goes; the lists a new connection tells replace them,
+    /// the open one, gone, as if left. Closed, it leaves their spaces and conversations.
     @Test
     func whatTheConnectionSaysIsHeard() async {
-        let (events, heard) = AsyncStream.makeStream(of: ChatEvent.self)
+        let asked = LockIsolated<[LiveAsk]>([])
+        let (events, heard) = AsyncStream.makeStream(of: LiveEvent.self)
         let store = TestStore(initialState: SidebarFeature.State()) {
             SidebarFeature()
         } withDependencies: {
-            $0.server.spaces = { _ in [self.turgai] }
-            $0.server.conversations = { _ in [self.dinner] }
+            $0.chat.ask = joins([self.turgai], [self.dinner], asked: asked)
             $0.chat.events = { events }
+            $0.server.people = { _, _ in [SpacePerson(id: "account-ann", name: "ann", groups: [])] }
         }
-        let shown = await store.send(.appeared(session)) { $0.session = self.session }
+        let shown = await store.send(.signedIn(session)) { $0.session = self.session }
         await store.receive(\.loaded) {
             $0.spaces = [self.turgai]
             $0.conversations = [.init(id: self.dinner.id, title: "plan dinner", spaceID: turgaiSpace, people: 1)]
@@ -119,15 +137,31 @@ struct SidebarFeatureTests {
             $0.shownSpaceID = turgaiSpace
         }
         await store.receive(\.delegate, .open(dinner.id))
+        await store.receive(\.peopleCounted) { $0.peopleCounts[turgaiSpace] = 1 }
 
-        heard.yield(ChatEvent(payload: .conversationJoined(conversation: trip)))
+        heard.yield(LiveEvent(payload: .conversationJoined(conversation: trip)))
         await store.receive(\.conversationJoined) {
             $0.conversations.insert(
                 .init(id: self.trip.id, title: "trip", spaceID: turgaiSpace, people: 1, unread: true), at: 0)
         }
-        heard.yield(ChatEvent(payload: .conversationDeleted(conversationID: trip.id)))
+        heard.yield(LiveEvent(payload: .conversationDeleted(conversationID: trip.id)))
         await store.receive(\.conversationLeft) { $0.conversations.remove(id: self.trip.id) }
+
+        heard.yield(LiveEvent(payload: .conversations(conversations: [trip])))
+        await store.receive(\.conversationsRead) {
+            $0.conversations = [.init(id: self.trip.id, title: "trip", spaceID: turgaiSpace, people: 1)]
+            $0.selected = self.trip.id
+        }
+        await store.receive(\.delegate, .open(trip.id))
+        let family = SpaceSummary(id: familySpace, name: "Family", permissions: memberMay, status: .active)
+        heard.yield(LiveEvent(payload: .spaces(spaces: [family])))
+        await store.receive(\.spacesRead) {
+            $0.spaces = [family]
+            $0.shownSpaceID = nil
+        }
         await shown.cancel()
+        await store.finish()
+        #expect(asked.value == [.join(.spaces), .join(.conversations), .leave(.spaces), .leave(.conversations)])
     }
 
     /// Something said in another conversation brings it to the top, marked, until it's opened.
@@ -543,7 +577,7 @@ struct SidebarFeatureTests {
     /// again. With nothing left in it, it shows no conversation.
     @Test
     func anAdminArchivesASpace() async {
-        let asks = LockIsolated<[ChatAsk]>([])
+        let asks = LockIsolated<[LiveAsk]>([])
         let family = SpaceSummary(id: familySpace, name: "Family", permissions: adminMay, status: .active)
         let archived = SpaceSummary(
             id: familySpace, name: "Family", permissions: adminMay, status: .archived)
@@ -697,7 +731,7 @@ struct ChatOpeningTests {
     /// another conversation then isn't shown.
     @Test
     func openingShowsOnlyThatConversation() async {
-        let sent = LockIsolated<[ChatCommand]>([])
+        let sent = LockIsolated<[LiveCommand]>([])
         let dinner = ConversationID(rawValue: "dinner")
         let trip = ConversationID(rawValue: "trip")
         var state = ChatFeature.State(connection: .connected(botID: BotID(rawValue: "conversation")))
@@ -720,7 +754,7 @@ struct ChatOpeningTests {
 
         let late = Message(id: MessageID(), role: .user, text: "late", at: Date(timeIntervalSince1970: 2))
         await store.send(
-            .received(ChatEvent(payload: .messageAccepted(conversationID: dinner, turnID: nil, message: late))))
+            .received(LiveEvent(payload: .messageAccepted(conversationID: dinner, turnID: nil, message: late))))
     }
 }
 
@@ -756,7 +790,7 @@ struct MentionTests {
     func mentioningSomeoneFromTheSpaceBringsThemIn() async {
         let bob = ParticipantSummary(kind: .person, id: "account-bob", name: "bob")
         let cat = ParticipantSummary(kind: .person, id: "account-cat", name: "cat")
-        let session = Session(token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
+        let session = Session(server: .onThisMac, token: "token", expiresAt: Date(timeIntervalSince1970: 2_000_000))
         var state = ChatFeature.State(
             connection: .connected(botID: BotID(rawValue: "conversation")), session: session,
             conversationID: ConversationID(rawValue: "dinner"),
@@ -806,7 +840,7 @@ struct MentionTests {
             $0.pending = [request]
         }
         let taken = Message(id: request.id, role: .user, text: "@cat", at: Date(timeIntervalSince1970: 1))
-        let accepted = ChatEvent(
+        let accepted = LiveEvent(
             payload: .messageAccepted(conversationID: ConversationID(rawValue: "dinner"), turnID: nil, message: taken))
         await store.send(.received(accepted)) {
             $0.pending = []
@@ -819,7 +853,7 @@ struct MentionTests {
     /// A suggestion picked is who the message is said to, while its name is still in the message.
     @Test
     func aMentionSaysTheMessageToThem() async {
-        let sent = LockIsolated<[ChatCommand]>([])
+        let sent = LockIsolated<[LiveCommand]>([])
         let bob = ParticipantSummary(kind: .person, id: "account-bob", name: "bob")
         let cat = ParticipantSummary(kind: .person, id: "account-cat", name: "cat")
         let store = TestStore(
@@ -860,7 +894,7 @@ struct MentionTests {
     /// suggested, and sends otherwise.
     @Test
     func returnPicksTheMarkedSuggestionOrSends() async {
-        let sent = LockIsolated<[ChatCommand]>([])
+        let sent = LockIsolated<[LiveCommand]>([])
         let bob = ParticipantSummary(kind: .person, id: "account-bob", name: "bob")
         let bea = ParticipantSummary(kind: .person, id: "account-bea", name: "bea")
         let store = TestStore(

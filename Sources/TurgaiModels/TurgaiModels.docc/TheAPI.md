@@ -31,7 +31,7 @@ Bodies and answers are JSON. A refusal answers an error with a `code` and a `mes
 
 | Route | |
 | --- | --- |
-| `GET`, `POST /api/v1/spaces` | Their spaces; making one, with its first bot. |
+| `POST /api/v1/spaces` | Making a space, with its first bot. |
 | `PATCH /api/v1/spaces/:space` | Renaming it. |
 | `DELETE /api/v1/spaces/:space/me` | Leaving it. |
 | `GET /api/v1/spaces/:space/people` | Who's in it, and their groups. |
@@ -54,10 +54,10 @@ Bodies and answers are JSON. A refusal answers an error with a `code` and a `mes
 
 | Route | |
 | --- | --- |
-| `GET /api/v1/conversations` | Their conversations, the one something was last said in first. |
 | `POST /api/v1/conversations` | Starting one in a space: ``CreateConversationRequest``. |
 | `GET`, `PATCH /api/v1/conversations/:id` | One of them; titling it. |
 | `GET`, `POST /api/v1/conversations/:id/participants` | Who's in it; adding someone from its space. |
+| `GET /api/v1/spaces/:space/conversations/:id/turns/:turn` | One of the agent's turns, step by step: a ``TurnRecord``. |
 | `DELETE /api/v1/conversations/:id/me` | Leaving it. |
 | `GET`, `POST /api/v1/spaces/:space/conversations/:id/messages` | Its messages; saying something. |
 
@@ -65,7 +65,6 @@ Bodies and answers are JSON. A refusal answers an error with a `code` and a `mes
 
 | Route | |
 | --- | --- |
-| `GET /api/v1/spaces/:space/objects` | The space's objects they may read. |
 | `GET /api/v1/spaces/:space/objects/:object/card` | One of them, by its handle: an ``ObjectCard``. |
 | `POST /api/v1/spaces/:space/objects/:object/share` | Sharing one: ``ObjectSharingRequest``. |
 

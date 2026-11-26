@@ -108,8 +108,8 @@ struct PageTests {
                         Layout(items: [.text(words: "Munich"), .text(words: "\\(degrees)° and cloudy all day")])
                     }
 
-                    var preview: Layout {
-                        Layout(items: [.text(words: "\\(degrees)°")])
+                    var preview: Preview {
+                        .small(Layout(items: [.text(words: "\\(degrees)°")]))
                     }
                 }
                 """
@@ -117,7 +117,7 @@ struct PageTests {
             let plain = try await made(menu, "Menu", named: "Menu", in: family, by: ann, on: node)
             #expect(
                 try await self.as(ann) { try await Previewed.preview(of: previewed) }
-                    == Layout(items: [.text(words: "7°")]))
+                    == .small(Layout(items: [.text(words: "7°")])))
             #expect(try await self.as(ann) { try await Previewed.preview(of: plain) } == nil)
         }
     }
@@ -175,6 +175,43 @@ struct PageTests {
             ])
     }
 
+    /// Code whose page can't be shown isn't saved: why comes back, as what's wrong with code does,
+    /// and its code stays as it was. Code whose page can be is saved.
+    @Test(.timeLimit(.minutes(1)))
+    func aPageThatCantBeShownIsntSaved() async throws {
+        try await withClusterSystem(
+            "pages", store: MemoryEventStore(), hostsVirtualActors: true, people: [ann]
+        ) { node in
+            let session = ObjectSession(
+                in: family, objects: try await DynamicObjects.of(family, on: node), actorSystem: node)
+            let handle = try await self.as(ann) {
+                _ = try await session.make("Menu", described: "A menu.")
+                return try await session.id(written: "menu")
+            }
+            let twice = """
+                actor Menu: Page {
+                    var layout: Layout {
+                        Layout(items: [.text(id: "dish", words: "Soup"), .text(id: "dish", words: "Pie")])
+                    }
+                }
+                """
+            let refused = await #expect(throws: ObjectToolError.self) {
+                _ = try await self.as(ann) { try await session.save(twice, to: handle) }
+            }
+            #expect(String(describing: refused).contains("its page can't be shown"), "\(String(describing: refused))")
+            let kept = try await self.as(ann) { try await session.codePage(of: handle).reading }
+            #expect(kept.contains("actor Menu {}"), "\(kept)")
+
+            // Nothing in it, none too, is a page that's shown.
+            let quiet = """
+                actor Menu: Page {
+                    var layout: Layout { Layout(items: [.text(words: "")]) }
+                }
+                """
+            _ = try await self.as(ann) { try await session.save(quiet, to: handle) }
+        }
+    }
+
     /// An object's code page has a section of the protocols its code can conform to, `Page`
     /// among them, each with what it requires.
     @Test(.timeLimit(.minutes(1)))
@@ -198,7 +235,7 @@ struct PageTests {
             #expect(page.components(separatedBy: "- `Page`").count == 2, "\(page)")
             #expect(
                 page.contains(
-                    "- `Previewed`: conforming to it gives the object's page a preview, shown before the page is opened. Its `preview`, a `Layout`, is what the preview shows."
+                    "- `Previewed`: conforming to it gives the object's page a preview, shown before the page is opened. Its `preview`, a `Preview`, is what the preview shows, and at which size."
                 ), "\(page)")
             // Explained by name, as anything its code can use is, with what it names next.
             let explained = try await self.as(ann) {
@@ -206,6 +243,15 @@ struct PageTests {
             }
             #expect(explained.contains("conforming to it makes the object a page"), "\(explained)")
             #expect(explained.hasSuffix("It names: `Layout`"), "\(explained)")
+            // A preview's size is one of its cases, each saying the size it's drawn at.
+            let preview = try await self.as(ann) {
+                try await session.declaration("Preview", for: try await session.id(written: "menu"))
+            }
+            #expect(preview.contains(".small(Layout), a square, 160 by 160 points."), "\(preview)")
+            #expect(
+                preview.contains(
+                    ".medium(Layout), a rectangle as wide as two small ones side by side, 340 by 160 points."),
+                "\(preview)")
         }
     }
 

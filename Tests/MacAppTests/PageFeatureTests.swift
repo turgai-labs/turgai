@@ -4,6 +4,7 @@ import Testing
 import TurgaiModels
 
 @testable import MacApp
+@testable import TurgaiClient
 
 @MainActor
 struct PageFeatureTests {
@@ -18,17 +19,15 @@ struct PageFeatureTests {
             version: version)
     }
 
-    /// The window shows what the page shows, having joined its topic; a press goes to it with the
-    /// layout it was pressed on, and what it shows is read again, as it is each time it changes.
+    /// The page shows what the server tells it shows, having joined its topic, and again each
+    /// time it tells it; a press goes with the layout it was pressed on; one that can't be shown
+    /// says why; closed, it leaves the topic.
     @Test
     func aPageIsShownPressedAndFollowed() async throws {
-        let (events, heard) = AsyncStream.makeStream(of: ChatEvent.self)
-        let asked = LockIsolated<[ChatAsk]>([])
-        let pressed = LockIsolated<[(PiecePath, Int)]>([])
+        let (events, heard) = AsyncStream.makeStream(of: LiveEvent.self)
+        let asked = LockIsolated<[LiveAsk]>([])
         let first = try shown(0, version: 7)
         let second = try shown(1, version: 8)
-        let third = try shown(2, version: 9)
-        let reads = LockIsolated<[PageShown]>([first, second, third])
         let store = TestStore(initialState: PageFeature.State(address: address)) {
             PageFeature()
         } withDependencies: {
@@ -37,45 +36,84 @@ struct PageFeatureTests {
                 asked.withValue { $0.append(ask) }
                 return .ok
             }
-            $0.pages.shown = { _, _ in reads.withValue { $0.removeFirst() } }
-            $0.pages.press = { _, _, path, version in
-                pressed.withValue { $0.append((path, version)) }
-                return true
-            }
         }
 
-        let task = await store.send(.appeared)
-        await store.receive(\.loaded) { $0.content = .shown(first) }
+        let task = await store.send(.follow)
+        heard.yield(LiveEvent(payload: .page(space: address.space, page: address.page, shown: first)))
+        await store.receive(\.shown) { $0.content = .shown(first) }
         let order = try #require(PiecePath("page/order"))
         await store.send(.pressed(order))
-        await store.receive(\.changed)
-        await store.receive(\.loaded) { $0.content = .shown(second) }
-        #expect(pressed.value.map(\.1) == [7])
-        #expect(pressed.value.map(\.0) == [order])
-        // Changed elsewhere: what it shows is read again.
-        heard.yield(ChatEvent(payload: .pageChanged(space: address.space, page: address.page)))
-        await store.receive(\.changed)
-        await store.receive(\.loaded) { $0.content = .shown(third) }
+        heard.yield(LiveEvent(payload: .page(space: address.space, page: address.page, shown: second)))
+        await store.receive(\.shown) { $0.content = .shown(second) }
+        // Another page's isn't taken.
+        heard.yield(
+            LiveEvent(payload: .page(space: address.space, page: MadeObjectID(rawValue: "other"), shown: first)))
+        heard.yield(LiveEvent(payload: .pageFailed(space: address.space, page: address.page, reason: "broken")))
+        await store.receive(\.failed) { $0.content = .failed("broken") }
         heard.finish()
         await task.finish()
         #expect(
             asked.value == [
                 .join(.page(space: address.space, page: address.page)),
+                .pressPage(space: address.space, page: address.page, path: order, version: 7),
                 .leave(.page(space: address.space, page: address.page)),
             ])
     }
 
-    /// The pages window follows each page it lists: when one changes, its tile is drawn again from
-    /// what it shows now.
+    /// The page shows what its join answers it shows now, as the chat shows the history its open
+    /// answers: nothing has to be told after it.
+    @Test
+    func aPageShowsWhatItsJoinAnswers() async throws {
+        let first = try shown(0, version: 7)
+        let address = address
+        let store = TestStore(initialState: PageFeature.State(address: address)) {
+            PageFeature()
+        } withDependencies: {
+            $0.chat.events = { .never }
+            $0.chat.ask = { ask in
+                guard case .join = ask else { return .ok }
+                return .joined(LiveEvent(payload: .page(space: address.space, page: address.page, shown: first)))
+            }
+        }
+
+        let task = await store.send(.follow)
+        await store.receive(\.shown) { $0.content = .shown(first) }
+        await task.cancel()
+    }
+
+    /// Tiles go row by row in the order their pages are listed: a medium one takes a row of its
+    /// own, small ones two to a row, as do pages with no preview.
+    @Test
+    func mediumTilesTakeARowAndSmallOnesPairUp() throws {
+        let widget = Widget.text(try Text("degrees", "7°"))
+        func page(_ name: String, _ preview: PagePreview?) -> PageListing {
+            PageListing(id: MadeObjectID(rawValue: name), title: name, summary: nil, preview: preview)
+        }
+        let pages = [
+            page("clock", .small(widget)), page("weather", .medium(widget)), page("menu", nil),
+            page("timer", .small(widget)), page("notes", .small(widget)),
+        ]
+        var state = PagesFeature.State(space: address.space)
+        state.listing = .live(IdentifiedArray(uniqueElements: pages))
+        let tile = { (page: PageListing) in Tile(page: page, preview: page.preview) }
+        #expect(
+            state.rows == [
+                .small(tile(pages[0]), nil), .medium(tile(pages[1])), .small(tile(pages[2]), tile(pages[3])),
+                .small(tile(pages[4]), nil),
+            ])
+    }
+
+    /// The pages list follows each page it lists: its tile draws the preview it gives now, as the
+    /// server tells it; none while it gives none.
     @Test
     func eachTileIsDrawnAgainWhenItsPageChanges() async throws {
-        let (events, heard) = AsyncStream.makeStream(of: ChatEvent.self)
-        let asked = LockIsolated<[ChatAsk]>([])
+        let (events, heard) = AsyncStream.makeStream(of: LiveEvent.self)
+        let asked = LockIsolated<[LiveAsk]>([])
         let first = try shown(0, version: 7)
-        let second = try shown(1, version: 8)
-        let reads = LockIsolated<[PageShown]>([first, second])
+        let small = Widget.text(try Text("small", "Small"))
+        let second = PageShown(widget: first.widget, version: 8, preview: .small(small))
         let menu = PageListing(id: address.page, title: "Menu", summary: nil)
-        let store = TestStore(initialState: PagesFeature.State(space: address.space)) {
+        let store = TestStore(initialState: PagesFeature.State()) {
             PagesFeature()
         } withDependencies: {
             $0.chat.events = { events }
@@ -83,21 +121,23 @@ struct PageFeatureTests {
                 asked.withValue { $0.append(ask) }
                 return .ok
             }
-            $0.pages.list = { _ in [menu] }
-            $0.pages.shown = { _, _ in reads.withValue { $0.removeFirst() } }
         }
 
-        let task = await store.send(.appeared)
-        await store.receive(\.changed) {
+        let task = await store.send(.spaceChanged(address.space)) { $0.space = self.address.space }
+        heard.yield(LiveEvent(payload: .pages(space: address.space, pages: [menu])))
+        await store.receive(\.listed) {
             $0.listing = .live([menu])
             $0.followed = [menu.id]
         }
-        await store.receive(\.previewLoaded) { $0.previews[menu.id] = first }
-        heard.yield(ChatEvent(payload: .pageChanged(space: address.space, page: address.page)))
-        await store.receive(\.pageChanged)
-        await store.receive(\.previewLoaded) { $0.previews[menu.id] = second }
-        #expect(asked.value.contains(.join(.page(space: address.space, page: address.page))))
+        heard.yield(LiveEvent(payload: .page(space: address.space, page: address.page, shown: first)))
+        await store.receive(\.shown) { $0.shown[menu.id] = first }
+        #expect(store.state.preview(of: menu) == nil)
+        heard.yield(LiveEvent(payload: .page(space: address.space, page: address.page, shown: second)))
+        await store.receive(\.shown) { $0.shown[menu.id] = second }
+        #expect(store.state.preview(of: menu) == .small(small))
         heard.finish()
         await task.finish()
+        #expect(asked.value.contains(.join(.pages(space: address.space))))
+        #expect(asked.value.contains(.join(.page(space: address.space, page: address.page))))
     }
 }

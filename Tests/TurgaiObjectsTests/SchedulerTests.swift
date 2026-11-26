@@ -59,18 +59,19 @@ struct SchedulerTests {
             _ = try await self.as(Self.bob) { try await scheduler.cancel(name: "morning-news") }
             #expect(try await self.as(Self.ann) { try await scheduler.list().chat }.isEmpty)
 
-            // Whoever follows the space's tasks is told each change as it's made.
-            let id = ChatSchedule.id(in: Self.chat, of: Self.space, named: "morning-news")
+            // Whoever follows the space's tasks is told each change as it's made, of the one kept.
+            let notices = await heard.notices(4)
+            guard case .kept(let first) = notices.first else {
+                Issue.record("The schedule wasn't told as kept first: \(notices)")
+                return
+            }
             func kept(paused: Bool) -> TasksNotice {
                 .kept(
                     KeptTask(
-                        id: .schedule(id), of: .chat(Self.chat, name: "morning-news", does: "asks Tell me the news"),
+                        id: first.id, of: .chat(Self.chat, name: "morning-news", does: "asks Tell me the news"),
                         due: .schedule(.daily(hour: 8, minute: 0, timeZone: "Europe/Berlin")), paused: paused))
             }
-            #expect(
-                await heard.notices(4) == [
-                    kept(paused: false), kept(paused: true), kept(paused: false), .ended(.schedule(id)),
-                ])
+            #expect(notices == [kept(paused: false), kept(paused: true), kept(paused: false), .ended(first.id)])
         }
     }
 }

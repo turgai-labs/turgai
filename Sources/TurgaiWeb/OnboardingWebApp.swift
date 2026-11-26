@@ -64,17 +64,45 @@ public struct TurgaiOnboardingWebApp: Service, Sendable {
     }
 }
 
+/// Where Turgai's web server listens: on this machine only, unless it's told to listen on a network,
+/// such as every one the machine is on. Whoever reaches it signs in all the same.
+public struct WebHost: Hashable, Sendable, CustomStringConvertible {
+    /// The address it listens on, as a host's own: `127.0.0.1`, or `0.0.0.0` for every network.
+    public let name: String
+
+    /// On `name`: none for what names no address.
+    public init?(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, !trimmed.contains(" "), !trimmed.contains("/") else { return nil }
+        self.name = trimmed
+    }
+
+    /// This machine only.
+    public static let thisMachine = WebHost("127.0.0.1")!
+
+    public var description: String { name }
+}
+
 /// Turgai's one web server, on one port for the whole run: it answers with setting up's routes, and
 /// then with Turgai's, once they're handed to it. Nothing stops in between, so a page waiting for
 /// Turgai to start simply gets it on its next request.
 public final class TurgaiWebServer: Sendable {
     private let routes: Mutex<RouterResponder<BasicWebSocketRequestContext>>
+    private let host: WebHost
     private let port: Int
+    /// Told once it listens.
+    private let listening: @Sendable () async -> Void
 
-    /// Answering on `port`, on this machine only, with `router`'s routes.
-    public init(serving router: Router<BasicWebSocketRequestContext>, port: Int) {
+    /// Answering on `port`, where `host` says, with `router`'s routes; `listening` told once it
+    /// listens.
+    public init(
+        serving router: Router<BasicWebSocketRequestContext>, on host: WebHost, port: Int,
+        listening: @escaping @Sendable () async -> Void = {}
+    ) {
         routes = Mutex(router.buildResponder())
+        self.host = host
         self.port = port
+        self.listening = listening
     }
 
     /// Its routes from now on: `router`'s, for requests and WebSockets alike.
@@ -88,7 +116,8 @@ public final class TurgaiWebServer: Sendable {
         Application(
             responder: Current(server: self),
             server: .http1WebSocketUpgrade(webSocketRouter: Current(server: self)),
-            configuration: .init(address: .hostname("127.0.0.1", port: port))
+            configuration: .init(address: .hostname(host.name, port: port)),
+            onServerRunning: { [listening] _ in await listening() }
         )
     }
 

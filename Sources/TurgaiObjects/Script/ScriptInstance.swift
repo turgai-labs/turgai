@@ -73,7 +73,7 @@ public final class ScriptInstance {
                 guard let held = fields[field.name], !field.constant || !ObjectReference.all(in: held).isEmpty else {
                     continue
                 }
-                try object.set(field.name, to: host.portable(held))
+                try await object.set(field.name, to: host.portable(held))
             }
             let started = ScriptInstance(source: source, shape: shape, object: object, host: host)
             try await started.check()

@@ -97,7 +97,7 @@
       "location" : "https://github.com/turgai-labs/doppel.git",
       "state" : {
         "branch" : "main",
-        "revision" : "b989f18f4a36e0aefe8ef5894023ee7034619e84"
+        "revision" : "9f7d283727e926173ae0a0ec580c69ca41d011fa"
       }
     },
     {
@@ -196,7 +196,7 @@
       "location" : "https://github.com/turgai-labs/mosaic.git",
       "state" : {
         "branch" : "main",
-        "revision" : "eacf8ec33f78a62333a880906e0d57708dcdb0d3"
+        "revision" : "7853cb4e08a8b8c029907c58cba809e5a6a5feef"
       }
     },
     {

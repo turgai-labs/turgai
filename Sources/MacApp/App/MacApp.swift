@@ -1,6 +1,7 @@
 import AppKit
 import ComposableArchitecture
 import SwiftUI
+import TurgaiClient
 
 /// The Mac app: a skylark in the menu bar that runs all of Turgai in this process,
 /// with a window for the person's conversations and the live objects beside them. The app bundle and its
@@ -12,9 +13,11 @@ public struct TurgaiScenes: Scene {
     @State private var app: StoreOf<AppFeature>
 
     public init() {
-        let runtime = Runtime()
+        let app = AppFeature.store(server: .own(.onThisMac))
+        // The app asks this Mac's Turgai again once it listens, instead of asking until it does.
+        let runtime = Runtime { await app.send(.serverListening) }
         _runtime = State(initialValue: runtime)
-        _app = State(initialValue: AppFeature.store())
+        _app = State(initialValue: app)
     }
 
     public var body: some Scene {
@@ -43,12 +46,6 @@ public struct TurgaiScenes: Scene {
         }
         .defaultSize(width: 380, height: 600)
 
-        Window("Pages", id: WindowID.pages) {
-            PagesView(store: app.scope(\.pages, action: \.pages))
-                .frame(minWidth: 360, minHeight: 320)
-        }
-        .defaultSize(width: 620, height: 480)
-
         // Each page in a window of its own, drawn as it says.
         WindowGroup("Page", id: WindowID.page, for: PageAddress.self) { $address in
             if let address {
@@ -68,7 +65,7 @@ public struct TurgaiScenes: Scene {
         .defaultSize(width: 760, height: 820)
 
         Window("Profile", id: WindowID.profile) {
-            ProfileView(store: app.scope(\.profile, action: \.profile))
+            ProfileWindow(store: app.scope(\.profile, action: \.profile))
                 .frame(minWidth: 360, minHeight: 420)
         }
         .defaultSize(width: 420, height: 560)
@@ -82,7 +79,6 @@ enum WindowID {
     static let objects = "objects"
     static let profile = "profile"
     static let card = "card"
-    static let pages = "pages"
     static let page = "page"
 }
 
@@ -161,9 +157,21 @@ private final class DockPresence {
 extension NSImage {
     /// The skylark at menu bar size, tinted by the system like any status item.
     fileprivate static let menuBarSkylark: NSImage = {
-        let image = Bundle.module.image(forResource: "Skylark") ?? NSImage()
+        let image = NSImage.skylark
         image.size = NSSize(width: 18, height: 18)
         image.isTemplate = true
         return image
     }()
+}
+
+/// The profile, in a window of its own, which closes as they sign out.
+private struct ProfileWindow: View {
+    let store: StoreOf<ProfileFeature>
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        ProfileView(store: store) { dismissWindow(id: WindowID.profile) }
+            // Their memory followed while the window's open: its task ends as the window closes.
+            .task { await store.send(.shown).finish() }
+    }
 }

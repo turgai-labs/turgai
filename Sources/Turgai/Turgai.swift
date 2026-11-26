@@ -51,6 +51,13 @@ struct Serve: AsyncParsableCommand {
     @Option(name: .long, help: "Local web server port.")
     var port: Int = 3333
 
+    @Option(
+        name: .long,
+        help:
+            "Where the web server listens: 127.0.0.1, this machine only, unless told otherwise, such as 0.0.0.0 for every network it's on. Whoever reaches it signs in all the same."
+    )
+    var listen: String = WebHost.thisMachine.name
+
     @Option(name: .long, help: "Public API authentication mode: local, api-key, or trusted-proxy.")
     var apiAuth: String = APIAuthMode.local.rawValue
 
@@ -61,6 +68,9 @@ struct Serve: AsyncParsableCommand {
         let environment = ProcessInfo.processInfo.environment
         guard (1...65_535).contains(port) else {
             throw ValidationError("Port must be between 1 and 65535.")
+        }
+        guard let host = WebHost(listen) else {
+            throw ValidationError("Listen on an address, such as 127.0.0.1 or 0.0.0.0.")
         }
         guard let apiAuthMode = APIAuthMode(rawValue: apiAuth) else {
             throw ValidationError("API authentication must be local, api-key, or trusted-proxy.")
@@ -80,6 +90,7 @@ struct Serve: AsyncParsableCommand {
         let server = try await TurgaiServer(
             directory: Self.dataDirectory(option: directory, fileManager: .default),
             secretKey: try Self.secretKey(environment: environment),
+            host: host,
             port: port,
             logLevel: level,
             api: APIConfiguration(authMode: apiAuthMode, apiKey: apiKey),

@@ -3,6 +3,7 @@ import DurableWorkflows
 import EventSourcing
 import Foundation
 import Testing
+import TurgaiTimers
 import TurgaiDomain
 import TurgaiSpaces
 
@@ -73,20 +74,18 @@ struct ObjectScheduleTests {
             "schedules-often", store: store, hostsVirtualActors: true,
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
-            let worker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
-                actorSystem: node, activities: ObjectScheduleActivities())
+            let worker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
+                actorSystem: node, activities: FiringActivities())
             defer { _ = worker }
             let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
             let identity = try await objects.create(
                 name: "Ticker", spec: .new(try Script(code: Self.ticker, type: "Ticker", uses: Self.uses)))
             let ticker = try await objects.held(identity)
-            let id = ObjectFiring.scheduleID(of: identity, in: AsAPerson.person.space, "tick")
-            try await eventually("kept") {
-                try await node.workflows.listSchedules(workflow: ObjectScheduleWorkflow.self).contains { $0.id == id }
-            }
+            try await eventually("kept") { try await tickID(on: node) != nil }
+            let id = try #require(try await tickID(on: node))
             let times = 70
             for time in 1...times {
-                _ = try await node.workflows.triggerSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
+                _ = try await node.workflows.triggerSchedule(id: id, workflow: ScheduleWorkflow.self)
                 try await eventually("handled \(time)") {
                     try await ticker.read(property: "count") == .integer(Int64(time))
                 }
@@ -102,8 +101,8 @@ struct ObjectScheduleTests {
             "schedules", store: store, hostsVirtualActors: true,
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
-            let worker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
-                actorSystem: node, activities: ObjectScheduleActivities())
+            let worker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
+                actorSystem: node, activities: FiringActivities())
             defer { _ = worker }
             let (listener, heard) = try await listening(to: AsAPerson.person.space, as: AsAPerson.person, on: node)
             defer { listener.cancel() }
@@ -111,14 +110,12 @@ struct ObjectScheduleTests {
             let identity = try await objects.create(
                 name: "Ticker", spec: .new(try Script(code: Self.ticker, type: "Ticker", uses: Self.uses)))
             let ticker = try await objects.held(identity)
-            let id = ObjectFiring.scheduleID(of: identity, in: AsAPerson.person.space, "tick")
-            func kept() async throws -> Bool {
-                try await node.workflows.listSchedules(workflow: ObjectScheduleWorkflow.self).contains { $0.id == id }
-            }
+            func kept() async throws -> Bool { try await tickID(on: node) != nil }
             // Kept durably as its property says.
             try await eventually("kept") { try await kept() }
+            let id = try #require(try await tickID(on: node))
             // Due: its handler runs as the object's own doing.
-            _ = try await node.workflows.triggerSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
+            _ = try await node.workflows.triggerSchedule(id: id, workflow: ScheduleWorkflow.self)
             try await eventually("handled") { try await ticker.read(property: "count") == 1 }
             // Its property holding none ends it.
             _ = try await ticker.respond("stop", arguments: [:])
@@ -167,8 +164,8 @@ struct ObjectScheduleTests {
             "timers", store: store, hostsVirtualActors: true,
             installing: { $0.plugins.install(plugin: DurableWorkflowsPlugin()) }
         ) { node in
-            let worker = await DurableActivityDispatchWorker<ObjectTimerWorkflow>(
-                actorSystem: node, activities: ObjectScheduleActivities())
+            let worker = await DurableActivityDispatchWorker<TimerWorkflow>(
+                actorSystem: node, activities: FiringActivities())
             defer { _ = worker }
             let objects = try await DynamicObjects.of(AsAPerson.person.space, on: node)
             let identity = try await objects.create(
@@ -184,6 +181,14 @@ struct ObjectScheduleTests {
             try await eventually("fired again") { try await reminder.read(property: "count") == 2 }
         }
     }
+}
+
+/// The schedule the ticker's `tick` is kept by, while it's kept.
+private func tickID(on node: ClusterSystem) async throws -> ScheduleID? {
+    try await TimerKeeper(on: node).schedules().compactMap { kept -> ScheduleID? in
+        guard kept.firing.name == "tick", case .schedule(let id) = kept.firing.id else { return nil }
+        return id
+    }.first
 }
 
 private func eventually(_ what: String, _ condition: () async throws -> Bool) async throws {

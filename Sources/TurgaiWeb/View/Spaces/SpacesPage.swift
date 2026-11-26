@@ -39,8 +39,8 @@ struct SpacesPage: HTMLDocument, Sendable {
         }
     }
 
-    /// Follows the person's spaces on the app's connection: each change to them, the list shown
-    /// again as the server lists it now.
+    /// Follows the person's spaces on the app's connection, joining them as it opens: each change to
+    /// them, the list shown again as the server lists it now. It asks nothing else, so one ref does.
     static let following = """
         (() => {
           const shown = document.getElementById('spaces');
@@ -53,6 +53,9 @@ struct SpacesPage: HTMLDocument, Sendable {
           const follow = () => {
             const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
             const socket = new WebSocket(`${scheme}://${location.host}/api/v1/live`);
+            socket.addEventListener('open', () => socket.send(JSON.stringify({
+              type: 'push', ref: { rawValue: '00000000-0000-0000-0000-000000000001' }, ask: 'join', topic: 'spaces'
+            })));
             socket.addEventListener('message', (message) => {
               const event = JSON.parse(message.data);
               if (typeof event.type === 'string' && event.type.startsWith('space.')) relist();

@@ -61,7 +61,6 @@ public distributed actor AgentParticipant {
         let conversationID = self.conversationID
         let conversation = self.conversation
         let participant = self
-        let agentID = self.agentID
         let scope = ConversationScope(
             conversationID: conversationID,
             turnID: request.turnID,

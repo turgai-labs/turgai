@@ -2,6 +2,7 @@ import DiscoverableActors
 import Doppel
 import SwiftParser
 import SwiftSyntax
+import TurgaiTimers
 
 /// What's wrong with an object's code, in a line, at a line of it when that's known.
 public struct CodeProblem: Error, Codable, Sendable, Equatable, CustomStringConvertible {
@@ -217,7 +218,7 @@ public struct ObjectShape: Sendable, Equatable {
 
     /// The timers it follows: each `@Subscribed` `Timer` it holds, or optional one, is due once, at
     /// its date.
-    public var timers: [String] { subscribed(to: "\(Timer.self)") }
+    public var timers: [String] { subscribed(to: "\(TurgaiTimers.Timer.self)") }
 
     /// Its `@Subscribed` fields of `type`, or optional ones of it, as the checker resolved their types.
     private func subscribed(to type: String) -> [String] {

@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import TurgaiClient
 import TurgaiPersistence
 
 /// Why the Keychain didn't give Turgai its key.

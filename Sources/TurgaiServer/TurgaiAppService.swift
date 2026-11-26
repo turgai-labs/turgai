@@ -27,6 +27,7 @@ import TurgaiSpaces
 import TurgaiTelegram
 import TurgaiWeb
 import VirtualActors
+import TurgaiTimers
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -267,33 +268,24 @@ struct TurgaiAppService: Service, Sendable {
                         temperature: runtimeConfiguration.temperature,
                         ollamaKeepAlive: runtimeConfiguration.ollamaKeepAlive)))
             let virtualNode = await VirtualNode(actorSystem: system)
+            // What's due, for whoever set it: its owner is told when it's due.
             let scheduleWorker = await DurableActivityDispatchWorker<ScheduleWorkflow>(
                 actorSystem: system,
-                activities: ScheduleActivities()
+                activities: FiringActivities()
             )
-            let scheduleTimerWorker = await DurableActivityDispatchWorker<TimerWorkflow>(
+            let timerWorker = await DurableActivityDispatchWorker<TimerWorkflow>(
                 actorSystem: system,
-                activities: TimerActivities()
+                activities: FiringActivities()
             )
             let memoryReadWorker = await DurableActivityDispatchWorker<MemoryReadWorkflow>(
                 actorSystem: system,
                 activities: MemoryReadActivities()
             )
-            let objectScheduleWorker = await DurableActivityDispatchWorker<ObjectScheduleWorkflow>(
-                actorSystem: system,
-                activities: ObjectScheduleActivities()
-            )
-            let objectTimerWorker = await DurableActivityDispatchWorker<ObjectTimerWorkflow>(
-                actorSystem: system,
-                activities: ObjectScheduleActivities()
-            )
             let clusterService = TurgaiClusterService(
                 system: system,
                 virtualNode: virtualNode,
                 scheduleWorker: scheduleWorker,
-                scheduleTimerWorker: scheduleTimerWorker,
-                objectScheduleWorker: objectScheduleWorker,
-                objectTimerWorker: objectTimerWorker,
+                timerWorker: timerWorker,
                 memoryReadWorker: memoryReadWorker
             )
 
@@ -306,8 +298,6 @@ struct TurgaiAppService: Service, Sendable {
                 Startup("workflows", logger: logger) {
                     try await system.workflows.recoverAll(ofType: ScheduleWorkflow.self)
                     try await system.workflows.recoverAll(ofType: TimerWorkflow.self)
-                    try await system.workflows.recoverAll(ofType: ObjectScheduleWorkflow.self)
-                    try await system.workflows.recoverAll(ofType: ObjectTimerWorkflow.self)
                     try await system.workflows.recoverAll(ofType: MemoryReadWorkflow.self)
                 },
                 // What ran by itself when the node stopped: each comes back by its own id.
@@ -413,10 +403,9 @@ struct Startup: Service {
 struct TurgaiClusterService: Service {
     let system: ClusterSystem
     let virtualNode: VirtualNode
+    /// They run what's due: told to whoever set it.
     let scheduleWorker: DurableActivityDispatchWorker<ScheduleWorkflow>
-    let scheduleTimerWorker: DurableActivityDispatchWorker<TimerWorkflow>
-    let objectScheduleWorker: DurableActivityDispatchWorker<ObjectScheduleWorkflow>
-    let objectTimerWorker: DurableActivityDispatchWorker<ObjectTimerWorkflow>
+    let timerWorker: DurableActivityDispatchWorker<TimerWorkflow>
     let memoryReadWorker: DurableActivityDispatchWorker<MemoryReadWorkflow>
 
     func run() async throws {

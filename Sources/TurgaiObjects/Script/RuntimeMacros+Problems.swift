@@ -1,5 +1,6 @@
 import SwiftParser
 import SwiftSyntax
+import TurgaiTimers
 
 extension RuntimeMacros {
     /// What's wrong with how `script` uses the runtime's macros, which Swift doesn't know: an
@@ -142,7 +143,7 @@ extension RuntimeMacros {
         let made =
             (value?.as(FunctionCallExprSyntax.self)?.calledExpression ?? value)?.as(MemberAccessExprSyntax.self)?.base?
             .trimmedDescription
-        return ["\(Schedule.self)", "\(Timer.self)"].contains(written ?? made ?? "")
+        return ["\(Schedule.self)", "\(TurgaiTimers.Timer.self)"].contains(written ?? made ?? "")
     }
 
     /// Each of the runtime's attributes where Swift lets it attach but the runtime has nothing for

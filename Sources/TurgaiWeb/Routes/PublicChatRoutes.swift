@@ -6,6 +6,7 @@ import HTTPTypes
 import Hail
 import Hummingbird
 import HummingbirdWebSocket
+import Logging
 import Mosaic
 import NIOCore
 import TurgaiAgents
@@ -20,6 +21,7 @@ import TurgaiObjects
 import TurgaiPeople
 import TurgaiSpaces
 import TurgaiTelegram
+import TurgaiTimers
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials
@@ -203,78 +205,17 @@ extension TurgaiMainWebApp {
                 try await outbound.close(.policyViolation, reason: "Sign in first")
                 return
             }
+            let connection = UUID().uuidString
             let session = LiveSession(
-                id: UUID().uuidString, actorSystem: dependencies.system, linking: dependencies.linking, source: .web)
+                id: connection, actorSystem: dependencies.system, linking: dependencies.linking, source: .web)
             // It runs while the socket does: its input finishes as the socket closes.
             async let _: Void = session.run()
             let person = owner.person
             let writer = PublicChatSocketWriter(outbound: outbound)
             let shown = ShownConversation()
+            let log = dependencies.system.log
+            log.info("Live connection opened", metadata: ["connection": "\(connection)"])
             do {
-                // Notices about the person's conversations in Turgai's apps. What's said in the one
-                // it has open, and leaving it, come as that conversation's own events.
-                let directory = try await dependencies.system.singleton.proxy(
-                    ConversationDirectory.self, name: ConversationDirectory.singletonName)
-                let notices = try await directory.subscription(for: person)
-                @Sendable func tell(_ notice: ConversationNotice) async {
-                    let payload: TurgaiModels.ChatEvent.Payload?
-                    switch notice {
-                    case .joined(let listing) where listing.id.channel == turgaiChannel:
-                        payload = .conversationJoined(conversation: .init(listing))
-                    case .said(let listing) where listing.id.channel == turgaiChannel:
-                        let open = await shown.conversation?.domainID == listing.id
-                        payload = open ? nil : .conversationSaid(conversation: .init(listing))
-                    case .titled(let listing) where listing.id.channel == turgaiChannel:
-                        payload = .conversationTitled(conversation: .init(listing))
-                    case .left(let conversation) where conversation.channel == turgaiChannel:
-                        let open = await shown.conversation?.domainID == conversation
-                        let id = TurgaiModels.ConversationID(rawValue: conversation.externalAddress.rawValue)
-                        payload = open ? nil : .conversationLeft(conversationID: id)
-                    case .deleted(let conversation) where conversation.channel == turgaiChannel:
-                        // The open one too: what it showed is gone.
-                        let id = TurgaiModels.ConversationID(rawValue: conversation.externalAddress.rawValue)
-                        payload = .conversationDeleted(conversationID: id)
-                    case .joined, .said, .titled, .left, .deleted:
-                        payload = nil
-                    }
-                    guard let payload else { return }
-                    try? await writer.write(.init(payload: payload))
-                }
-                let telling = Task {
-                    for await notice in notices { await tell(notice) }
-                }
-                defer {
-                    telling.cancel()
-                    await notices.cancel()
-                }
-                // The person's spaces as they change: each as it lists itself for them now.
-                let spaces = try await dependencies.system.singleton.proxy(
-                    SpaceDirectory.self, name: SpaceDirectory.singletonName
-                ).subscription(for: person)
-                let system = dependencies.system
-                let spacesTelling = Task {
-                    for await notice in spaces {
-                        let payload: TurgaiModels.ChatEvent.Payload?
-                        switch notice {
-                        case .joined(let id):
-                            payload = try? await Space.identified(by: id, on: system).listing(for: person).map {
-                                .spaceJoined(space: SpaceSummary($0))
-                            }
-                        case .listed(let id):
-                            payload = try? await Space.identified(by: id, on: system).listing(for: person).map {
-                                .spaceListed(space: SpaceSummary($0))
-                            }
-                        case .left(let id):
-                            payload = .spaceLeft(spaceID: id.api)
-                        }
-                        guard let payload else { continue }
-                        try? await writer.write(.init(payload: payload))
-                    }
-                }
-                defer {
-                    spacesTelling.cancel()
-                    Task { await spaces.cancel() }
-                }
                 // What it's told about besides the conversation it shows, while it's joined.
                 let topics = JoinedTopics()
                 defer { await topics.leaveAll() }
@@ -284,7 +225,7 @@ extension TurgaiMainWebApp {
                         for try await input in inbound.messages(maxSize: 1_000_000) {
                             guard case .text(let text) = input,
                                 let data = text.data(using: .utf8),
-                                let command = try? JSONDecoder().decode(TurgaiModels.ChatCommand.self, from: data)
+                                let command = try? JSONDecoder().decode(TurgaiModels.LiveCommand.self, from: data)
                             else { continue }
                             switch command {
                             case .open(let space, let id):
@@ -332,8 +273,20 @@ extension TurgaiMainWebApp {
                                 _ = await receipt.wait()
                             case .push(let ref, let ask):
                                 let reply = await answer(
-                                    ask, for: person, topics: topics, writer: writer, dependencies: dependencies)
-                                try await writer.write(.init(payload: .reply(ref: ref, reply: reply)))
+                                    ask, for: person, topics: topics, writer: writer, shown: shown,
+                                    dependencies: dependencies)
+                                let metadata: Logger.Metadata = [
+                                    "connection": "\(connection)", "ref": "\(ref.rawValue)", "ask": "\(ask)",
+                                    "reply": "\(reply)",
+                                ]
+                                do {
+                                    try await writer.write(.init(payload: .reply(ref: ref, reply: reply)))
+                                    log.info("Reply written", metadata: metadata)
+                                } catch {
+                                    log.warning(
+                                        "Reply not written", metadata: metadata.merging(["error": "\(error)"]) { $1 })
+                                    throw error
+                                }
                             }
                         }
                     }
@@ -358,7 +311,9 @@ extension TurgaiMainWebApp {
                     _ = try await group.next()
                     group.cancelAll()
                 }
+                log.info("Live connection closed", metadata: ["connection": "\(connection)"])
             } catch {
+                log.warning("Live connection ended", metadata: ["connection": "\(connection)", "error": "\(error)"])
                 try? await outbound.close(.goingAway, reason: "Chat connection ended")
             }
             session.input.finish()
@@ -371,15 +326,6 @@ extension TurgaiMainWebApp {
         on conversations: RouterGroup<BasicWebSocketRequestContext>, dependencies: TurgaiRouteDependencies
     ) {
         // The person's conversations in Turgai's apps, the one something was last said in first.
-        conversations.get { request, _ in
-            guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
-            let listed = try await dependencies.system.singleton
-                .proxy(ConversationDirectory.self, name: ConversationDirectory.singletonName)
-                .conversations(of: owner.person)
-            return try publicAPIResponse(
-                listed.filter { $0.id.channel == turgaiChannel }.map(TurgaiModels.Conversation.init))
-        }
-
         // A new conversation, in a space the person is in, with them its first:
         // answered by the bot asked for, or the space's main one.
         conversations.post { request, context in
@@ -464,6 +410,24 @@ extension TurgaiMainWebApp {
             }
             return try publicAPIResponse(
                 participants.sorted { ($0.kind == .agent ? 0 : 1, $0.name) < ($1.kind == .agent ? 0 : 1, $1.name) })
+        }
+
+        // One of the agent's turns in it, step by step: the tools it called and what they gave back.
+        conversations.get(":id/turns/:turn") { request, context in
+            guard let owner = await chatOwner(from: request, auth: dependencies.auth) else { return signInRequired() }
+            guard let conversation = try await named(in: context, readBy: owner.person) else {
+                return conversationNotFound()
+            }
+            let space = try await conversation.reached(on: dependencies.system)
+            let turns = try await agentTurns(
+                in: conversation, of: space, askedBy: owner.person, journal: dependencies.journal)
+            guard let asked = context.parameters.get("turn").flatMap(UUID.init(uuidString:)),
+                let turn = turns.first(where: { $0.id.rawValue == asked })
+            else {
+                return publicAPIErrorResponse(
+                    status: .notFound, code: "turn_not_found", message: "The conversation has no such turn.")
+            }
+            return try publicAPIResponse(TurnRecord(turn))
         }
 
         // Someone added by one of its people: a person of its space, or one of its bots.
@@ -576,23 +540,6 @@ extension TurgaiMainWebApp {
         @Sendable func summary(of space: Space, for person: TurgaiDomain.UserID) async throws -> SpaceSummary {
             guard let listing = try await space.listing(for: person) else { throw SpaceRefusal.notInIt }
             return SpaceSummary(listing)
-        }
-
-        // The spaces they're in, the first joined first, each as it lists itself for them.
-        spaces.get { request, _ in
-            try await answering(request) { person in
-                let ids = try await system.singleton.proxy(SpaceDirectory.self, name: SpaceDirectory.singletonName)
-                    .spaces(of: person)
-                var listed: [SpaceSummary] = []
-                for id in ids {
-                    // One they've left since the directory read it isn't theirs.
-                    guard let listing = try await Space.identified(by: id, on: system).listing(for: person) else {
-                        continue
-                    }
-                    listed.append(SpaceSummary(listing))
-                }
-                return try publicAPIResponse(listed)
-            }
         }
 
         spaces.post { request, context in
@@ -983,16 +930,6 @@ extension TurgaiMainWebApp {
             }
         }
 
-        // Its objects the person may read: those made in it, and the built-in ones.
-        spaces.get(":space/objects") { request, context in
-            try await answering(request) { person in
-                guard let id = spaceID(in: context) else { return noSuchSpace() }
-                // The space lists what's its own, as the person may see it.
-                let entries = try await Space.identified(by: id, on: system).objects(for: person)
-                return try publicAPIResponse(entries.map(ObjectListing.init))
-            }
-        }
-
         // One of its objects' card, by its handle as listed: what it is, its YAML and its Swift. Only
         // for one the person may read.
         spaces.get(":space/objects/:object/card") { request, context in
@@ -1041,83 +978,6 @@ extension TurgaiMainWebApp {
                     return Response(status: .forbidden)
                 }
                 return Response(status: .noContent)
-            }
-        }
-
-        /// What `answer` gives for the page `context` names, asked on behalf of `person` with what
-        /// their space says they may do: none when there's no such object, they may not read it,
-        /// or it isn't a page.
-        @Sendable func page<Answer: Sendable>(
-            _ context: BasicWebSocketRequestContext, for person: TurgaiDomain.UserID,
-            _ answer: @Sendable (DynamicObject) async throws -> Answer
-        ) async throws -> Answer? {
-            guard let id = spaceID(in: context), let page = context.parameters.get("page") else { return nil }
-            let scope = try await Space.identified(by: id, on: system).scope(of: person)
-            let object = try await DynamicObject.identified(by: ObjectIdentity(rawValue: page), in: id, on: system)
-            do {
-                return try await CallChain.$current.withValue(.start(scope, in: nil)) { try await answer(object) }
-            } catch is NotAPage { return nil } catch is NotAllowed { return nil } catch is DynamicObjectError {
-                return nil
-            }
-        }
-
-        // Its pages the person may read: its objects that conform to `Page`.
-        spaces.get(":space/pages") { request, context in
-            try await answering(request) { person in
-                guard let id = spaceID(in: context) else { return noSuchSpace() }
-                let space = try await Space.identified(by: id, on: system)
-                let scope = try await space.scope(of: person)
-                let entries = try await space.objects(for: person)
-                let pages = try await CallChain.$current.withValue(.start(scope, in: nil)) { () async throws in
-                    var pages: [PageListing] = []
-                    for entry in entries {
-                        guard let made = DynamicObject.identity(of: entry.object.id),
-                            let described = try? await entry.object.describe(),
-                            described.conforms.contains(Page.name)
-                        else { continue }
-                        // Its own preview, when it gives one that can be drawn.
-                        let object = try await DynamicObject.identified(by: made, in: id, on: system)
-                        let preview = (try? await Previewed.preview(of: object)).flatMap { $0 }.flatMap {
-                            try? Widget($0)
-                        }
-                        pages.append(
-                            PageListing(
-                                id: MadeObjectID(rawValue: made.rawValue), title: entry.id.description,
-                                summary: entry.description, preview: preview))
-                    }
-                    return pages
-                }
-                return try publicAPIResponse(pages)
-            }
-        }
-
-        // What one of its pages shows now, as a widget: none for an object that isn't a page.
-        spaces.get(":space/pages/:page") { request, context in
-            try await answering(request) { person in
-                guard
-                    let shown = try await page(
-                        context, for: person,
-                        { object in
-                            let shown = try await Page.shown(by: object)
-                            return PageShown(widget: try Widget(shown.layout), version: shown.version)
-                        })
-                else { return noSuchObject() }
-                return try publicAPIResponse(shown)
-            }
-        }
-
-        // A press of one of its pages' buttons, by its path, on the layout it was shown as: not
-        // taken once that layout is replaced.
-        spaces.post(":space/pages/:page/press") { request, context in
-            try await answering(request) { person in
-                guard let path = request.uri.queryParameters.get("path").flatMap(PiecePath.init),
-                    let version = request.uri.queryParameters.get("page", as: Int.self)
-                else { return Response(status: .badRequest) }
-                guard
-                    let taken = try await page(
-                        context, for: person, { try await Page.press(path, on: version, of: $0) })
-                else { return noSuchObject() }
-                return Response(status: taken ? .noContent : .conflict)
             }
         }
     }
@@ -1232,38 +1092,96 @@ private func apiConversation(
 }
 
 /// The conversation an app's connection has open, if it has one.
-/// The topics a connection has joined, each with how it's left.
+/// The topics a connection has joined, each followed once however often it's joined, and left
+/// once every join of it is.
 private actor JoinedTopics {
-    private var leaving: [TurgaiModels.ChatTopic: @Sendable () async -> Void] = [:]
-
-    /// `topic` joined by `follow`, which gives how it's left: once, however often it's joined.
-    func join(
-        _ topic: TurgaiModels.ChatTopic, by follow: () async throws -> @Sendable () async -> Void
-    ) async throws {
-        guard leaving[topic] == nil else { return }
-        leaving[topic] = try await follow()
+    private struct Joined {
+        var joins: Int
+        let followed: Followed
     }
 
-    func leave(_ topic: TurgaiModels.ChatTopic) async {
-        await leaving.removeValue(forKey: topic)?()
+    private var joined: [TurgaiModels.LiveTopic: Joined] = [:]
+
+    /// `topic` joined: followed by `follow` the first time; joined again, followed as it was. Either
+    /// way, what it is now, which the join's answer tells, as the chat's open tells its history.
+    func join(_ topic: TurgaiModels.LiveTopic, by follow: () async throws -> Followed) async throws
+        -> LiveEvent.Payload?
+    {
+        if var already = joined[topic] {
+            already.joins += 1
+            joined[topic] = already
+            return await already.followed.now()
+        }
+        let followed = try await follow()
+        joined[topic] = Joined(joins: 1, followed: followed)
+        return await followed.now()
+    }
+
+    /// One join of `topic` left: no longer followed once none is left.
+    func leave(_ topic: TurgaiModels.LiveTopic) async {
+        guard var already = joined[topic] else { return }
+        already.joins -= 1
+        guard already.joins == 0 else {
+            joined[topic] = already
+            return
+        }
+        joined[topic] = nil
+        await already.followed.leave()
     }
 
     func leaveAll() async {
-        for leave in leaving.values { await leave() }
-        leaving = [:]
+        for already in joined.values { await already.followed.leave() }
+        joined = [:]
+    }
+}
+
+/// A topic followed: what it is now, as a join's answer tells it, and how it's left. Each change
+/// is told as it comes, after it's followed.
+private struct Followed: Sendable {
+    let now: @Sendable () async -> LiveEvent.Payload?
+    let leave: @Sendable () async -> Void
+}
+
+/// One open page's own changes, as they're followed now: replaced as it's followed again.
+private actor PageFollowing {
+    private var hearing: Task<Void, Never>?
+    private var cancel: (@Sendable () async -> Void)?
+
+    /// Followed by `hearing` from now on, ended by `cancel`; what followed it before ended.
+    func replace(hearing: Task<Void, Never>, cancel: @escaping @Sendable () async -> Void) async {
+        let before = (hearing: self.hearing, cancel: self.cancel)
+        self.hearing = hearing
+        self.cancel = cancel
+        before.hearing?.cancel()
+        await before.cancel?()
+    }
+
+    /// No longer followed.
+    func stop() async {
+        hearing?.cancel()
+        await cancel?()
+        hearing = nil
+        cancel = nil
     }
 }
 
 /// What a connection follows, its topic read: a space's tasks by the space's id.
 private enum Following {
+    case spaces
+    case conversations
     case memory
     case tasks(TurgaiDomain.SpaceID)
     case objects(TurgaiDomain.SpaceID)
+    case pages(TurgaiDomain.SpaceID)
     case page(TurgaiDomain.SpaceID, ObjectIdentity)
 
     /// `topic`, read: none when the space it names isn't one.
-    init?(_ topic: TurgaiModels.ChatTopic) {
+    init?(_ topic: TurgaiModels.LiveTopic) {
         switch topic {
+        case .spaces:
+            self = .spaces
+        case .conversations:
+            self = .conversations
         case .memory:
             self = .memory
         case .tasks(let space):
@@ -1272,6 +1190,9 @@ private enum Following {
         case .objects(let space):
             guard let id = TurgaiDomain.SpaceID(space) else { return nil }
             self = .objects(id)
+        case .pages(let space):
+            guard let id = TurgaiDomain.SpaceID(space) else { return nil }
+            self = .pages(id)
         case .page(let space, let page):
             guard let id = TurgaiDomain.SpaceID(space) else { return nil }
             self = .page(id, ObjectIdentity(rawValue: page.rawValue))
@@ -1279,66 +1200,220 @@ private enum Following {
     }
 }
 
-/// `person` told about `following` on the connection `writer` writes to, as it changes, until the
-/// returned function is called.
+/// `following` followed for `person`, on the connection `writer` writes to: each change told as it
+/// comes, until it's left. What it is now, its join's answer tells.
 private func follow(
     _ following: Following, for person: TurgaiDomain.UserID, writer: PublicChatSocketWriter,
-    dependencies: TurgaiRouteDependencies
-) async throws -> @Sendable () async -> Void {
+    shown: ShownConversation, dependencies: TurgaiRouteDependencies
+) async throws -> Followed {
     let system = dependencies.system
     switch following {
-    case .objects(let space):
-        // Its space hands its objects to someone in it, who follows that they changed; what they
-        // are as it's joined, the app lists itself.
-        let reached = try await Space.identified(by: space, on: system)
-        let chain = CallChain.start(try await reached.scope(of: person), in: nil)
-        let changes = try await CallChain.$current.withValue(chain) {
-            try await ObjectSession(in: space, actorSystem: system, agents: [], builtIns: []).changes()
+    case .spaces:
+        // Each as it lists itself for them now; one they've left since the directory read it isn't
+        // theirs.
+        let directory = try await system.singleton.proxy(SpaceDirectory.self, name: SpaceDirectory.singletonName)
+        let changes = try await directory.subscription(for: person)
+        let now: @Sendable () async -> LiveEvent.Payload? = {
+            do {
+                var listed: [SpaceSummary] = []
+                for id in try await directory.spaces(of: person) {
+                    guard let listing = try await Space.identified(by: id, on: system).listing(for: person) else {
+                        continue
+                    }
+                    listed.append(SpaceSummary(listing))
+                }
+                return .spaces(spaces: listed)
+            } catch {
+                system.log.warning("Spaces not listed", metadata: ["error": "\(error)"])
+                return nil
+            }
         }
         let forwarding = Task {
-            for await _ in changes { try? await writer.write(.init(payload: .objectsChanged)) }
+            for await notice in changes {
+                let told: LiveEvent.Payload?
+                switch notice {
+                case .joined(let id):
+                    told = try? await Space.identified(by: id, on: system).listing(for: person).map {
+                        .spaceJoined(space: SpaceSummary($0))
+                    }
+                case .listed(let id):
+                    told = try? await Space.identified(by: id, on: system).listing(for: person).map {
+                        .spaceListed(space: SpaceSummary($0))
+                    }
+                case .left(let id):
+                    told = .spaceLeft(spaceID: id.api)
+                }
+                if let told { try? await writer.write(.init(payload: told)) }
+            }
         }
-        // Left, its subscription ends, and nothing more is told.
-        return {
-            await changes.cancel()
-            forwarding.cancel()
+        return Followed(
+            now: now,
+            leave: {
+                forwarding.cancel()
+                await changes.cancel()
+            })
+    case .conversations:
+        // Those in Turgai's apps, the one something was last said in first.
+        let directory = try await system.singleton.proxy(
+            ConversationDirectory.self, name: ConversationDirectory.singletonName)
+        let changes = try await directory.subscription(for: person)
+        let now: @Sendable () async -> LiveEvent.Payload? = {
+            do {
+                let listed = try await directory.conversations(of: person)
+                return .conversations(
+                    conversations: listed.filter { $0.id.channel == turgaiChannel }.map(TurgaiModels.Conversation.init))
+            } catch {
+                system.log.warning("Conversations not listed", metadata: ["error": "\(error)"])
+                return nil
+            }
         }
+        let forwarding = Task {
+            for await notice in changes {
+                if let told = await told(notice, shown: shown) { try? await writer.write(.init(payload: told)) }
+            }
+        }
+        return Followed(
+            now: now,
+            leave: {
+                forwarding.cancel()
+                await changes.cancel()
+            })
+    case .objects(let space):
+        // Its space lists its objects for someone in it.
+        let reached = try await Space.identified(by: space, on: system)
+        let now: @Sendable () async -> LiveEvent.Payload? = {
+            do {
+                let entries = try await reached.objects(for: person)
+                return .objects(space: space.api, objects: entries.map(ObjectListing.init))
+            } catch {
+                system.log.warning("Objects not listed", metadata: ["space": "\(space)", "error": "\(error)"])
+                return nil
+            }
+        }
+        return try await followingObjects(of: space, for: person, on: system, writer: writer, now: now)
+    case .pages(let space):
+        // Its pages, among its objects.
+        let now: @Sendable () async -> LiveEvent.Payload? = {
+            do {
+                let started = ContinuousClock.now
+                let pages = try await pageListings(of: space, for: person, on: system)
+                system.log.info(
+                    "Pages listed",
+                    metadata: [
+                        "space": "\(space)", "pages": "\(pages.count)",
+                        "milliseconds": "\(milliseconds(since: started))",
+                    ])
+                return .pages(space: space.api, pages: pages)
+            } catch {
+                system.log.warning("Pages not listed", metadata: ["space": "\(space)", "error": "\(error)"])
+                return nil
+            }
+        }
+        return try await followingObjects(of: space, for: person, on: system, writer: writer, now: now)
     case .page(let space, let identity):
-        // A page of its space the person may read: each time it changes, they're told, and read
-        // what it shows then themselves.
+        // A page of its space the person may read.
         let reached = try await Space.identified(by: space, on: system)
         let chain = CallChain.start(try await reached.scope(of: person), in: nil)
         let object = try await DynamicObject.identified(by: identity, in: space, on: system)
-        _ = try await CallChain.$current.withValue(chain) { try await Page.shown(by: object) }
-        let changed = ChatEvent(
-            payload: .pageChanged(space: space.api, page: MadeObjectID(rawValue: identity.rawValue)))
-        let forwarding = Task {
+        // Refused for one they may not read, or that isn't a page. Followed first, so no change
+        // between this and what's read now is missed.
+        let subscribed = try await CallChain.$current.withValue(chain) {
+            guard try await object.describe().conforms.contains(Page.name) else { throw NotAPage() }
+            return try await object.subscribe(to: ObjectChanged.self)
+        }
+        let page = MadeObjectID(rawValue: identity.rawValue)
+        // What it shows as it worked it out after it last changed: the page runs no code here.
+        let now: @Sendable () async -> LiveEvent.Payload? = {
             await CallChain.$current.withValue(chain) {
-                // Subscribed again while they have it open, each time a subscription ends, as when its
-                // code changed or nothing changed for long: it may show something else, so they're
-                // told. One that can't be made, as when it's gone, ends following it.
-                while !Task.isCancelled, let changes = try? await object.subscribe(to: ObjectChanged.self) {
-                    do {
-                        for try await _ in changes { try? await writer.write(changed) }
-                    } catch {}
-                    try? await writer.write(changed)
+                let started = ContinuousClock.now
+                defer {
+                    system.log.info(
+                        "Page read",
+                        metadata: [
+                            "space": "\(space)", "page": "\(identity)",
+                            "milliseconds": "\(milliseconds(since: started))",
+                        ])
+                }
+                do {
+                    switch try await object.page() {
+                    case .shown(let shown, let preview):
+                        return .page(
+                            space: space.api, page: page,
+                            shown: PageShown(
+                                widget: try Widget(shown.layout), version: shown.version,
+                                preview: preview.flatMap { try? PagePreview($0) }))
+                    case .failed(let reason):
+                        // Why, the page said as it worked it out.
+                        return .pageFailed(space: space.api, page: page, reason: reason)
+                    }
+                } catch {
+                    system.log.warning(
+                        "Page not read", metadata: ["space": "\(space)", "page": "\(identity)", "error": "\(error)"])
+                    return .pageFailed(space: space.api, page: page, reason: String(describing: error))
                 }
             }
         }
-        // Left, its subscription ends, and nothing more is told.
-        return { forwarding.cancel() }
+        // Each change told as what it shows then.
+        @Sendable func hearing(_ changes: some AsyncSequence<ObjectChanged, any Error> & Sendable) -> Task<Void, Never>
+        {
+            Task {
+                do {
+                    for try await _ in changes {
+                        guard let told = await now() else { continue }
+                        try? await writer.write(.init(payload: told))
+                        system.log.info("Page change told", metadata: ["page": "\(identity)"])
+                    }
+                } catch {}
+            }
+        }
+        let following = PageFollowing()
+        await following.replace(hearing: hearing(subscribed), cancel: { await subscribed.cancel() })
+        // Its space says its objects changed, as when its code did: new code ends what was
+        // followed, so it's followed again, and what it shows then is told.
+        let spaceChanges = try await CallChain.$current.withValue(chain) {
+            try await ObjectSession(in: space, actorSystem: system, agents: [], builtIns: []).changes()
+        }
+        let forwarding = Task {
+            for await _ in spaceChanges {
+                let again = try? await CallChain.$current.withValue(chain) {
+                    try await object.subscribe(to: ObjectChanged.self)
+                }
+                // One that can't be followed, as when it's gone, is told no more.
+                guard let again else { continue }
+                await following.replace(hearing: hearing(again), cancel: { await again.cancel() })
+                if let told = await now() { try? await writer.write(.init(payload: told)) }
+            }
+        }
+        return Followed(
+            now: now,
+            leave: {
+                forwarding.cancel()
+                await spaceChanges.cancel()
+                await following.stop()
+            })
     case .memory:
         let changes = try await system.singleton.proxy(MemoryNotices.self, name: MemoryNotices.singletonName)
             .subscription(for: person)
+        let now: @Sendable () async -> LiveEvent.Payload? = {
+            do {
+                return .memory(try await memory(of: person, on: system))
+            } catch {
+                system.log.warning("Memory not read", metadata: ["error": "\(error)"])
+                return nil
+            }
+        }
         let forwarding = Task {
-            for await _ in changes { try? await writer.write(.init(payload: .memoryChanged)) }
+            for await _ in changes {
+                if let told = await now() { try? await writer.write(.init(payload: told)) }
+            }
         }
-        return {
-            await changes.cancel()
-            forwarding.cancel()
-        }
+        return Followed(
+            now: now,
+            leave: {
+                await changes.cancel()
+                forwarding.cancel()
+            })
     case .tasks(let space):
-        // What the tasks are now goes first; each change follows it, in order.
         let id = space.api
         let reached = try await Space.identified(by: space, on: system)
         let scope = try await reached.scope(of: person)
@@ -1357,46 +1432,23 @@ private func follow(
                 return read != nil
             }
         }
-        // Following first, so no change between this and what's read now is missed. Followed for
+        // Followed first, so no change between this and what's read now is missed. Followed for
         // the person, as the space said they may when they joined the topic.
         let changes = try await CallChain.$current.withValue(chain) {
             try await reached.tasks(for: person).subscription()
         }
-        // What's kept now: its objects' schedules and timers, and its chats'.
-        let workflows = system.workflows
-        let decoder = JSONDecoder()
-        var tasks: [KeptTask] = []
-        for schedule in try await workflows.listSchedules(workflow: ObjectScheduleWorkflow.self) {
-            guard let firing = try? decoder.decode(ObjectFiring.self, from: schedule.inputData), firing.space == space
-            else { continue }
-            tasks.append(
-                KeptTask(
-                    id: .schedule(schedule.id), of: .object(firing.object, field: firing.property), due: firing.due,
-                    paused: schedule.paused))
+        // What's kept now: those the person sees.
+        let now: @Sendable () async -> LiveEvent.Payload? = {
+            do {
+                var seen: [KeptTask] = []
+                for task in try await keptTasks(in: space, on: system) where await sees(task) { seen.append(task) }
+                return .tasks(space: id, tasks: seen.map(TaskListing.init))
+            } catch {
+                system.log.warning("Tasks not listed", metadata: ["space": "\(space)", "error": "\(error)"])
+                return nil
+            }
         }
-        for timer in try await workflows.listWorkflows(workflow: ObjectTimerWorkflow.self) {
-            guard case .running = timer.status, let data = timer.inputData,
-                let firing = try? decoder.decode(ObjectFiring.self, from: data), firing.space == space
-            else { continue }
-            tasks.append(
-                KeptTask(
-                    id: .timer(timer.id), of: .object(firing.object, field: firing.property), due: firing.due,
-                    paused: false))
-        }
-        for schedule in try await workflows.listSchedules(workflow: ScheduleWorkflow.self) {
-            guard let made = try? decoder.decode(ChatSchedule.self, from: schedule.inputData), made.space == space
-            else { continue }
-            tasks.append(KeptTask(made, id: schedule.id, paused: schedule.paused))
-        }
-        for timer in try await workflows.listWorkflows(workflow: TimerWorkflow.self) {
-            guard case .running = timer.status, let data = timer.inputData,
-                let made = try? decoder.decode(ChatTimer.self, from: data), made.space == space
-            else { continue }
-            tasks.append(KeptTask(made, id: timer.id))
-        }
-        var seen: [KeptTask] = []
-        for task in tasks where await sees(task) { seen.append(task) }
-        try? await writer.write(.init(payload: .tasks(space: id, tasks: seen.map(TaskListing.init))))
+        // Each change told as it comes.
         let forwarding = CallChain.$current.withValue(chain) {
             Task {
                 for await notice in changes {
@@ -1411,28 +1463,133 @@ private func follow(
             }
         }
         // Left, its subscription ends, and nothing more is told.
-        return {
-            await CallChain.$current.withValue(chain) { await changes.cancel() }
-            forwarding.cancel()
+        return Followed(
+            now: now,
+            leave: {
+                await CallChain.$current.withValue(chain) { await changes.cancel() }
+                forwarding.cancel()
+            })
+    }
+}
+
+extension PagePreview {
+    /// `preview` drawn as a widget, at its size. Throws when its layout can't be drawn.
+    init(_ preview: TurgaiObjects.Preview) throws {
+        switch preview {
+        case .small(let layout): self = .small(try Widget(layout))
+        case .medium(let layout): self = .medium(try Widget(layout))
         }
     }
+}
+
+/// What the connection that shows `shown` is told of `notice`, about one of the person's
+/// conversations in Turgai's apps: nothing of one elsewhere, and what's said in the one it shows,
+/// or its leaving, comes as that conversation's own events.
+private func told(_ notice: ConversationNotice, shown: ShownConversation) async -> LiveEvent.Payload? {
+    switch notice {
+    case .joined(let listing) where listing.id.channel == turgaiChannel:
+        return .conversationJoined(conversation: .init(listing))
+    case .said(let listing) where listing.id.channel == turgaiChannel:
+        let open = await shown.conversation?.domainID == listing.id
+        return open ? nil : .conversationSaid(conversation: .init(listing))
+    case .titled(let listing) where listing.id.channel == turgaiChannel:
+        return .conversationTitled(conversation: .init(listing))
+    case .left(let conversation) where conversation.channel == turgaiChannel:
+        let open = await shown.conversation?.domainID == conversation
+        let id = TurgaiModels.ConversationID(rawValue: conversation.externalAddress.rawValue)
+        return open ? nil : .conversationLeft(conversationID: id)
+    case .deleted(let conversation) where conversation.channel == turgaiChannel:
+        // The open one too: what it showed is gone.
+        let id = TurgaiModels.ConversationID(rawValue: conversation.externalAddress.rawValue)
+        return .conversationDeleted(conversationID: id)
+    case .joined, .said, .titled, .left, .deleted:
+        return nil
+    }
+}
+
+/// `space`'s pages `person` may read: its objects that conform to `Page`, each with its own preview
+/// when it gives one that can be drawn.
+private func pageListings(
+    of space: TurgaiDomain.SpaceID, for person: TurgaiDomain.UserID, on system: ClusterSystem
+) async throws -> [PageListing] {
+    let reached = try await Space.identified(by: space, on: system)
+    let scope = try await reached.scope(of: person)
+    let entries = try await reached.objects(for: person)
+    return try await CallChain.$current.withValue(.start(scope, in: nil)) { () async throws in
+        var pages: [PageListing] = []
+        for entry in entries {
+            guard let made = DynamicObject.identity(of: entry.object.id),
+                let described = try? await entry.object.describe(),
+                described.conforms.contains(Page.name)
+            else { continue }
+            let object = try await DynamicObject.identified(by: made, in: space, on: system)
+            let preview = (try? await Previewed.preview(of: object)).flatMap { $0 }.flatMap { try? PagePreview($0) }
+            pages.append(
+                PageListing(
+                    id: MadeObjectID(rawValue: made.rawValue), title: entry.id.description,
+                    summary: entry.description, preview: preview))
+        }
+        return pages
+    }
+}
+
+/// What's kept for `space` now: its objects' schedules and timers, and its chats'.
+private func keptTasks(in space: TurgaiDomain.SpaceID, on system: ClusterSystem) async throws -> [KeptTask] {
+    let keeper = TimerKeeper(on: system)
+    return try await (keeper.schedules() + keeper.timers()).compactMap { KeptTask($0, in: space) }
+}
+
+/// A space's objects followed for `person`: what `now` says they are, told again each time they
+/// change, until it's left.
+private func followingObjects(
+    of space: TurgaiDomain.SpaceID, for person: TurgaiDomain.UserID, on system: ClusterSystem,
+    writer: PublicChatSocketWriter, now: @escaping @Sendable () async -> LiveEvent.Payload?
+) async throws -> Followed {
+    let reached = try await Space.identified(by: space, on: system)
+    let chain = CallChain.start(try await reached.scope(of: person), in: nil)
+    // Followed first, so no change between this and what's read now is missed.
+    let changes = try await CallChain.$current.withValue(chain) {
+        try await ObjectSession(in: space, actorSystem: system, agents: [], builtIns: []).changes()
+    }
+    let forwarding = Task {
+        for await _ in changes {
+            if let told = await now() { try? await writer.write(.init(payload: told)) }
+        }
+    }
+    // Left, its subscription ends, and nothing more is told.
+    return Followed(
+        now: now,
+        leave: {
+            await changes.cancel()
+            forwarding.cancel()
+        })
+}
+
+/// How long since `start`, in whole milliseconds, as the log says it.
+private func milliseconds(since start: ContinuousClock.Instant) -> Int64 {
+    let elapsed = ContinuousClock.now - start
+    return elapsed.components.seconds * 1000 + elapsed.components.attoseconds / 1_000_000_000_000_000
 }
 
 /// The answer to `ask`, asked by `person` on the connection `writer` writes to: a topic joined or
 /// left, what's remembered about them, forgetting it, or remembering on or off.
 private func answer(
-    _ ask: TurgaiModels.ChatAsk, for person: TurgaiDomain.UserID, topics: JoinedTopics,
-    writer: PublicChatSocketWriter, dependencies: TurgaiRouteDependencies
-) async -> TurgaiModels.ChatReply {
+    _ ask: TurgaiModels.LiveAsk, for person: TurgaiDomain.UserID, topics: JoinedTopics,
+    writer: PublicChatSocketWriter, shown: ShownConversation, dependencies: TurgaiRouteDependencies
+) async -> TurgaiModels.LiveReply {
     let system = dependencies.system
     do {
         switch ask {
         case .join(let topic):
             guard let following = Following(topic) else { return .failed(notASpace) }
-            try await topics.join(topic) {
-                try await follow(following, for: person, writer: writer, dependencies: dependencies)
+            let started = ContinuousClock.now
+            let now = try await topics.join(topic) {
+                try await follow(following, for: person, writer: writer, shown: shown, dependencies: dependencies)
             }
-            return .ok
+            system.log.info(
+                "Topic joined", metadata: ["topic": "\(topic)", "milliseconds": "\(milliseconds(since: started))"])
+            // What it is now, as the chat's open answers with its history.
+            return now.map { .joined(LiveEvent(payload: $0)) } ?? .ok
         case .leave(let topic):
             await topics.leave(topic)
             return .ok
@@ -1493,6 +1650,17 @@ private func answer(
                 _ = try await Timers.of(space, on: system).cancel(name: name)
             }
             return .ok
+        case .pressPage(let space, let page, let path, let version):
+            guard let space = TurgaiDomain.SpaceID(space) else { return .failed(notASpace) }
+            // On their behalf, as they may read the page: one pressed on a layout since replaced
+            // isn't taken, and what it shows now is told on its topic either way.
+            let scope = try await Space.identified(by: space, on: system).scope(of: person)
+            let object = try await DynamicObject.identified(
+                by: ObjectIdentity(rawValue: page.rawValue), in: space, on: system)
+            _ = try await CallChain.$current.withValue(.start(scope, in: nil)) {
+                try await Page.press(path, on: version, of: object)
+            }
+            return .ok
         }
     } catch let refusal as DueInChatError {
         return .failed(TurgaiModels.ChatError(code: "refused", message: refusal.description))
@@ -1501,6 +1669,7 @@ private func answer(
     } catch let refusal as ConversationRefusal {
         return .failed(TurgaiModels.ChatError(code: "refused", message: refusal.description))
     } catch {
+        dependencies.system.log.warning("Push not answered", metadata: ["ask": "\(ask)", "error": "\(error)"])
         return .failed(TurgaiModels.ChatError(code: "push_failed", message: "That didn't work. Try again."))
     }
 }
@@ -1553,8 +1722,9 @@ private func open(
     return await receipt.wait()
 }
 
-/// What an app's connection is sent as it opens `conversation` for `person`: that it's open, what's
-/// been said in it, and the agent's past turns.
+/// What an app's connection is sent as it opens `conversation` for `person`: that it's open, and
+/// what's been said in it. The agent's turns, its tool calls, are read over HTTP, one as it's asked
+/// for.
 private func writeOpened(
     _ conversation: APIConversation, for person: TurgaiDomain.UserID, on writer: PublicChatSocketWriter,
     names: ParticipantNames, dependencies: TurgaiRouteDependencies
@@ -1569,19 +1739,6 @@ private func writeOpened(
                 conversationID: conversation.publicID, botID: conversation.bot.map { .init(rawValue: $0.id.role) },
                 status: publicConversationStatus(status), you: person.key)))
     try await writer.write(.init(payload: .history(conversationID: conversation.publicID, messages: history)))
-    // The agent's turns, step by step; the chat works without them, and says why they're missing.
-    let turns: [ConversationTurn]
-    do {
-        turns = try await agentTurns(in: conversation, of: space, askedBy: person, journal: dependencies.journal)
-    } catch {
-        try await writer.write(
-            publicAPIErrorEvent(
-                conversationID: conversation.publicID, code: "turns_unavailable",
-                message: "Couldn't read what the agent did: \(error)"))
-        return
-    }
-    try await writer.write(
-        .init(payload: .turns(conversationID: conversation.publicID, turns: turns.map(TurnRecord.init))))
 }
 
 /// `request`, said by `person` in `conversation` through `session`: what's wrong with it, or that
@@ -2106,7 +2263,7 @@ private func publicAPIErrorEvent(
     conversationID: TurgaiModels.ConversationID,
     code: String,
     message: String
-) -> TurgaiModels.ChatEvent {
+) -> TurgaiModels.LiveEvent {
     .init(
         payload: .notice(
             conversationID: conversationID,
@@ -2124,13 +2281,13 @@ private func send(
     to: Set<Participant>,
     dependencies: TurgaiRouteDependencies,
     names: ParticipantNames
-) async throws -> TurgaiModels.ChatEvent {
+) async throws -> TurgaiModels.LiveEvent {
     let session = LiveSession(
         id: UUID().uuidString, actorSystem: dependencies.system, linking: dependencies.linking, source: .web)
     // It runs while the socket does: its input finishes as the socket closes.
     async let _: Void = session.run()
-    let outputTask = Task<TurgaiModels.ChatEvent?, Never> {
-        var terminalEvent: TurgaiModels.ChatEvent?
+    let outputTask = Task<TurgaiModels.LiveEvent?, Never> {
+        var terminalEvent: TurgaiModels.LiveEvent?
         for await delivery in session.output {
             let event = PublicChatEvent(
                 event: delivery.event,
@@ -2217,7 +2374,7 @@ private actor PublicChatSocketWriter {
         self.outbound = outbound
     }
 
-    func write(_ event: TurgaiModels.ChatEvent) async throws {
+    func write(_ event: TurgaiModels.LiveEvent) async throws {
         let data = try JSONEncoder().encode(event)
         guard let text = String(data: data, encoding: .utf8) else {
             throw PublicChatSocketWriterError.encodingFailed
@@ -2432,7 +2589,7 @@ private func runHTMLChatSocket(
 
 private struct PublicChatEvent: Sendable {
     /// What the client is sent, or `nil` for what the API doesn't show.
-    let event: TurgaiModels.ChatEvent?
+    let event: TurgaiModels.LiveEvent?
 
     /// `event` as the API sends it, its message said by `author`.
     init(
@@ -2442,6 +2599,7 @@ private struct PublicChatEvent: Sendable {
     ) {
         switch event {
         case .reply(let reply):
+            // The connection hears what's said, not the tools the agent calls to say it.
             self.event = Self.replyEvent(
                 reply,
                 publicConversationID: publicConversationID,
@@ -2480,7 +2638,7 @@ private struct PublicChatEvent: Sendable {
         _ reply: ReplyEvent,
         publicConversationID: TurgaiModels.ConversationID,
         author: ParticipantSummary?
-    ) -> TurgaiModels.ChatEvent {
+    ) -> TurgaiModels.LiveEvent? {
         switch reply {
         case .userMessage(_, let turnID, let messageID, let text, _, let to, let at):
             return .init(
@@ -2525,14 +2683,9 @@ private struct PublicChatEvent: Sendable {
                     activity: message
                 )
             )
-        case .step(_, let turnID, let step):
-            return .init(
-                payload: .turnStep(
-                    conversationID: publicConversationID,
-                    turnID: .init(rawValue: turnID.rawValue),
-                    step: TurnStep(step)
-                )
-            )
+        case .step:
+            // A tool call, read over HTTP as its turn is.
+            return nil
         case .partial(_, let turnID, let text):
             return .init(
                 payload: .turnPartial(

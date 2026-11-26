@@ -1,5 +1,5 @@
-/// One object, as `GET /api/v1/objects` lists it to the signed-in account: what it is, what it
-/// takes, and the node it lives on. Only what the account may read is listed.
+/// One object, as the connection lists a space's objects to the signed-in account: what it is,
+/// what it takes, and the node it lives on. Only what the account may read is listed.
 public struct ObjectListing: Codable, Hashable, Sendable {
     /// Its actor's id, the same while it lives.
     public let id: String

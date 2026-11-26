@@ -34,6 +34,7 @@ public struct ObjectWriter: Sendable {
         "Stored properties are what it keeps; methods are what it can be asked to do.",
         "Methods and properties without `private` are what it offers to others. Mark helper methods and state only it uses `private`.",
         CodableValues.rule,
+        "Model data as algebraic data types: enums, with associated values, for alternatives, structs for records. Branch with `switch` and pattern matching, not string constants and if-else chains.",
         "Only the object goes in the file: code outside it never runs.",
     ]
 

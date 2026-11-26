@@ -4,6 +4,7 @@ import DurableWorkflows
 import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
+import TurgaiTimers
 import VirtualActors
 
 #if canImport(FoundationEssentials)
@@ -17,7 +18,7 @@ import VirtualActors
 @Describable
 public struct ScheduleInChat: Codable, Sendable, Equatable {
     public let name: String
-    public let schedule: TurgaiObjects.Schedule
+    public let schedule: TurgaiTimers.Schedule
     public let then: WhenDue
     public let next: Date?
     public let paused: Bool
@@ -29,7 +30,7 @@ public struct ScheduleInChat: Codable, Sendable, Equatable {
 public struct ObjectScheduleInChat: Codable, Sendable, Equatable {
     public let object: String
     public let property: String
-    public let schedule: TurgaiObjects.Schedule
+    public let schedule: TurgaiTimers.Schedule
     public let next: Date?
     public let paused: Bool
 }
@@ -79,7 +80,8 @@ public enum DueInChatError: Error, Codable, Sendable, Equatable, CustomStringCon
 }
 
 /// The chats' schedules: each due as it says, by the name it's given in its chat, saying text
-/// there or asking the chat's agent each time. What an object's own schedules are, it lists.
+/// there or asking the chat's agent each time. It's told when one is due, as their owner. What an
+/// object's own schedules are, it lists.
 @Discoverable
 @VirtualActor
 public distributed actor Scheduler {
@@ -91,8 +93,12 @@ public distributed actor Scheduler {
 
     /// `space`'s scheduler, wherever and whenever it runs.
     public static func of(_ space: SpaceID, on actorSystem: ClusterSystem) async throws -> Scheduler {
-        try await actorSystem.virtualActors.getActor(
-            identifiedBy: .owned(by: space, "builtin", "scheduler"), dependency: space)
+        try await actorSystem.virtualActors.getActor(identifiedBy: virtualID(of: space), dependency: space)
+    }
+
+    /// The id of `space`'s scheduler.
+    static func virtualID(of space: SpaceID) -> VirtualActorID {
+        .owned(by: space, "builtin", "scheduler")
     }
 
     public init(actorSystem: ActorSystem, dependency space: SpaceID) async throws {
@@ -107,28 +113,23 @@ public distributed actor Scheduler {
     ///   - schedule: When it's due.
     ///   - then: What it does each time it's due.
     @DiscoverableAction
-    public distributed func every(name: String, schedule: TurgaiObjects.Schedule, then: WhenDue) async throws
+    public distributed func every(name: String, schedule: TurgaiTimers.Schedule, then: WhenDue) async throws
         -> ScheduleInChat
     {
         let (chain, chat) = try DueInChatError.chat()
         let name = ObjectNames.handle(for: name)
         guard !name.trimmed().isEmpty else { throw DueInChatError.unnamed }
-        let rule = try schedule.rule()
         try DueInChatError.askable(then, chain)
-        let id = ChatSchedule.id(in: chat, of: chain.scope.space, named: name)
-        let workflows = actorSystem.workflows
-        if let made = try await made(id) {
-            try await workflows.cancelSchedule(id: id, workflow: ScheduleWorkflow.self)
-        }
-        let entry = ChatSchedule(
-            name: name, schedule: schedule, then: then, askedBy: chain.scope.asker,
+        let reminder = ChatReminder(
+            name: name, then: then, askedBy: chain.scope.asker, in: chain.scope.space, conversationID: chat)
+        let keeper = TimerKeeper(on: actorSystem)
+        let id = try await keeper.set(
+            ChatReminder.timerName(name, in: chat), every: schedule, of: try await Self.of(space, on: actorSystem),
+            about: reminder)
+        await actorSystem.tellTasks(
             in: chain.scope.space,
-            conversationID: chat)
-        try await workflows.schedule(
-            id: id, recurrence: rule, workflow: ScheduleWorkflow.self, input: entry,
-            retryPolicy: ChatSchedule.retryPolicy, overlapPolicy: .skip)
-        await actorSystem.tellTasks(in: chain.scope.space, .kept(KeptTask(entry, id: id, paused: false)))
-        let next = try await workflows.describeSchedule(id: id, workflow: ScheduleWorkflow.self)?.nextFireAt
+            .kept(KeptTask(id: id, of: .chat(chat, name: name, does: then.described), due: .schedule(schedule), paused: false)))
+        let next = try await made(name, in: chat)?.next
         return ScheduleInChat(name: name, schedule: schedule, then: then, next: next, paused: false)
     }
 
@@ -136,25 +137,21 @@ public distributed actor Scheduler {
     @DiscoverableAction(safe: true, idempotent: true)
     public distributed func list() async throws -> SchedulesInChat {
         let (chain, chat) = try DueInChatError.chat()
-        let workflows = actorSystem.workflows
-        let decoder = JSONDecoder()
-        let schedules = try await workflows.listSchedules(workflow: ScheduleWorkflow.self).compactMap {
-            description -> ScheduleInChat? in
-            guard let entry = try? decoder.decode(ChatSchedule.self, from: description.inputData),
-                entry.space == chain.scope.space, entry.conversationID == chat
+        let keeper = TimerKeeper(on: actorSystem)
+        let schedules = try await keeper.schedules(of: Self.virtualID(of: space)).compactMap { now -> ScheduleInChat? in
+            guard let reminder = now.firing.about(as: ChatReminder.self), reminder.conversationID == chat,
+                case .schedule(let schedule) = now.firing.due
             else { return nil }
             return ScheduleInChat(
-                name: entry.name, schedule: entry.schedule, then: entry.then, next: description.nextFireAt,
-                paused: description.paused)
+                name: reminder.name, schedule: schedule, then: reminder.then, next: now.next, paused: now.paused)
         }
-        let objects = try await workflows.listSchedules(workflow: ObjectScheduleWorkflow.self).compactMap {
-            description -> ObjectScheduleInChat? in
-            guard let firing = try? decoder.decode(ObjectFiring.self, from: description.inputData),
-                firing.place == chat, case .schedule(let schedule) = firing.due
+        let objects = try await keeper.schedules().compactMap { now -> ObjectScheduleInChat? in
+            guard let object = now.firing.about(as: ObjectTimerAbout.self), object.space == chain.scope.space,
+                object.place == chat, case .schedule(let schedule) = now.firing.due
             else { return nil }
             return ObjectScheduleInChat(
-                object: firing.object.rawValue, property: firing.property, schedule: schedule,
-                next: description.nextFireAt, paused: description.paused)
+                object: object.object.rawValue, property: now.firing.name, schedule: schedule, next: now.next,
+                paused: now.paused)
         }
         return SchedulesInChat(
             chat: schedules.sorted { $0.name < $1.name },
@@ -165,59 +162,60 @@ public distributed actor Scheduler {
     /// - Parameter name: The schedule's name in this chat.
     @DiscoverableAction
     public distributed func pause(name: String) async throws -> ScheduleInChat {
-        try await changing(name) { id, workflows in
-            try await workflows.pauseSchedule(id: id, workflow: ScheduleWorkflow.self, reason: nil)
-        }
+        try await changing(name) { id, keeper in _ = try await keeper.pause(id, true) }
     }
 
     /// Resumes this chat's paused schedule `name`.
     /// - Parameter name: The schedule's name in this chat.
     @DiscoverableAction
     public distributed func resume(name: String) async throws -> ScheduleInChat {
-        try await changing(name) { id, workflows in
-            try await workflows.unpauseSchedule(id: id, workflow: ScheduleWorkflow.self, reason: nil)
-        }
+        try await changing(name) { id, keeper in _ = try await keeper.pause(id, false) }
     }
 
     /// Ends this chat's schedule `name` for good.
     /// - Parameter name: The schedule's name in this chat.
     @DiscoverableAction
     public distributed func cancel(name: String) async throws -> ScheduleInChat {
-        try await changing(name) { id, workflows in
-            try await workflows.cancelSchedule(id: id, workflow: ScheduleWorkflow.self)
-        }
+        try await changing(name) { id, keeper in try await keeper.cancel(.schedule(id)) }
     }
 
     /// Changes this chat's schedule `name` as `change` does, when it's theirs to change: what it
     /// is after.
-    private func changing(
-        _ written: String, _ change: (ScheduleID, DurableWorkflowsPlugin) async throws -> Void
-    ) async throws -> ScheduleInChat {
+    private func changing(_ written: String, _ change: (ScheduleID, TimerKeeper) async throws -> Void) async throws
+        -> ScheduleInChat
+    {
         let (chain, chat) = try DueInChatError.chat()
         let name = ObjectNames.handle(for: written)
-        let id = ChatSchedule.id(in: chat, of: chain.scope.space, named: name)
-        guard let made = try await made(id) else {
+        guard let made = try await made(name, in: chat), case .schedule(let id) = made.firing.id,
+            case .schedule(let schedule) = made.firing.due, let reminder = made.firing.about(as: ChatReminder.self)
+        else {
             throw DueInChatError.none(kind: "schedule", written, named: try await list().chat.map(\.name))
         }
-        let workflows = actorSystem.workflows
-        try await change(id, workflows)
-        let after = try await workflows.describeSchedule(id: id, workflow: ScheduleWorkflow.self)
+        let keeper = TimerKeeper(on: actorSystem)
+        try await change(id, keeper)
+        let after = try await keeper.now(id)
         await actorSystem.tellTasks(
             in: chain.scope.space,
-            after.map { .kept(KeptTask(made, id: id, paused: $0.paused)) } ?? .ended(.schedule(id)))
+            after.flatMap { KeptTask($0, in: chain.scope.space) }.map { .kept($0) } ?? .ended(made.firing.id))
         return ScheduleInChat(
-            name: made.name, schedule: made.schedule, then: made.then, next: after?.nextFireAt,
-            paused: after?.paused ?? false)
+            name: reminder.name, schedule: schedule, then: reminder.then, next: after?.next, paused: after?.paused ?? false)
     }
 
-    /// The schedule made as `id`, while there is one.
-    private func made(_ id: ScheduleID) async throws -> ChatSchedule? {
-        guard
-            let description = try await actorSystem.workflows.describeSchedule(id: id, workflow: ScheduleWorkflow.self)
-        else { return nil }
-        return try? JSONDecoder().decode(ChatSchedule.self, from: description.inputData)
+    /// This chat's schedule `name`, while there is one.
+    private func made(_ name: String, in chat: ConversationID) async throws -> Kept? {
+        try await TimerKeeper(on: actorSystem).schedules(of: Self.virtualID(of: space)).first {
+            $0.firing.name == ChatReminder.timerName(name, in: chat)
+        }
     }
+}
 
+/// What it sets due is its chats': it's told when one is, as their owner.
+extension Scheduler: TimerOwner {
+    /// A chat's schedule is due: it does what it says there.
+    public distributed func timerFired(_ firing: Firing, run: WorkflowID) async throws {
+        guard let reminder = firing.about(as: ChatReminder.self) else { return }
+        try await reminder.doing(run: run, on: actorSystem)
+    }
 }
 
 /// Read by everyone: what each may change, it decides.

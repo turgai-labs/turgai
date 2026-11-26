@@ -430,7 +430,9 @@ public actor ObjectSession {
     }
 
     /// The code of `handle` saved as `code`: checked as Swift is, against what its code can use,
-    /// then run. What's wrong with it is thrown, each at its line; saved, it lands on the object.
+    /// then run, and for a page, its page drawn with what it holds now. What's wrong with it is
+    /// thrown, each at its line, or why its page can't be shown, with its code as it was; saved,
+    /// it lands on the object.
     func save(_ code: String, to handle: ObjectID) async throws -> CallReturn {
         let object = try await dynamicObject(handle)
         let current = try await object.source
@@ -442,7 +444,13 @@ public actor ObjectSession {
             let problems = await ScriptInstance.problems(in: source)
             if problems.isEmpty {
                 try await replace(handle, with: source)
-                wrong = nil
+                // A page that can't be shown isn't saved: its code goes back to what it was.
+                if let notShown = await pageNotShown(object) {
+                    try await replace(handle, with: current)
+                    wrong = "its page can't be shown: \(notShown)"
+                } else {
+                    wrong = nil
+                }
             } else {
                 wrong = problems.map { $0.written(in: code) }.joined(separator: "\n")
             }
@@ -980,6 +988,18 @@ extension ObjectSession {
     }
 
     /// The object behind `handle` as one made here, or `nil` for any other object.
+    /// Why `object`'s page can't be shown now: none while it can, or when it isn't a page.
+    func pageNotShown(_ object: DynamicObject) async -> String? {
+        guard case .failed(let reason)? = try? await object.page() else { return nil }
+        return reason
+    }
+
+    /// Why `handle`'s page can't be shown now: none while it can, or when it isn't a page made here.
+    func pageNotShown(_ handle: ObjectID) async -> String? {
+        guard let made = try? await madeObject(handle) else { return nil }
+        return await pageNotShown(made)
+    }
+
     func madeObject(_ handle: ObjectID) async throws -> DynamicObject? {
         if let known = made[handle] { return known }
         let object = try await object(handle)
@@ -1599,6 +1619,10 @@ public struct InvokeObjectEffect: ScopedEffect, Sendable {
         lines.append(changes.isEmpty ? "Nothing it holds changed." : changes.joined(separator: "; ") + ".")
         let printed = await session.printed
         if !printed.isEmpty { lines.append("It printed: " + printed.joined(separator: " ")) }
+        // What it holds now can break a page that was shown.
+        if let notShown = await session.pageNotShown(handle) {
+            lines.append("Its page can't be shown now: \(notShown)")
+        }
         return await session.page(lines.joined(separator: "\n"))
     }
 }

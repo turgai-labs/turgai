@@ -4,6 +4,7 @@ import Testing
 import TurgaiModels
 
 @testable import MacApp
+@testable import TurgaiClient
 
 @MainActor
 struct TasksFeatureTests {
@@ -34,16 +35,16 @@ struct TasksFeatureTests {
 
         // As the connection does: each listener hears what's said; a space's tasks are said as it's
         // joined.
-        let listeners = LockIsolated<[AsyncStream<ChatEvent>.Continuation]>([])
-        let tell = { @Sendable (payload: ChatEvent.Payload) in
-            for listener in listeners.value { listener.yield(ChatEvent(payload: payload)) }
+        let listeners = LockIsolated<[AsyncStream<LiveEvent>.Continuation]>([])
+        let tell = { @Sendable (payload: LiveEvent.Payload) in
+            for listener in listeners.value { listener.yield(LiveEvent(payload: payload)) }
         }
-        let asked = LockIsolated<[ChatAsk]>([])
+        let asked = LockIsolated<[LiveAsk]>([])
         let store = TestStore(initialState: TasksFeature.State()) {
             TasksFeature()
         } withDependencies: {
             $0.chat.events = {
-                let (events, listener) = AsyncStream.makeStream(of: ChatEvent.self)
+                let (events, listener) = AsyncStream.makeStream(of: LiveEvent.self)
                 listeners.withValue { $0.append(listener) }
                 return events
             }

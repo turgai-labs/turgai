@@ -4,7 +4,9 @@ import PackageDescription
 let package = Package(
     name: "Turgai",
     platforms: [
-        .macOS("26.4")
+        .macOS("26.4"),
+        // The iPhone app, which arranges itself around a foldable's fold (`ArrangementView`).
+        .iOS("27.1"),
     ],
     products: [
         .library(name: "TurgaiModels", targets: ["TurgaiModels"]),
@@ -16,6 +18,7 @@ let package = Package(
         .executable(name: "TurgaiWasmRunner", targets: ["TurgaiWasmRunner"]),
         .executable(name: "TurgaiSite", targets: ["TurgaiSite"]),
         .library(name: "MacApp", targets: ["MacApp"]),
+        .library(name: "PhoneApp", targets: ["PhoneApp"]),
     ],
     traits: [
         .trait(name: "Llama", description: "Local GGUF models run by llama.cpp, which builds only for Apple platforms.")
@@ -130,6 +133,19 @@ let package = Package(
                 .product(name: "VirtualActors", package: "cluster-virtual-actors"),
             ]
         ),
+        // What's due once or again and again, for whoever sets it: each kept by its durable
+        // workflow, which tells its owner when it's due. It knows nothing of who sets it.
+        .target(
+            name: "TurgaiTimers",
+            dependencies: [
+                .product(name: "AttributedCalls", package: "cluster-attributed-calls"),
+                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "DiscoverableActors", package: "discoverable-distributed-actors"),
+                .product(name: "DistributedCluster", package: "swift-distributed-actors"),
+                .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
+                .product(name: "VirtualActors", package: "cluster-virtual-actors"),
+            ]
+        ),
         .target(
             name: "TurgaiPeople",
             dependencies: [
@@ -148,6 +164,7 @@ let package = Package(
         .target(
             name: "TurgaiSpaces",
             dependencies: [
+                "TurgaiTimers",
                 .product(name: "AttributedCalls", package: "cluster-attributed-calls"),
                 .product(name: "RunningActors", package: "cluster-running-actors"),
                 "TurgaiAgents",
@@ -211,6 +228,7 @@ let package = Package(
         .target(
             name: "TurgaiWeb",
             dependencies: [
+                "TurgaiTimers",
                 .product(name: "DurableWorkflows", package: "cluster-durable-workflows"),
                 "TurgaiAgents",
                 "TurgaiCalls",
@@ -252,6 +270,7 @@ let package = Package(
         .target(
             name: "TurgaiObjects",
             dependencies: [
+                "TurgaiTimers",
                 .product(name: "RunningActors", package: "cluster-running-actors"),
                 .product(name: "AttributedCalls", package: "cluster-attributed-calls"),
                 "TurgaiCalls",
@@ -362,6 +381,7 @@ let package = Package(
         .target(
             name: "TurgaiServer",
             dependencies: [
+                "TurgaiTimers",
                 .product(name: "RunningActors", package: "cluster-running-actors"),
                 "TurgaiAgents",
                 "TurgaiCalls",
@@ -402,8 +422,23 @@ let package = Package(
             ]
         ),
         .target(
+            // What the apps show and do, talking only to a server, wherever it runs: the Mac app
+            // and the iPhone app each draw it their own way.
+            name: "TurgaiClient",
+            dependencies: [
+                "TurgaiModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "Mosaic", package: "mosaic"),
+                .product(name: "MosaicSwiftUI", package: "mosaic"),
+            ],
+            resources: [
+                .process("Resources/Assets.xcassets")
+            ]
+        ),
+        .target(
             name: "MacApp",
             dependencies: [
+                "TurgaiClient",
                 "TurgaiApplication",
                 "TurgaiModels",
                 "TurgaiObjects",
@@ -418,9 +453,16 @@ let package = Package(
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "Mosaic", package: "mosaic"),
                 .product(name: "MosaicSwiftUI", package: "mosaic"),
-            ],
-            resources: [
-                .process("Resources/Assets.xcassets")
+            ]
+        ),
+        .target(
+            // Turgai on an iPhone: what `TurgaiClient` does, drawn for a phone, folded or not.
+            name: "PhoneApp",
+            dependencies: [
+                "TurgaiClient",
+                "TurgaiModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+                .product(name: "Mosaic", package: "mosaic"),
             ]
         ),
         .executableTarget(
@@ -436,7 +478,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TurgaiModelsTests",
-            dependencies: ["TurgaiModels"]
+            dependencies: ["TurgaiModels", .product(name: "Mosaic", package: "mosaic")]
         ),
         .testTarget(
             name: "TurgaiMemoryTests",
@@ -456,6 +498,7 @@ let package = Package(
         .testTarget(
             name: "TurgaiObjectsTests",
             dependencies: [
+                "TurgaiTimers",
                 "TurgaiCalls",
                 .product(name: "AttributedCalls", package: "cluster-attributed-calls"),
                 "TurgaiSpaces",
@@ -480,9 +523,19 @@ let package = Package(
             resources: [.copy("Corpus")]
         ),
         .testTarget(
+            name: "PhoneAppTests",
+            dependencies: [
+                "PhoneApp",
+                "TurgaiClient",
+                "TurgaiModels",
+                .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
+            ]
+        ),
+        .testTarget(
             name: "MacAppTests",
             dependencies: [
                 "MacApp",
+                "TurgaiClient",
                 "TurgaiModels",
                 .product(name: "ComposableArchitecture", package: "swift-composable-architecture"),
             ]

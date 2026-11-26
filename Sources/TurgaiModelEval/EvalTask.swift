@@ -337,7 +337,7 @@ struct EvalTask: Sendable {
     /// What a widget says: its texts and its buttons' labels, in order.
     private static func words(of widget: Widget) -> [String] {
         switch widget {
-        case .text(let text): [text.words.rawValue]
+        case .text(let text): [text.words]
         case .button(let button): ["[\(button.label.rawValue)]"]
         default: widget.children.flatMap(words(of:))
         }

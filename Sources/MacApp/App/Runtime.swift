@@ -2,6 +2,7 @@ import AppKit
 import Logging
 import Observation
 import ServiceLifecycle
+import TurgaiClient
 import TurgaiServer
 import TurgaiWeb
 
@@ -20,18 +21,21 @@ final class Runtime {
     @ObservationIgnored private var group: ServiceGroup?
     @ObservationIgnored private var run: Task<Void, Never>?
 
-    init() {
+    /// Runs it, `listening` told once its web server listens.
+    init(listening: @escaping @Sendable () async -> Void) {
         self.run = Task {
             let server: TurgaiServer
             do {
                 server = try await TurgaiServer(
                     directory: TurgaiServer.defaultDirectory,
                     secretKey: try SecretKeychain.secretKey(),
-                    port: LocalServer.baseURL.port ?? 3333,
+                    host: .thisMachine,
+                    port: ServerAddress.onThisMac.url.port ?? 3333,
                     logLevel: .info,
                     api: APIConfiguration(),
                     environment: ProcessInfo.processInfo.environment,
-                    workspaceRoot: FileManager.default.homeDirectoryForCurrentUser.path
+                    workspaceRoot: FileManager.default.homeDirectoryForCurrentUser.path,
+                    listening: listening
                 )
             } catch {
                 self.stopped(reason: String(describing: error))

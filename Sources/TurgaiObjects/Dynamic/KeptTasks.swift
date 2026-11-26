@@ -1,6 +1,7 @@
 import DistributedCluster
 import DurableWorkflows
 import TurgaiDomain
+import TurgaiTimers
 import VirtualActors
 
 #if canImport(FoundationEssentials)
@@ -13,10 +14,7 @@ import VirtualActors
 /// with when it's due.
 public struct KeptTask: Codable, Sendable, Equatable, Identifiable {
     /// The durable schedule or timer that keeps it.
-    public enum ID: Hashable, Codable, Sendable {
-        case schedule(ScheduleID)
-        case timer(WorkflowID)
-    }
+    public typealias ID = TimerID
 
     /// What it's for: a chat's reminder, by its name there, doing what `does` says; or an
     /// object's field.
@@ -27,10 +25,10 @@ public struct KeptTask: Codable, Sendable, Equatable, Identifiable {
 
     public let id: ID
     public let of: Of
-    public let due: ObjectDue
+    public let due: When
     public let paused: Bool
 
-    public init(id: ID, of: Of, due: ObjectDue, paused: Bool) {
+    public init(id: ID, of: Of, due: When, paused: Bool) {
         self.id = id
         self.of = of
         self.due = due

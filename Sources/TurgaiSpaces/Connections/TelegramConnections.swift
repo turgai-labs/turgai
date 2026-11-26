@@ -7,7 +7,6 @@ import TurgaiConversations
 import TurgaiDomain
 import TurgaiHail
 import TurgaiPeople
-import TurgaiSpaces
 import TurgaiTelegram
 
 #if canImport(FoundationEssentials)

@@ -42,11 +42,13 @@ public struct TurgaiServer: Sendable {
     public init(
         directory: URL,
         secretKey: SecretKey,
+        host: WebHost,
         port: Int,
         logLevel: Logger.Level,
         api: APIConfiguration,
         environment: [String: String],
-        workspaceRoot: String
+        workspaceRoot: String,
+        listening: @escaping @Sendable () async -> Void = {}
     ) async throws {
         // Turgai's database first, opened once: accounts, agents, limits, conversations, channels
         // and the journal are kept there, each in tables of its own.
@@ -69,7 +71,7 @@ public struct TurgaiServer: Sendable {
             setup: setup
         )
         // One web server for the whole run: setting up's routes until Turgai hands it its own.
-        let web = TurgaiWebServer(serving: onboarding.router(), port: port)
+        let web = TurgaiWebServer(serving: onboarding.router(), on: host, port: port, listening: listening)
         let appService = TurgaiAppService(
             environment: environment,
             workspaceRoot: workspaceRoot,

@@ -3,6 +3,7 @@ import Testing
 import TurgaiModels
 
 @testable import MacApp
+@testable import TurgaiClient
 
 @MainActor
 struct ObjectsFeatureTests {
@@ -27,15 +28,20 @@ struct ObjectsFeatureTests {
 
     private let family = SpaceID(rawValue: "family")
 
-    /// The window lists the shown space's objects as it opens, having joined their topic, and again
-    /// each time the server says they changed; closed, it leaves the topic.
+    /// What `row` is, as the connection lists it.
+    private func listing(_ row: ObjectRow) -> ObjectListing {
+        ObjectListing(
+            id: row.id, title: row.title, summary: row.summary, actions: row.actions, events: row.events,
+            node: row.node, made: row.made)
+    }
+
+    /// The window lists the shown space's objects as the server tells them, having joined their
+    /// topic, and again each time it tells them; another space's aren't taken; closed, it leaves.
     @Test
     func listFollowsTheObjectsAsTheyJoinAndLeave() async {
-        let (events, heard) = AsyncStream.makeStream(of: ChatEvent.self)
-        let asked = LockIsolated<[ChatAsk]>([])
-        let lists = LockIsolated<[[ObjectRow]]>([[mac], [mac, reminders], [reminders]])
-        let listedIn = LockIsolated<[SpaceID]>([])
-        let store = TestStore(initialState: ObjectsFeature.State(space: family)) {
+        let (events, heard) = AsyncStream.makeStream(of: LiveEvent.self)
+        let asked = LockIsolated<[LiveAsk]>([])
+        let store = TestStore(initialState: ObjectsFeature.State()) {
             ObjectsFeature()
         } withDependencies: {
             $0.chat.events = { events }
@@ -43,46 +49,40 @@ struct ObjectsFeatureTests {
                 asked.withValue { $0.append(ask) }
                 return .ok
             }
-            $0.objects.list = { space in
-                listedIn.withValue { $0.append(space) }
-                return lists.withValue { $0.removeFirst() }
-            }
         }
 
-        let task = await store.send(.appeared)
+        let task = await store.send(.spaceChanged(family)) { $0.space = self.family }
+        heard.yield(LiveEvent(payload: .objects(space: family, objects: [listing(mac)])))
         await store.receive(\.changed) { $0.listing = .live([self.mac]) }
-        heard.yield(ChatEvent(payload: .objectsChanged))
+        heard.yield(LiveEvent(payload: .objects(space: SpaceID(rawValue: "work"), objects: [listing(reminders)])))
+        heard.yield(LiveEvent(payload: .objects(space: family, objects: [listing(mac), listing(reminders)])))
         await store.receive(\.changed) { $0.listing = .live([self.mac, self.reminders]) }
-        heard.yield(ChatEvent(payload: .objectsChanged))
-        await store.receive(\.changed) { $0.listing = .live([self.reminders]) }
         heard.finish()
         await task.finish()
         #expect(asked.value == [.join(.objects(space: family)), .leave(.objects(space: family))])
-        #expect(listedIn.value == [family, family, family])
     }
 
-    /// Another space shown: its objects are listed instead; none are until a space is shown.
+    /// Another space shown: its objects' topic is joined instead; none is until a space is shown,
+    /// and none once none is.
     @Test
     func anotherSpaceShownListsItsObjects() async {
         let work = SpaceID(rawValue: "work")
-        let listedIn = LockIsolated<[SpaceID]>([])
+        let asked = LockIsolated<[LiveAsk]>([])
         let store = TestStore(initialState: ObjectsFeature.State()) {
             ObjectsFeature()
         } withDependencies: {
             $0.chat.events = { AsyncStream { $0.finish() } }
-            $0.chat.ask = { _ in .ok }
-            $0.objects.list = { space in
-                listedIn.withValue { $0.append(space) }
-                return [self.mac]
+            $0.chat.ask = { ask in
+                asked.withValue { $0.append(ask) }
+                return .ok
             }
         }
 
-        await store.send(.appeared)
-        #expect(listedIn.value.isEmpty)
         await store.send(.spaceChanged(work)) { $0.space = work }
-        await store.receive(\.changed) { $0.listing = .live([self.mac]) }
         await store.send(.spaceChanged(work))
-        #expect(listedIn.value == [work])
+        await store.send(.spaceChanged(nil)) { $0.space = nil }
+        await store.finish()
+        #expect(asked.value == [.join(.objects(space: work)), .leave(.objects(space: work))])
     }
 
     @Test

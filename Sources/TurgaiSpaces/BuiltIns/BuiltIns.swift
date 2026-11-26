@@ -19,15 +19,13 @@ public struct BuiltIn: Sendable {
         },
     ]
 
-    /// The built-in objects of `space`, each started and checked in there, where the space's code
-    /// finds it by name, as the catalog lists them: those the call's chain may read.
+    /// The built-in objects of `space`, as the catalog lists them: those the call's chain may read.
     public static func entries(in space: SpaceID, _ objects: DynamicObjects, on system: ClusterSystem)
         async throws -> [ObjectEntry]
     {
         var entries: [ObjectEntry] = []
         for builtIn in all {
             for object in try await builtIn.objects(space, objects, system) {
-                await system.receptionist.checkIn(object, with: .virtualObjects(in: space))
                 guard let virtual = object.id.virtualActorID, let description = try? await object.describe() else {
                     continue
                 }

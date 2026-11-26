@@ -1,5 +1,5 @@
-public import AttributedCalls
-public import Foundation
+import AttributedCalls
+import Foundation
 public import TurgaiDomain
 public import VirtualActors
 

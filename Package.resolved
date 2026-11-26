@@ -1,5 +1,5 @@
 {
-  "originHash" : "c564894cab0c3d2bda5bbe4372c122ade28b84b3acc3203d1254894015459265",
+  "originHash" : "11b96244154c0bd7f33c55cdf7a6dfddefe4a5da63a7f4e0342a2ec7ab2eafc2",
   "pins" : [
     {
       "identity" : "anylanguagemodel",
@@ -97,7 +97,7 @@
       "location" : "https://github.com/turgai-labs/doppel.git",
       "state" : {
         "branch" : "main",
-        "revision" : "b989f18f4a36e0aefe8ef5894023ee7034619e84"
+        "revision" : "9f7d283727e926173ae0a0ec580c69ca41d011fa"
       }
     },
     {
@@ -182,21 +182,12 @@
       }
     },
     {
-      "identity" : "llama.swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/mattt/llama.swift",
-      "state" : {
-        "revision" : "dc5b8cb58bfe028f88ade84d1ad0c10842644fb4",
-        "version" : "3.0.0"
-      }
-    },
-    {
       "identity" : "mosaic",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/turgai-labs/mosaic.git",
       "state" : {
         "branch" : "main",
-        "revision" : "eacf8ec33f78a62333a880906e0d57708dcdb0d3"
+        "revision" : "7853cb4e08a8b8c029907c58cba809e5a6a5feef"
       }
     },
     {

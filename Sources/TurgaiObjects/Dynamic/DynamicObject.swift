@@ -9,7 +9,10 @@ import RunningActors
 import ScopedEffect
 import TurgaiCalls
 import TurgaiDomain
+import TurgaiTimers
 import VirtualActors
+
+import enum Mosaic.Widget
 
 /// An object that runs Swift a model wrote, its ``Script``, the way an Erlang process runs a
 /// module: a name, the code it runs, and its own fields. Its code runs as a live instance of its
@@ -47,7 +50,13 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// The schedules its `Schedule` fields are due by, as they're kept durably now, by field.
     private var scheduled: [String: Schedule] = [:]
     /// The timers its `Timer` fields are due at, as they're kept durably now, by field.
-    private var timed: [String: Timer] = [:]
+    private var timed: [String: TurgaiTimers.Timer] = [:]
+    /// What it shows as a page, as it was worked out after it last changed, and when: none until
+    /// it's asked for since.
+    private var rendering: (at: Date, worked: Task<PageRender, Never>)?
+    /// How long what it shows as a page is kept without a change: what its code reads besides what it
+    /// holds, such as the date, is read again after it.
+    private static let renderKept: TimeInterval = 5 * 60
     /// Keeping its schedules as its fields say, one change after another.
     private var rescheduling: Task<Void, Never>?
     /// Its code as the checker read it, once for each code it runs.
@@ -87,8 +96,16 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         self.actorSystem = actorSystem
         self.own = dependency.identity
         self.home = dependency.space
-        try await actorSystem.journal.register(
-            actor: self, with: Self.persistenceID(for: dependency.identity, in: dependency.space))
+        do {
+            try await actorSystem.journal.register(
+                actor: self, with: Self.persistenceID(for: dependency.identity, in: dependency.space))
+        } catch {
+            // Whoever called it only hears that the call failed: why is said here.
+            actorSystem.log.warning(
+                "Object not started",
+                metadata: ["space": "\(dependency.space)", "object": "\(dependency.identity)", "error": "\(error)"])
+            throw error
+        }
         rehub()
         refollow()
     }
@@ -172,6 +189,11 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
 
     public func handleEvent(_ event: DynamicObjectEvent) {
         state = state.applying(event)
+        // What it shows as a page is worked out again once its code or what it holds changed.
+        switch event {
+        case .handled, .set, .adopted, .removed: rendering = nil
+        case .shared, .described, .failed, .announced: break
+        }
         // Whoever shows what it holds is told it changed: replayed, there's no one to tell yet. New
         // code, or its removal, ends their subscription instead.
         switch event {
@@ -289,22 +311,18 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         stop()
         rehub()
         refollow()
-        if let workflows = workflows {
-            for property in schedules {
-                let id = ObjectFiring.scheduleID(of: own, in: home, property)
-                try? await workflows.cancelSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
-                await actorSystem.tellTasks(in: home, .ended(.schedule(id)))
-            }
-            for (property, timer) in timers {
-                let id = ObjectFiring.timerID(of: own, in: home, property, at: timer.date)
-                try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
-                await actorSystem.tellTasks(in: home, .ended(.timer(id)))
+        if workflows != nil, let me = try? await reference() {
+            let keeper = TimerKeeper(on: actorSystem)
+            for property in schedules + timers.keys {
+                for ended in (try? await keeper.cancel(property, of: me)) ?? [] {
+                    await actorSystem.tellTasks(in: home, .ended(ended))
+                }
             }
         }
     }
 
-    /// Its `property`'s schedule is due: its code's `on<Property>Fired(at:)` handles it as its own
-    /// doing, as an event it follows is handled.
+    /// Its `property`'s schedule or timer is due: its code's `on<Property>Fired(at:)` handles it as
+    /// its own doing, as an event it follows is handled.
     distributed func fired(_ property: String) async throws {
         let handler = Schedule.handler(for: property)
         let arguments: JSONValue = ["at": .string(Date.now.ISO8601Format())]
@@ -482,6 +500,52 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         }
     }
 
+    /// What it shows as a page: worked out once after each change of its code or of what it holds,
+    /// as it's first asked for, then the same for everyone who asks until it changes again, or for
+    /// five minutes at most. Those asking while it's worked out wait for it. Refused when it doesn't
+    /// conform to `Page`.
+    public distributed func page() async throws -> PageRender {
+        guard try await describe().conforms.contains(Page.name) else { throw NotAPage() }
+        if let rendering, Date.now.timeIntervalSince(rendering.at) < Self.renderKept {
+            return await rendering.worked.value
+        }
+        let worked = Task { await render() }
+        rendering = (Date.now, worked)
+        return await worked.value
+    }
+
+    /// What it shows as a page now, run as its code says: its layout, a widget that can be drawn,
+    /// and its preview, when it gives one that can be; or why it can't be shown, said once here.
+    private func render() async -> PageRender {
+        let started = ContinuousClock.now
+        defer {
+            let took = ContinuousClock.now - started
+            actorSystem.log.info(
+                "Page rendered",
+                metadata: [
+                    "space": "\(home)", "object": "\(own)",
+                    "milliseconds":
+                        "\(took.components.seconds * 1000 + took.components.attoseconds / 1_000_000_000_000_000)",
+                ])
+        }
+        do {
+            let layout: Layout = try await read(property: "layout").decode()
+            _ = try Widget(layout)
+            var preview: Preview?
+            if try await describe().conforms.contains(Previewed.name),
+                let previewed = try? await read(property: "preview").decode(Preview.self),
+                (try? Widget(previewed.layout)) != nil
+            {
+                preview = previewed
+            }
+            return .shown(LayoutShown(layout: layout, version: Page.version(of: layout)), preview: preview)
+        } catch {
+            actorSystem.log.warning(
+                "Page not shown", metadata: ["space": "\(home)", "object": "\(own)", "error": "\(error)"])
+            return .failed(String(describing: error))
+        }
+    }
+
     /// Its property `name` as Swift reads it: what a stored one holds, or what a computed one's
     /// getter gives, run as its code says.
     public distributed func read(property name: String) async throws -> JSONValue {
@@ -597,6 +661,17 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         let system = actorSystem
         let space = home
         let generation = process.generation + 1
+        let starting = ContinuousClock.now
+        defer {
+            let took = ContinuousClock.now - starting
+            system.log.info(
+                "Object started",
+                metadata: [
+                    "space": "\(space)", "object": "\(own)",
+                    "milliseconds":
+                        "\(took.components.seconds * 1000 + took.components.attoseconds / 1_000_000_000_000_000)",
+                ])
+        }
         let started = try await ScriptInstance.start(
             code, as: own, holding: object.fields,
             reaches: { recipient, request in
@@ -734,7 +809,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
     /// came for long, it subscribes to again.
     private func follow(_ field: String, holding source: ObjectReference, handlers: Set<String>) async {
         // Following is its own doing, as its tasks are.
-        let subscribed = (try? await asItsOwn { try await following(field, holding: source, handlers: handlers) }) ?? false
+        let subscribed =
+            (try? await asItsOwn { try await following(field, holding: source, handlers: handlers) }) ?? false
         guard !Task.isCancelled, followers[field]?.source == source else { return }
         followers[field] = nil
         if subscribed { refollow() }
@@ -797,7 +873,8 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                 try await Call.asWork(of: actorID(for: identity, in: space)) { try await object.allowed() }
             }
         } catch {
-            system.log.debug("An object wasn't told it's allowed", metadata: ["object": "\(identity)", "error": "\(error)"])
+            system.log.debug(
+                "An object wasn't told it's allowed", metadata: ["object": "\(identity)", "error": "\(error)"])
         }
     }
 
@@ -828,18 +905,23 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         for property in shape.schedules {
             guard let value = fields[property], value != .null else { continue }
             let schedule = try value.decode(Schedule.self)
-            _ = try schedule.rule()
+            do {
+                _ = try schedule.rule()
+            } catch {
+                throw CodeProblem(error.description)
+            }
             held[property] = schedule
         }
         return held
     }
 
     /// The timers `fields` hold, by field.
-    private func timers(in fields: [String: JSONValue]) -> [String: Timer] {
+    private func timers(in fields: [String: JSONValue]) -> [String: TurgaiTimers.Timer] {
         guard case .live(let object) = state, let shape = try? shape(of: object.code) else { return [:] }
-        var held: [String: Timer] = [:]
+        var held: [String: TurgaiTimers.Timer] = [:]
         for property in shape.timers {
-            guard let value = fields[property], value != .null, let timer = try? value.decode(Timer.self) else {
+            guard let value = fields[property], value != .null, let timer = try? value.decode(TurgaiTimers.Timer.self)
+            else {
                 continue
             }
             held[property] = timer
@@ -856,12 +938,14 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
         }
     }
 
-    /// Each `Schedule` field it holds has its durable schedule: made when it's set, made again
-    /// when it changes, and cancelled when it's `nil`, gone, or the object is.
+    /// Each `Schedule` field it holds is due as it says, and each `Timer` field once, at its date,
+    /// each set by the property's name: set when it's set, set again when it changes, and no longer
+    /// due when it's `nil`, gone, or the object is. It's told when one's due, as their owner.
     private func reschedule() async {
-        guard let workflows else { return }
+        guard workflows != nil, let me = try? await reference() else { return }
+        let keeper = TimerKeeper(on: actorSystem)
         let wanted: [String: Schedule]
-        let wantedTimers: [String: Timer]
+        let wantedTimers: [String: TurgaiTimers.Timer]
         let living: Bool
         let place: ConversationID?
         if case .live(let object) = state {
@@ -875,27 +959,16 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             living = false
             place = nil
         }
+        let about = ObjectTimerAbout(object: own, space: home, place: place)
         for (property, schedule) in wanted where scheduled[property] != schedule {
             guard living else { continue }
-            let id = ObjectFiring.scheduleID(of: own, in: home, property)
             do {
-                // One that changed is made again: a schedule that's there keeps what it was made with.
-                if scheduled[property] != nil {
-                    try await workflows.cancelSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
-                }
-                try await workflows.schedule(
-                    id: id, recurrence: try schedule.rule(), workflow: ObjectScheduleWorkflow.self,
-                    input: ObjectFiring(
-                        object: own, property: property, space: home,
-                        due: .schedule(schedule), place: place),
-                    overlapPolicy: .skip)
+                // One that changed is set again, in place of the one there.
+                let id = try await keeper.set(property, every: schedule, of: me, about: about)
                 scheduled[property] = schedule
                 await actorSystem.tellTasks(
                     in: home,
-                    .kept(
-                        KeptTask(
-                            id: .schedule(id), of: .object(own, field: property), due: .schedule(schedule),
-                            paused: false)))
+                    .kept(KeptTask(id: id, of: .object(own, field: property), due: .schedule(schedule), paused: false)))
             } catch {
                 actorSystem.log.warning(
                     "A dynamic object's schedule couldn't be kept",
@@ -903,34 +976,26 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
             }
         }
         for property in scheduled.keys where wanted[property] == nil {
-            let id = ObjectFiring.scheduleID(of: own, in: home, property)
-            try? await workflows.cancelSchedule(id: id, workflow: ObjectScheduleWorkflow.self)
+            let ended = (try? await keeper.cancel(property, of: me)) ?? []
             scheduled[property] = nil
-            if living { await actorSystem.tellTasks(in: home, .ended(.schedule(id))) }
+            if living { for id in ended { await actorSystem.tellTasks(in: home, .ended(id)) } }
         }
-        // A timer is started for each date it's set to: one that fired, or runs, is left as it is.
+        // A timer is set for each date it's set to: one that fired, or runs, is left as it is.
         for (property, timer) in wantedTimers where timed[property] != timer {
             guard living else { continue }
             do {
-                if let before = timed[property] {
-                    let id = ObjectFiring.timerID(of: own, in: home, property, at: before.date)
-                    try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
-                    await actorSystem.tellTasks(in: home, .ended(.timer(id)))
+                if timed[property] != nil {
+                    for id in try await keeper.cancel(property, of: me) {
+                        await actorSystem.tellTasks(in: home, .ended(id))
+                    }
                 }
-                let id = ObjectFiring.timerID(of: own, in: home, property, at: timer.date)
-                try await workflows.start(
-                    type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id),
-                    input: ObjectFiring(
-                        object: own, property: property, space: home,
-                        due: .timer(timer), place: place))
+                let id = try await keeper.set(property, at: timer, of: me, about: about)
                 timed[property] = timer
-                // A timer that's due already fires as it starts, and isn't one any more.
+                // A timer that's due already is told as it's set, and isn't one any more.
                 if timer.date > Date.now {
                     await actorSystem.tellTasks(
                         in: home,
-                        .kept(
-                            KeptTask(
-                                id: .timer(id), of: .object(own, field: property), due: .timer(timer), paused: false)))
+                        .kept(KeptTask(id: id, of: .object(own, field: property), due: .timer(timer), paused: false)))
                 }
             } catch {
                 actorSystem.log.warning(
@@ -938,11 +1003,10 @@ public distributed actor DynamicObject: DiscoverableActor, AccessControlled {
                     metadata: ["object": "\(own)", "field": "\(property)", "error": "\(error)"])
             }
         }
-        for (property, timer) in timed where wantedTimers[property] == nil {
-            let id = ObjectFiring.timerID(of: own, in: home, property, at: timer.date)
-            try? await workflows.cancel(type: ObjectTimerWorkflow.self, options: WorkflowOptions(id: id))
+        for property in timed.keys where wantedTimers[property] == nil {
+            let ended = (try? await keeper.cancel(property, of: me)) ?? []
             timed[property] = nil
-            if living { await actorSystem.tellTasks(in: home, .ended(.timer(id))) }
+            if living { for id in ended { await actorSystem.tellTasks(in: home, .ended(id)) } }
         }
     }
 
@@ -1101,5 +1165,15 @@ extension DynamicObject: Describable {
 extension ObjectIdentity: Describable {
     public static var jsonSchema: JSONValue {
         ["type": "string", "description": "An object's identity."]
+    }
+}
+
+/// What it sets due is its own: it's told when one is, as their owner.
+extension DynamicObject: TimerOwner {
+    /// Its property's schedule or timer is due: handled as its own doing. A timer, due once, isn't
+    /// one any more.
+    public distributed func timerFired(_ firing: Firing, run: WorkflowID) async throws {
+        try await fired(firing.name)
+        if case .timer = firing.due { await actorSystem.tellTasks(in: home, .ended(firing.id)) }
     }
 }

@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import SwiftUI
+import TurgaiClient
 import TurgaiModels
 
 /// The main window, once someone is signed in: Turgai's field behind everything, the open
@@ -19,31 +20,17 @@ struct MainWindow: View {
         ZStack {
             WorkingField(hue: hue)
             // The conversation keeps clear of the panel; the field runs under it.
-            ConversationPane(title: openTitle, chat: chat, inset: chatInset, initial: initial, name: name)
+            MainPane(store: store, inset: chatInset, initial: initial, name: name)
             LeftPanel(store: store, width: Self.sidebarWidth)
                 .padding(Self.gap)
                 // From the window's top, as the system's own sidebars are: the traffic lights sit in it.
                 .ignoresSafeArea(.container, edges: .top)
         }
         .modifier(SidebarDialogs(store: sidebar))
-        .task(id: session) { await appeared() }
-    }
-
-    /// Someone's signed in as `session`: who they are is read, and the sidebar hears the connection
-    /// while the window's shown.
-    private func appeared() async {
-        store.send(.profile(.appeared(session)))
-        await store.send(.sidebar(.appeared(session))).finish()
-    }
-
-    private var chat: StoreOf<ChatFeature> {
-        store.scope(\.chat, action: \.chat)
     }
 
     /// The shown space's color, the field's.
     private var hue: SpaceHue { store.sidebar.shownSpaceHue }
-
-    private var openTitle: String { store.sidebar.openTitle }
 
     /// Who's signed in: their initial, and their name, once it's read.
     private var initial: String { store.profile.initial }
@@ -61,20 +48,27 @@ struct MainWindow: View {
     }
 }
 
-/// The open conversation, `inset` from the window's leading edge, and the window's toolbar over it.
-private struct ConversationPane: View {
-    let title: String
-    let chat: StoreOf<ChatFeature>
-    /// The panel's room: what's in the conversation keeps its own margins.
+/// What's open: the page opened from the panel, or else the open conversation; `inset` from the
+/// window's leading edge, and the window's toolbar over it.
+private struct MainPane: View {
+    let store: StoreOf<AppFeature>
+    /// The panel's room: what's open keeps its own margins.
     let inset: CGFloat
     /// Who's signed in: their initial, and their name, once it's read.
     let initial: String
     let name: String?
 
     var body: some View {
-        ChatView(title: title, store: chat)
-            .safeAreaPadding(.leading, inset)
-            .toolbar { WindowToolbar(initial: initial, name: name) }
+        Group {
+            if let page = store.scope(\.openPage, action: \.openPage) {
+                PageContentView(content: page.content) { page.send(.pressed($0)) }
+                    .navigationTitle(page.address.page.rawValue)
+            } else {
+                ChatView(title: store.sidebar.openTitle, store: store.scope(\.chat, action: \.chat))
+            }
+        }
+        .safeAreaPadding(.leading, inset)
+        .toolbar { WindowToolbar(initial: initial, name: name) }
     }
 }
 
@@ -85,7 +79,6 @@ private struct WindowToolbar: ToolbarContent {
     let name: String?
 
     var body: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) { PagesButton() }
         ToolbarItem(placement: .primaryAction) { ObjectsButton() }
         ToolbarItem(placement: .primaryAction) { AccountButton(initial: initial, name: name) }
             // A stamp of its own, not on the toolbar's glass.
@@ -97,12 +90,15 @@ private struct WindowToolbar: ToolbarContent {
 private struct LeftPanel: View {
     let store: StoreOf<AppFeature>
     let width: CGFloat
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         GeometryReader { geometry in
             SidebarGlass(
                 isShown: store.showsSidebar, size: CGSize(width: width, height: geometry.size.height),
-                store: store.scope(\.sidebar, action: \.sidebar)
+                store: store.scope(\.sidebar, action: \.sidebar), pages: store.scope(\.pages, action: \.pages),
+                openPage: { store.send(.pageOpened($0)) },
+                openPageInWindow: { openWindow(id: WindowID.page, value: $0) }
             ) {
                 withAnimation(.panelMorph) { _ = store.send(.sidebarToggled) }
             }
@@ -162,20 +158,6 @@ private struct ObjectsButton: View {
             Label("Objects", systemImage: "cube")
         }
         .help("Objects")
-    }
-}
-
-/// The space's pages, in a window of their own.
-private struct PagesButton: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button {
-            openWindow(id: WindowID.pages)
-        } label: {
-            Label("Pages", systemImage: "rectangle.grid.2x2")
-        }
-        .help("Pages")
     }
 }
 

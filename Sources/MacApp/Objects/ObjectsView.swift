@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import SwiftUI
+import TurgaiClient
 import TurgaiModels
 
 /// The objects the person may see, live: they appear and leave as they check in with the
@@ -29,7 +30,6 @@ struct ObjectsView: View {
             }
         }
         .scrollContentBackground(.hidden)
-        .task { store.send(.appeared) }
         .alert(store.refusal ?? "", isPresented: $store.isRefused.sending(\.refusalPresented)) {}
     }
 }

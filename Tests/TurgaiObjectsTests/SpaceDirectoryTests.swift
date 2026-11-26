@@ -48,7 +48,7 @@ struct SpaceDirectoryTests {
                 SpaceDirectory(actorSystem: $0, storage: .test, journal: store, refreshInterval: .milliseconds(10))
             }
             let bobs = try await directory.subscription(for: .bob)
-            var heard = bobs.makeAsyncIterator()
+            let heard = bobs.makeAsyncIterator()
             let familyID = SpaceID()
             let family = try await Space.identified(by: familyID, on: system)
             try await family.make(named: SpaceName("Family")!, by: .ann, bot: ollamaBot("Helper"))

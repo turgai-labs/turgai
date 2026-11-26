@@ -4,6 +4,7 @@ import DurableWorkflows
 import TurgaiCalls
 import TurgaiDomain
 import TurgaiObjects
+import TurgaiTimers
 import VirtualActors
 
 #if canImport(FoundationEssentials)
@@ -37,7 +38,8 @@ public struct TimersInChat: Codable, Sendable, Equatable {
 }
 
 /// The chats' timers: each due once, at its date, by the name it's given in its chat, saying text
-/// there or asking the chat's agent. What an object's own timers are, it lists.
+/// there or asking the chat's agent. It's told when one is due, as their owner. What an object's own
+/// timers are, it lists.
 @Discoverable
 @VirtualActor
 public distributed actor Timers {
@@ -49,8 +51,12 @@ public distributed actor Timers {
 
     /// `space`'s timers, wherever and whenever it runs.
     public static func of(_ space: SpaceID, on actorSystem: ClusterSystem) async throws -> Timers {
-        try await actorSystem.virtualActors.getActor(
-            identifiedBy: .owned(by: space, "builtin", "timers"), dependency: space)
+        try await actorSystem.virtualActors.getActor(identifiedBy: virtualID(of: space), dependency: space)
+    }
+
+    /// The id of `space`'s timers.
+    static func virtualID(of space: SpaceID) -> VirtualActorID {
+        .owned(by: space, "builtin", "timers")
     }
 
     public init(actorSystem: ActorSystem, dependency space: SpaceID) async throws {
@@ -86,17 +92,14 @@ public distributed actor Timers {
     @DiscoverableAction(safe: true, idempotent: true)
     public distributed func list() async throws -> TimersInChat {
         let (chain, chat) = try DueInChatError.chat()
-        let timers = try await running(in: chat, of: chain.scope.space).map { _, timer in
-            TimerInChat(name: timer.name, date: timer.date, then: timer.then)
+        let timers = try await running(in: chat).map { _, reminder, date in
+            TimerInChat(name: reminder.name, date: date, then: reminder.then)
         }
-        let decoder = JSONDecoder()
-        let objects = try await actorSystem.workflows.listWorkflows(workflow: ObjectTimerWorkflow.self).compactMap {
-            description -> ObjectTimerInChat? in
-            guard case .running = description.status, let data = description.inputData,
-                let firing = try? decoder.decode(ObjectFiring.self, from: data), firing.place == chat,
-                case .timer(let timer) = firing.due
+        let objects = try await TimerKeeper(on: actorSystem).timers().compactMap { now -> ObjectTimerInChat? in
+            guard let object = now.firing.about(as: ObjectTimerAbout.self), object.space == chain.scope.space,
+                object.place == chat, case .timer(let timer) = now.firing.due
             else { return nil }
-            return ObjectTimerInChat(object: firing.object.rawValue, property: firing.property, date: timer.date)
+            return ObjectTimerInChat(object: object.object.rawValue, property: now.firing.name, date: timer.date)
         }
         return TimersInChat(
             chat: timers.sorted { $0.date < $1.date }, objects: objects.sorted { $0.date < $1.date })
@@ -108,13 +111,13 @@ public distributed actor Timers {
     public distributed func cancel(name written: String) async throws -> TimerInChat {
         let (chain, chat) = try DueInChatError.chat()
         let name = ObjectNames.handle(for: written)
-        let running = try await running(in: chat, of: chain.scope.space)
-        guard let (id, timer) = running.first(where: { $0.timer.name == name }) else {
-            throw DueInChatError.none(kind: "timer", written, named: running.map(\.timer.name).sorted())
+        let running = try await running(in: chat)
+        guard let (id, reminder, date) = running.first(where: { $0.reminder.name == name }) else {
+            throw DueInChatError.none(kind: "timer", written, named: running.map(\.reminder.name).sorted())
         }
-        try await actorSystem.workflows.cancel(type: TimerWorkflow.self, options: WorkflowOptions(id: id))
-        await actorSystem.tellTasks(in: chain.scope.space, .ended(.timer(id)))
-        return TimerInChat(name: timer.name, date: timer.date, then: timer.then)
+        try await TimerKeeper(on: actorSystem).cancel(id)
+        await actorSystem.tellTasks(in: chain.scope.space, .ended(id))
+        return TimerInChat(name: reminder.name, date: date, then: reminder.then)
     }
 
     /// Sets the timer `written` in this chat for `date`, in place of the one of that name.
@@ -123,36 +126,39 @@ public distributed actor Timers {
         let name = ObjectNames.handle(for: written)
         guard !name.trimmed().isEmpty else { throw DueInChatError.unnamed }
         try DueInChatError.askable(then, chain)
-        let workflows = actorSystem.workflows
-        if let (id, before) = try await running(in: chat, of: chain.scope.space).first(where: { $0.timer.name == name })
-        {
-            try await workflows.cancel(type: TimerWorkflow.self, options: WorkflowOptions(id: id))
-            await actorSystem.tellTasks(in: chain.scope.space, .ended(.timer(id)))
+        let keeper = TimerKeeper(on: actorSystem)
+        let me = try await Self.of(space, on: actorSystem)
+        let timerName = ChatReminder.timerName(name, in: chat)
+        for ended in try await keeper.cancel(timerName, of: me) {
+            await actorSystem.tellTasks(in: chain.scope.space, .ended(ended))
         }
-        let timer = ChatTimer(
-            name: name, date: date, then: then, askedBy: chain.scope.asker, in: chain.scope.space,
-            conversationID: chat)
-        let id = ChatTimer.id(in: chat, of: chain.scope.space, named: name, at: date)
-        try await workflows.start(
-            type: TimerWorkflow.self, options: WorkflowOptions(id: id, retryPolicy: ChatSchedule.retryPolicy),
-            input: timer)
-        await actorSystem.tellTasks(in: chain.scope.space, .kept(KeptTask(timer, id: id)))
+        let reminder = ChatReminder(
+            name: name, then: then, askedBy: chain.scope.asker, in: chain.scope.space, conversationID: chat)
+        let id = try await keeper.set(timerName, at: .at(date), of: me, about: reminder)
+        await actorSystem.tellTasks(
+            in: chain.scope.space,
+            .kept(KeptTask(id: id, of: .chat(chat, name: name, does: then.described), due: .timer(.at(date)), paused: false)))
         return TimerInChat(name: name, date: date, then: then)
     }
 
-    /// The timers of the chat `chat` of `space` that aren't due yet, each with its workflow.
-    private func running(in chat: ConversationID, of space: SpaceID) async throws
-        -> [(id: WorkflowID, timer: ChatTimer)]
-    {
-        let decoder = JSONDecoder()
-        return try await actorSystem.workflows.listWorkflows(workflow: TimerWorkflow.self).compactMap {
-            description -> (WorkflowID, ChatTimer)? in
-            guard case .running = description.status, let data = description.inputData,
-                let timer = try? decoder.decode(ChatTimer.self, from: data), timer.space == space,
-                timer.conversationID == chat
+    /// The timers of the chat `chat` that aren't due yet, each with its id and date.
+    private func running(in chat: ConversationID) async throws -> [(id: TimerID, reminder: ChatReminder, date: Date)] {
+        try await TimerKeeper(on: actorSystem).timers(of: Self.virtualID(of: space)).compactMap { now in
+            guard let reminder = now.firing.about(as: ChatReminder.self), reminder.conversationID == chat,
+                case .timer(let timer) = now.firing.due
             else { return nil }
-            return (description.id, timer)
+            return (now.firing.id, reminder, timer.date)
         }
+    }
+}
+
+/// What it sets due is its chats': it's told when one is, as their owner.
+extension Timers: TimerOwner {
+    /// A chat's timer is due: it does what it says there, once, and isn't a timer any more.
+    public distributed func timerFired(_ firing: Firing, run: WorkflowID) async throws {
+        guard let reminder = firing.about(as: ChatReminder.self) else { return }
+        try await reminder.doing(run: run, on: actorSystem)
+        await actorSystem.tellTasks(in: reminder.space, .ended(firing.id))
     }
 }
 

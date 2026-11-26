@@ -8,7 +8,6 @@ import TurgaiDomain
 import TurgaiHail
 import TurgaiMemory
 import TurgaiPeople
-import TurgaiSpaces
 
 #if canImport(FoundationEssentials)
     import FoundationEssentials

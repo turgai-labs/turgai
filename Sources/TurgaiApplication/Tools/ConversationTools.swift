@@ -51,7 +51,7 @@ public enum ConversationTools {
             if case .conversation = working { CallChain.current?.scope.person } else { nil }
         // Objects are its space's, and the built-in ones, as its space hands them to whoever the turn is
         // for: an agent in no space, or a turn on no one's behalf, reaches none.
-        if let actorSystem, let space = working?.space, let person = CallChain.current?.scope.person {
+        if let actorSystem, let space = working?.space, CallChain.current?.scope.person != nil {
             // Its space lists what's in it, its other bots among them: never itself.
             let session = try await ObjectSession(in: space, actorSystem: actorSystem, asking: context.agentID.role)
             // What objects can be: found, listed, made, changed and removed, at the root; and the

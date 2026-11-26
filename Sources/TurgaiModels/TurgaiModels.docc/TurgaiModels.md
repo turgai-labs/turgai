@@ -60,12 +60,12 @@ connections and its objects. So most of the API is under `/api/v1/spaces/<space>
 
 ### The live connection
 
-- ``ChatCommand``
-- ``ChatEvent``
-- ``ChatEventKind``
-- ``ChatAsk``
-- ``ChatReply``
-- ``ChatTopic``
+- ``LiveCommand``
+- ``LiveEvent``
+- ``LiveEventKind``
+- ``LiveAsk``
+- ``LiveReply``
+- ``LiveTopic``
 - ``PushRef``
 - ``AccessRequest``
 - ``AccessAnswer``

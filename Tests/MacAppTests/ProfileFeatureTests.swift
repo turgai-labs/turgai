@@ -4,6 +4,7 @@ import Testing
 import TurgaiModels
 
 @testable import MacApp
+@testable import TurgaiClient
 
 @MainActor
 struct ProfileFeatureTests {
@@ -18,8 +19,8 @@ struct ProfileFeatureTests {
 
     /// What's asked on the app's connection: each push, in order, answered by `answer`.
     private func connection(
-        asked: LockIsolated<[ChatAsk]>, answer: @escaping @Sendable (ChatAsk) throws -> ChatReply
-    ) -> @Sendable (ChatAsk) async throws -> ChatReply {
+        asked: LockIsolated<[LiveAsk]>, answer: @escaping @Sendable (LiveAsk) throws -> LiveReply
+    ) -> @Sendable (LiveAsk) async throws -> LiveReply {
         { ask in
             asked.withValue { $0.append(ask) }
             return try answer(ask)
@@ -30,16 +31,18 @@ struct ProfileFeatureTests {
     /// it's under; Forget Everything… asks again, and only a yes forgets it.
     @Test
     func everythingRememberedIsForgottenOnceTheySaySoAgain() async {
-        let asked = LockIsolated<[ChatAsk]>([])
+        let asked = LockIsolated<[LiveAsk]>([])
         let remembered = remembered
         let store = TestStore(initialState: ProfileFeature.State()) {
             ProfileFeature()
         } withDependencies: {
-            $0.chat.ask = connection(asked: asked) { ask in ask == .memory ? .memory(remembered) : .ok }
+            $0.chat.ask = connection(asked: asked) { ask in
+                ask == .join(.memory) ? .joined(LiveEvent(payload: .memory(remembered))) : .ok
+            }
             $0.chat.events = { .never }
         }
 
-        await store.send(.shown) { $0.showing = .shown }
+        await store.send(.shown)
         await store.receive(\.memoryLoaded) { $0.memory = .read(remembered) }
         #expect(
             store.state.memoryShown
@@ -57,47 +60,43 @@ struct ProfileFeatureTests {
         await store.receive(\.forgotten) { $0.memory = .read(MemorySummary(nodes: [], remembering: .on)) }
         #expect(store.state.memoryShown == .note("Nothing is remembered about you yet."))
         #expect(!store.state.canForget)
-        await store.send(.hidden) { $0.showing = .hidden }
+        await store.send(.hidden)
         await store.finish()
-        #expect(asked.value == [.join(.memory), .memory, .forgetMemory, .leave(.memory)])
+        #expect(asked.value == [.join(.memory), .forgetMemory, .leave(.memory)])
     }
 
-    /// While it's shown, a change to their memory, or the connection opening again, has it read
-    /// again; closed, it leaves their memory and reads nothing more.
+    /// Shown, it's what its join answers; while it's shown, each change comes with what's
+    /// remembered then; closed, it leaves their memory and hears nothing more.
     @Test
     func whileShownItStaysCurrentAndClosedItLeaves() async {
-        let asked = LockIsolated<[ChatAsk]>([])
+        let asked = LockIsolated<[LiveAsk]>([])
         let remembered = remembered
         let forgotten = MemorySummary(nodes: [], remembering: .off)
-        let current = LockIsolated(remembered)
-        let (events, heard) = AsyncStream.makeStream(of: ChatEvent.self)
+        let (events, heard) = AsyncStream.makeStream(of: LiveEvent.self)
         let store = TestStore(initialState: ProfileFeature.State()) {
             ProfileFeature()
         } withDependencies: {
-            $0.chat.ask = connection(asked: asked) { ask in ask == .memory ? .memory(current.value) : .ok }
+            $0.chat.ask = connection(asked: asked) { ask in
+                ask == .join(.memory) ? .joined(LiveEvent(payload: .memory(remembered))) : .ok
+            }
             $0.chat.events = { events }
         }
 
-        await store.send(.shown) { $0.showing = .shown }
+        await store.send(.shown)
         await store.receive(\.memoryLoaded) { $0.memory = .read(remembered) }
-        current.setValue(forgotten)
-        heard.yield(ChatEvent(payload: .memoryChanged))
-        await store.receive(\.memoryChanged)
+        heard.yield(LiveEvent(payload: .memory(forgotten)))
         await store.receive(\.memoryLoaded) { $0.memory = .read(forgotten) }
-        await store.send(.connected)
-        await store.receive(\.memoryLoaded)
 
-        await store.send(.hidden) { $0.showing = .hidden }
-        await store.send(.memoryChanged)
-        await store.send(.connected)
+        await store.send(.hidden)
+        heard.yield(LiveEvent(payload: .memory(remembered)))
         await store.finish()
-        #expect(asked.value == [.join(.memory), .memory, .memory, .memory, .leave(.memory)])
+        #expect(asked.value == [.join(.memory), .leave(.memory)])
     }
 
     /// The switch turns remembering off and on; one the connection refuses goes back, saying so.
     @Test
     func rememberingIsTurnedOffAndOn() async {
-        let asked = LockIsolated<[ChatAsk]>([])
+        let asked = LockIsolated<[LiveAsk]>([])
         var state = ProfileFeature.State()
         state.memory = .read(remembered)
         let store = TestStore(initialState: state) {
@@ -128,15 +127,15 @@ struct ProfileFeatureTests {
         let store = TestStore(initialState: ProfileFeature.State()) {
             ProfileFeature()
         } withDependencies: {
-            $0.chat.ask = { _ in throw ChatSocketError.closed }
+            $0.chat.ask = { _ in throw LiveSocketError.closed }
             $0.chat.events = { .never }
         }
 
-        await store.send(.shown) { $0.showing = .shown }
+        await store.send(.shown)
         await store.receive(\.memoryFailed) { $0.memory = .failed("Couldn't read what's remembered.") }
         #expect(store.state.memoryShown == .note("Couldn't read what's remembered."))
         #expect(!store.state.canForget)
-        await store.send(.hidden) { $0.showing = .hidden }
+        await store.send(.hidden)
     }
 }
 

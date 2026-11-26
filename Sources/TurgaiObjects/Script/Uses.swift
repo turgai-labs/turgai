@@ -2,6 +2,7 @@ import DiscoverableActors
 import Foundation
 import SwiftParser
 import SwiftSyntax
+import TurgaiTimers
 
 /// What an object's code was written against: the other objects around it and the values they
 /// send and take, as the module its code imports, and the objects that exist. It's kept
@@ -71,7 +72,10 @@ extension Uses {
         -> ModuleInterface
     {
         // The runtime's own values, which any object's code can hold: when something's due.
-        var schemas: [JSONValue] = [Schedule.jsonSchema, Timer.jsonSchema, Layout.jsonSchema, ButtonPressed.jsonSchema]
+        var schemas: [JSONValue] = [
+            Schedule.jsonSchema, TurgaiTimers.Timer.jsonSchema, Layout.jsonSchema, Preview.jsonSchema,
+            ButtonPressed.jsonSchema,
+        ]
         // The events, each declared in its actor, `Player.TrackChanged`, and among the values no more.
         var events: Set<String> = []
         var actors: [String] = []

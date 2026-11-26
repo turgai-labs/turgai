@@ -60,14 +60,18 @@ struct TimersTests {
             #expect(try await self.as(Self.ann) { try await timers.list().chat }.isEmpty)
 
             // Whoever follows the space's tasks is told it's set, then that it isn't due any more.
-            let id = ChatTimer.id(in: Self.chat, of: Self.space, named: "tea", at: set.date)
+            let notices = await heard.notices(2)
+            guard case .kept(let first) = notices.first else {
+                Issue.record("The timer wasn't told as kept first: \(notices)")
+                return
+            }
             #expect(
-                await heard.notices(2) == [
+                notices == [
                     .kept(
                         KeptTask(
-                            id: .timer(id), of: .chat(Self.chat, name: "tea", does: "says Tea's ready"),
+                            id: first.id, of: .chat(Self.chat, name: "tea", does: "says Tea's ready"),
                             due: .timer(.at(set.date)), paused: false)),
-                    .ended(.timer(id)),
+                    .ended(first.id),
                 ])
         }
     }
